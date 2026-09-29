@@ -355,12 +355,18 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         block.admit_fastpq_source_for_testing(Hash::from(entry.execution_call_hash()));
         let mut failed = block.transaction();
         bind_fee_context(&mut failed, signed);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let policy_route =
+            crate::state::network_policy_routes::CapturedNetworkPolicyRoute::for_component(
+                &accepted, &failed, route,
+            );
         assert!(
             StateBlock::execute_accepted_transaction_in_overlay(
                 accepted,
                 &mut failed,
                 &mut cache,
-                Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+                route,
+                policy_route,
             )
             .is_err()
         );

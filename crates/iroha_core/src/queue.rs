@@ -127,6 +127,7 @@ use tokio::{
     sync::watch,
     time::{MissedTickBehavior, interval},
 };
+pub(crate) mod policy_route;
 type EntrypointHash = HashOf<TransactionEntrypoint>;
 type PendingKagemushaOperationKey = [u8; 32];
 use crate::smartcontracts::isi::sccp::admission::{
@@ -315,16 +316,7 @@ fn resolve_routing_plan_for_queue_admission(
     nexus: &Nexus,
     committed_height: u64,
 ) -> Result<RoutingPlan, RoutingResolveError> {
-    let plan = resolve_routing_plan_against_nexus_at_height(plan, nexus, committed_height)?;
-    let Some(next_proposal_height) = committed_height.checked_add(1) else {
-        let route = plan.coordinator_route();
-        return Err(RoutingResolveError::InactiveLane {
-            lane_id: route.lane_id,
-            dataspace_id: route.dataspace_id,
-        });
-    };
-    ensure_routing_plan_active_at_height(&plan, nexus, next_proposal_height)?;
-    Ok(plan)
+    policy_route::resolve_plan_for_admission(plan, nexus, committed_height)
 }
 
 fn state_height_for_routing(state: &State) -> u64 {

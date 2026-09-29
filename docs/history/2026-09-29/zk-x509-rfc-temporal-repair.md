@@ -424,3 +424,28 @@ The two-file amendment and independent source review are retained under
 `bounded-helper-controls/receipt.json`. The frozen baseline has not been
 amended. Native allocation-owner and default-stack binding checks, followed by
 the complete optimized proof, remain required on the repaired candidate.
+
+The unchanged optimized baseline remained active more than 24 minutes after
+its 11:13:04 UTC start, so it cannot meet the 300-second producer target. No
+terminal proof result or phase totals had been emitted at that observation;
+current process RSS is not a substitute for final peak RSS. The process is
+being retained through completion for correctness and resource evidence.
+
+A further source-reviewed amendment removes repeated P-256 arithmetic
+validation during native column replay. A private immutable owner first runs
+the existing complete arithmetic and role-topology checks under a clearing
+guard, retains the checked public schedule, and lends lifetime-bound row views
+to base and auxiliary readers. Arbitrary borrowed traces still use the checked
+constructor. Auxiliary challenge validation and terminal recomputation remain
+in their original order. Actual retained schedule capacity and simultaneous
+validation allocations are charged against the unchanged allowances. The
+source-only review, exact two-file delta, and proposed controls are retained
+under `dist/zk-remediation/2026-09-29/x509-p256-validated-owner`.
+
+The next candidate combines that amendment with the preceding allocation
+clearing repair. Its normal controls must include default-stack maximum
+binding and rejection/erasure checks; optimized qualification must explicitly
+execute the otherwise-ignored every-cell base/auxiliary parity test before
+running the full maximum proof. The capture and test drivers are prepared,
+but this combined candidate has not yet been captured or compiled. No measured
+speedup or proof-time compliance follows from the source review.

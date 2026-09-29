@@ -223,6 +223,7 @@ fn fixture_with_effects(
     setup.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
     let mut builder = BlockBuilder::new(header);
+    let mut contexts = Vec::new();
     // A successful and an actually rejected Network input both remain sources.
     for body in [
         vec![InstructionBox::from(Log::new(
@@ -249,8 +250,26 @@ fn fixture_with_effects(
             ),
         );
         tx.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
-        builder.push_transaction(tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key()));
+        let signed = tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key());
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(&signed));
+        let view = state.view();
+        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view);
+        let native = snapshot
+            .inputs(view.world())
+            .execution_route(&accepted, header.height().get())
+            .expect("fixture input has its exact committed native route");
+        contexts.push(iroha_data_model::block::ExternalExecutionContext::new(
+            accepted.hash_as_entrypoint(),
+            native.lane_id,
+            native.dataspace_id,
+        ));
+        drop(view);
+        builder.push_transaction(signed);
     }
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(contexts),
+    ));
     (
         state,
         builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),

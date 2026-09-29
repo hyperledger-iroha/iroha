@@ -182,6 +182,7 @@ impl State {
                 world,
                 transactions: storage_transactions::TransactionsBlockField::new(transactions),
                 ordinary_carrier_membership_source: None,
+                network_policy_routes: None,
                 commit_topology: block_field::BlockField::new(commit_topology),
                 prev_commit_topology: block_field::BlockField::new(prev_commit_topology),
                 sumeragi_lane_state_seal: None,

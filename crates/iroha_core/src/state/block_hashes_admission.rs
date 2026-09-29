@@ -53,6 +53,9 @@ pub enum StateBlockStartError<E: std::fmt::Debug> {
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
     Membership(#[from] storage_transactions::MembershipAdmissionError),
+    /// Source-route backing could not be funded before acquiring State or applying effects.
+    #[error(transparent)]
+    ExecutionDeferred(crate::execution_attempt::ExecutionDeferred),
     /// The caller's original pristine/after-start failure.
     #[error("block start stage failed: {0:?}")]
     Stage(E),
@@ -63,6 +66,7 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
             StateBlockStartError::Storage(error) => Self::StateStorageAdmission(error),
             StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
             StateBlockStartError::Membership(error) => Self::MembershipAdmission(error),
+            StateBlockStartError::ExecutionDeferred(error) => Self::ExecutionDeferred(error),
             StateBlockStartError::Stage(error) => error,
         }
     }
@@ -136,6 +140,10 @@ impl<E: std::fmt::Debug> StateBlockStartError<E> {
             Self::Storage(error) => error.release_wait(),
             Self::History(error) => error.release_wait(),
             Self::Membership(error) => error.release_wait(),
+            Self::ExecutionDeferred(error) => match error.allocation_refusal() {
+                Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) => Some(release),
+                _ => None,
+            },
             Self::Stage(_) => None,
         }
     }

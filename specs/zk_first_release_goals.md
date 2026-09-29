@@ -108,7 +108,7 @@ network qualification remains open ([record](../docs/history/2026-09-29/zk-curre
 
 RAM-LFE registration, activation, restoration and receipts now reject both signed
 and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
-Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
+Public evaluators refuse before private work; 349 native crypto and 37 API controls pass.
 An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
 complete relation and current Torii qualification remain open. The execute API's
 false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
@@ -256,7 +256,7 @@ all 47 endpoint controls pass, with strict types and lint. The first fixture fai
 C# passes 269 managed controls plus four authenticated-native and three real wallet controls;
 a strict derivation-revision mismatch is repaired. Current Swift five-slice builds are running.
 Rust generic/specialized encryptors are private: 349 native and 37 API compile checks pass;
-Soracloud production refusal and cleanup reruns remain. Source-bound evidence is retained.
+Core/model/Torii containment passes 798/799; the sole error-fixture correction is rebuilding. Source-bound evidence is retained.
 See [SDK boundary evidence](../docs/history/2026-09-29/ram-lfe-sdk-encryption-retirement.md).
 
 Public guidance belongs in `iroha-docs`. FASTPQ plus 20 translations pass scoped

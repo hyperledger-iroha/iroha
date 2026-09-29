@@ -10,8 +10,7 @@ use super::*;
 use crate::{
     queue::RoutingDecision,
     smartcontracts::ivm::cache::IvmCache,
-    state::WorldReadOnly,
-    sumeragi::lanes::routing::RoutingInputs,
+    state::network_policy_routes::CapturedNetworkPolicyRoute,
     tx::{
         AcceptedTransaction, execution_rejection_from_admission_failure,
         rejected_transaction_gas_is_accountable,
@@ -19,31 +18,10 @@ use crate::{
 };
 use iroha_data_model::{
     ValidationFail,
-    block::ExternalExecutionContext,
     events::{EventBox, trigger_completed::TriggerCompletedEvent},
     transaction::{TransactionResult, error::TransactionRejectionReason},
 };
 use std::borrow::Cow;
-
-/// Resolve only the original validated context, or the signed genesis routing scope.
-fn freeze_network_route<W: WorldReadOnly>(
-    input: &TransactionEntrypoint,
-    context: Option<&ExternalExecutionContext>,
-    genesis_routes: Option<RoutingInputs<'_, W>>,
-    height: u64,
-) -> Result<RoutingDecision, String> {
-    if let Some(context) = context {
-        if context.entrypoint_hash != input.hash() {
-            return Err("Network route belongs to another source".into());
-        }
-        return Ok(RoutingDecision::new(context.lane_id, context.dataspace_id));
-    }
-    let routes = genesis_routes.ok_or("Network source lacks its authenticated execution route")?;
-    let borrowed = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(input));
-    routes
-        .execution_route(&borrowed, height)
-        .ok_or_else(|| "genesis Network route has no exact active lane".into())
-}
 
 struct FrozenNetworkSource<'source> {
     pub(super) routing: RoutingDecision,
@@ -115,33 +93,14 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             (false, None) => None,
             _ => return Err("Network source lacks its exact initial genesis admission".into()),
         };
-        let height = source.header().height().get();
         let now = source.header().creation_time();
-        let now_ms = u64::try_from(now.as_millis()).map_err(|_| "Network timestamp exceeds u64")?;
         let count = source.network_entrypoint_count();
-        let context = match (
-            source.header().execution_context_hash(),
-            source.execution_context(),
-        ) {
-            (None, None) => None,
-            (Some(expected), Some(context))
-                if context.has_current_version()
-                    && HashOf::new(context) == expected
-                    && context.external.len() == count =>
-            {
-                Some(context)
-            }
-            _ => return Err("Network source has an invalid execution context".into()),
-        };
-        let genesis_policy =
-            genesis_account.and_then(|_| crate::sumeragi::lanes::lane_policy(&self.state.world));
-        let genesis_routes = genesis_account.map(|_| RoutingInputs {
-            policy: genesis_policy.as_ref(),
-            lanes: self.state.world.sumeragi_lanes(),
-            dataspaces: &self.state.nexus.dataspace_catalog,
-            world: &self.state.world,
-            ledger_time_ms: now_ms,
-        });
+        let policy_routes = self
+            .state
+            .network_policy_routes
+            .as_ref()
+            .ok_or("Network source lacks its original pre-effect physical policy owner")?;
+        policy_routes.validate_carrier(source)?;
         let parameters = self.state.world.parameters.get();
         let mut sources = Vec::new();
         sources.try_reserve_exact(count).map_err(|_| {
@@ -150,8 +109,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             )
         })?;
         for (index, input) in source.network_entrypoints().enumerate() {
-            let embedded = context.map(|context| &context.external[index]);
-            let routing = freeze_network_route(input, embedded, genesis_routes, height)?;
+            let (routing, policy_route) = policy_routes.get(source, index)?;
             // Lane admission does not preserve TTL. Expansion filters invalid
             // merged inputs at this same global time before they enter Network,
             // and execution repeats normal signature/network/expiry validation.
@@ -195,17 +153,22 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                         let telemetry = Some(self.state.telemetry);
                         #[cfg(not(feature = "telemetry"))]
                         let telemetry = None;
-                        crate::tx::enforce_fraud_policy(
-                            &self.state.fraud_monitoring,
-                            signed.metadata(),
-                            telemetry,
-                            &crate::tx::LaneAssignment {
-                                lane_id: routing.lane_id,
-                                dataspace_id: routing.dataspace_id,
-                                dataspace_catalog: &self.state.nexus.dataspace_catalog,
-                            },
-                        )
-                        .and(admission)
+                        let fraud = if let Some(physical) = policy_route.physical() {
+                            let physical = physical.decision();
+                            crate::tx::enforce_fraud_policy(
+                                &self.state.fraud_monitoring,
+                                signed.metadata(),
+                                telemetry,
+                                &crate::tx::LaneAssignment {
+                                    lane_id: physical.lane_id,
+                                    dataspace_id: physical.dataspace_id,
+                                    dataspace_catalog: &self.state.nexus.dataspace_catalog,
+                                },
+                            )
+                        } else {
+                            Ok(())
+                        };
+                        fraud.and(admission)
                     }
                 } else {
                     admission
@@ -348,6 +311,15 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             .begin(ExecutionOutputV1::network_output_limit_rejection(
                 input_index,
             ))?;
+        let (captured_native, policy_route) = self
+            .state
+            .network_policy_routes
+            .as_ref()
+            .ok_or("Network source lost its physical policy owner")?
+            .get(self.source.0, index)?;
+        if captured_native != routing {
+            return Err("Network source changed its captured native route".into());
+        }
         let row = execute_network_attempt(
             self.state,
             &self.source,
@@ -356,6 +328,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             u64::from(input_index),
             self.source.header().height().get(),
             routing,
+            policy_route,
             admitted,
             quarantine == QuarantineAdmission::Overflow,
             reservation,
@@ -379,6 +352,7 @@ pub(in crate::state) fn execute_network_attempt(
     execution_index: u64,
     height: u64,
     routing: RoutingDecision,
+    policy_route: CapturedNetworkPolicyRoute,
     admitted: Result<AcceptedTransaction<'_>, TransactionRejectionReason>,
     quarantine_overflow: bool,
     reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
@@ -409,7 +383,8 @@ pub(in crate::state) fn execute_network_attempt(
             accepted,
             transaction,
             cache,
-            Some(routing),
+            routing,
+            policy_route,
         ) {
             Ok(sequence) => Ok(sequence),
             Err(ExecutionAttemptError::Rejected(reason)) => Err(reason),
@@ -681,66 +656,4 @@ fn require_rejection_fragment(
         return Err("rejection settlement retained rejected business capture".into());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod routing_tests {
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-    use iroha_data_model::{prelude::*, transaction::FeePaymentIntent};
-    use iroha_model_base::topology::{DataSpaceId, LaneId};
-
-    fn input() -> TransactionEntrypoint {
-        TransactionBuilder::new(
-            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-                Hash::new(b"native Network route test"),
-            )),
-            iroha_test_samples::ALICE_ID.clone(),
-            FeePaymentIntent::authority(vec![], None),
-        )
-        .with_instructions([Log::new(Level::INFO, "source route".to_owned())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-        .into()
-    }
-
-    #[test]
-    fn network_keeps_exact_context_and_requires_it_outside_genesis() {
-        let state = State::new(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let world = state.world.view();
-        let source = input();
-        let genesis_routes = RoutingInputs {
-            policy: None,
-            lanes: world.sumeragi_lanes(),
-            dataspaces: &world.dataspace_catalog,
-            world: &world,
-            ledger_time_ms: 1_000,
-        };
-        assert_eq!(
-            freeze_network_route(&source, None, Some(genesis_routes), 1).unwrap(),
-            RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
-        );
-        assert!(
-            freeze_network_route::<crate::state::WorldView<'_>>(&source, None, None, 2).is_err()
-        );
-        let mut original =
-            ExternalExecutionContext::new(source.hash(), LaneId::new(7), DataSpaceId::new(9));
-        assert_eq!(
-            freeze_network_route::<crate::state::WorldView<'_>>(&source, Some(&original), None, 2)
-                .unwrap(),
-            RoutingDecision::new(LaneId::new(7), DataSpaceId::new(9))
-        );
-        original.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign source"));
-        assert!(
-            freeze_network_route::<crate::state::WorldView<'_>>(&source, Some(&original), None, 2)
-                .is_err()
-        );
-    }
 }

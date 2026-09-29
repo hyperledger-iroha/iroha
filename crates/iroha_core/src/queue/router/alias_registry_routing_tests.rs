@@ -264,11 +264,18 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
     overlay.current_lane_id = Some(leg.route.lane_id);
     overlay.current_dataspace_id = Some(leg.route.dataspace_id);
     overlay.world.current_dataspace_id = Some(leg.route.dataspace_id);
+    let policy_route =
+        crate::state::network_policy_routes::CapturedNetworkPolicyRoute::for_component(
+            &transaction,
+            &overlay,
+            leg.route,
+        );
     crate::state::StateBlock::execute_accepted_transaction_in_overlay(
         transaction,
         &mut overlay,
         &mut IvmCache::new(),
-        Some(leg.route),
+        leg.route,
+        policy_route,
     )
     .map_err(|error| format!("{error:?}"))?;
     overlay.apply();

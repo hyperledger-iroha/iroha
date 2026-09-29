@@ -11,6 +11,7 @@
 //! as various forms of validation are performed.
 mod authority_admission;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
+use crate::state::network_policy_routes::CapturedNetworkPolicyRoute;
 
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
@@ -2959,7 +2960,8 @@ impl StateBlock<'_> {
     pub(crate) fn validate_stateful_admission(
         tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
         validate_kagemusha_top_up_admission_invariants_v1(tx).map_err(|reason| {
@@ -3097,33 +3099,17 @@ impl StateBlock<'_> {
                 ));
             }
         }
-        let routing_decision = match routing_decision {
-            Some(decision) => decision,
-            None => {
-                let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                    &state_transaction.nexus,
-                    &accepted,
-                    &state_transaction.world,
-                    state_transaction.block_unix_timestamp_ms(),
-                    state_transaction.block_height(),
-                )
-                .map(|plan| plan.coordinator_route())
-                .map_err(|err| {
-                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                        "transaction routing could not be resolved: {err}"
-                    )))
-                })?
-            }
-        };
+        let physical = policy_route
+            .for_signed(tx, state_transaction, routing_decision)?
+            .decision();
         state_transaction.current_lane_id = Some(routing_decision.lane_id);
         state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
         state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         crate::executor::validate_transaction_fee_admission(state_transaction, tx)
             .map_err(TransactionRejectionReason::Validation)?;
         let lane_assignment = LaneAssignment {
-            lane_id: routing_decision.lane_id,
-            dataspace_id: routing_decision.dataspace_id,
+            lane_id: physical.lane_id,
+            dataspace_id: physical.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
@@ -3156,7 +3142,8 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         if let Some(reason) = state_transaction.execution_deferral() {
             return Err(ExecutionAttemptError::Deferred(reason));
@@ -3171,10 +3158,15 @@ impl StateBlock<'_> {
                 state_transaction,
                 ivm_cache,
                 routing_decision,
+                policy_route,
             );
         }
-        let admission =
-            Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
+        let admission = Self::validate_stateful_admission(
+            tx.as_ref(),
+            state_transaction,
+            routing_decision,
+            policy_route,
+        )?;
         let authority = admission.authority.clone();
         let allow_unregistered_authority = admission.allow_unregistered_authority;
         match tx.as_ref().instructions() {
@@ -3328,7 +3320,8 @@ impl StateBlock<'_> {
         reveal: &SealedTransactionReveal,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
@@ -3353,6 +3346,7 @@ impl StateBlock<'_> {
             state_transaction,
             ivm_cache,
             routing_decision,
+            policy_route,
         )
     }
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -5241,11 +5235,13 @@ pub fn execute_component_transaction_for_testing(
     overlay.current_lane_id = Some(route.lane_id);
     overlay.current_dataspace_id = Some(route.dataspace_id);
     overlay.world.current_dataspace_id = Some(route.dataspace_id);
+    let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
     match StateBlock::execute_accepted_transaction_in_overlay(
         accepted,
         &mut overlay,
         cache,
-        Some(route),
+        route,
+        policy_route,
     ) {
         Ok(sequence) => {
             overlay.apply();
@@ -12742,14 +12738,15 @@ pub mod tests {
         let mut overlay = block.transaction_for_fastpq_testing(Hash::from(
             accepted.entrypoint().execution_call_hash(),
         ));
+        let route =
+            crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
         let result = StateBlock::execute_accepted_transaction_in_overlay(
             accepted,
             &mut overlay,
             &mut cache,
-            Some(crate::queue::RoutingDecision::new(
-                TestLaneId::SINGLE,
-                TestDataSpaceId::UNIVERSAL,
-            )),
+            route,
+            policy_route,
         );
         result.expect("zero block gas limit must mean unlimited");
         assert!(overlay.last_tx_gas_used > 0);

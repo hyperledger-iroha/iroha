@@ -146,3 +146,188 @@ parameter, noise-depth, circuit-privacy or proof-capacity gates. Next compare th
 complete masked/broadcast tape plan against a reviewed BFV-RNS modulus and key
 schedule, including maximum `SelectEqZero` programs and every output. Production
 remains unavailable until all replacement-plan milestones pass.
+
+## Complete scalar-tape lowering contract candidate
+
+This is a private structural planning contract, not a selected encryption
+profile. It preserves the source interpreter's eleven instructions and admits
+no alternate evaluator. The concrete plaintext implementation covers N=4096;
+RNS dimension, primes, distributions, levels and sanitization are still
+unselected. Symbolic polynomial counts below must be instantiated and checked
+against a reviewed profile before any encryption or production admission.
+
+### Input, output and private owners
+
+The input is one packed scalar vector: slot 0 is length `0..63`, slots
+`1..=length` are bytes `0..255`, and all other slots through 127 are zero. The
+first 64 logical slots preserve `encode_identifier_slots` exactly; a value of
+256 is invalid in a byte slot. Message normalization and identifier-specific
+canonicality remain separate checks. The client owns the message and encryption
+coins. Its well-formedness proof must establish those bounds, the exact scalar
+embedding and encryption relation under the authenticated policy key, binding
+the same input commitment/context as the evaluator's execution proof. The
+evaluator must not be required to know the client's plaintext or coins.
+
+Both proof relations must be verified and bound to the identical typed input
+commitment; an unchecked client assertion or token is insufficient. A proposed
+compound envelope must count both proofs and their public instances in its
+limits. This does not prescribe recursive verification or authorize a new
+trusted input issuer. The input-admission relation is not implemented.
+
+Four registers start at scalar zero. Reads before the first load are valid:
+the source initializes these registers, rather than treating them as undefined.
+Thirty-two memory lanes are rederived for each evaluation from the private key,
+function identity and associated data; `StoreState` persists only within that
+tape invocation. No cross-request state transition is introduced.
+
+Preserve 1..256 tape instructions, four registers, 32 lanes and 1..64 ordered
+outputs. Scalars and immediates range over `0..256`. An output is a scalar, not
+a byte: never truncate 256. `Output` snapshots the source at that instruction;
+later writes cannot alter earlier outputs. Pack the ordered outputs in slots
+`0..output_count`, with all remaining slots zero, including slots 64..127.
+The opening authority must check this exact output encoding, declared count and
+context before hashing the opened scalar sequence. Its authenticated plaintext
+opening remains distinct from the execution proof and ciphertext commitment.
+
+The existing outer request cap is 1 MiB; associated data is `0..512` bytes. The
+hidden tape owner reserves 12,288 instruction bytes and its explicit frame cap
+remains `RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES`. Existing generic secrets remain
+`1..4096` bytes for their separate backends. The proposed programmed `ProgramKey`
+is exactly one canonical nonzero 32-byte Fp element; arbitrary old secret bytes
+are not silently converted into that key. Planning consumes no secret key,
+plaintext input or randomness. It borrows the validated clearing tape, keeps
+its program-dependent counts/indices private, and clears owned plan scratch.
+No raw program, private count report or planning trace is added as a public
+sidecar. Detailed errors belong to the policy owner's local builder; public
+execution refusal must not reveal hidden opcodes or instruction positions.
+
+### One explicit lowering for all eleven operations
+
+Use a uniform broadcast-scalar representation for each register and memory
+lane. `Embed(v)` denotes the selected BFV scheme's exact trivial plaintext
+embedding, not fresh encryption or sanitization. Those intermediate values
+remain private evaluator/prover material. `CMul` includes its full tensor
+product, scale/round and relinearization; `Galois(a)` includes a full key switch.
+Neither is a host callback exempt from the final proof.
+
+| Tape instruction | Required semantic lowering | Logical multiplication rank |
+| --- | --- | --- |
+| `LoadInput(dst,j)` | Mask packed input by `e_j`; for each of the seven fixed exponents, apply Galois then add to the running value; replace dst with the broadcast scalar. | 0 |
+| `LoadState(dst,lane)` | Copy the lane's immutable value into dst, without changing the lane. | lane rank |
+| `StoreState(lane,src)` | Snapshot src into the lane, without changing src. | src rank |
+| `LoadConst(dst,v)` | `Embed(v)` broadcast to every scalar slot. | 0 |
+| `Add(dst,a,b)` | Align immutable operand copies, add, replace dst. | `max(a,b)` |
+| `AddPlain(dst,a,v)` | Exact canonical scalar plaintext addition. | a rank |
+| `SubPlain(dst,a,v)` | Exact canonical scalar plaintext subtraction. | a rank |
+| `MulPlain(dst,a,v)` | Exact canonical scalar plaintext multiplication. | a rank |
+| `Mul(dst,a,b)` | Align copies, `CMul(a,b)`, replace dst. | `max(a,b)+1` |
+| `SelectEqZero(dst,c,z,n)` | Full expansion below; source values are captured before replacing dst. | `max(c+10,z+1,n+1)` |
+| `Output(src)` | Multiply captured src by next output mask; align and add to the packed output accumulator, preserving order. | max emitted rank |
+
+The table's ranks are dependency depths, **not RNS modulus levels or noise
+budgets**. A physical level scheduler may map ranks to a reviewed chain only
+when its exact switching/rounding semantics and correctness bounds are supplied.
+Addition or plaintext multiplication can exhaust noise without changing rank.
+The existing logical rank ceiling 16 is retained as a planning bound, not a
+promise that any encryption profile supports that depth.
+
+For `SelectEqZero`, perform exactly eight repeated ciphertext squarings of c,
+then one ciphertext multiplication by `Embed(1)` as in the source exponentiation
+schedule. Form `indicator = Embed(1) - powered`, `delta = z - n`, then
+`result = n + CMul(indicator, delta)`. This is ten ciphertext multiplications,
+two ciphertext subtractions, one ciphertext addition and two explicit one
+embeddings; constant folding is not part of this initial lowering. Squarings
+require relinearization too. Aliasing dst with any source is safe only because
+all sources remain immutable until the result is complete. This expansion is
+correct only for scalar F257 inputs; the client admission and subsequent
+scalar-preserving transitions are essential.
+
+Each input load costs one polynomial plaintext mask, seven automorphisms with
+key switches and seven ciphertext additions. Each output costs one polynomial
+plaintext mask, and outputs after the first cost an accumulator addition.
+A mask has centered l1 norm 8,256. A broadcast scalar has one nonzero polynomial
+coefficient bounded by 128; a general scalar-packed message has centered l1 at
+most 16,384. Intermediate partially broadcast/accumulated messages must retain
+the appropriate message-shape bound. These facts are inputs to a noise proof,
+not replacements for encoding/rounding and key-switch error terms.
+
+The seven Galois-key roles and relinearization role must be authenticated from
+the typed policy. The old diagnostic bundle's prohibition of rotation keys
+cannot be reused for this replacement. Required actual level/basis variants,
+decomposition digits, special primes and key sizes remain explicit unresolved
+profile requirements. No bootstrap, refresh-as-bootstrap or implicit modulus
+reset is permitted.
+
+### Resource accounting and unresolved qualification
+
+The planner must separate three outputs: exact structural counts, symbolic
+profile-dependent requirements, and measured proof/backend limits. It may
+produce an `UnqualifiedPlan`; it must not produce an executable/qualified token
+while any noise, input-admission, key, physical-level, sanitization, codec or
+proof requirement is absent. Unknown costs never become zero.
+
+Track each register/lane's current value and rank, instruction/output counts,
+all primitive counts, required key roles and checked live storage. Process all
+256 possible tape positions; the universal relation constrains inactive positions
+to preserve state and emit nothing. Private instruction count, opcode and index
+selectors must not select a smaller public circuit, proof or key. Active-work
+counts alone therefore underestimate the fixed hidden-program relation. Native
+timing/allocation leakage needs a separately stated and qualified policy; this
+planner does not establish oblivious execution.
+
+The structurally valid worst cases are material: 255 independent selects followed
+by an output require 2,550 ciphertext multiplications even though each select
+has rank 10. Conversely, 255 input loads followed by an output require 1,785
+Galois key switches. These are separate extrema, not one jointly attainable
+program. Sixty-four outputs require 64 masks and 63 accumulator additions.
+Initialized zero registers do not justify removing private instructions from
+the proof relation. A complete feasibility estimate must cost the universal
+selection/routing machinery and inactive positions as well as real arithmetic.
+
+Let `C(level)=2*N*L(level)*8` bytes for a two-component residue owner and
+`T(level)=3*N*L(level)*8` for an unrelinearized tensor, using canonical u64
+residues. These are checked storage formulas, not selected N or limb counts.
+Keep the input owner, 32 lane owners, four register owners, optional output
+accumulator and all operands live until each replacement commits. Count
+alignment copies, old destination, running broadcast plus rotated/add result,
+select intermediates, three-component multiplication buffers, decomposition,
+basis-extension/NTT scratch and clearing transfers separately. Immutable sharing
+may reduce allocations only when a liveness proof counts the actual owners;
+logical aliases do not authorize destructive mutation or early erasure.
+
+The selected RNS implementation must provide a checked workspace inventory and
+physical-level/noise transfer rule for every primitive. Plaintext masking needs
+its coefficient norm **and** the scheme's plaintext-embedding/rounding terms;
+`E'=8256*E` alone is not a complete BFV bound. Key switches, scale-and-round and
+modulus switches need their actual error terms and temporary bases. A missing
+rule yields a typed unresolved requirement, not a conservative-looking guessed
+number. No planner may invoke the old scalar-modulus reconstruction owner as a
+genuine Q-product profile.
+
+After output packing, require an explicit reviewed circuit-privacy/sanitization
+stage even for constant-only programs. Its fresh randomness, distribution,
+noise cost, buffers, key material, proof constraints and lifetime/query limits
+belong in the plan. Adding an encryption of zero is not accepted as a generic
+sanitizer. A proof can constrain bounded coins and the transformation; it does
+not prove that an honest random sampler supplied entropy. That assumption and
+the clearing RNG owner require independent review and implementation evidence.
+
+Input and output frames, both proof relations, verification keys, authenticated
+evaluation-key material and any public-instance encodings must have exact
+bounded canonical sizes. The total proof budget remains 192 KiB, outer envelope
+1 MiB and k<=16; inputs/evaluation keys already owned by the consumer must not be
+duplicated as sidecars. Policy-key storage/loading is also bounded separately,
+not hidden outside the accounting. Profile-specific maxima and prover-memory
+ceilings remain to be supplied rather than invented here. The maximum single
+Poseidon prototype already measured 233–239 ms complete IPA verification,
+exceeding the existing 20 ms soft budget; no complete execution/admission budget
+has passed.
+
+The next test-only planner can implement tape/rank/count/alias bookkeeping and
+symbolic primitive requirements without keys or encryption. Required controls
+cover all eleven operations, all register/lane alias cases, zero-initialized
+reads, exact 256/257 and 64/65 boundaries, rank-16/17 cases, all ten select
+multiplications, the two extrema above, output snapshots, checked byte arithmetic
+and actual scratch erasure on success/error/unwind. It remains structurally
+unqualified until the replacement plan supplies and independently reviews every
+profile-dependent rule and the complete proof budget.

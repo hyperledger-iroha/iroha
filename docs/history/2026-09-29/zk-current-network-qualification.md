@@ -161,3 +161,23 @@ is under `fastpq-native-lane-normal-20260929T110745Z`, its
 `remaining-independent-controls`, and `kagami-execution-result-normal-20260929T112602Z`
 in the dated local remediation directory. No canonical fixtures were generated,
 and no production check or signed workload was weakened to obtain a pass.
+
+The recorder amendment's normal Core build passes in 517.449 seconds with exact
+source and dependency-output guards. Its launcher then fails before native tests
+because Python 3.9 does not accept `zip(strict=True)`; the failed runner and error
+are retained. A corrected, independently reviewed no-Cargo continuation uses the
+same copied executable. The 13 State and 12 source context controls pass again.
+Inventory improves to 94 passed / five failed / zero ignored. The new missing,
+reset and foreign-recorder sticky-failure control passes. All five remaining
+failures are in `owned_sources_tests`, whose source fixture lacks an authenticated
+execution route; they now get past the earlier recorder/manifest failures.
+No authority check is relaxed. The route split and exact signed-source fixture
+migration remain in progress. Evidence is retained in
+`fastpq-recorder-normal-20260929T113647Z/native-controls-retry1`.
+
+The remaining three native routing controls and original-recorder ownership
+control pass on that unchanged executable. The combined census is 123 passed,
+five failed and zero ignored, with all 128 selected names executed exactly once.
+`fastpq-recorder-normal-20260929T113647Z/combined-result.json` reconciles both
+reader runs and retains the launcher interruption. The five failures prevent
+claiming a passing inventory suite or canonical SDK fixture readiness.

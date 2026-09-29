@@ -1539,6 +1539,9 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
             crate::state::StateBlockStartError::Membership(error) => {
                 Self::MembershipAdmission(error)
             }
+            crate::state::StateBlockStartError::ExecutionDeferred(error) => {
+                Self::ExecutionDeferred(error)
+            }
             crate::state::StateBlockStartError::Stage(error) => error,
         }
     }

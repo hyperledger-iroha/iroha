@@ -187,9 +187,14 @@ opening and proof verification return distinct typed results; a higher-level
 resolve operation may compose them without hiding their different authorities.
 An unavailable or over-budget program fails before private/network work.
 
-The next implementable slice is milestone 2's internal RNS profile/residue owner
-and a test-only scalar reference, after milestones 1 and 3 supply reviewed
-encoding/parameter inputs. Small arithmetic fixtures may validate code earlier
+The immediate determinate slice is the [complete eleven-operation lowering
+and resource contract](ram_lfe_plaintext_packing.md#complete-scalar-tape-lowering-contract-candidate):
+a test-only structural planner may track the real tape, ranks, buffers and
+unresolved primitive obligations without choosing a security profile. It must
+return an unqualified plan while physical levels, noise, input admission,
+sanitization, key ownership or proof costs remain unknown. The next arithmetic
+slice is milestone 2's genuine RNS profile/residue owner and scalar reference,
+after milestones 1 and 3 supply reviewed encoding/parameter inputs. Small arithmetic fixtures may validate code earlier
 but cannot select a production profile. Full `SelectEqZero` capacity, hidden
 function privacy and the complete proof relation remain hard gates. Do not switch
 the current interpreter to rounded dispatch, promote diagnostic refresh as a
