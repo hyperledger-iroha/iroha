@@ -203,8 +203,8 @@ FAMILIES = {
                 )
             ),
         ),
-        definition_sha256="fd5e33624892c8034acbe981fa8080df5ba5e0cb76853ea485bdd76da28019aa",
-        expanded_preimage_sha256="99dc2af613287fa81ee6dfd236922a8c0f61e32f6c4f4d98a13a22809c764ea8",
+        definition_sha256="24d376896f5fa3e44528fe6722f5956f600eba827fed648e085fd0ffa44bd024",
+        expanded_preimage_sha256="926c35fed300911fe3aab9f0dff9406d94cd0dc662994fd26039e8fce61d3812",
     ),
     "iso_lifecycle_submission_handlers": WrapperFamily(
         parameters=("handler", "message_type", "access_context"),
@@ -261,8 +261,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 556
-ROUTE_TUPLE_SHA256 = "4c99e2b882090243f0cc49717aee27c34f73c6891b07c4a1ccbaa12e371f6d3a"
+ROUTE_ROW_COUNT = 566
+ROUTE_TUPLE_SHA256 = "fb4a3cea2b230523966403c6c72d7fc4dbd70fdca9fa8cb1c23f03bd51385123"
 
 
 def _normalized_tokens(source: str) -> bytes:

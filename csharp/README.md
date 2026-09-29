@@ -195,9 +195,9 @@ The direct V1 instruction contains only the referendum selector, owner, new tota
 bond and requested lock duration. The choice is immutable and read from finalized
 state; a repeated cast is not an update.
 
-Contract-call drafts require the signature-bound `QueuePlanSynced` admission
-intent. `CallContractAsync` checks it with the exact caller-trusted network,
-authority, invocation, metadata and fee before returning a draft for local signing.
+`CallContractAsync` validates the canonical nine-field transaction payload against
+the exact caller-trusted network, authority, invocation, metadata and fee before
+returning a draft for local signing. Retired admission-intent layouts are rejected.
 
 ## Run the sample
 
@@ -341,7 +341,7 @@ This uses Core's default change diversifier; reusing a nondefault input diversif
 would produce another owner. `ConfidentialNotes` supplies native-backed default
 diversifier, owner, commitment, root and path helpers without managed cryptography.
 
-Run the two-proof disposable example with the normal ABI-24 runtime library
+Run the two-proof disposable example with the normal ABI-25 runtime library
 available to the .NET loader:
 
 ```sh

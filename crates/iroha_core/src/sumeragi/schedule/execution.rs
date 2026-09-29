@@ -108,9 +108,57 @@ impl ScheduleStep {
     }
 }
 
+/// Authenticate a successor's original native context at one committed State cut.
+/// Reused before event attribution and by the pristine writer before schedule effects.
+pub(crate) fn authenticate_successor_context(
+    state: &(impl StateReadOnly + ?Sized),
+    header: &iroha_data_model::block::BlockHeader,
+    expected: &GlobalThresholdBeaconPulseContextV1,
+) -> Result<(), ScheduleError> {
+    let height = header.height().get();
+    if height <= 1
+        || u64::try_from(state.block_hashes().hash_count())
+            .ok()
+            .and_then(|cut| cut.checked_add(1))
+            != Some(height)
+        || header.prev_block_hash()
+            != state
+                .block_hashes()
+                .hash_count()
+                .checked_sub(1)
+                .and_then(|index| state.block_hashes().hash_at(index))
+                .copied()
+    {
+        return Err(ScheduleError::Epoch(
+            "native successor differs from its original committed header/parent cut".into(),
+        ));
+    }
+    // Canonical committed reads exclude differences in local QC signer subsets.
+    let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)?;
+    let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)?;
+    let instance =
+        crate::sumeragi::node::global_instance(genesis.block(), &state.chain_id().to_string());
+    let current = &state.world().consensus_schedule().ready(height)?.epoch;
+    expected
+        .validate()
+        .map_err(|error| ScheduleError::Epoch(error.into()))?;
+    if expected.instance != instance.0
+        || expected.parent_consensus_hash != parent.core_hash().0
+        || expected.parent_result != parent.result().0
+        || expected.epoch != current.authorization.epoch
+        || expected.epoch_context_id != current.context_id().map_err(ScheduleError::Epoch)?
+    {
+        return Err(ScheduleError::Epoch(
+            "native control differs from the pristine committed instance/parent/result/epoch"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 impl StateBlock<'_> {
     /// Capture the exact authenticated source in the pristine constructor callback, after
-    /// source-generation/header validation and before any QueuePlan, NPoS or start effect.
+    /// source-generation/header validation and before any schedule or execution effect.
     /// Missing mandatory transported beacon work is refused; local aggregation is irrelevant.
     pub(crate) fn request_sumeragi_schedule(
         &mut self,
@@ -156,23 +204,7 @@ impl StateBlock<'_> {
                     "native successor lacks its authenticated header context".into(),
                 )
             })?;
-            // Deterministic committed reads ignore per-node QC signer subsets. The exact
-            // pristine overlay owns this same predecessor; no local reducer grants authority.
-            let parent = crate::sumeragi::certified_chain::committed_block(self, height - 1)?;
-            let genesis = crate::sumeragi::certified_chain::committed_block(self, genesis_height)?;
-            let instance = crate::sumeragi::node::global_instance(
-                genesis.block(),
-                &self.chain_id().to_string(),
-            );
-            if expected.instance != instance.0
-                || expected.parent_consensus_hash != parent.core_hash().0
-                || expected.parent_result != parent.result().0
-            {
-                return Err(ScheduleError::Epoch(
-                    "native control differs from the pristine committed instance/parent/result"
-                        .into(),
-                ));
-            }
+            authenticate_successor_context(self, &self._curr_block, expected)?;
         }
         let budget = self.pipeline_ivm_prepared_cache.execution_budget();
         let params = ChainParamsRecord::from_parameters(self.world.parameters().sumeragi());

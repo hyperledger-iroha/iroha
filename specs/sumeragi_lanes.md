@@ -225,6 +225,11 @@ recomputes the floor from the lane blocks; a different declaration makes the blo
    lanes at their retirement height are removed; fixed lanes are reconciled with the policy;
    stalled lanes close (§6.4); at most one autoscale transition applies (§6.2–§6.3).
 
+FASTPQ execution-source capture freezes these same committed native lane incarnations before
+block-start effects. At height `h`, a nonzero lane uses its exact record only while it admits
+anchor `h - 1`; lane 0 retains the global chain's original incarnation. Physical storage catalogs
+do not grant execution-lane authority, and later lifecycle effects cannot change that frozen scope.
+
 **Parallel execution.** Step 3 fixes the *result*: the canonical serial order above. The executor
 may run merged lane batches concurrently with the deterministic parallel scheduler, which commits
 a transaction only in canonical order and re-executes it on a read/write conflict with an earlier
@@ -274,6 +279,23 @@ otherwise the default route is sharded over lane 0 and the admitted elastic lane
 preserving their order). A node routes new transactions with its latest applied `G` state; `G`
 re-evaluates the route at merge (§4.3 step 3), so a transaction routed just before a lane opened
 or closed is dropped as misrouted without effect, stays pending in the queue and is re-routed.
+
+**Application policy.** A native lane determines ordering and execution provenance; the
+transaction's physical application profile is independently selected by the deterministic Nexus
+routing policy over the current execution state. Queue admission applies that physical profile,
+and merge execution resolves it again. The physical plan must contain exactly one route; the
+current executor rejects multi-route plans. Its dataspace must equal the authenticated native
+execution route's dataspace. Manifest readiness, governance hooks, privacy, compliance and fraud
+checks use the exact physical profile, including when its numeric lane identifier collides with
+a native lane identifier. Execution source identity and output custody retain the native lane
+and incarnation. No catalog-order choice or same-dataspace sibling substitutes for the selected
+application profile.
+
+The configured genesis signature authenticates bootstrap inputs before execution. Each input
+carries a private admission capability bound to its exact header, transaction hash and position,
+usable only while committed history is empty. This capability exempts that input from runtime
+fraud-assessment metadata, which the canonical genesis envelope cannot carry. Ordinary execution,
+including an isolated component with a height-one header, retains the configured fraud policy.
 
 **Rescue.** `G` does not enforce routes on its own transactions. A leader includes a transaction
 routed to another lane once it is older than `2A` global block times (by its creation time
@@ -347,9 +369,10 @@ changing the policy.
 ## 7. Fees and settlement
 
 Lane transactions pay fees at merge execution like any transaction (the fee model of
-`nexus_fee_model.md`); per-lane settlement buffers and fee schedules are profile fields applied by
-the executor. There are no lane relay envelopes, settlement receipts or FASTPQ relay proofs: `G`
-executes the transactions itself.
+`nexus_fee_model.md`). Fee admission uses the transaction's dataspace, which must agree between
+the physical application policy and authenticated native execution route (§5.1). There are no
+lane relay envelopes, settlement receipts or FASTPQ relay proofs: `G` executes the transactions
+itself.
 
 ## 8. Status and telemetry
 
@@ -358,6 +381,13 @@ executes the transactions itself.
 pinned committee and parameters, activation, closing, merged frontier, stall bookkeeping) and the
 status of the node's instance of it (the same `SumeragiStatus` as `G`'s, or none before the
 instance runs). Lane instances report through the node's log observer like `G`.
+
+`/v1/sumeragi/diagnostics` reports pressure from its live Queue owner, committed NPoS
+parameters and physical lane governance. It does not retain synthetic lane/dataspace
+commitment or pipeline snapshots from the retired driver. A missing Queue owner is
+unavailable rather than an empty queue. Account dataspace summaries expose bindings,
+portfolio counters and manifest state; native lane incarnation/frontier information
+comes from `/v1/sumeragi/lanes`. These diagnostics do not qualify RS16 availability.
 
 ## 9. What lanes do not have
 

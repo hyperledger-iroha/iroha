@@ -245,7 +245,7 @@ async fn submit_contract_call_once(
     signing_client.key_pair = iroha_crypto::KeyPair::from_private_key(private_key.clone())?;
     let account = signing_client.build()?.account_client()?;
     // The SDK authenticates prepare, verifies it against the local artifact, signs the exact
-    // QueuePlan payload, and submits once. An ambiguous outcome must never restart preparation.
+    // transaction payload, and submits once. An ambiguous outcome must never restart preparation.
     let result = account
         .post_contract_call_json(
             authority,

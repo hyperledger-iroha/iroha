@@ -1715,6 +1715,64 @@ mod routed_read_merge_regression_tests {
         .expect("routed-read merge test memory envelope should fit")
     }
 
+    #[tokio::test]
+    async fn dataspace_summary_merge_preserves_portfolios_and_rejects_retired_consensus() {
+        let shard = |id: u64, positions: u64, active: bool| norito::json!({
+            "account": "alice",
+            "account_id": "alice",
+            "uaid": "test-uaid",
+            "totals": {},
+            "dataspaces": [{
+                "dataspace_id": id,
+                "dataspace_alias": null,
+                "accounts": ["alice"],
+                "portfolio": {"accounts": 1, "positions": positions},
+                "manifest": {"present": true, "active": active}
+            }]
+        });
+        let response = merged_dataspace_summary_response(
+            vec![shard(7, 2, true), shard(9, 3, false)],
+            "proxy",
+            test_budget(),
+        )
+        .expect("current portfolio summaries merge");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("summary response body");
+        let merged: Value = norito::json::from_slice(&body).expect("summary JSON");
+        assert_eq!(merged["account"], Value::from("alice"));
+        assert_eq!(merged["account_id"], Value::from("alice"));
+        assert_eq!(merged["uaid"], Value::from("test-uaid"));
+        assert_eq!(merged["totals"], norito::json!({
+            "dataspaces": 2, "accounts_bound": 1, "portfolio_accounts": 2,
+            "portfolio_positions": 5, "manifests_total": 2, "manifests_active": 1
+        }));
+        assert_eq!(merged["dataspaces"][0]["dataspace_id"], Value::from(7));
+        assert_eq!(merged["dataspaces"][1]["dataspace_id"], Value::from(9));
+        assert!(merged["dataspaces"].as_array().unwrap().iter()
+            .all(|row| row.get("consensus").is_none()));
+
+        for key in ["consensus_entries", "consensus_tx_count", "consensus_chunks_total",
+            "consensus_rbc_bytes_total", "consensus_teu_total"] {
+            let mut retired = shard(7, 2, true);
+            retired.as_object_mut().unwrap()
+                .get_mut("totals").unwrap().as_object_mut().unwrap()
+                .insert(key.into(), Value::from(0));
+            let response = merged_dataspace_summary_response(vec![retired], "proxy", test_budget())
+                .expect_err("even zero retired totals are not the current protocol");
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        for value in [Value::Null, norito::json!({})] {
+            let mut retired = shard(7, 2, true);
+            retired.as_object_mut().unwrap()
+                .get_mut("dataspaces").unwrap().as_array_mut().unwrap()[0]
+                .as_object_mut().unwrap().insert("consensus".into(), value);
+            let response = merged_dataspace_summary_response(vec![retired], "proxy", test_budget())
+                .expect_err("retired commitment projection is rejected");
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
     fn test_manifest_uaid() -> iroha_data_model::nexus::UniversalAccountId {
         iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
             b"torii-space-directory-merge-test-uaid",
@@ -2598,6 +2656,15 @@ fn merged_dataspace_summary_response(
     let (row_count, account_count, account_bytes) = payloads.iter().try_fold(
         (0_usize, 0_usize, 0_usize),
         |(rows_seen, accounts_seen, account_bytes), payload| {
+            if payload
+                .get("totals")
+                .and_then(Value::as_object)
+                .is_some_and(|totals| totals.keys().any(|key| key.starts_with("consensus_")))
+            {
+                return Err(torii_internal_json_error(
+                    "dataspace summaries must not contain retired consensus totals",
+                ));
+            }
             let rows = payload
                 .as_object()
                 .and_then(|object| object.get("dataspaces"))
@@ -2613,6 +2680,11 @@ fn merged_dataspace_summary_response(
             let (accounts_seen, account_bytes) =
                 rows.iter()
                     .try_fold((accounts_seen, account_bytes), |(count, bytes), row| {
+                        if row.get("consensus").is_some() {
+                            return Err(torii_internal_json_error(
+                                "dataspace summary rows must not contain retired consensus commitments",
+                            ));
+                        }
                         let Some(accounts) = row.get("accounts").and_then(Value::as_array) else {
                             return Ok((count, bytes));
                         };
@@ -2646,11 +2718,6 @@ fn merged_dataspace_summary_response(
     let mut portfolio_positions_total = 0u64;
     let mut manifests_total = 0u64;
     let mut manifests_active = 0u64;
-    let mut consensus_entries_total = 0u64;
-    let mut consensus_tx_total = 0u64;
-    let mut consensus_chunks_total = 0u64;
-    let mut consensus_rbc_bytes_total = 0u64;
-    let mut consensus_teu_total = 0u64;
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -2725,37 +2792,6 @@ fn merged_dataspace_summary_response(
             {
                 manifests_active = manifests_active.saturating_add(1);
             }
-            let consensus = row.get("consensus").and_then(Value::as_object);
-            consensus_entries_total = consensus_entries_total.saturating_add(
-                consensus
-                    .and_then(|consensus| consensus.get("entries"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
-            consensus_tx_total = consensus_tx_total.saturating_add(
-                consensus
-                    .and_then(|consensus| consensus.get("tx_count"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
-            consensus_chunks_total = consensus_chunks_total.saturating_add(
-                consensus
-                    .and_then(|consensus| consensus.get("total_chunks"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
-            consensus_rbc_bytes_total = consensus_rbc_bytes_total.saturating_add(
-                consensus
-                    .and_then(|consensus| consensus.get("rbc_bytes_total"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
-            consensus_teu_total = consensus_teu_total.saturating_add(
-                consensus
-                    .and_then(|consensus| consensus.get("teu_total"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-            );
             dataspaces.insert(dataspace_id, row);
         }
     }
@@ -2768,11 +2804,6 @@ fn merged_dataspace_summary_response(
         "portfolio_positions",
         "manifests_total",
         "manifests_active",
-        "consensus_entries",
-        "consensus_tx_count",
-        "consensus_chunks_total",
-        "consensus_rbc_bytes_total",
-        "consensus_teu_total",
         "account",
         "account_id",
         "uaid",
@@ -2782,7 +2813,7 @@ fn merged_dataspace_summary_response(
     .into_iter()
     .try_fold(0_usize, |bytes, key| bytes.checked_add(key.len()))
     .ok_or_else(torii_routed_read_accounting_response)?;
-    budget.admit_merge_btree::<String, Value>(2, 16)?;
+    budget.admit_merge_btree::<String, Value>(2, 11)?;
     budget.admit_merge_allocation(fixed_key_bytes)?;
     let mut totals = norito::json::Map::new();
     totals.insert("dataspaces".into(), Value::from(dataspaces.len() as u64));
@@ -2797,23 +2828,6 @@ fn merged_dataspace_summary_response(
     );
     totals.insert("manifests_total".into(), Value::from(manifests_total));
     totals.insert("manifests_active".into(), Value::from(manifests_active));
-    totals.insert(
-        "consensus_entries".into(),
-        Value::from(consensus_entries_total),
-    );
-    totals.insert("consensus_tx_count".into(), Value::from(consensus_tx_total));
-    totals.insert(
-        "consensus_chunks_total".into(),
-        Value::from(consensus_chunks_total),
-    );
-    totals.insert(
-        "consensus_rbc_bytes_total".into(),
-        Value::from(consensus_rbc_bytes_total),
-    );
-    totals.insert(
-        "consensus_teu_total".into(),
-        Value::from(consensus_teu_total),
-    );
     let mut merged_dataspaces = budget.try_merge_vec(dataspaces.len())?;
     merged_dataspaces.extend(dataspaces.into_values());
     let mut root = norito::json::Map::new();

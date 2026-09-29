@@ -405,60 +405,142 @@ fn configured_genesis_execution_capability_rejects_foreign_key_header_and_inputs
 }
 
 #[test]
-fn authenticated_genesis_uses_the_actual_whole_output_owner() {
-    use iroha_data_model::{Registrable, account::Account};
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-    let committed_fixture = canonical_executed_genesis_fixture();
-    let mut source = committed_fixture.canonical_resultless_proposal();
-    let account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    let world = World::with([], [Account::new(account.clone()).build(&account)], []);
-    let state = State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
+fn authenticated_genesis_transaction_capability_binds_the_original_input_and_empty_history() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(World::new(), 1_000))
+        .expect("original signed genesis and its pristine State");
+    let genesis = prepared.genesis.block().clone();
+    let transactions = genesis.external_transactions().cloned().collect::<Vec<_>>();
+    assert!(
+        transactions.len() >= 2,
+        "the signed bootstrap has distinct original inputs"
     );
-    let statuses = state
-        .nexus_snapshot()
-        .lane_catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            (
-                lane.id,
-                crate::governance::manifest::LaneManifestStatus {
-                    lane: lane.id,
-                    alias: lane.alias.clone(),
-                    dataspace: lane.dataspace_id,
-                    visibility: lane.visibility,
-                    storage: lane.storage,
-                    governance: None,
-                    manifest_path: None,
-                    governance_rules: None,
-                    privacy_commitments: Vec::new(),
-                },
+    let first = &transactions[0];
+    let second = &transactions[1];
+    let source = authenticate_genesis_block_intents(&genesis, first.authority()).unwrap();
+    let token = source.transaction_for(&genesis, 0).unwrap();
+    let mut changed_proof = first.clone();
+    changed_proof.set_signature(second.signature().clone());
+    assert_eq!(
+        changed_proof.hash_as_entrypoint(),
+        first.hash_as_entrypoint()
+    );
+    assert!(changed_proof.verify_signature().is_err());
+    let mut changed_inputs = genesis.clone();
+    changed_inputs.set_external_entrypoints(
+        std::iter::once(TransactionEntrypoint::External(changed_proof.clone()))
+            .chain(
+                transactions
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .map(TransactionEntrypoint::External),
             )
-        })
-        .collect();
-    state.install_lane_manifests_for_testing(&std::sync::Arc::new(
-        crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
-    ));
-    let mut block = state.block(source.header());
-    let before = block.committed_fragment_count();
-    ValidBlock::execute_block_outputs_for_test(&mut source, &mut block, Some(&account)).unwrap();
+            .collect(),
+    );
+    assert_eq!(changed_inputs.header(), genesis.header());
+    assert!(source.transaction_for(&changed_inputs, 0).is_err());
+    assert!(
+        source
+            .transaction_for(&genesis, transactions.len())
+            .is_err()
+    );
+    {
+        let mut block = prepared.state.block(genesis.header());
+        let mut transaction = block.transaction();
+        transaction.current_entrypoint_index = Some(0);
+        transaction.current_network_entrypoint_hash = Some(first.hash_as_entrypoint());
+        token
+            .validate(first, &transaction)
+            .expect("exact original bootstrap input");
+        assert!(token.validate(&changed_proof, &transaction).is_err());
+        assert!(token.validate(second, &transaction).is_err());
+        transaction.current_entrypoint_index = Some(1);
+        assert!(token.validate(first, &transaction).is_err());
+        transaction.current_entrypoint_index = Some(0);
+        transaction.current_network_entrypoint_hash = Some(second.hash_as_entrypoint());
+        assert!(token.validate(first, &transaction).is_err());
+        transaction.current_network_entrypoint_hash = None;
+        assert!(token.validate(first, &transaction).is_err());
+    }
+    let changed_header = BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(genesis.hash()),
+        genesis.header().merkle_root(),
+        1_001,
+        0,
+    );
+    let mut changed = genesis.clone();
+    changed.replace_header_for_testing(changed_header);
+    assert!(source.transaction_for(&changed, 0).is_err());
+    {
+        let mut block = prepared.state.block(changed_header);
+        let mut transaction = block.transaction();
+        transaction.current_entrypoint_index = Some(0);
+        transaction.current_network_entrypoint_hash = Some(first.hash_as_entrypoint());
+        assert!(token.validate(first, &transaction).is_err());
+    }
+    assert_eq!(prepared.state.view().height(), 0);
+    let chain = CertifiedTestChain::from_prepared(prepared).expect("original genesis commits");
+    assert_eq!(chain.height(), 1);
+    // Even an overlay carrying the original height-one header cannot replay this authority
+    // after the original genesis is committed. No fabricated history enters the test.
+    let mut block = chain.state().block(genesis.header());
+    let mut transaction = block.transaction();
+    transaction.current_entrypoint_index = Some(0);
+    transaction.current_network_entrypoint_hash = Some(first.hash_as_entrypoint());
+    assert!(token.validate(first, &transaction).is_err());
+}
+
+#[test]
+fn authenticated_genesis_uses_the_actual_whole_output_owner() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(World::new(), 1_000))
+        .expect("original signed genesis binds its executed native policy");
+    let original = prepared.genesis.block().clone();
+    let account = original
+        .external_transactions()
+        .next()
+        .unwrap()
+        .authority()
+        .clone();
+    let topology = Topology::new(
+        prepared
+            .validator_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone())),
+    );
+    let (_, clock) = TimeSource::new_mock(original.header().creation_time());
+    let (valid, block) = ValidBlock::validate_signed_genesis(
+        original.clone(),
+        &topology,
+        &account,
+        &clock,
+        &prepared.state,
+        iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+    )
+    .unpack(|_| {})
+    .unwrap();
+    let source = valid.as_ref();
     source.validate_output_merkle_cache().unwrap();
-    assert_eq!(source.network_entrypoint_count(), 1);
-    assert_eq!(source.execution_outputs().len(), 1);
-    let (position, output) = source.network_output_at(0).unwrap();
-    assert_eq!(position, 0);
-    assert!(output.result.is_ok());
-    assert!(output.completions.is_empty());
-    assert_eq!(block.committed_fragment_count(), before + 1);
+    let count = original.network_entrypoint_count();
+    assert!(count > 0);
+    assert_eq!(source.execution_outputs().len(), count);
+    for index in 0..count {
+        let index = u32::try_from(index).unwrap();
+        let (position, output) = source.network_output_at(index).unwrap();
+        assert_eq!(position, index);
+        assert!(output.result.is_ok());
+        assert!(output.completions.is_empty());
+    }
+    assert!(block.committed_fragment_count() >= count);
     assert_eq!(
         source.canonical_resultless_proposal(),
-        committed_fixture.canonical_resultless_proposal()
+        original.canonical_resultless_proposal()
     );
-    assert_eq!(source.header(), committed_fixture.header());
-    block.verify_execution_output_seal(&source).unwrap();
+    assert_eq!(source.header(), original.header());
+    block.verify_execution_output_seal(source).unwrap();
     assert!(
         matches!(
             block.commit().unwrap_err(),
@@ -466,4 +548,6 @@ fn authenticated_genesis_uses_the_actual_whole_output_owner() {
         ),
         "execution does not invent the unfinished publication authority"
     );
+    assert_eq!(prepared.state.view().height(), 0);
+    assert_eq!(prepared.kura.blocks_count(), 0);
 }

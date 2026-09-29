@@ -3140,7 +3140,7 @@ mod tests {
         for (index, transaction) in block.external_transactions().enumerate() {
             assert_eq!(transaction.expires_at_height()?, Some(2));
             assert_eq!(transaction.tx_sequence()?, Some(index as u64 + 1));
-            assert_eq!(transaction.metadata().len(), 2);
+            assert_eq!(transaction.metadata().iter().len(), 2);
         }
         validate_prepared_genesis_bundle(
             &block.encode_wire()?,

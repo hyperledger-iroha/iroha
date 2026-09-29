@@ -995,10 +995,10 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         &local_fanout_request.visited_peer_ids,
     );
     assert!(
-        fanout_candidates.peers.iter().all(|candidate| {
-            !matches!(candidate, ToriiProxyCandidate::Local(_))
-                && candidate.peer_id() != &local_peer_id
-        }),
+        fanout_candidates
+            .peers
+            .iter()
+            .all(|candidate| { candidate.peer_id() != &local_peer_id }),
         "an outbound local Nexus fanout leg must never re-enter local proxy delivery"
     );
     let exhausted = super::torii_proxy_candidate_peer_ids(

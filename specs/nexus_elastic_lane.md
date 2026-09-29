@@ -276,15 +276,11 @@ bundle manifest into one artefact set so load runs can be published directly to 
 
 ### 6.1 Workload preparation
 
-1. Create a run directory and capture canonical fixtures for the lane under test:
-
-   ```bash
-   mkdir -p artifacts/nexus/load/payments-2026q2
-   cargo xtask nexus-fixtures --output artifacts/nexus/load/payments-2026q2/fixtures
-   ```
-
-   The fixtures mirror `fixtures/nexus/lane_commitments/*.json` and give the load generator a
-   deterministic workload seed (record the seed in `artifacts/.../README.md`).
+1. Capture the lane's original certified native execution evidence and retain its launch
+   plan so Kagami can replay it independently. The canonical one-lane and four-lane
+   SDK parity captures live in `fixtures/sumeragi/native_execution_evidence_*_lanes_v1.json`;
+   they exercise the contract in [Sumeragi lanes](sumeragi_lanes.md) and do not grant
+   authority to a load run on another network.
 2. Baseline the lane before the run:
 
    ```bash

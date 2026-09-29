@@ -623,6 +623,20 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
             };
             builder.push_sealed_transaction_reveal(reveal.clone());
         }
+        builder.set_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(
+                reveals
+                    .iter()
+                    .map(|input| {
+                        iroha_data_model::block::ExternalExecutionContext::new(
+                            input.hash(),
+                            iroha_model_base::topology::LaneId::SINGLE,
+                            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        )
+                    })
+                    .collect(),
+            ),
+        ));
         let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
         exec_witness::start_block();
         let mut block = state.block(source.header());
@@ -669,10 +683,10 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
     let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for quota in [0, 1] {
-        let asset = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("network-fee", "universal").unwrap(),
-            "quarantine_fee".parse().unwrap(),
-        );
+        let asset = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )
+        .expect("canonical network XOR fee asset");
         let mut state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
         state.pipeline.quarantine_max_txs_per_block = quota;
         let mut metadata = Metadata::default();

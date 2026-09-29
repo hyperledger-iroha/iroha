@@ -1,6 +1,9 @@
 //! Bounded finalized-carrier reads and explicit Network output projections.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
+
+#[cfg(test)]
+use std::sync::Arc;
 
 use iroha_core::{smartcontracts::isi::tx, state::State};
 use iroha_crypto::HashOf;
@@ -15,7 +18,8 @@ fn invalid(message: impl std::fmt::Display) -> QueryExecutionFail {
 }
 
 /// Authenticate and bound the whole carrier before projecting any output.
-pub(crate) fn read_carrier(
+#[cfg(test)]
+fn read_carrier(
     state: &State,
     height: NonZeroUsize,
     hash: HashOf<BlockHeader>,

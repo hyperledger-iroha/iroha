@@ -21,6 +21,8 @@ pub(crate) enum ExecutionOutputSealError<E> {
     Owner(String),
     /// Local execution did not complete; no output may be sealed or published.
     Deferred(crate::execution_attempt::ExecutionDeferred),
+    /// Authenticated genesis produced a rejected output before schedule finalization.
+    RejectedGenesis,
     /// The block finalizer rejected its actual deterministic effects.
     Finalizer(E),
 }
@@ -289,6 +291,20 @@ impl StateBlock<'_> {
         self.require_storage_admission()
             .map_err(ExecutionOutputSealError::Storage)?;
         execution?;
+        // A rejected genesis transaction rolls back its entire batch, including
+        // validator registrations. Report the actual output failure before the
+        // schedule finalizer inspects that rolled-back World. Component fixtures
+        // without authenticated genesis keep their ordinary output semantics.
+        if genesis.is_some()
+            && matches!(
+                self.execution_output_plan.as_ref(),
+                Some(ExecutionOutputPlanState::Retained(retained))
+                    if retained.rows.iter().any(|row| row.result().is_err())
+            )
+        {
+            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            return Err(ExecutionOutputSealError::RejectedGenesis);
+        }
         self.seal_execution_outputs(block, finalize)
     }
 

@@ -106,14 +106,16 @@ BUILD_FREE_FLOOR_BYTES = 8 * 1024**3
 CAPTURE_HEADROOM_BYTES = 256 * 1024**2
 PROGRESS_SECONDS = 30
 SESSION_SCHEMA = "taira.local-preparation.v1"
-BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
+CAPTURED_GATE_SOURCES = ("scripts/taira_release_check.py", "scripts/taira_native_test_inventory.py",
+                         "scripts/formal/rust_text.py")
+BUILD_SOURCES = ("scripts/taira_release.py", *CAPTURED_GATE_SOURCES,
                  "scripts/taira_cargo_cache.py", "scripts/taira_cargo_artifact.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
 # The native gate is authenticated with every captured build input, then loaded
 # from that capture. Only these controller files execute from the live checkout.
 BOOTSTRAP_SOURCES = tuple(path for path in BUILD_SOURCES
-                          if path != "scripts/taira_release_check.py")
+                          if path not in CAPTURED_GATE_SOURCES)
 
 
 class PrepareError(RuntimeError):
@@ -945,16 +947,36 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
 
 
 def captured_gate(source: Path, before: list[dict[str, object]]):
+    """Execute the gate and its census from the same retained, verified code bytes."""
+    rows = {row["path"]: row for row in before}
+    captured = {}
+    for relative in CAPTURED_GATE_SOURCES:
+        row = rows.get(relative)
+        require(row is not None, "captured native gate dependency is absent: " + relative)
+        path = source / relative
+        expected = stable_hash_path(path)
+        require(expected.sha256 == row["sha256"],
+                "captured native gate changed: " + relative)
+        with stable_open_relative(path.parent, path.name, expected=expected) as fd:
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                code = stream.read()
+        require(hashlib.sha256(code).hexdigest() == row["sha256"],
+                "captured native gate changed: " + relative)
+        captured[relative] = code
+
+    helper_path = source / "scripts/formal/rust_text.py"
+    helper = {"__name__": "taira_captured_rust_text", "__file__": str(helper_path)}
+    exec(compile(captured["scripts/formal/rust_text.py"], str(helper_path), "exec"), helper)
+    inventory_path = source / "scripts/taira_native_test_inventory.py"
+    inventory = {"__name__": "taira_captured_native_inventory", "__file__": str(inventory_path),
+                 "_captured_mask_rust_comments": helper["mask_rust_comments"]}
+    exec(compile(captured["scripts/taira_native_test_inventory.py"],
+                 str(inventory_path), "exec"), inventory)
     path = source / "scripts/taira_release_check.py"
-    expected = stable_hash_path(path)
-    row = next(row for row in before if row["path"] == "scripts/taira_release_check.py")
-    require(expected.sha256 == row["sha256"], "captured native gate changed")
-    with stable_open_relative(path.parent, path.name, expected=expected) as fd:
-        with os.fdopen(os.dup(fd), "rb") as stream:
-            code = stream.read()
     module = types.ModuleType("taira_captured_release_check")
     module.__file__ = str(path)
-    exec(compile(code, str(path), "exec"), module.__dict__)
+    module.__dict__["_captured_native_inventory"] = inventory
+    exec(compile(captured["scripts/taira_release_check.py"], str(path), "exec"), module.__dict__)
     return module
 
 

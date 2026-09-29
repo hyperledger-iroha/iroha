@@ -773,10 +773,7 @@ def test_propose_multisig_posts_native_instruction_payload_and_requires_draft_in
         payload={
             "ok": True,
             "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
-            "fee_payment": _authority_fee_payment(),
-            "creation_time_ms": 0,
-            "submitted": True,
-            "tx_hash_hex": "ab" * 32,
+            **_unsigned_multisig_response_fields(),
         }
     )
     client = ToriiClient("http://node.test", session=session)

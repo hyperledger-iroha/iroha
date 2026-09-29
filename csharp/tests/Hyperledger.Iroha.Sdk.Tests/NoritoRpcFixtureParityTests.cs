@@ -62,7 +62,6 @@ public sealed class NoritoRpcFixtureParityTests
     private static readonly IReadOnlySet<string> PayloadFields =
         new HashSet<string>(StringComparer.Ordinal)
         {
-            "admission_intent",
             "authority",
             "creation_time_ms",
             "executable",
@@ -386,10 +385,6 @@ public sealed class NoritoRpcFixtureParityTests
         var name = RequireString(source, "name", "source fixture");
         var payload = source.GetProperty("payload");
         RequireExactProperties(payload, PayloadFields, $"{name}.payload");
-        RequireExactProperties(
-            payload.GetProperty("admission_intent"),
-            new HashSet<string>(StringComparer.Ordinal) { "intent", "value" },
-            $"{name}.payload.admission_intent");
         ValidateFeePayment(payload.GetProperty("fee_payment"), $"{name}.payload.fee_payment");
         Assert.Equal(JsonValueKind.Object, payload.GetProperty("metadata").ValueKind);
         ValidateExecutable(payload.GetProperty("executable"), $"{name}.payload.executable");

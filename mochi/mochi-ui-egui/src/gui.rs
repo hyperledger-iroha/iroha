@@ -42,7 +42,7 @@ use iroha_data_model::{
         admission::{ImplicitAccountCreationFee, ImplicitAccountFeeDestination},
     },
     asset::{AssetDefinitionId, AssetId, definition::Mintable},
-    block::consensus::{SumeragiDiagnosticsStatus, SumeragiLaneGovernance},
+    block::consensus::SumeragiDiagnosticsStatus,
     da::commitment::DaProofScheme,
     events::{
         EventBox,
@@ -6263,7 +6263,7 @@ impl MochiApp {
                     }
                 }
                 ui.add_space(6.0);
-                egui::CollapsingHeader::new("Lane status")
+                egui::CollapsingHeader::new("Configured lanes")
                     .default_open(false)
                     .show(ui, |ui| {
                         for alias in peer_aliases {
@@ -6276,21 +6276,17 @@ impl MochiApp {
                             }
                             ui.label(format!("Peer {alias}"));
                             egui::Grid::new(format!("mochi_lane_status_{alias}"))
-                                .num_columns(6)
+                                .num_columns(4)
                                 .striped(true)
                                 .show(ui, |ui| {
                                     ui.label("Lane");
                                     ui.label("Dataspace");
-                                    ui.label("Block");
-                                    ui.label("RBC bytes");
                                     ui.label("DA cursor");
                                     ui.label("Governance manifest");
                                     ui.end_row();
                                     for row in rows {
                                         ui.label(format!("{} ({})", row.lane_id, row.alias));
                                         ui.label(&row.dataspace);
-                                        ui.label(row.block_height_label());
-                                        ui.label(row.rbc_bytes_label());
                                         ui.label(row.da_cursor_label());
                                         ui.colored_label(
                                             row.manifest_state.color(),
@@ -10704,23 +10700,11 @@ struct LaneStatusRow {
     lane_id: u32,
     alias: String,
     dataspace: String,
-    block_height: Option<u64>,
-    rbc_bytes: Option<u64>,
     da_cursor_epoch: Option<u64>,
     da_cursor_sequence: Option<u64>,
     manifest_state: LaneManifestState,
 }
 impl LaneStatusRow {
-    fn block_height_label(&self) -> String {
-        self.block_height
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "—".to_owned())
-    }
-    fn rbc_bytes_label(&self) -> String {
-        self.rbc_bytes
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "—".to_owned())
-    }
     fn da_cursor_label(&self) -> String {
         match (self.da_cursor_epoch, self.da_cursor_sequence) {
             (Some(epoch), Some(seq)) => format!("e{epoch} s{seq}"),
@@ -10925,10 +10909,6 @@ impl PeerStatusView {
         let (Some(snapshot), Some(sumeragi)) = (snapshot, sumeragi) else {
             return Vec::new();
         };
-        let mut commitments = BTreeMap::new();
-        for commitment in &sumeragi.lane_commitments {
-            commitments.insert(commitment.lane_id.as_u32(), commitment);
-        }
         let mut governance = BTreeMap::new();
         for entry in &sumeragi.lane_governance {
             governance.insert(entry.lane_id.as_u32(), entry);
@@ -10945,7 +10925,6 @@ impl PeerStatusView {
             }
         }
         let mut lane_ids = catalog.lane_ids();
-        lane_ids.extend(commitments.keys().copied());
         lane_ids.extend(governance.keys().copied());
         lane_ids.extend(da_cursors.keys().copied());
         let mut rows = Vec::new();
@@ -10956,8 +10935,6 @@ impl PeerStatusView {
                 .filter(|alias| !alias.is_empty())
                 .unwrap_or_else(|| catalog.lane_alias(lane_id));
             let dataspace = catalog.dataspace_label(catalog.lane_dataspace_id(lane_id));
-            let block_height = commitments.get(&lane_id).map(|entry| entry.block_height);
-            let rbc_bytes = commitments.get(&lane_id).map(|entry| entry.rbc_bytes_total);
             let (da_cursor_epoch, da_cursor_sequence) = da_cursors
                 .get(&lane_id)
                 .map(|(epoch, sequence)| (Some(*epoch), Some(*sequence)))
@@ -10973,8 +10950,6 @@ impl PeerStatusView {
                 lane_id,
                 alias,
                 dataspace,
-                block_height,
-                rbc_bytes,
                 da_cursor_epoch,
                 da_cursor_sequence,
                 manifest_state,

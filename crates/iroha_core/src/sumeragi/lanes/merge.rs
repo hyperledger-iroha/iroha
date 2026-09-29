@@ -140,6 +140,17 @@ impl std::fmt::Debug for Expansion<'_> {
     }
 }
 impl Expansion<'_> {
+    /// Refuse a local receiver substitution or publication change before interpreting peer work.
+    pub(crate) fn validate_publication(&self, state: &State) -> Result<(), MergeError> {
+        if !std::ptr::eq(self.state, state)
+            || !is_stable_state_view_generation(self.generation, state.state_view_generation())
+        {
+            return Err(MergeError::Pending(
+                "expansion differs from original State publication".into(),
+            ));
+        }
+        Ok(())
+    }
     /// Consume the original expansion after native proposal-wire validation, preserving
     /// the original proposal on refusal and moving the exact lane step into execution.
     pub(crate) fn apply(
@@ -148,10 +159,10 @@ impl Expansion<'_> {
         state: &State,
         generation: u64,
     ) -> Result<(SignedBlock, LaneStepInput), (SignedBlock, MergeError)> {
-        if !std::ptr::eq(self.state, state)
-            || !is_stable_state_view_generation(self.generation, generation)
-            || !is_stable_state_view_generation(generation, state.state_view_generation())
-        {
+        if let Err(error) = self.validate_publication(state) {
+            return Err((proposal, error));
+        }
+        if !is_stable_state_view_generation(self.generation, generation) {
             return Err((
                 proposal,
                 MergeError::Pending("expansion differs from original State publication".into()),

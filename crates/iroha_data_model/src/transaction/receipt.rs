@@ -187,7 +187,7 @@ mod tests {
                 [0xD5; 32],
             )),
             status: 503,
-            reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+            reject_code: Some("transaction_dispatch_outcome_unknown".to_owned()),
         };
         let bytes = norito::to_bytes(&outcome).unwrap();
         assert_eq!(

@@ -453,6 +453,10 @@ fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
         if corrupt {
             kura.overwrite_commit_marker_for_tests(b"corrupt exact marker")
                 .unwrap();
+            // The injected out-of-band disk corruption must invalidate both cached
+            // snapshots before this test exercises the storage-refusal path.
+            kura.invalidate_pending_budget_cache();
+            kura.invalidate_durable_budget_snapshot();
         }
         let canonical = kura.canonical_chain_lock.lock();
         let mut wait = kura
@@ -497,6 +501,7 @@ fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
 #[test]
 fn repeated_native_pending_lookups_retain_original_fences_through_unwind() {
     let (_directory, kura, expected) = super::super::tests::pending_native_capacity_fixture();
+    let scans_before = kura.pending_budget_raw_scans.load(Ordering::Relaxed);
     let canonical = kura.canonical_chain_lock.lock();
     let mut wait = kura
         .canonical_chain_lock
@@ -531,7 +536,10 @@ fn repeated_native_pending_lookups_retain_original_fences_through_unwind() {
     }
     owner.geometry = Some(kura.lane_geometry_lock.lock());
     owner.sidecar = Some(kura.sidecar_lock.lock());
-    assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 3);
+    assert_eq!(
+        kura.pending_budget_raw_scans.load(Ordering::Relaxed),
+        scans_before + 3
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _original = owner;

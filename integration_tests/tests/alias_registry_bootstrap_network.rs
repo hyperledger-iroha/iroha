@@ -90,7 +90,6 @@ use iroha_test_network::{
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
 use norito::codec::DecodeAll;
-use sha2::{Digest as _, Sha256};
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
 
@@ -688,10 +687,6 @@ struct ReleaseSourceIdentity {
     head_tree: String,
     source_manifest_sha256: String,
     cargo_lock_sha256: String,
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
 }
 
 fn required_exact_env(name: &str) -> Result<String> {

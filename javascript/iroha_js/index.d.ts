@@ -4119,13 +4119,6 @@ export interface ClientConnectWebSocketOptions<T = unknown>
   ) => void;
 }
 
-export interface ToriiSumeragiMembershipSnapshot {
-  height: number;
-  view: number;
-  epoch: number;
-  view_hash?: string | null;
-}
-
 /**
  * Exact protocol `u64` decoded from JSON.
  *
@@ -4133,33 +4126,6 @@ export interface ToriiSumeragiMembershipSnapshot {
  * returned as bigint so typed Sumeragi reads never round wire integers.
  */
 export type ToriiU64 = number | bigint;
-
-/**
- * Aggregated TEU commitment for a Nexus lane recorded in the latest block.
- */
-export interface ToriiLaneCommitmentSnapshot {
-  block_height: number;
-  lane_id: number;
-  tx_count: number;
-  total_chunks: number;
-  rbc_bytes_total: number;
-  teu_total: number;
-  block_hash: string;
-}
-
-/**
- * Aggregated TEU commitment for a Nexus dataspace recorded in the latest block.
- */
-export interface ToriiDataspaceCommitmentSnapshot {
-  block_height: number;
-  lane_id: number;
-  dataspace_id: number;
-  tx_count: number;
-  total_chunks: number;
-  rbc_bytes_total: number;
-  teu_total: number;
-  block_hash: string;
-}
 
 export interface ToriiLaneRuntimeUpgradeHookSnapshot {
   allow: boolean;
@@ -5801,8 +5767,6 @@ export interface ToriiStatusPayload {
   txs_rejected: number;
   view_changes: number;
   governance: ToriiGovernanceStatusSnapshot | null;
-  lane_commitments: ToriiLaneCommitmentSnapshot[];
-  dataspace_commitments: ToriiDataspaceCommitmentSnapshot[];
   lane_governance: ToriiLaneGovernanceSnapshot[];
   dataspace_catalog: ToriiDataspaceCatalogEntry[];
   lane_governance_sealed_total: number;

@@ -136,3 +136,26 @@ fn native_canonical_recovery_cannot_reopen_poisoned_storage() {
     ));
     assert_eq!(journal_image(&kura.block_store.lock()), before);
 }
+
+#[test]
+fn native_rewrite_image_requires_the_complete_original_frame() {
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let block = chain.committed(1);
+    let body = block.block().encode_wire().unwrap();
+    let store = BlockStore::new(Path::new(""));
+    let mut image = DaBlockRewriteImageV1 {
+        height: 1,
+        block_hash: block.block_hash(),
+        index_start: EVICTED_BLOCK_START,
+        index_length: body.len() as u64,
+        body,
+    };
+    store.validate_da_block_rewrite_image(&image).unwrap();
+    image.body.clear();
+    assert!(store.validate_da_block_rewrite_image(&image).is_err());
+    image.index_length = 0;
+    assert!(
+        store.validate_da_block_rewrite_image(&image).is_err(),
+        "an empty evicted frame cannot recreate retired snapshot authority"
+    );
+}

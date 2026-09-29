@@ -17,7 +17,6 @@ use iroha_data_model::{
     account::{Account, AccountId},
     domain::Domain,
 };
-use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::peer::PeerId;
 use iroha_torii::{OnlinePeersProvider, Torii};
@@ -53,6 +52,7 @@ fn build_torii(
     Torii,
     iroha_torii::TestApiRouterRuntime,
     iroha_torii::test_utils::TestDataDirGuard,
+    iroha_data_model::NetworkId,
 ) {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
@@ -74,10 +74,11 @@ fn build_torii(
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
+    let network_id = *state.network_id_ref();
     let torii = Torii::new(
         build_identity_test_fixture::build_identity(),
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        state.chain_id_ref().clone(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -92,9 +93,10 @@ fn build_torii(
     let router = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
-    (torii, router, data_dir)
+    (torii, router, data_dir, network_id)
 }
 fn register_device_request(
+    network_id: &iroha_data_model::NetworkId,
     account_id: &AccountId,
     key_pair: &iroha_crypto::KeyPair,
     token: &str,
@@ -109,7 +111,7 @@ fn register_device_request(
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body.clone()))
         .unwrap();
-    fixtures::app_signed_request(account_id, key_pair, request, body.as_bytes())
+    fixtures::app_signed_request(network_id, account_id, key_pair, request, body.as_bytes())
 }
 async fn status_and_body(
     router: axum::Router,
@@ -130,10 +132,10 @@ async fn push_registration_rejected_when_disabled() {
         enabled: false,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
-        register_device_request(&account_id, &key_pair, "t0"),
+        register_device_request(&network_id, &account_id, &key_pair, "t0"),
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
@@ -146,10 +148,10 @@ async fn push_registration_rejected_without_credentials() {
         enabled: true,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
-        register_device_request(&account_id, &key_pair, "t0"),
+        register_device_request(&network_id, &account_id, &key_pair, "t0"),
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
@@ -158,10 +160,10 @@ async fn push_registration_rejected_without_credentials() {
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
     let (key_pair, account_id) = push_identity(13);
-    let (torii, runtime, _data_dir) = build_torii(push_config(), &account_id);
+    let (torii, runtime, _data_dir, network_id) = build_torii(push_config(), &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
-        register_device_request(&account_id, &key_pair, "t0"),
+        register_device_request(&network_id, &account_id, &key_pair, "t0"),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "body: {body}");

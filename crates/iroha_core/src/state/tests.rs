@@ -7563,13 +7563,15 @@ state_test! { sync normal_validation_requires_can_set_parameters_for_lane_lifecy
                 BTreeSet::from([Permission::from(CanSetParameters)]),
             );
         }
-        let state = manual_lane_lifecycle_test_state(world);
+        let chain = manual_lane_lifecycle_test_chain(world);
+        let state = chain.state();
         let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( manual_lane_lifecycle_payload().into_custom_parameter(), ))]) .sign(signer.private_key()) };
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-        let_row! { parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new()) .chain(0, None) .sign(signer.private_key()) .unpack(|_| {}) .into() };
+        let parent = state.view().latest_block().expect("original native predecessor");
         let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-        let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), &state).expect("original recorder before execution");
-        let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+        let source: SignedBlock = unverified.into();
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+        let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
         let signed: SignedBlock = committed.into();
         if authorized {
             assert!(
@@ -7605,8 +7607,9 @@ state_test! { sync signed_lane_lifecycle_transaction_rejects_duplicate_transitio
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([instruction(), instruction()]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(&parent)) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), state).expect("original recorder before execution");
-    let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+    let source: SignedBlock = unverified.into();
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("duplicate signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("already staged"), "{rejection}");
@@ -7635,8 +7638,9 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( stale_payload.into_custom_parameter(), ))]) .sign(signer.private_key()) };
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
     let_row! { unverified = BlockBuilder::new(vec![accepted]) .chain(0, Some(first.block().as_ref())) .sign(signer.private_key()) .unpack(|_| {}) };
-    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(unverified.as_ref(), state).expect("original recorder before execution");
-    let_row! { committed = unverified .validate_and_record_transactions(&mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
+    let source: SignedBlock = unverified.into();
+    let (mut state_block, guard) = crate::block::ValidBlock::start_component_execution(&source, state).expect("original recorder before execution");
+    let_row! { committed = crate::block::ValidBlock::validate_unchecked(source, &mut state_block, guard) .unpack(|_| {}) .commit_unchecked() .unpack(|_| {}) };
     let signed: SignedBlock = committed.into();
     let_row! { rejection = format!( "{:?}", signed .output_error(0) .expect("stale signed lifecycle transition must be rejected") ) };
     assert!(rejection.contains("expected catalog hash"), "{rejection}");
@@ -25588,9 +25592,8 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
         state_block.commit_world_overlay_for_testing().unwrap();
     }
     // Execute the trigger and expect rejection; state changes must rollback.
-    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
     {
-        let mut state_block = state.block(block.as_ref().header());
         // Exercise atomic rollback through the signed executor, which owns the
         // callback journal and discards the failed transaction overlay.
         let mut builder = TransactionBuilder::new(
@@ -25605,7 +25608,17 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
         let mut source = iroha_data_model::block::builder::BlockBuilder::new(block.as_ref().header());
         source.push_transaction(signed);
         let mut source = source.build(BTreeSet::new()).canonical_resultless_proposal();
-        ValidBlock::execute_block_outputs_for_test(&mut source, &mut state_block, None)
+        let entrypoint_hash = source.external_entrypoints_cloned().next().unwrap().hash();
+        source.set_execution_context(Some(iroha_data_model::block::BlockExecutionContextBundle::new(
+            vec![iroha_data_model::block::ExternalExecutionContext::new(
+                entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )],
+        )));
+        let (mut state_block, recorder) = ValidBlock::start_component_execution(&source, &state)
+            .expect("original callback source starts recording before block effects");
+        ValidBlock::execute_recorded_component_outputs(&mut source, &mut state_block, &recorder)
             .expect("original signed callback completes with an ordinary rejection");
         let err = source.output_error(0).expect("trigger must fail to execute");
         assert!(

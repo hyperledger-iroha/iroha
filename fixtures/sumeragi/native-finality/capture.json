@@ -2,39 +2,47 @@
   "format": "iroha.native-finality.checkpoint-fixture-capture",
   "version": 1,
   "chain_id": "portable-native-fixture",
-  "network_id": "hash:D4D2146E7ACD6E0CDD45BFD08AE470F8A5F042F5D058E3D5B160E1B816E88163#E567",
+  "network_id": "hash:B929236197D56A8C6067F27D0402BE9C7408EBEDEFEAADCD77D76FF00387E779#1ADB",
   "generator": {
     "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
-    "source_sha256": "921a55a9d5024961a1d0cc043e69ed443d5c252a915c80783514bc5a0a4267e7",
-    "exporter_patch_sha256": "64787990e89e2526103dd6020b9489fe5b072017eb063f9068dd63020ed21ebd",
+    "source_sha256": "c4ae7bae636cb27261d0a1886e3e8f422f838eecd3573e0ecf8c3a930b604e65",
     "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
-    "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --ignored --exact --nocapture"
+    "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --ignored --exact --nocapture",
+    "compiled_harness_sha256": "8e75cdd67b7c04e1f8bf3f90c3d0c05468ba0b68107fe95cbd1258c41aa27231"
   },
   "captures": [
     {
-      "log": "target/staking-validation/native-checkpoint-capture-a.log",
-      "sha256": "b7c801da5e070d677220af0afd98b88fe3ad39d6c571512b3e94c9ad5d95bdae",
+      "log": "target/staking-validation/native-checkpoint-v1-capture-1.log",
+      "sha256": "189e777a37997c3e5deec930c1ba04995ba405a3fc3c06cc72727ae48af66cc5",
+      "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --ignored --exact --nocapture",
       "result": "1 passed; 0 failed; 0 ignored; explicit exporter invocation"
     },
     {
-      "log": "target/staking-validation/native-checkpoint-capture-b.log",
-      "sha256": "01bd5e15197222cd71566e521bfdcfa502e24f686e38dd7ebbbacbc15db6fd02",
+      "log": "target/staking-validation/native-checkpoint-v1-capture-2.log",
+      "sha256": "7a92d6861d78844e376d8d42240ba1cc6614775536e0befb4b831fb5e5114713",
+      "command": "target/debug/deps/iroha_data_model-6a34bf67119bb8dc sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --exact --nocapture",
+      "result": "1 passed; 0 failed; 0 ignored; explicit exporter invocation"
+    },
+    {
+      "log": "target/staking-validation/native-checkpoint-v1-capture-3.log",
+      "sha256": "34e337dde4bf82a4d5136dd1ed223f82c36a01f5607691d660ac48d1846b0346",
+      "command": "scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_data_model --lib --features test-fixtures,transparent_api sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures -- --ignored --exact --nocapture",
       "result": "1 passed; 0 failed; 0 ignored; explicit exporter invocation"
     }
   ],
-  "byte_identical_runs": 2,
+  "byte_identical_runs": 3,
   "artifacts": [
     {
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
       "height": 1,
       "bytes": 31152,
-      "sha256": "5a1bcfd4d938fc35d6b0fce593c57d808521bd0ec2320a26b1240b46926fd538"
+      "sha256": "59523702679f892a573c47d1082f6083dff02295c32f5a09ee4bffc60f151dc7"
     },
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
       "bytes": 34329,
-      "sha256": "7e83081ea44ddc82e9fe350ad4afa00883c456e9df030825861790ed3b709c2a"
+      "sha256": "b3bb5f7221af06360614da29c35cbcbbe1b2bebdf4356194bc4d9763d66a248c"
     }
   ],
   "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate over synthetic outputs. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."

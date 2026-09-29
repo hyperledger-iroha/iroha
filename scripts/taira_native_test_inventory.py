@@ -111,6 +111,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'malformed_merges_are_invalid_and_missing_blocks_pending',
         'expansion_consumes_only_the_exact_original_proposal',
         'expansion_refuses_equivalent_foreign_state_and_changed_publication',
+        'merged_rejection_event_retains_the_original_native_proposal_header',
     )),
     ('native beacon custody', 'sumeragi/epoch_beacon/producer.rs', 'sumeragi/epoch_beacon/producer/tests.rs', 'tests', 'sumeragi::epoch_beacon::producer::tests', (
         'all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse',
@@ -208,12 +209,19 @@ def native_owner_stages(label=None, *, exclude=()):
                  if (label is None or coverage == label) and coverage not in exclude)
 
 
-def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS):
-    """Require the complete reviewed native declaration census and parent registration."""
+def rust_source_masker(root):
+    """Use retained authenticated code in preparation, or explicit mutable development code."""
+    if __name__ == "taira_captured_native_inventory":
+        return _captured_mask_rust_comments
     helper = Path(root) / "scripts/formal/rust_text.py"
     namespace = {"__name__": "native_inventory_rust_text", "__file__": str(helper)}
     exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
-    mask = namespace["mask_rust_comments"]
+    return namespace["mask_rust_comments"]
+
+
+def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS):
+    """Require the complete reviewed native declaration census and parent registration."""
+    mask = rust_source_masker(root)
     package = Path(root) / "crates/iroha_core/src"
     declarations = re.compile(r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*\(")
     seen = set()
@@ -248,9 +256,12 @@ def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS):
                 boundary = max(parent_mask.rfind(";", 0, registration.start()),
                                parent_mask.rfind("}", 0, registration.start())) + 1
                 attributes = parent_text[boundary:registration.start()]
-                path = re.search(r'#\[path\s*=\s*"([^"\n]+)"\]', attributes)
-                if path:
-                    bound.append((package / parent).parent / path.group(1))
+                paths = [match for match in re.finditer(r'#\[path\s*=\s*"([^"\n]+)"\]', attributes)
+                         if parent_mask[boundary + match.start():boundary + match.start() + 6] == "#[path"]
+                if len(paths) > 1:
+                    raise ValueError("native test module source registration differs: " + prefix)
+                if paths:
+                    bound.append((package / parent).parent / paths[0].group(1))
                 else:
                     base = (package / parent).parent
                     if Path(parent).name != "mod.rs":

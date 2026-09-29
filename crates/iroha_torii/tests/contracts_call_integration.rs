@@ -344,8 +344,13 @@ impl ContractTestApp {
             .expect("collect request body")
             .to_bytes();
         let request = http::Request::from_parts(parts, axum::body::Body::from(bytes.clone()));
-        let request =
-            fixtures::app_signed_request(&self.authority, &self.key_pair, request, &bytes);
+        let request = fixtures::app_signed_request(
+            self.state.network_id_ref(),
+            &self.authority,
+            &self.key_pair,
+            request,
+            &bytes,
+        );
         self.runtime
             .router()
             .oneshot(request)
@@ -380,19 +385,11 @@ fn contract_test_queue_and_app(
 ) {
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.common.chain = "chain".parse().expect("test chain ID");
+    cfg.common.chain = state.chain_id_ref().clone();
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue = Arc::new(Queue::from_config(cfg.queue.clone(), events.clone()));
     let chain_id = cfg.common.chain.clone();
-    let harness = fixtures::ToriiHarness::new_without_telemetry(
-        &cfg,
-        chain_id.clone(),
-        *state.network_id_ref(),
-        kura,
-        state,
-        &queue,
-        events,
-    );
+    let harness = fixtures::ToriiHarness::new_without_telemetry(&cfg, kura, state, &queue, events);
     let runtime = harness.router();
     let app = ContractTestApp {
         runtime,

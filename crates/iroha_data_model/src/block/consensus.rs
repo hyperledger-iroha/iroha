@@ -1,9 +1,9 @@
-//! Norito-encoded consensus types shared across Sumeragi implementations.
+//! Norito-encoded Sumeragi genesis inputs, operator diagnostics and execution receipts.
 //!
 //! These types cover signed consensus genesis parameters, operator diagnostics, Nexus fee
-//! and settlement receipts, and execution witnesses. Global consensus messages and signed
-//! RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 message
-//! family.
+//! and settlement receipts, and execution witnesses. Native consensus messages belong to
+//! [`iroha_sumeragi::message`]; signed RS16 data availability and signed genesis context inputs
+//! live in [`super::consensus_v2`].
 use super::Header as BlockHeader;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -386,68 +386,6 @@ pub struct EvidenceRecord {
     /// Exact pending, applied, or cancelled penalty state.
     pub penalty_status: EvidencePenaltyStatus,
 }
-/// Aggregated per-lane commitment summary reported by Sumeragi status.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiLaneCommitment")]
-pub struct SumeragiLaneCommitment {
-    /// Block height associated with the commitment.
-    pub block_height: u64,
-    /// Numeric lane identifier.
-    pub lane_id: LaneId,
-    /// Number of transactions attributed to the lane.
-    pub tx_count: u64,
-    /// Total RBC chunks allocated to the lane.
-    pub total_chunks: u64,
-    /// Total RBC payload bytes allocated to the lane.
-    pub rbc_bytes_total: u64,
-    /// Total TEU allocated to the lane.
-    pub teu_total: u64,
-    /// Block hash anchoring the commitment.
-    pub block_hash: HashOf<BlockHeader>,
-}
-/// Aggregated per-dataspace commitment summary reported by Sumeragi status.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiDataspaceCommitment")]
-pub struct SumeragiDataspaceCommitment {
-    /// Block height associated with the commitment.
-    pub block_height: u64,
-    /// Numeric lane identifier.
-    pub lane_id: LaneId,
-    /// Numeric dataspace identifier.
-    pub dataspace_id: DataSpaceId,
-    /// Number of transactions attributed to the dataspace.
-    pub tx_count: u64,
-    /// Total RBC chunks allocated to the dataspace.
-    pub total_chunks: u64,
-    /// Total RBC payload bytes allocated to the dataspace.
-    pub rbc_bytes_total: u64,
-    /// Total TEU allocated to the dataspace.
-    pub teu_total: u64,
-    /// Block hash anchoring the commitment.
-    pub block_hash: HashOf<BlockHeader>,
-}
 /// Deterministic settlement receipt emitted for audit and reconciliation.
 #[derive(
     Clone,
@@ -729,58 +667,6 @@ impl SumeragiNposDiagnostics {
         Ok(())
     }
 }
-/// Aggregate execution diagnostics for the latest block pipeline run.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    Default,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiPipelineExecutionStatus")]
-pub struct SumeragiPipelineExecutionStatus {
-    /// Total transaction vertices across all lanes.
-    pub tx_vertices_total: u64,
-    /// Total conflict edges across all lanes.
-    pub tx_edges_total: u64,
-    /// Total overlay fragments executed across all lanes.
-    pub overlay_count_total: u64,
-    /// Total overlay instructions executed across all lanes.
-    pub overlay_instr_total: u64,
-    /// Total overlay bytes executed across all lanes.
-    pub overlay_bytes_total: u64,
-    /// Total RBC chunks attributed across all lanes.
-    pub rbc_chunks_total: u64,
-    /// Total RBC payload bytes attributed across all lanes.
-    pub rbc_bytes_total: u64,
-    /// Transactions prepared for detached overlay execution.
-    pub detached_prepared_total: u64,
-    /// Detached transaction deltas merged without sequential fallback.
-    pub detached_merged_total: u64,
-    /// Detached transaction deltas that fell back to sequential execution.
-    pub detached_fallback_total: u64,
-    /// Sequential fallbacks caused by fee postprocessing.
-    pub detached_fallback_fee_postprocessing_total: u64,
-    /// Sequential fallbacks caused by a user-provided executor.
-    pub detached_fallback_user_executor_total: u64,
-    /// Sequential fallbacks caused by durable smart-contract state changes.
-    pub detached_fallback_durable_state_total: u64,
-    /// Sequential fallbacks caused by unsupported detached instructions.
-    pub detached_fallback_unsupported_instruction_total: u64,
-    /// Sequential fallbacks caused by rejected detached evaluation.
-    pub detached_fallback_rejected_eval_total: u64,
-    /// Sequential fallbacks caused by overlay build errors.
-    pub detached_fallback_overlay_error_total: u64,
-    /// Quarantine transactions executed sequentially.
-    pub quarantine_executed_total: u64,
-}
 /// Operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 ///
 /// This payload deliberately excludes reducer phase, height, view, leader, certificates, mode, and
@@ -796,8 +682,6 @@ pub struct SumeragiPipelineExecutionStatus {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::SumeragiDiagnosticsStatus")]
 pub struct SumeragiDiagnosticsStatus {
-    /// Latest block-pipeline execution diagnostics.
-    pub pipeline_execution: SumeragiPipelineExecutionStatus,
     /// Current transaction queue depth.
     pub tx_queue_depth: u64,
     /// Configured transaction queue capacity.
@@ -820,10 +704,6 @@ pub struct SumeragiDiagnosticsStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub npos: Option<SumeragiNposDiagnostics>,
-    /// Aggregated lane-level commitment snapshots.
-    pub lane_commitments: Vec<SumeragiLaneCommitment>,
-    /// Aggregated dataspace-level commitment snapshots.
-    pub dataspace_commitments: Vec<SumeragiDataspaceCommitment>,
     /// Count of lanes that still require a governance manifest.
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed.
@@ -924,10 +804,7 @@ impl_decode_from_slice_via_codec!(ExecWitnessMsg);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiNposDiagnostics);
-impl_decode_from_slice_via_codec!(SumeragiPipelineExecutionStatus);
 impl_decode_from_slice_via_codec!(SumeragiDiagnosticsStatus);
-impl_decode_from_slice_via_codec!(SumeragiLaneCommitment);
-impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {

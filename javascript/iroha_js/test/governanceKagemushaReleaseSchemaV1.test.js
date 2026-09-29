@@ -133,3 +133,15 @@ test("release manifest requires network identity and an exact scoped purpose", (
     assert.throws(() => validateKagemushaReleaseSchemaV1(ROOTS.manifest, { ...manifest, purpose }));
   }
 });
+
+
+test("KAGEMUSHA hardware capability mask retains the complete u32 wire range", () => {
+  const hardware = fixture(INSTALL_PATH).payload.manifest.enabled_profiles[0].hardware_profile;
+  hardware.capability_mask = 0xffffffff;
+  assert.doesNotThrow(() => validateKagemushaReleaseSchemaV1("GovernanceKagemushaHardwareProfileV1", hardware));
+  hardware.capability_mask = 0x100000000;
+  assert.throws(
+    () => validateKagemushaReleaseSchemaV1("GovernanceKagemushaHardwareProfileV1", hardware),
+    /integer/u,
+  );
+});

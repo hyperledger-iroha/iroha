@@ -38,10 +38,10 @@ fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         for maximum in [1, 2] {
-            let asset = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("network-fee", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
+            let asset = AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .expect("canonical network XOR fee asset");
             let mut state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
             state.pipeline.overlay_max_instructions = maximum;
             state.pipeline.overlay_max_bytes = 0;

@@ -7478,8 +7478,8 @@ struct DaBlockRewriteImageV1 {
     index_start: u64,
     /// Raw framed-block length committed by the index.
     index_length: u64,
-    /// Exact framed block bytes, absent only for an authenticated hash-only entry.
-    body: Option<Vec<u8>>,
+    /// Exact original canonical framed block bytes.
+    body: Vec<u8>,
 }
 impl DaBlockRewriteImageV1 {
     fn index(&self) -> BlockIndex {
@@ -8740,33 +8740,27 @@ impl BlockStore {
         Ok(stage)
     }
     fn validate_da_block_rewrite_image(&self, image: &DaBlockRewriteImageV1) -> Result<()> {
-        if image.height == 0 || image.index_length > STRICT_INIT_MAX_BLOCK_BYTES {
+        if image.height == 0
+            || image.index_length == 0
+            || image.index_length > STRICT_INIT_MAX_BLOCK_BYTES
+        {
             return Err(self.invalid_da_block_rewrite_stage(
                 "DA block rewrite image has an invalid height or length",
             ));
         }
-        match image.body.as_deref() {
-            Some(body) => {
-                if u64::try_from(body.len())? != image.index_length {
-                    return Err(self.invalid_da_block_rewrite_stage(
-                        "DA block rewrite image body length mismatches its index",
-                    ));
-                }
-                let decoded = decode_framed_signed_block(body)?;
-                if decoded.header().height().get() != image.height
-                    || decoded.hash() != image.block_hash
-                {
-                    return Err(self.invalid_da_block_rewrite_stage(
-                        "DA block rewrite image body mismatches its height or hash",
-                    ));
-                }
-            }
-            None if image.index_length == 0 && image.index_start == EVICTED_BLOCK_START => {}
-            None => {
-                return Err(self.invalid_da_block_rewrite_stage(
-                    "DA block rewrite image omits a nonempty body",
-                ));
-            }
+        if u64::try_from(image.body.len())? != image.index_length {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite image body length mismatches its index",
+            ));
+        }
+        let decoded = decode_framed_signed_block(&image.body)?;
+        if decoded.header().height().get() != image.height
+            || decoded.hash() != image.block_hash
+            || decoded.encode_wire()? != image.body
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite image body mismatches its height, hash or canonical frame",
+            ));
         }
         Ok(())
     }
@@ -8909,15 +8903,19 @@ impl BlockStore {
                 start_block_height: index_position,
                 block_count: 1,
             })?;
-        let body = if index.length == 0 {
-            None
-        } else if index.is_evicted() {
-            Some(self.read_da_block_bytes(height, index.length)?)
+        if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(Error::CorruptedBlockLength {
+                length: index.length,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
+        }
+        let body = if index.is_evicted() {
+            self.read_da_block_bytes(height, index.length)?
         } else {
             let length = usize::try_from(index.length)?;
             let mut body = vec![0_u8; length];
             self.read_block_data(index.start, &mut body)?;
-            Some(body)
+            body
         };
         let image = DaBlockRewriteImageV1 {
             height,
@@ -9025,7 +9023,7 @@ impl BlockStore {
                 block_hash: *block_hash,
                 index_start: *index_start,
                 index_length: *index_length,
-                body: Some(body.clone()),
+                body: body.clone(),
             };
             self.validate_da_block_rewrite_image(&image)?;
             replacement.push(image);
@@ -9062,10 +9060,8 @@ impl BlockStore {
                     if image.index_start == EVICTED_BLOCK_START {
                         continue;
                     }
-                    if let Some(body) = image.body.as_deref() {
-                        file.seek(SeekFrom::Start(image.index_start))?;
-                        file.write_all(body)?;
-                    }
+                    file.seek(SeekFrom::Start(image.index_start))?;
+                    file.write_all(&image.body)?;
                 }
                 file.flush()?;
                 file.sync_all()
@@ -9073,9 +9069,7 @@ impl BlockStore {
         }
         for image in &stage.old_suffix {
             if image.index_start == EVICTED_BLOCK_START {
-                if let Some(body) = image.body.as_deref() {
-                    self.write_da_block_bytes(image.height, body)?;
-                }
+                self.write_da_block_bytes(image.height, &image.body)?;
             } else {
                 self.remove_da_block_file(image.height)?;
             }
@@ -9140,11 +9134,7 @@ impl BlockStore {
                     "published DA block rewrite metadata mismatches its stage",
                 ));
             }
-            let body = image.body.as_deref().ok_or_else(|| {
-                self.invalid_da_block_rewrite_stage(
-                    "published DA block rewrite replacement body is unavailable",
-                )
-            })?;
+            let body = image.body.as_slice();
             if index.is_evicted() {
                 self.write_da_block_bytes(image.height, body)?;
             } else {
@@ -11218,7 +11208,7 @@ pub(crate) mod tests {
                 block_hash: second.hash(),
                 index_start: first_wire.len() as u64,
                 index_length: second_wire.len() as u64,
-                body: Some(second_wire.clone()),
+                body: second_wire.clone(),
             }],
         };
         store

@@ -269,6 +269,7 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
         &mut overlay,
         &mut IvmCache::new(),
         Some(leg.route),
+        None,
     )
     .map_err(|error| format!("{error:?}"))?;
     overlay.apply();

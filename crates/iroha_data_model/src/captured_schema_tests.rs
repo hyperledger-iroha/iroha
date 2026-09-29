@@ -17,10 +17,10 @@ pub(crate) mod native_capture;
 mod current_release_capture;
 
 /// Number of retained nominal codec identities in the reviewed fixture.
-const EXPECTED_CODEC_COUNT: usize = 1_712;
+const EXPECTED_CODEC_COUNT: usize = 1_695;
 const CAPTURE_REPORT_SHA256: &str =
     "5fae6cc228a9cd2a7e4575de0c7e54d2c8f94808da2c40dd8bac96b497c2ae58";
-const FIXTURE_SHA256: &str = "c6e3e4ba1143c006c075ad93849d25be6eab95181508ae396aaf81bf53d00f94";
+const FIXTURE_SHA256: &str = "e60331ade37ae6e42ee1f07ef35f870c26942f63886629cccd09ddaeed0b78a6";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -94,7 +94,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_637, 68, 7]);
+        assert_eq!(direction_counts, [1_622, 66, 7]);
         names
     })
 }

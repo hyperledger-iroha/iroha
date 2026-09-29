@@ -504,12 +504,7 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
             "attestation_trust_roots_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
-            "capability_mask": {
-                "format": "uint16",
-                "maximum": 65535,
-                "minimum": 0,
-                "type": "integer"
-            },
+            "capability_mask": {"format": "uint32", "maximum": 4294967295, "minimum": 0, "type": "integer"},
             "enrollment_attestation_verifier_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
@@ -1137,12 +1132,7 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
                 },
                 "type": "array"
             },
-            "network_id": {
-                "maxLength": 74,
-                "minLength": 74,
-                "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
-                "type": "string"
-            },
+            "network_id": {"$ref": "#/components/schemas/Hash"},
             "profile_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
@@ -1295,6 +1285,7 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
         ],
         "type": "object"
     },
+    "Hash": {"pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$", "type": "string"},
 }
 
 

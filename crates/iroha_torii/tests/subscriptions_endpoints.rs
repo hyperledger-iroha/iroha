@@ -36,7 +36,6 @@ use iroha_data_model::{
     },
     trigger::{Trigger, TriggerId, action::Action},
 };
-use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -234,10 +233,9 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    let chain_id = ChainId::from("test-chain");
     let torii = Torii::new_with_handle(
-        chain_id.clone(),
-        iroha_torii::test_utils::signed_query_network_id(),
+        state.chain_id_ref().clone(),
+        *state.network_id_ref(),
         kiso,
         cfg.torii.clone(),
         queue.clone(),
@@ -271,8 +269,13 @@ async fn call_app(app: &axum::Router, mut request: Request<Body>) -> Response {
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
     app.clone().oneshot(request).await.expect("router responds")
 }
-fn signed_bob_mutation(uri: &str, body: &str) -> Request<Body> {
+fn signed_bob_mutation(
+    network_id: &iroha_data_model::NetworkId,
+    uri: &str,
+    body: &str,
+) -> Request<Body> {
     fixtures::app_signed_request(
+        network_id,
         &BOB_ID,
         &BOB_KEYPAIR,
         Request::builder()
@@ -308,7 +311,11 @@ async fn subscription_mutation_routes_are_registered() {
         format!("/v1/subscriptions/{subscription_id}/charge-now"),
     ] {
         let body = "{}";
-        let resp = call_app(&harness.app, signed_bob_mutation(&uri, body)).await;
+        let resp = call_app(
+            &harness.app,
+            signed_bob_mutation(harness.state.network_id_ref(), &uri, body),
+        )
+        .await;
         assert!(
             !matches!(
                 resp.status(),
@@ -381,6 +388,7 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
     let resume_resp = call_app(
         &harness.app,
         signed_bob_mutation(
+            harness.state.network_id_ref(),
             &format!("/v1/subscriptions/{subscription_id}/resume"),
             &body,
         ),
@@ -471,6 +479,7 @@ async fn subscription_action_route_rejects_legacy_private_key_payload() {
     let response = call_app(
         &harness.app,
         signed_bob_mutation(
+            harness.state.network_id_ref(),
             &format!("/v1/subscriptions/{subscription_id}/resume"),
             &body,
         ),
@@ -490,7 +499,11 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
         json_entry("cancel_mode", "immediate"),
     ]))
     .expect("serialize legacy cancel request");
-    let response = call_app(&harness.app, signed_bob_mutation(&uri, &legacy_body)).await;
+    let response = call_app(
+        &harness.app,
+        signed_bob_mutation(harness.state.network_id_ref(), &uri, &legacy_body),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let cancel_mode = json_object(vec![
         json_entry("mode", "immediate"),
@@ -501,7 +514,11 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
         ("cancel_mode".to_owned(), cancel_mode),
     ]))
     .expect("serialize exact cancel request");
-    let response = call_app(&harness.app, signed_bob_mutation(&uri, &body)).await;
+    let response = call_app(
+        &harness.app,
+        signed_bob_mutation(harness.state.network_id_ref(), &uri, &body),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let response = response_json(response).await;
     assert_eq!(

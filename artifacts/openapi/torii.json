@@ -4144,14 +4144,16 @@
         ]
       },
       "BeaconHorizonStatusV1": {
-        "type": "object",
         "additionalProperties": false,
         "description": "Same-applied-cut local beacon readiness. This observation confers no finality or signing authority.",
         "properties": {
           "active_session_id": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Fixed32ByteArray"
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -4159,9 +4161,9 @@
             ]
           },
           "epoch_length_blocks": {
-            "type": "integer",
             "format": "uint64",
-            "minimum": 0
+            "minimum": 0,
+            "type": "integer"
           },
           "local_provider_ready": {
             "type": "boolean"
@@ -4169,9 +4171,9 @@
           "next_required_pulse_height": {
             "anyOf": [
               {
-                "type": "integer",
                 "format": "uint64",
-                "minimum": 1
+                "minimum": 1,
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -4188,7 +4190,8 @@
           "active_session_id",
           "session_covers_next_pulse",
           "local_provider_ready"
-        ]
+        ],
+        "type": "object"
       },
       "BfvCiphertextBoundModeV1": {
         "oneOf": [
@@ -10729,9 +10732,9 @@
             "type": "array"
           },
           "public_key": {
-            "type": "string",
+            "description": "Canonical BLS-normal key; its possession proof and authenticated committee position are verified together.",
             "pattern": "^ea0130[0-9A-F]{96}$",
-            "description": "Canonical BLS-normal key; its possession proof and authenticated committee position are verified together."
+            "type": "string"
           }
         },
         "required": [
@@ -13085,34 +13088,32 @@
         "type": "object"
       },
       "GovernanceKagemushaAcceptanceCaseEvidenceV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "case": {
             "$ref": "#/components/schemas/GovernanceKagemushaAcceptanceCaseV1"
           },
-          "validator_count": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "validator_count": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "case",
           "validator_count",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaAcceptanceCaseV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "case": {
-            "type": "string",
             "enum": [
               "receiver_inbox_pressure",
               "sender_outbox_capacity_exhaustion",
@@ -13216,7 +13217,8 @@
               "native_fixture_jni",
               "native_fixture_qr",
               "native_fixture_nfc"
-            ]
+            ],
+            "type": "string"
           },
           "value": {
             "type": "null"
@@ -13225,32 +13227,32 @@
         "required": [
           "case",
           "value"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaAggregateBalanceQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "independent_payments": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
           "folded_credits": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
-          "spend_payments": {
-            "type": "integer",
+          "independent_payments": {
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "spend_payments": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -13258,37 +13260,36 @@
           "folded_credits",
           "spend_payments",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaArtifactBindingV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
+          "byte_len": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "role": {
             "$ref": "#/components/schemas/GovernanceKagemushaArtifactRoleV1"
           },
           "sha256": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "byte_len": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
           }
         },
         "required": [
           "role",
           "sha256",
           "byte_len"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaArtifactRoleV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "role": {
-            "type": "string",
             "enum": [
               "params_eq",
               "params_ep",
@@ -13340,7 +13341,8 @@
               "mint_hash_claim_vk_eq",
               "mint_hash_claim_pk_ep",
               "mint_hash_claim_vk_ep"
-            ]
+            ],
+            "type": "string"
           },
           "value": {
             "type": "null"
@@ -13349,40 +13351,41 @@
         "required": [
           "role",
           "value"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaBytes32V1": {
-        "type": "array",
-        "minItems": 32,
-        "maxItems": 32,
         "items": {
-          "type": "integer",
           "format": "uint8",
+          "maximum": 255,
           "minimum": 0,
-          "maximum": 255
-        }
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "type": "array"
       },
       "GovernanceKagemushaDevicePublicKeyV1": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 1,
         "items": {
-          "type": "string",
-          "minLength": 130,
           "maxLength": 130,
-          "pattern": "^04[0-9A-F]{128}$"
-        }
+          "minLength": 130,
+          "pattern": "^04[0-9A-F]{128}$",
+          "type": "string"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
       },
       "GovernanceKagemushaDeviceSignatureV1": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 1,
         "items": {
-          "type": "string",
-          "minLength": 128,
           "maxLength": 128,
-          "pattern": "^[0-9A-F]{128}$"
-        }
+          "minLength": 128,
+          "pattern": "^[0-9A-F]{128}$",
+          "type": "string"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
       },
       "GovernanceKagemushaEmptyVerifierRegistryV1": {
         "additionalProperties": false,
@@ -13412,7 +13415,6 @@
         "type": "object"
       },
       "GovernanceKagemushaEnabledProfileV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "hardware_profile": {
@@ -13421,23 +13423,23 @@
           "hardware_profile_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
+          "policy_epoch": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "qualification_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "qualification_report": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
           "suite_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "vk_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "qualification_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "policy_epoch": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "qualification_report": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           }
         },
         "required": [
@@ -13448,32 +13450,32 @@
           "qualification_digest",
           "policy_epoch",
           "qualification_report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaEnvelopeQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "raw_complete_exchange_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "text_complete_exchange_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
           "handoff_p95_ms": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
+          },
+          "raw_complete_exchange_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "text_complete_exchange_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -13481,59 +13483,59 @@
           "text_complete_exchange_bytes",
           "handoff_p95_ms",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaEvidenceClosureV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
+          "candidate_context_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
           "evidence_manifest": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
           "observer_policy": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
-          "verification_records_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "candidate_context_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "verification_record_count": {
-            "type": "integer",
-            "format": "uint32",
+          "total_command_input_bytes": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
           "total_evidence_bytes": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "total_transcript_bytes": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "total_command_input_bytes": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "total_observed_duration_ms": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
           },
           "total_observed_cpu_ms": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
+          },
+          "total_observed_duration_ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_transcript_bytes": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verification_record_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verification_records_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           }
         },
         "required": [
@@ -13547,34 +13549,43 @@
           "total_command_input_bytes",
           "total_observed_duration_ms",
           "total_observed_cpu_ms"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaEvidenceFileV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
+          "byte_len": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "sha256": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "byte_len": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
           }
         },
         "required": [
           "sha256",
           "byte_len"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaGovernedVerifierRegistryV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
-            "type": "integer"
+          "active_release_id": {
+            "oneOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9A-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "authority_policy": {
             "oneOf": [
@@ -13586,25 +13597,16 @@
               }
             ]
           },
-          "active_release_id": {
-            "oneOf": [
-              {
-                "type": "string",
-                "minLength": 64,
-                "maxLength": 64,
-                "pattern": "^[0-9A-F]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "releases": {
-            "type": "array",
             "items": {
               "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierReleaseV1"
             },
-            "maxItems": 64
+            "maxItems": 64,
+            "type": "array"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -13612,30 +13614,13 @@
           "authority_policy",
           "active_release_id",
           "releases"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaGovernedVerifierReleaseV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "release_id": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "status": {
-            "type": "integer",
-            "enum": [
-              1,
-              2,
-              3
-            ]
-          },
-          "profile_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
           "artifact_manifest_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "receipt_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "attestation_digest": {
@@ -13650,8 +13635,25 @@
           "native_profile_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
+          "profile_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
           "provider_policy_root": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "receipt_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "release_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "status": {
+            "enum": [
+              1,
+              2,
+              3
+            ],
+            "type": "integer"
           },
           "suite_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -13673,20 +13675,20 @@
           "provider_policy_root",
           "suite_id",
           "vk_set_digest"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaHardwarePlatformClassV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "class": {
-            "type": "string",
             "enum": [
               "android_oem_service",
               "apple_oem_service",
               "dedicated_secure_element",
               "other_qualified"
-            ]
+            ],
+            "type": "string"
           },
           "value": {
             "type": "null"
@@ -13695,76 +13697,76 @@
         "required": [
           "class",
           "value"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaHardwareProfileV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
-            "type": "integer"
-          },
-          "protocol_version": {
-            "const": 1,
-            "type": "integer"
-          },
-          "hardware_profile_id": {
+          "allowed_suite_commitment": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "provider_id": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "platform_class": {
-            "$ref": "#/components/schemas/GovernanceKagemushaHardwarePlatformClassV1"
-          },
-          "product_class_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "firmware_policy_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "enrollment_attestation_verifier_digest": {
+          "app_attestation_authority_policy_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "attestation_trust_roots_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "allowed_suite_commitment": {
+          "capability_mask": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enrollment_attestation_verifier_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "policy_epoch": {
-            "type": "integer",
+          "expires_at_ms": {
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
+          },
+          "firmware_policy_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "governance_credential_public_key": {
             "$ref": "#/components/schemas/GovernanceKagemushaDevicePublicKeyV1"
           },
-          "capability_mask": {
-            "type": "integer",
-            "format": "uint32",
+          "hardware_profile_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "platform_class": {
+            "$ref": "#/components/schemas/GovernanceKagemushaHardwarePlatformClassV1"
+          },
+          "policy_epoch": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
+          },
+          "product_class_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "protocol_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "provider_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "qualification_report_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "valid_from_ms": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
           },
-          "expires_at_ms": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "app_attestation_authority_policy_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -13785,32 +13787,32 @@
           "valid_from_ms",
           "expires_at_ms",
           "app_attestation_authority_policy_digest"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaHelperProtocolV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "helper": {
-            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedHelperCircuitV1"
-          },
-          "eq_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "ep_proof_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "ep_protocol_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "eq_proof_bytes": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
-          "ep_proof_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+          "eq_protocol_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "helper": {
+            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedHelperCircuitV1"
           }
         },
         "required": [
@@ -13819,83 +13821,83 @@
           "ep_protocol_digest",
           "eq_proof_bytes",
           "ep_proof_bytes"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaHelperQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "helper": {
-            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedHelperCircuitV1"
+          "complete_proof_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
-          "eq_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "ep_circuit_rows": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ep_proof_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "ep_protocol_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "eq_verifying_key": {
-            "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
           "ep_verifying_key": {
             "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
           "eq_circuit_rows": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
-          },
-          "ep_circuit_rows": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
           "eq_proof_bytes": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
-          "ep_proof_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+          "eq_protocol_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "complete_proof_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+          "eq_verifying_key": {
+            "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
-          "prove_p95_ms": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "verify_p95_ms": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "process_rss_bytes": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
+          "helper": {
+            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedHelperCircuitV1"
           },
           "operation_energy_millijoules": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
+          },
+          "process_rss_bytes": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prove_p95_ms": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "verify_p95_ms": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -13914,90 +13916,90 @@
           "process_rss_bytes",
           "operation_energy_millijoules",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaInternalValidationReceiptV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
-            "type": "integer"
-          },
-          "source_tree_digest": {
+          "artifact_set_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "cargo_lock_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "profile_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "circuit_shape_report": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
-          "native_profile_digest": {
+          "ep_protocol_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "eq_protocol_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "ep_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "evidence_closure": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceClosureV1"
           },
-          "artifact_set_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "fuzz_cases": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fuzz_report": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
           "hardware_policy_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
+          "helper_protocols": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"
+            },
+            "type": "array"
+          },
+          "kat_report": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "native_profile_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "profile_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "profile_qualifications": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaProfileQualificationV1"
+            },
+            "type": "array"
+          },
+          "provider_policy": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaProviderPolicyEntryV1"
+            },
+            "type": "array"
+          },
           "provider_policy_root": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "provider_policy": {
-            "type": "array",
+          "reproducible_builds": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaProviderPolicyEntryV1"
-            }
+              "$ref": "#/components/schemas/GovernanceKagemushaReproducibleBuildV1"
+            },
+            "type": "array"
           },
-          "evidence_closure": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceClosureV1"
-          },
-          "circuit_shape_report": {
+          "resource_report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
           "security_review_report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
           },
-          "kat_report": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          "source_tree_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "fuzz_report": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
-          },
-          "resource_report": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
-          },
-          "profile_qualifications": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaProfileQualificationV1"
-            }
-          },
-          "helper_protocols": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"
-            }
-          },
-          "reproducible_builds": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaReproducibleBuildV1"
-            }
-          },
-          "fuzz_cases": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -14022,47 +14024,47 @@
           "helper_protocols",
           "reproducible_builds",
           "fuzz_cases"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaProfileQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "profile": {
-            "$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"
-          },
-          "relations": {
-            "type": "array",
+          "acceptance_cases": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaRelationQualificationV1"
-            }
-          },
-          "helper_circuits": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaHelperQualificationV1"
-            }
-          },
-          "recursive_depths": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaRecursiveDepthQualificationV1"
-            }
+              "$ref": "#/components/schemas/GovernanceKagemushaAcceptanceCaseEvidenceV1"
+            },
+            "type": "array"
           },
           "aggregate_balance": {
             "$ref": "#/components/schemas/GovernanceKagemushaAggregateBalanceQualificationV1"
           },
-          "thermal": {
-            "$ref": "#/components/schemas/GovernanceKagemushaThermalQualificationV1"
-          },
           "envelope": {
             "$ref": "#/components/schemas/GovernanceKagemushaEnvelopeQualificationV1"
           },
-          "acceptance_cases": {
-            "type": "array",
+          "helper_circuits": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaAcceptanceCaseEvidenceV1"
-            }
+              "$ref": "#/components/schemas/GovernanceKagemushaHelperQualificationV1"
+            },
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"
+          },
+          "recursive_depths": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaRecursiveDepthQualificationV1"
+            },
+            "type": "array"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaRelationQualificationV1"
+            },
+            "type": "array"
+          },
+          "thermal": {
+            "$ref": "#/components/schemas/GovernanceKagemushaThermalQualificationV1"
           }
         },
         "required": [
@@ -14074,26 +14076,26 @@
           "thermal",
           "envelope",
           "acceptance_cases"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaProviderPolicyEntryV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "hardware_profile_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
+          "issuer_signature": {
+            "$ref": "#/components/schemas/GovernanceKagemushaDeviceSignatureV1"
+          },
           "provider_authority_commitment": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "provider_profile_index": {
-            "type": "integer",
             "format": "uint16",
+            "maximum": 65535,
             "minimum": 0,
-            "maximum": 65535
-          },
-          "issuer_signature": {
-            "$ref": "#/components/schemas/GovernanceKagemushaDeviceSignatureV1"
+            "type": "integer"
           }
         },
         "required": [
@@ -14101,14 +14103,13 @@
           "provider_authority_commitment",
           "provider_profile_index",
           "issuer_signature"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaQualifiedHelperCircuitV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "helper": {
-            "type": "string",
             "enum": [
               "mint_authorization",
               "mint_credit",
@@ -14116,7 +14117,8 @@
               "guard_bundle",
               "mint_hash_shard",
               "mint_hash_claim"
-            ]
+            ],
+            "type": "string"
           },
           "value": {
             "type": "null"
@@ -14125,14 +14127,13 @@
         "required": [
           "helper",
           "value"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaQualifiedRelationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "relation": {
-            "type": "string",
             "enum": [
               "bootstrap",
               "mint_fold",
@@ -14142,7 +14143,8 @@
               "rotate",
               "terminal_authorization",
               "commit_wrapper"
-            ]
+            ],
+            "type": "string"
           },
           "value": {
             "type": "null"
@@ -14151,44 +14153,44 @@
         "required": [
           "relation",
           "value"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaRecursiveDepthQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "depth": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "verified_handoffs": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
           "complete_proof_bytes": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
+          },
+          "depth": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "raw_complete_exchange_bytes": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
-          },
-          "text_complete_exchange_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "text_complete_exchange_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verified_handoffs": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -14198,71 +14200,71 @@
           "raw_complete_exchange_bytes",
           "text_complete_exchange_bytes",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaRelationQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "relation": {
-            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedRelationV1"
+          "complete_proof_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
-          "eq_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "ep_circuit_rows": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           },
           "ep_protocol_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "eq_verifying_key": {
-            "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
           "ep_verifying_key": {
             "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
           "eq_circuit_rows": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
-          "ep_circuit_rows": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
+          "eq_protocol_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "complete_proof_bytes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "prove_p95_ms": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "verify_p95_ms": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "process_rss_bytes": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "maximum": 9007199254740991
+          "eq_verifying_key": {
+            "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
           },
           "operation_energy_millijoules": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
+          },
+          "process_rss_bytes": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prove_p95_ms": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/GovernanceKagemushaQualifiedRelationV1"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
+          },
+          "verify_p95_ms": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -14279,51 +14281,51 @@
           "process_rss_bytes",
           "operation_energy_millijoules",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaReleaseApprovalV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "public_key": {
-            "type": "string",
+            "description": "Canonical Iroha multihash PublicKey; native admission checks algorithm and spelling.",
             "minLength": 1,
-            "description": "Canonical Iroha multihash PublicKey; native admission checks algorithm and spelling."
+            "type": "string"
           },
           "signature": {
-            "type": "string",
+            "description": "Uppercase hexadecimal canonical release-authority signature.",
             "minLength": 2,
             "pattern": "^[0-9A-F]+$",
-            "description": "Uppercase hexadecimal canonical release-authority signature."
+            "type": "string"
           }
         },
         "required": [
           "public_key",
           "signature"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaReleaseAttestationSubjectV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
-            "type": "integer"
-          },
-          "authority_policy_digest": {
+          "artifact_set_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "release_id": {
+          "authority_policy_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "manifest_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
+          "release_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
           "validation_receipt_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "artifact_set_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -14333,31 +14335,32 @@
           "manifest_digest",
           "validation_receipt_digest",
           "artifact_set_digest"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaReleaseAttestationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
-            "type": "integer"
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaReleaseApprovalV1"
+            },
+            "type": "array"
           },
           "subject": {
             "$ref": "#/components/schemas/GovernanceKagemushaReleaseAttestationSubjectV1"
           },
-          "approvals": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaReleaseApprovalV1"
-            }
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
           "version",
           "subject",
           "approvals"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaReleaseAuthorityPolicyV1": {
         "additionalProperties": false,
@@ -14441,15 +14444,49 @@
         "type": "object"
       },
       "GovernanceKagemushaReleaseManifestV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "version": {
-            "const": 1,
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
+            },
+            "type": "array"
+          },
+          "cargo_lock_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "enabled_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"
+            },
+            "type": "array"
+          },
+          "ep_protocol_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "eq_protocol_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "halo2_k": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
             "type": "integer"
+          },
+          "hardware_policy_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "helper_protocols": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"
+            },
+            "type": "array"
           },
           "network_id": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "profile_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "purpose": {
             "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1"
@@ -14460,47 +14497,12 @@
           "source_tree_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "cargo_lock_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "profile_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "eq_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "ep_protocol_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "hardware_policy_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
           "validation_receipt_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "halo2_k": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
-          "helper_protocols": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"
-            }
-          },
-          "enabled_profiles": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"
-            }
-          },
-          "artifacts": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
-            }
+          "version": {
+            "const": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -14519,17 +14521,17 @@
           "helper_protocols",
           "enabled_profiles",
           "artifacts"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaReleasePurposeV1": {
         "oneOf": [
           {
-            "type": "object",
             "additionalProperties": false,
             "properties": {
               "kind": {
-                "type": "string",
-                "const": "production"
+                "const": "production",
+                "type": "string"
               },
               "value": {
                 "type": "null"
@@ -14538,15 +14540,15 @@
             "required": [
               "kind",
               "value"
-            ]
+            ],
+            "type": "object"
           },
           {
-            "type": "object",
             "additionalProperties": false,
             "properties": {
               "kind": {
-                "type": "string",
-                "const": "testnet_experiment"
+                "const": "testnet_experiment",
+                "type": "string"
               },
               "value": {
                 "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
@@ -14555,18 +14557,18 @@
             "required": [
               "kind",
               "value"
-            ]
+            ],
+            "type": "object"
           }
         ]
       },
       "GovernanceKagemushaReproducibleBuildV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "builder_id": {
+          "artifact_set_digest": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
-          "artifact_set_digest": {
+          "builder_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "report": {
@@ -14577,10 +14579,10 @@
           "builder_id",
           "artifact_set_digest",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaTestnetExperimentScopeV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
           "asset_identity_digest": {
@@ -14590,10 +14592,10 @@
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
           },
           "asset_scale": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 28,
             "minimum": 0,
-            "maximum": 28
+            "type": "integer"
           },
           "liability_pool_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -14604,35 +14606,35 @@
           "asset_incarnation",
           "asset_scale",
           "liability_pool_id"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceKagemushaThermalQualificationV1": {
-        "type": "object",
         "additionalProperties": false,
         "properties": {
-          "folded_credits": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          },
           "fold_p95_ms": {
-            "type": "integer",
             "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 4294967295
+            "type": "integer"
           },
-          "process_rss_bytes": {
-            "type": "integer",
-            "format": "uint64",
+          "folded_credits": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
           },
           "operation_energy_millijoules": {
-            "type": "integer",
             "format": "uint64",
+            "maximum": 9007199254740991,
             "minimum": 0,
-            "maximum": 9007199254740991
+            "type": "integer"
+          },
+          "process_rss_bytes": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
           "report": {
             "$ref": "#/components/schemas/GovernanceKagemushaEvidenceFileV1"
@@ -14644,7 +14646,8 @@
           "process_rss_bytes",
           "operation_energy_millijoules",
           "report"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceManifestProvenanceV1": {
         "additionalProperties": false,
@@ -16961,12 +16964,11 @@
             "type": "object"
           },
           {
-            "type": "object",
             "additionalProperties": false,
             "properties": {
               "kind": {
-                "type": "string",
-                "const": "KagemushaVerifierReleaseInstall"
+                "const": "KagemushaVerifierReleaseInstall",
+                "type": "string"
               },
               "payload": {
                 "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1"
@@ -16975,15 +16977,15 @@
             "required": [
               "kind",
               "payload"
-            ]
+            ],
+            "type": "object"
           },
           {
-            "type": "object",
             "additionalProperties": false,
             "properties": {
               "kind": {
-                "type": "string",
-                "const": "KagemushaVerifierReleaseActivate"
+                "const": "KagemushaVerifierReleaseActivate",
+                "type": "string"
               },
               "payload": {
                 "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1"
@@ -16992,7 +16994,8 @@
             "required": [
               "kind",
               "payload"
-            ]
+            ],
+            "type": "object"
           }
         ]
       },
@@ -17384,12 +17387,11 @@
         "type": "object"
       },
       "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseActivateV1": {
-        "type": "object",
         "additionalProperties": false,
         "description": "Exact Parliament first activation of the sole installed standby verifier release from an inactive registry. Native admission validates the complete predecessor signer policy and release set; the due certificate and State-owned compare-and-set authorize the sole status transition.",
         "properties": {
-          "proposal_operator": {
-            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          "expected_predecessor": {
+            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
           },
           "network_id": {
             "description": "Canonical checked genesis hash; native admission verifies checksum and byte-for-byte rendering.",
@@ -17398,8 +17400,8 @@
             "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
             "type": "string"
           },
-          "expected_predecessor": {
-            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "successor_release_id": {
             "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -17410,15 +17412,21 @@
           "network_id",
           "expected_predecessor",
           "successor_release_id"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceParliamentProposalPayloadKagemushaVerifierReleaseInstallV1": {
-        "type": "object",
         "additionalProperties": false,
         "description": "Exact certified Parliament installation of one threshold-authenticated standby verifier release. Native admission authenticates every digest and signature and atomically compares the complete finalized predecessor registry.",
         "properties": {
-          "proposal_operator": {
-            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          "attestation": {
+            "$ref": "#/components/schemas/GovernanceKagemushaReleaseAttestationV1"
+          },
+          "expected_predecessor": {
+            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaReleaseManifestV1"
           },
           "network_id": {
             "description": "Canonical checked genesis hash; native admission verifies checksum and byte-for-byte rendering.",
@@ -17427,17 +17435,11 @@
             "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
             "type": "string"
           },
-          "expected_predecessor": {
-            "$ref": "#/components/schemas/GovernanceKagemushaGovernedVerifierRegistryV1"
-          },
-          "manifest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaReleaseManifestV1"
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
           },
           "receipt": {
             "$ref": "#/components/schemas/GovernanceKagemushaInternalValidationReceiptV1"
-          },
-          "attestation": {
-            "$ref": "#/components/schemas/GovernanceKagemushaReleaseAttestationV1"
           }
         },
         "required": [
@@ -17447,7 +17449,8 @@
           "manifest",
           "receipt",
           "attestation"
-        ]
+        ],
+        "type": "object"
       },
       "GovernanceParliamentProposalPayloadMusubiRegistryActionV1": {
         "description": "Closed Parliament-only Musubi recovery, takedown, alias-retarget, and registry-policy action.",
@@ -22425,7 +22428,7 @@
       },
       "KagemushaOperationResultV1": {
         "additionalProperties": false,
-        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and\u2014only for top-up\u2014the byte-identical mint credit.",
+        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/KagemushaOperationKindV1"
@@ -28284,9 +28287,9 @@
         "description": "One bounded original SignedBlockWire. This untrusted transport is not an authority capability; signed genesis has no CommitQC.",
         "properties": {
           "block_wire": {
-            "type": "string",
             "format": "byte",
-            "maxLength": 44739244
+            "maxLength": 44739244,
+            "type": "string"
           }
         },
         "required": [
@@ -47360,15 +47363,15 @@
             "$ref": "#/components/schemas/BlockHeader",
             "description": "Canonical block header authenticated by the native finality proof."
           },
+          "finality_proof": {
+            "$ref": "#/components/schemas/SumeragiFinalityProof",
+            "description": "Exact canonical block frame and committee authenticated by the native chain."
+          },
           "height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
             "minimum": 2,
             "type": "integer"
-          },
-          "finality_proof": {
-            "$ref": "#/components/schemas/SumeragiFinalityProof",
-            "description": "Exact canonical block frame and committee authenticated by the native chain."
           },
           "witnessed_post_state_root": {
             "$ref": "#/components/schemas/Hash",
@@ -48086,76 +48089,9 @@
         ],
         "type": "object"
       },
-      "SumeragiDataspaceCommitment": {
-        "additionalProperties": false,
-        "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "rbc_bytes_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "teu_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "total_chunks": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tx_count": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "block_height",
-          "lane_id",
-          "dataspace_id",
-          "tx_count",
-          "total_chunks",
-          "rbc_bytes_total",
-          "teu_total",
-          "block_hash"
-        ],
-        "type": "object"
-      },
       "SumeragiDiagnosticsResponse": {
         "additionalProperties": false,
         "properties": {
-          "dataspace_commitments": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiDataspaceCommitment"
-            },
-            "type": "array"
-          },
-          "lane_commitments": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiLaneCommitment"
-            },
-            "type": "array"
-          },
           "lane_governance": {
             "items": {
               "$ref": "#/components/schemas/SumeragiLaneGovernance"
@@ -48175,9 +48111,6 @@
           },
           "npos": {
             "$ref": "#/components/schemas/SumeragiNposDiagnostics"
-          },
-          "pipeline_execution": {
-            "$ref": "#/components/schemas/SumeragiPipelineExecutionDiagnostics"
           },
           "tx_queue_capacity": {
             "format": "uint64",
@@ -48218,7 +48151,6 @@
           }
         },
         "required": [
-          "pipeline_execution",
           "tx_queue_depth",
           "tx_queue_capacity",
           "tx_queue_retained_bytes",
@@ -48228,8 +48160,6 @@
           "tx_queue_saturated_by_bytes",
           "tx_queue_saturated_by_age",
           "tx_queue_oldest_queued_age_ms",
-          "lane_commitments",
-          "dataspace_commitments",
           "lane_governance_sealed_total",
           "lane_governance_sealed_aliases",
           "lane_governance"
@@ -48240,6 +48170,10 @@
         "additionalProperties": false,
         "description": "Closed audit projection of original native evidence and independently authenticated historical signer attribution.",
         "properties": {
+          "authority_generation": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "class": {
             "enum": [
               "proposal",
@@ -48269,9 +48203,25 @@
             "minimum": 0,
             "type": "integer"
           },
+          "instance": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
           "kind": {
             "const": "NativeSumeragiEvidence",
             "type": "string"
+          },
+          "native_frame_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "offenders": {
+            "items": {
+              "$ref": "#/components/schemas/SumeragiEvidenceOffender"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "type": "array"
           },
           "penalty_status": {
             "$ref": "#/components/schemas/SumeragiEvidencePenaltyStatus"
@@ -48290,26 +48240,6 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "authority_generation": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "instance": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "native_frame_hash": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "offenders": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiEvidenceOffender"
-            },
-            "maxItems": 1024,
-            "minItems": 1,
-            "type": "array"
           },
           "safety_violation": {
             "type": "boolean"
@@ -48477,10 +48407,10 @@
           },
           "signature": {
             "description": "Canonical uppercase node signature over the domain-separated typed body hash.",
+            "maxLength": 192,
             "minLength": 192,
             "pattern": "^(?:[0-9A-F]{2})+$",
-            "type": "string",
-            "maxLength": 192
+            "type": "string"
           }
         },
         "required": [
@@ -48703,26 +48633,34 @@
           {
             "additionalProperties": false,
             "properties": {
+              "details": {
+                "type": "null"
+              },
               "reason": {
                 "const": "safety_record_corrupt",
                 "type": "string"
               }
             },
             "required": [
-              "reason"
+              "reason",
+              "details"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
+              "details": {
+                "type": "null"
+              },
               "reason": {
                 "const": "safety_record_inconsistent",
                 "type": "string"
               }
             },
             "required": [
-              "reason"
+              "reason",
+              "details"
             ],
             "type": "object"
           },
@@ -48769,66 +48707,41 @@
           {
             "additionalProperties": false,
             "properties": {
+              "details": {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "const": "publication_recovery_required",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "details"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "type": "null"
+              },
               "reason": {
                 "const": "driver_anomaly",
                 "type": "string"
               }
             },
             "required": [
-              "reason"
+              "reason",
+              "details"
             ],
             "type": "object"
           }
         ]
-      },
-      "SumeragiLaneCommitment": {
-        "additionalProperties": false,
-        "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "rbc_bytes_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "teu_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "total_chunks": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tx_count": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "block_height",
-          "lane_id",
-          "tx_count",
-          "total_chunks",
-          "rbc_bytes_total",
-          "teu_total",
-          "block_hash"
-        ],
-        "type": "object"
       },
       "SumeragiLaneGovernance": {
         "additionalProperties": false,
@@ -48926,133 +48839,11 @@
             "maxItems": 32,
             "minItems": 32,
             "type": "array"
-          },
-          "prf_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "prf_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
           "epoch_length_blocks",
-          "epoch_seed",
-          "prf_height",
-          "prf_view"
-        ],
-        "type": "object"
-      },
-      "SumeragiPipelineExecutionDiagnostics": {
-        "additionalProperties": false,
-        "properties": {
-          "detached_fallback_durable_state_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_fee_postprocessing_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_overlay_error_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_rejected_eval_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_unsupported_instruction_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_fallback_user_executor_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_merged_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "detached_prepared_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "overlay_bytes_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "overlay_count_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "overlay_instr_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "quarantine_executed_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "rbc_bytes_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "rbc_chunks_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tx_edges_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tx_vertices_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "tx_vertices_total",
-          "tx_edges_total",
-          "overlay_count_total",
-          "overlay_instr_total",
-          "overlay_bytes_total",
-          "rbc_chunks_total",
-          "rbc_bytes_total",
-          "detached_prepared_total",
-          "detached_merged_total",
-          "detached_fallback_total",
-          "detached_fallback_fee_postprocessing_total",
-          "detached_fallback_user_executor_total",
-          "detached_fallback_durable_state_total",
-          "detached_fallback_unsupported_instruction_total",
-          "detached_fallback_rejected_eval_total",
-          "detached_fallback_overlay_error_total",
-          "quarantine_executed_total"
+          "epoch_seed"
         ],
         "type": "object"
       },
@@ -49156,13 +48947,13 @@
           "instance": {
             "maxLength": 64,
             "minLength": 64,
-            "pattern": "^[0-9A-F]{64}$",
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "leader": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PublicKey"
+                "$ref": "#/components/schemas/BlsValidatorId"
               },
               {
                 "type": "null"
@@ -49176,16 +48967,16 @@
             "type": "integer"
           },
           "protocol_version": {
-            "type": "integer",
-            "format": "uint16",
             "enum": [
               1
-            ]
+            ],
+            "format": "uint16",
+            "type": "integer"
           },
           "proxy_tail": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PublicKey"
+                "$ref": "#/components/schemas/BlsValidatorId"
               },
               {
                 "type": "null"
@@ -49195,7 +48986,7 @@
           "signer": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PublicKey"
+                "$ref": "#/components/schemas/BlsValidatorId"
               },
               {
                 "type": "null"
@@ -49286,7 +49077,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
+            "description": "Confidence interval (±ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -49361,7 +49152,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
+            "description": "Confidence interval (±ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -69215,7 +69006,7 @@
     },
     "/v1/gov/parliament/attempts/{governance_attempt_id}/plan": {
       "get": {
-        "description": "Returns the transitions the Parliament reducer accepts at the execution height of a transaction submitted now, the exact-height checkpoints, and the ballots waiting for a corpus relay or the combined TLE release (`specs/sccp.md` \u00a74.14.5 item 4). The plan is advice for a driver; consensus rechecks every submitted transition.",
+        "description": "Returns the transitions the Parliament reducer accepts at the execution height of a transaction submitted now, the exact-height checkpoints, and the ballots waiting for a corpus relay or the combined TLE release (`specs/sccp.md` §4.14.5 item 4). The plan is advice for a driver; consensus rechecks every submitted transition.",
         "operationId": "governanceParliamentAttemptPlanV1",
         "parameters": [
           {
@@ -78661,7 +78452,7 @@
     },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
-        "description": "Resolves the supplied canonical I105 account literal or on-chain alias and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
+        "description": "Resolves the supplied canonical I105 account literal or on-chain alias and returns a joined view of UAID bindings, space-directory manifests, portfolio counters.",
         "operationId": "nexusDataspacesAccountSummary",
         "parameters": [
           {
@@ -80731,7 +80522,17 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Prepare exact staking monetary inputs"
+        "summary": "Prepare exact staking monetary inputs",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "nexus.staking.prepare"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nexus/validator-committee": {
@@ -83306,10 +83107,10 @@
                 }
               }
             },
-            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the entrypoint. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External and SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. It does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External or SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. It does not fabricate queue-pressure details or headers.",
             "headers": {
               "x-iroha-entrypoint-hash": {
-                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "description": "Present exactly once only for transaction_dispatch_outcome_unknown; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
@@ -83318,12 +83119,12 @@
               "x-iroha-reject-code": {
                 "description": "Exact queue or Torii availability code when the failure originated in canonical entrypoint admission; intermediary failures may omit the header.",
                 "schema": {
-                  "example": "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                  "example": "transaction_dispatch_outcome_unknown",
                   "type": "string"
                 }
               },
               "x-iroha-signed-transaction-hash": {
-                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN when the submitted External or SealedReveal entrypoint carries an inner SignedTransaction; the exact unchanged inner hash is also carried in ErrorEnvelope.details.tx_hash.",
+                "description": "Present exactly once only for transaction_dispatch_outcome_unknown when the submitted External or SealedReveal entrypoint carries an inner SignedTransaction; the exact unchanged inner hash is also carried in ErrorEnvelope.details.tx_hash.",
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
@@ -83602,17 +83403,17 @@
                 }
               }
             },
-            "description": "The admission worker, authoritative Torii route, durable queue-plan journal, or KAGEMUSHA V1 pending-operation ownership index is unavailable or inconsistent. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT means Queue ownership requires recovery before another KAGEMUSHA V1 carrier can be admitted. Only the journal outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. It also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash. PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT means the pending-operation ownership index requires recovery before another KAGEMUSHA V1 carrier can be admitted. It does not fabricate queue-pressure details or headers.",
             "headers": {
               "Retry-After": {
-                "description": "Whole-second retry delay when authoritative backpressure supplies one; journal outcome-unknown responses omit it.",
+                "description": "Whole-second retry delay when authoritative backpressure supplies one; dispatch outcome-unknown responses omit it.",
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
                 }
               },
               "x-iroha-entrypoint-hash": {
-                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "description": "Present exactly once only for transaction_dispatch_outcome_unknown; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
@@ -83624,8 +83425,7 @@
                   "enum": [
                     "transaction_admission_worker_failed",
                     "route_unavailable",
-                    "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
-                    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                    "transaction_dispatch_outcome_unknown",
                     "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT"
                   ],
                   "example": "transaction_admission_worker_failed",
@@ -83633,7 +83433,7 @@
                 }
               },
               "x-iroha-signed-transaction-hash": {
-                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact unchanged caller-signed transaction hash also carried in ErrorEnvelope.details.tx_hash.",
+                "description": "Present exactly once only for transaction_dispatch_outcome_unknown; the exact unchanged caller-signed transaction hash also carried in ErrorEnvelope.details.tx_hash.",
                 "schema": {
                   "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
@@ -112705,7 +112505,7 @@
     },
     "/v1/sumeragi/diagnostics": {
       "get": {
-        "description": "Return non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics. Reducer phase, height, view, leader, and certificates are available only from the status endpoint.",
+        "description": "Returns current queue pressure, committed NPoS parameters and physical lane governance diagnostics. Native consensus instance and lane status are exposed separately.",
         "responses": {
           "200": {
             "content": {
@@ -112726,6 +112526,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The local transaction queue owner is unavailable (transaction_queue_unavailable)."
           }
         },
         "security": [
@@ -112973,52 +112783,6 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/sumeragi/leader": {
-      "get": {
-        "description": "Return the current Sumeragi leader snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaOperatorNonce": [],
-            "IrohaOperatorPublicKey": [],
-            "IrohaOperatorSignature": [],
-            "IrohaOperatorTimestampMs": []
-          }
-        ],
-        "summary": "Fetch current leader.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "operator",
-          "authentication": "operator_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "sumeragi.leader.read"
-        },
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/sumeragi/params": {
       "get": {
         "description": "Return Sumeragi consensus parameters.",
@@ -113061,52 +112825,6 @@
           "authentication": "operator_signature",
           "schemaVersion": 1,
           "stableRouteId": "sumeragi.parameter.read"
-        },
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/qc": {
-      "get": {
-        "description": "Return quorum certificate snapshots.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaOperatorNonce": [],
-            "IrohaOperatorPublicKey": [],
-            "IrohaOperatorSignature": [],
-            "IrohaOperatorTimestampMs": []
-          }
-        ],
-        "summary": "Fetch QC snapshots.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "operator",
-          "authentication": "operator_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "sumeragi.qc.read"
         },
         "x-iroha-tool-effect": "operator"
       }
@@ -117475,7 +117193,7 @@
       "name": "Applications"
     },
     {
-      "description": "SCCP v1 public read API under `/v1/sccp/*` (`specs/sccp.md` \u00a76). Every peer serves identical bytes derived from committed state; readers verify every proof themselves.",
+      "description": "SCCP v1 public read API under `/v1/sccp/*` (`specs/sccp.md` §6). Every peer serves identical bytes derived from committed state; readers verify every proof themselves.",
       "name": "SCCP"
     }
   ]

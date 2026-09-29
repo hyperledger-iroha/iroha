@@ -283,9 +283,13 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         ));
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            tokio::sync::broadcast::channel(1).0,
+        ));
         let response = super::handle_v1_sumeragi_diagnostics(
             axum::extract::State(Arc::clone(&state)),
-            None,
+            Some(queue),
             Some(axum::http::HeaderValue::from_static("application/json")),
         )
         .await
@@ -300,11 +304,15 @@ mod tests {
         let decoded: SumeragiDiagnosticsStatus =
             norito::json::from_slice(&body).expect("decode diagnostics");
         assert!(decoded.npos.is_none());
-        assert!(decoded.lane_commitments.is_empty());
+        assert_eq!(decoded.tx_queue_depth, 0);
+        assert!(!decoded.tx_queue_saturated);
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode diagnostics JSON object");
         assert!(json.get("npos").is_none());
         for retired in [
+            "lane_commitments",
+            "dataspace_commitments",
+            "pipeline_execution",
             "lane_relay_envelopes",
             "native_amx_participant_applications",
             "autonomous_lane_executions",
@@ -320,6 +328,102 @@ mod tests {
                 "leaked canonical field {canonical}"
             );
         }
+    }
+    #[tokio::test]
+    async fn sumeragi_diagnostics_require_the_live_queue_owner() {
+        let state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let error = super::handle_v1_sumeragi_diagnostics(
+            axum::extract::State(state),
+            None,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+        )
+        .await
+        .expect_err("missing queue cannot be represented as an empty queue");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "transaction_queue_unavailable",
+                ..
+            }
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    #[tokio::test]
+    async fn sumeragi_diagnostics_report_live_queue_pressure_and_committed_age_budget() {
+        use iroha_core::{
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+            tx::AcceptedTransaction,
+        };
+        use iroha_data_model::prelude::{Account, AccountId, Level, Log, TransactionBuilder};
+
+        let key = iroha_crypto::KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(key.public_key().clone());
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let chain = CertifiedTestChain::start(TestChainConfig::new(world, 1))
+            .expect("original signed genesis");
+        let state = Arc::clone(chain.state());
+        let config = iroha_config::parameters::actual::Queue {
+            capacity: std::num::NonZeroUsize::new(1).unwrap(),
+            ..Default::default()
+        };
+        let queue = Arc::new(Queue::from_config(
+            config,
+            tokio::sync::broadcast::channel(1).0,
+        ));
+        let transaction = TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "live diagnostics".to_owned())])
+        .sign(key.private_key());
+        let accepted = AcceptedTransaction::accept(
+            transaction,
+            state.network_id_ref(),
+            Duration::from_secs(5),
+            iroha_data_model::parameter::TransactionParameters::default(),
+            state.crypto().as_ref(),
+        )
+        .expect("original signed transaction passes envelope admission");
+        queue
+            .push(accepted, state.view())
+            .expect("queue real admitted work");
+        let _ = queue.backdate_queued_transactions_for_tests(Duration::from_secs(3_600));
+        let before = queue.set_pressure_age_budget_for_tests(Duration::from_secs(7_200));
+        assert!(!before.saturated_by_age, "deliberately stale local budget");
+        let response = super::handle_v1_sumeragi_diagnostics(
+            axum::extract::State(Arc::clone(&state)),
+            Some(Arc::clone(&queue)),
+            Some(axum::http::HeaderValue::from_static("application/json")),
+        )
+        .await
+        .expect("diagnostics handler");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let decoded: SumeragiDiagnosticsStatus = norito::json::from_slice(&body).unwrap();
+        assert_eq!(decoded.tx_queue_depth, 1);
+        assert_eq!(decoded.tx_queue_capacity, 1);
+        assert_eq!(decoded.tx_queue_retained_bytes, before.retained_bytes);
+        assert!(decoded.tx_queue_retained_bytes > 0);
+        assert_eq!(
+            decoded.tx_queue_max_retained_bytes,
+            before.max_retained_bytes.get()
+        );
+        assert!(decoded.tx_queue_saturated);
+        assert!(decoded.tx_queue_saturated_by_count);
+        assert!(!decoded.tx_queue_saturated_by_bytes);
+        assert!(
+            decoded.tx_queue_saturated_by_age,
+            "handler refreshes the committed cadence budget"
+        );
+        assert!(decoded.tx_queue_oldest_queued_age_ms >= 3_600_000);
     }
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {

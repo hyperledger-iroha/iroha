@@ -170,8 +170,8 @@ struct KuraTipV1 {
 /// store a running node owns), validates the durable commit marker and maps the hash journal
 /// read-only without repairing, creating or publishing anything. Every retained block body up to
 /// the tip is then decoded with this build's decoder and checked against the hash journal and its
-/// parent. The newest snapshot is restored into a scratch Kura in a temporary directory; the real
-/// store is only read.
+/// parent. The newest snapshot is checked using a scratch Kura in a temporary directory; the real
+/// store is only read. A positive-height snapshot reports that native execution replay is required.
 ///
 /// # Errors
 ///
@@ -350,8 +350,8 @@ fn verify_retained_bodies(store_root: &Path, kura: &Kura, tip_height: u64) -> Re
 /// Returns the snapshot's height and tip hash, or `None` when restore is disabled or no snapshot
 /// exists (the node would replay Kura from genesis).
 ///
-/// TODO: the Strict startup also compares the snapshot's WSV hash with Kura's WSV checkpoint at
-/// the snapshot height; the scratch restore does not expose that hash yet.
+/// Positive-height snapshots fail with `NativeExecutionReplayRequired`: a signed World export
+/// does not authenticate its full state against the native witnessed-write commitment.
 fn snapshot_restore_dry_run(
     config: &Config,
     tip_height: u64,
@@ -391,9 +391,8 @@ fn snapshot_restore_dry_run(
         usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get())
             .map_err(|_| "configured operation-index pool exceeds addressable memory".to_owned())?,
     );
-    // The scratch Kura holds no blocks; the claimed block count is the real durable tip so the
-    // snapshot height is admitted, and the snapshot's hashes are compared with the real store by
-    // the caller.
+    // Supply the real durable height for bounds checking. This never grants a positive-height
+    // snapshot authority to replace native certified execution replay.
     let block_count = BlockCount(usize::try_from(tip_height).map_err(|error| error.to_string())?);
     let restored = try_read_snapshot_with_limits(
         &execution_budget,
@@ -437,15 +436,18 @@ fn snapshot_restore_dry_run(
 }
 
 /// Compare every block hash a restored snapshot retains with Kura's durable hash at the same
-/// height, as the Strict startup's reconciliation does: a difference at any retained height,
-/// or a height Kura should hold but does not, fails; heights above Kura's tip are a
-/// snapshot-ahead suffix and end the comparison.
+/// height. A mismatch, a missing retained hash, or a snapshot above Kura's durable tip fails.
 fn reconcile_restored_hashes(
     snapshot_hashes: impl Iterator<Item = HashOf<BlockHeader>>,
     kura_height: u64,
     kura_hash: impl Fn(NonZeroUsize) -> Option<HashOf<BlockHeader>>,
 ) -> Result<(), String> {
     for (height, snapshot_hash) in (1_usize..).zip(snapshot_hashes) {
+        if u64::try_from(height).map_or(true, |height| height > kura_height) {
+            return Err(format!(
+                "snapshot height {height} exceeds Kura's durable height {kura_height}"
+            ));
+        }
         let height_nz = NonZeroUsize::new(height).expect("heights start at 1");
         match kura_hash(height_nz) {
             Some(kura_hash) if kura_hash == snapshot_hash => {}
@@ -454,7 +456,6 @@ fn reconcile_restored_hashes(
                     "the snapshot's block hash at height {height} differs from Kura's"
                 ));
             }
-            None if u64::try_from(height).map_or(true, |height| height > kura_height) => break,
             None => {
                 return Err(format!(
                     "Kura has no durable block at height {height}, which the snapshot retains"

@@ -60,4 +60,22 @@ class SumeragiStatusWireTest {
         val invalidOption = payload.copyOf(); invalidOption[37] = 2
         assertFails { SumeragiStatusWire.decodeCanonical(frame(invalidOption)) }
     }
+    @Test fun `beacon session requires the canonical nested fixed array layout`() {
+        val payload = NativeExecutionEvidenceFixtures.Reader(NoritoHeader.decode(sample(), null).payload)
+        val fields = MutableList(21) { payload.field() }
+        payload.finish()
+        val option = NativeExecutionEvidenceFixtures.Reader(fields[2])
+        assertContentEquals(byteArrayOf(1), option.raw(1))
+        val horizon = NativeExecutionEvidenceFixtures.Reader(option.field())
+        option.finish()
+        val nested = MutableList(5) { horizon.field() }
+        horizon.finish()
+        // Option<[u8;32]> uses generic element framing. A raw32 body is a
+        // different layout even when the outer frame has a correct checksum.
+        nested[2] = byteArrayOf(1) + NativeExecutionEvidenceFixtures.record(ByteArray(32) { 0xab.toByte() })
+        fields[2] = byteArrayOf(1) + NativeExecutionEvidenceFixtures.record(NativeExecutionEvidenceFixtures.record(*nested.toTypedArray()))
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiStatusWire.decodeCanonical(frame(NativeExecutionEvidenceFixtures.record(*fields.toTypedArray())))
+        }
+    }
 }

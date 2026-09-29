@@ -704,7 +704,13 @@ fn every_startup_mode_rejects_retired_snapshot_markers_without_changing_bytes() 
         let mut config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
         let lanes = RuntimeLaneConfig::default();
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
-        let blocks = kura.active_blocks_dir.lock().clone();
+        // Startup checks the configured spelling before canonicalizing or mutating storage.
+        // On macOS the configured temporary root may use /var and the active root /private/var.
+        let blocks = Kura::canonical_storage_path(&config.store_dir.resolve_relative_path());
+        assert_eq!(
+            fs::canonicalize(&blocks).unwrap(),
+            *kura.active_blocks_dir.lock()
+        );
         drop(kura);
         let path = blocks.join(name);
         if directory {
@@ -768,7 +774,11 @@ fn retired_snapshot_symlink_is_rejected_without_following_or_removing_it() {
     let temp = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
-    let blocks = kura.active_blocks_dir.lock().clone();
+    let blocks = Kura::canonical_storage_path(&config.store_dir.resolve_relative_path());
+    assert_eq!(
+        fs::canonicalize(&blocks).unwrap(),
+        *kura.active_blocks_dir.lock()
+    );
     drop(kura);
     let target = temp.path().join("untrusted-snapshot-target");
     fs::write(&target, b"preserve exact original evidence").unwrap();

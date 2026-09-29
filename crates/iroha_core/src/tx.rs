@@ -2960,7 +2960,13 @@ impl StateBlock<'_> {
         tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         routing_decision: Option<crate::queue::RoutingDecision>,
+        genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
+        if let Some(genesis) = genesis {
+            genesis
+                .validate(tx, state_transaction)
+                .map_err(reject_not_permitted)?;
+        }
         let authority = tx.authority().clone();
         validate_kagemusha_top_up_admission_invariants_v1(tx).map_err(|reason| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason.to_owned()))
@@ -3097,44 +3103,52 @@ impl StateBlock<'_> {
                 ));
             }
         }
-        let routing_decision = match routing_decision {
-            Some(decision) => decision,
-            None => {
-                let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                    &state_transaction.nexus,
-                    &accepted,
-                    &state_transaction.world,
-                    state_transaction.block_unix_timestamp_ms(),
-                    state_transaction.block_height(),
-                )
-                .map(|plan| plan.coordinator_route())
-                .map_err(|err| {
-                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                        "transaction routing could not be resolved: {err}"
-                    )))
-                })?
-            }
-        };
+        // The certified native lane owns execution and provenance; the physical route
+        // independently owns application policy. A native lane number is never a key
+        // into the physical manifest/privacy/compliance registries.
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
+        let policy_plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            &state_transaction.nexus,
+            &accepted,
+            &state_transaction.world,
+            state_transaction.block_unix_timestamp_ms(),
+            state_transaction.block_height(),
+        )
+        .map_err(|err| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "transaction policy routing could not be resolved: {err}"
+            )))
+        })?;
+        crate::queue::validate_current_admission_route(&policy_plan)
+            .map_err(|error| reject_not_permitted(error.to_string()))?;
+        let policy_route = policy_plan.coordinator_route();
+        let routing_decision = routing_decision.unwrap_or(policy_route);
+        if policy_route.dataspace_id != routing_decision.dataspace_id {
+            return Err(reject_not_permitted(
+                "physical application policy and authenticated execution disagree on the transaction dataspace",
+            ));
+        }
         state_transaction.current_lane_id = Some(routing_decision.lane_id);
         state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
         state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         crate::executor::validate_transaction_fee_admission(state_transaction, tx)
             .map_err(TransactionRejectionReason::Validation)?;
         let lane_assignment = LaneAssignment {
-            lane_id: routing_decision.lane_id,
-            dataspace_id: routing_decision.dataspace_id,
+            lane_id: policy_route.lane_id,
+            dataspace_id: policy_route.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
         let validation_fee_credit =
             crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
-        enforce_fraud_policy(
-            &state_transaction.fraud_monitoring,
-            tx.metadata(),
-            telemetry_handle,
-            &lane_assignment,
-        )?;
+        if genesis.is_none() {
+            enforce_fraud_policy(
+                &state_transaction.fraud_monitoring,
+                tx.metadata(),
+                telemetry_handle,
+                &lane_assignment,
+            )?;
+        }
         let faucet_claim_to_commit = staged_faucet_claim_consumption(tx, state_transaction)
             .map_err(TransactionRejectionReason::Validation)?;
         Ok(StatefulAdmission {
@@ -3157,9 +3171,15 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
+        genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         if let Some(reason) = state_transaction.execution_deferral() {
             return Err(ExecutionAttemptError::Deferred(reason));
+        }
+        if genesis.is_some() && !matches!(tx.entrypoint(), TransactionEntrypoint::External(_)) {
+            return Err(
+                reject_not_permitted("genesis admission requires an external input").into(),
+            );
         }
         if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
             return Self::validate_sealed_transaction_commitment(commitment, state_transaction)
@@ -3173,8 +3193,12 @@ impl StateBlock<'_> {
                 routing_decision,
             );
         }
-        let admission =
-            Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
+        let admission = Self::validate_stateful_admission(
+            tx.as_ref(),
+            state_transaction,
+            routing_decision,
+            genesis,
+        )?;
         let authority = admission.authority.clone();
         let allow_unregistered_authority = admission.allow_unregistered_authority;
         match tx.as_ref().instructions() {
@@ -3353,6 +3377,7 @@ impl StateBlock<'_> {
             state_transaction,
             ivm_cache,
             routing_decision,
+            None,
         )
     }
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -5246,6 +5271,7 @@ pub fn execute_component_transaction_for_testing(
         &mut overlay,
         cache,
         Some(route),
+        None,
     ) {
         Ok(sequence) => {
             overlay.apply();
@@ -6547,6 +6573,101 @@ pub mod tests {
             "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
         );
     }
+    #[test]
+    fn native_execution_lane_collision_cannot_bypass_the_physical_policy_hook() {
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(2_u32));
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(
+                    TestLaneId::SINGLE,
+                    Some("parliament"),
+                    runtime_upgrade_rules(false),
+                ),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(true),
+                ),
+            ),
+        ]);
+        let mut metadata = Metadata::default();
+        metadata.insert("expires_at_height".parse().unwrap(), Json::new(5_u64));
+        metadata.insert("tx_sequence".parse().unwrap(), Json::new(1_u64));
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_instructions([
+            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
+                manifest_bytes: vec![0x01],
+            },
+        ])
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        block.lane_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        let mut overlay = block.transaction();
+        let native =
+            crate::queue::RoutingDecision::new(TestLaneId::new(1), TestDataSpaceId::UNIVERSAL);
+        assert_not_permitted_contains(
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, Some(native), None)
+                .map(|_| ()),
+            "runtime upgrade hook prohibits runtime upgrade instructions",
+        );
+        assert_eq!(overlay.current_lane_id, Some(native.lane_id));
+        assert_eq!(overlay.current_dataspace_id, Some(native.dataspace_id));
+        assert!(overlay.world.runtime_upgrades.iter().next().is_none());
+    }
+
+    #[test]
+    fn native_execution_dataspace_mismatch_refuses_before_application_policy() {
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert("expires_at_height".parse().unwrap(), Json::new(5_u64));
+        metadata.insert("tx_sequence".parse().unwrap(), Json::new(1_u64));
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_instructions([Log::new(Level::INFO, "mismatched scope".into())])
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut overlay = block.transaction();
+        assert_not_permitted_contains(
+            StateBlock::validate_stateful_admission(
+                &tx,
+                &mut overlay,
+                Some(crate::queue::RoutingDecision::new(
+                    TestLaneId::new(1),
+                    TestDataSpaceId::new(7),
+                )),
+                None,
+            )
+            .map(|_| ()),
+            "physical application policy and authenticated execution disagree",
+        );
+        assert_eq!(overlay.current_lane_id, None);
+        assert_eq!(overlay.current_dataspace_id, None);
+    }
+
     #[test]
     fn lane_validator_gating_inherits_same_dataspace_manifest_authority() {
         let chain: ChainId = "same-dataspace-lane-validator-gating".parse().unwrap();
@@ -12750,6 +12871,7 @@ pub mod tests {
                 TestLaneId::SINGLE,
                 TestDataSpaceId::UNIVERSAL,
             )),
+            None,
         );
         result.expect("zero block gas limit must mean unlimited");
         assert!(overlay.last_tx_gas_used > 0);

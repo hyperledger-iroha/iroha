@@ -1,7 +1,7 @@
 // Sole original native header/body source identity, borrowed before any execution.
 
 /// Fixed source identity minted from an exact native proposal. This is not finality authority:
-/// pristine schedule capture still verifies its instance, epoch and committed parent/result.
+/// the pristine schedule capture rechecks the instance, epoch and committed parent/result.
 /// No native Header/skipped-leader list or body allocation is cloned into this token.
 pub(crate) struct NativeHeaderSource<'state> {
     state: &'state State,
@@ -49,9 +49,6 @@ impl ValidBlock {
         native_header: &iroha_sumeragi::message::BlockHeader,
         native_payload: &[u8],
     ) -> Result<NativeHeaderSource<'state>, BlockValidationError> {
-        if !block.has_consensus_work() {
-            return Err(BlockValidationError::EmptyBlock);
-        }
         let matches = block
             .matches_resultless_proposal_wire(native_payload)
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
@@ -69,9 +66,30 @@ impl ValidBlock {
         }
         let pulse = crate::sumeragi::epoch_beacon::control::decode(&native_header.control_witness)
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
+        let expected_context = iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1 {
+            instance: native_header.instance.0,
+            epoch: native_header.epoch.epoch,
+            epoch_context_id: native_header.epoch.context.0,
+            parent_consensus_hash: native_header.parent_hash.0,
+            parent_result: native_header.parent_result.0,
+        };
+        let generation = state.state_view_generation();
+        let view = state.query_view();
+        let authenticated = crate::sumeragi::schedule::authenticate_successor_context(
+            &view,
+            &block.header(),
+            &expected_context,
+        );
+        if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
+        {
+            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                reason: "native source State cut advanced during context authentication".into(),
+            });
+        }
+        authenticated.map_err(BlockValidationError::from)?;
         Ok(NativeHeaderSource {
             state,
-            generation: state.state_view_generation(),
+            generation,
             header: block.header(),
             proposal_hash: Hash::new(native_payload),
             consensus_hash: Hash::prehashed(
@@ -79,13 +97,7 @@ impl ValidBlock {
                     .hash(&crate::sumeragi::crypto::BlsCrypto::new())
                     .0,
             ),
-            expected_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1 {
-                instance: native_header.instance.0,
-                epoch: native_header.epoch.epoch,
-                epoch_context_id: native_header.epoch.context.0,
-                parent_consensus_hash: native_header.parent_hash.0,
-                parent_result: native_header.parent_result.0,
-            },
+            expected_context,
             pulse,
         })
     }

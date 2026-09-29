@@ -4371,183 +4371,27 @@ struct BlockIntervalSummary {
     p95_ms: u64,
     samples: u64,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SumeragiStatusDigest {
-    protocol_version: u64,
-    persisted_height: u64,
-    persisted_view: u64,
-    leader: u64,
-    phase: String,
-    body_state: String,
-    pending_persistence: bool,
-    has_locked_prepare_qc: bool,
-    has_highest_prepare_qc: bool,
-    has_last_timeout_certificate: bool,
-    last_committed_height: u64,
+    status: iroha_data_model::sumeragi::SumeragiStatus,
     committed_height_advance: u64,
-    pipeline_conflict_rate_bps: u64,
-    lane_tx_vertices_total: u64,
-    lane_tx_edges_total: u64,
-    lane_overlay_count_total: u64,
-    lane_overlay_instr_total: u64,
-    lane_overlay_bytes_total: u64,
-    lane_rbc_chunks_total: u64,
-    lane_rbc_bytes_total: u64,
-    detached_prepared_total: u64,
-    detached_merged_total: u64,
-    detached_fallback_total: u64,
-    quarantine_executed_total: u64,
 }
 impl SumeragiStatusDigest {
-    fn from_json(value: &norito::json::Value) -> Self {
-        let present = |key: &str| {
-            value
-                .get(key)
-                .is_some_and(|item| !matches!(item, norito::json::Value::Null))
-        };
+    fn from_status(status: iroha_data_model::sumeragi::SumeragiStatus) -> Self {
         Self {
-            protocol_version: json_u64(value, "protocol_version"),
-            persisted_height: json_u64(value, "height"),
-            persisted_view: json_u64(value, "view"),
-            leader: json_u64(value, "leader"),
-            phase: json_string(value, "phase"),
-            body_state: json_string(value, "body_state"),
-            pending_persistence: present("pending_persistence_id"),
-            has_locked_prepare_qc: present("locked_prepare_qc"),
-            has_highest_prepare_qc: present("highest_prepare_qc"),
-            has_last_timeout_certificate: present("last_timeout_certificate"),
-            last_committed_height: json_u64(value, "last_committed_height"),
-            ..Self::default()
+            status,
+            committed_height_advance: 0,
         }
-    }
-    fn apply_json_extras(&mut self, value: &norito::json::Value) {
-        self.pipeline_conflict_rate_bps = json_u64(value, "pipeline_conflict_rate_bps");
-        let has_pipeline_execution = if let Some(execution) = value
-            .get("pipeline_execution")
-            .and_then(norito::json::Value::as_object)
-        {
-            self.lane_tx_vertices_total = object_u64(execution, "tx_vertices_total");
-            self.lane_tx_edges_total = object_u64(execution, "tx_edges_total");
-            self.lane_overlay_count_total = object_u64(execution, "overlay_count_total");
-            self.lane_overlay_instr_total = object_u64(execution, "overlay_instr_total");
-            self.lane_overlay_bytes_total = object_u64(execution, "overlay_bytes_total");
-            self.lane_rbc_chunks_total = object_u64(execution, "rbc_chunks_total");
-            self.lane_rbc_bytes_total = object_u64(execution, "rbc_bytes_total");
-            self.detached_prepared_total = object_u64(execution, "detached_prepared_total");
-            self.detached_merged_total = object_u64(execution, "detached_merged_total");
-            self.detached_fallback_total = object_u64(execution, "detached_fallback_total");
-            self.quarantine_executed_total = object_u64(execution, "quarantine_executed_total");
-            true
-        } else {
-            false
-        };
-        if has_pipeline_execution {
-            return;
-        }
-        let Some(lanes) = value
-            .get("lane_activity")
-            .and_then(norito::json::Value::as_array)
-        else {
-            return;
-        };
-        if lanes.is_empty() {
-            return;
-        }
-        let mut lane_tx_vertices_total = 0u64;
-        let mut lane_tx_edges_total = 0u64;
-        let mut lane_overlay_count_total = 0u64;
-        let mut lane_overlay_instr_total = 0u64;
-        let mut lane_overlay_bytes_total = 0u64;
-        let mut lane_rbc_chunks_total = 0u64;
-        let mut lane_rbc_bytes_total = 0u64;
-        let mut detached_prepared_total = 0u64;
-        let mut detached_merged_total = 0u64;
-        let mut detached_fallback_total = 0u64;
-        let mut quarantine_executed_total = 0u64;
-        for lane in lanes {
-            lane_tx_vertices_total =
-                lane_tx_vertices_total.saturating_add(json_u64(lane, "tx_vertices"));
-            lane_tx_edges_total = lane_tx_edges_total.saturating_add(json_u64(lane, "tx_edges"));
-            lane_overlay_count_total =
-                lane_overlay_count_total.saturating_add(json_u64(lane, "overlay_count"));
-            lane_overlay_instr_total =
-                lane_overlay_instr_total.saturating_add(json_u64(lane, "overlay_instr_total"));
-            lane_overlay_bytes_total =
-                lane_overlay_bytes_total.saturating_add(json_u64(lane, "overlay_bytes_total"));
-            lane_rbc_chunks_total =
-                lane_rbc_chunks_total.saturating_add(json_u64(lane, "rbc_chunks"));
-            lane_rbc_bytes_total =
-                lane_rbc_bytes_total.saturating_add(json_u64(lane, "rbc_bytes_total"));
-            detached_prepared_total =
-                detached_prepared_total.saturating_add(json_u64(lane, "detached_prepared"));
-            detached_merged_total =
-                detached_merged_total.saturating_add(json_u64(lane, "detached_merged"));
-            detached_fallback_total =
-                detached_fallback_total.saturating_add(json_u64(lane, "detached_fallback"));
-            quarantine_executed_total =
-                quarantine_executed_total.saturating_add(json_u64(lane, "quarantine_executed"));
-        }
-        self.lane_tx_vertices_total = lane_tx_vertices_total;
-        self.lane_tx_edges_total = lane_tx_edges_total;
-        self.lane_overlay_count_total = lane_overlay_count_total;
-        self.lane_overlay_instr_total = lane_overlay_instr_total;
-        self.lane_overlay_bytes_total = lane_overlay_bytes_total;
-        self.lane_rbc_chunks_total = lane_rbc_chunks_total;
-        self.lane_rbc_bytes_total = lane_rbc_bytes_total;
-        self.detached_prepared_total = detached_prepared_total;
-        self.detached_merged_total = detached_merged_total;
-        self.detached_fallback_total = detached_fallback_total;
-        self.quarantine_executed_total = quarantine_executed_total;
     }
     fn delta_from(self, start: Self) -> Self {
         Self {
             committed_height_advance: self
-                .last_committed_height
-                .saturating_sub(start.last_committed_height),
-            protocol_version: self.protocol_version,
-            persisted_height: self.persisted_height,
-            persisted_view: self.persisted_view,
-            leader: self.leader,
-            phase: self.phase,
-            body_state: self.body_state,
-            pending_persistence: self.pending_persistence,
-            has_locked_prepare_qc: self.has_locked_prepare_qc,
-            has_highest_prepare_qc: self.has_highest_prepare_qc,
-            has_last_timeout_certificate: self.has_last_timeout_certificate,
-            last_committed_height: self.last_committed_height,
-            pipeline_conflict_rate_bps: self.pipeline_conflict_rate_bps,
-            lane_tx_vertices_total: self.lane_tx_vertices_total,
-            lane_tx_edges_total: self.lane_tx_edges_total,
-            lane_overlay_count_total: self.lane_overlay_count_total,
-            lane_overlay_instr_total: self.lane_overlay_instr_total,
-            lane_overlay_bytes_total: self.lane_overlay_bytes_total,
-            lane_rbc_chunks_total: self.lane_rbc_chunks_total,
-            lane_rbc_bytes_total: self.lane_rbc_bytes_total,
-            detached_prepared_total: self.detached_prepared_total,
-            detached_merged_total: self.detached_merged_total,
-            detached_fallback_total: self.detached_fallback_total,
-            quarantine_executed_total: self.quarantine_executed_total,
+                .status
+                .committed_height
+                .saturating_sub(start.status.committed_height),
+            ..self
         }
     }
-}
-fn json_u64(value: &norito::json::Value, key: &str) -> u64 {
-    value
-        .get(key)
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or_default()
-}
-fn json_string(value: &norito::json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(norito::json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
-}
-fn object_u64(object: &norito::json::Map, key: &str) -> u64 {
-    object
-        .get(key)
-        .and_then(norito::json::Value::as_u64)
-        .unwrap_or_default()
 }
 async fn sample_sumeragi_status_digest(
     peers: &[NetworkPeer],
@@ -4575,15 +4419,11 @@ async fn sample_sumeragi_status_digest(
                     continue;
                 }
             };
-            match inner.get_sumeragi_status_json() {
-                Ok(json) => {
-                    let mut digest = SumeragiStatusDigest::from_json(&json);
-                    digest.apply_json_extras(&json);
-                    return Ok(digest);
-                }
+            match inner.get_sumeragi_status() {
+                Ok(status) => return Ok(SumeragiStatusDigest::from_status(status)),
                 Err(err) => {
                     last_error = Some(format!(
-                        "failed to fetch authoritative Sumeragi v2 status snapshot: {err}"
+                        "failed to fetch native Sumeragi status snapshot: {err}"
                     ));
                 }
             }
@@ -7463,8 +7303,8 @@ mod tests {
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-        FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
+        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, FaultArgs, FaultToggles, IzanamiArgs,
+        NexusProfile, WorkloadProfile,
     };
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
@@ -10339,65 +10179,30 @@ mod tests {
         assert_eq!(snapshot.submitters, 3);
     }
     #[test]
-    fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
-        let start_json = norito::json!({
-            "protocol_version": 4,
-            "height": 10,
-            "view": 1,
-            "phase": "Prepare",
-            "leader": 0,
-            "locked_prepare_qc": null,
-            "highest_prepare_qc": null,
-            "last_timeout_certificate": null,
-            "body_state": "Validated",
-            "pending_persistence_id": null,
-            "last_committed_height": 9
-        });
-        let end_json = norito::json!({
-            "protocol_version": 4,
-            "height": 13,
-            "view": 4,
-            "phase": "Commit",
-            "leader": 3,
-            "locked_prepare_qc": {"height": 13},
-            "highest_prepare_qc": {"height": 13},
-            "last_timeout_certificate": {"height": 13},
-            "body_state": "PendingApply",
-            "pending_persistence_id": 7,
-            "last_committed_height": 12,
-            "pipeline_execution": {
-                "tx_vertices_total": 3,
-                "tx_edges_total": 2,
-                "overlay_count_total": 4,
-                "overlay_instr_total": 5,
-                "overlay_bytes_total": 4096,
-                "rbc_chunks_total": 3,
-                "rbc_bytes_total": 3072,
-                "detached_prepared_total": 7,
-                "detached_merged_total": 6,
-                "detached_fallback_total": 1,
-                "quarantine_executed_total": 2
-            }
-        });
-        let start = SumeragiStatusDigest::from_json(&start_json);
-        let mut end = SumeragiStatusDigest::from_json(&end_json);
-        end.apply_json_extras(&end_json);
-        let delta = end.delta_from(start);
-        assert_eq!(delta.protocol_version, 4);
-        assert_eq!(delta.persisted_height, 13);
-        assert_eq!(delta.persisted_view, 4);
-        assert_eq!(delta.leader, 3);
-        assert_eq!(delta.phase, "Commit");
-        assert_eq!(delta.body_state, "PendingApply");
-        assert!(delta.pending_persistence);
-        assert!(delta.has_locked_prepare_qc);
-        assert!(delta.has_highest_prepare_qc);
-        assert!(delta.has_last_timeout_certificate);
-        assert_eq!(delta.last_committed_height, 12);
+    fn sumeragi_status_digest_preserves_native_status_and_tracks_progress() {
+        let fixture = include_str!("../../../fixtures/sumeragi/native_status_v1.tsv")
+            .lines()
+            .find(|line| line.starts_with("validator\t"))
+            .expect("shared Rust-produced validator status");
+        let status: iroha_data_model::sumeragi::SumeragiStatus =
+            norito::json::from_str(fixture.split('\t').nth(1).expect("fixture JSON column"))
+                .expect("canonical native status");
+        let start = SumeragiStatusDigest::from_status(status.clone());
+        assert_eq!(start.status, status);
+        assert_eq!(start.committed_height_advance, 0);
+        let mut current = status;
+        current.height += 3;
+        current.committed_height += 3;
+        current.applied_height += 3;
+        current.view = 4;
+        current.high_qc_view = Some(3);
+        current.awaiting = true;
+        let end = SumeragiStatusDigest::from_status(current.clone());
+        let delta = end.clone().delta_from(start.clone());
+        assert_eq!(delta.status, current);
+        assert_eq!(delta.status.protocol_version, 1);
         assert_eq!(delta.committed_height_advance, 3);
-        assert_eq!(delta.lane_rbc_chunks_total, 3);
-        assert_eq!(delta.lane_rbc_bytes_total, 3_072);
-        assert_eq!(delta.detached_merged_total, 6);
+        assert_eq!(start.delta_from(end).committed_height_advance, 0);
     }
     #[test]
     fn diagnostic_copy_preserves_logs_configs_and_genesis_payloads() -> Result<()> {

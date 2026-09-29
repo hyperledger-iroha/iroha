@@ -1727,8 +1727,6 @@ fn taira_storage_profile_matches_the_complete_preseed_budget() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
-    const TAIRA_VALIDATOR_COUNT: i64 = 4;
-
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -1931,76 +1929,26 @@ fn taira_config_enables_untrusted_cid_hosting() {
             "Taira profile must not retain retired generic confidential route {retired}"
         );
     }
-    let block = doc
+    let sumeragi = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)
-        .and_then(|sumeragi| sumeragi.get("block"))
-        .and_then(TomlValue::as_table)
-        .expect("sumeragi.block should be configured");
-    assert_eq!(
-        block
-            .get("max_transactions")
-            .and_then(TomlValue::as_integer),
-        Some(96),
-        "Taira profile should cap total proposal size"
+        .expect("Taira node-local Sumeragi configuration");
+    let parsed = ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(sumeragi.clone()))
+        .read_and_complete::<iroha_config::parameters::user::Sumeragi>()
+        .expect("Taira Sumeragi section must pass the exact current schema");
+    assert!(matches!(
+        parsed.role,
+        iroha_config::parameters::user::NodeRole::Validator
+    ));
+    assert!(
+        sumeragi.get("block").is_none(),
+        "proposal limits belong to committed chain policy"
     );
-    assert_eq!(
-        block
-            .get("max_ivm_transactions")
-            .and_then(TomlValue::as_integer),
-        None,
-        "Sumeragi v2 profiles must not use the retired IVM transaction-count cap"
-    );
-    assert_eq!(
-        block
-            .get("max_payload_bytes")
-            .and_then(TomlValue::as_integer),
-        Some(16 * 1024 * 1024),
-        "Taira profile should cap proposal payload bytes"
-    );
-    assert_eq!(
-        block
-            .get("proposal_queue_scan_multiplier")
-            .and_then(TomlValue::as_integer),
-        Some(4),
-        "Taira profile should keep enough scan budget for cheap txs"
-    );
-    let queues = doc
-        .get("sumeragi")
-        .and_then(TomlValue::as_table)
-        .and_then(|sumeragi| sumeragi.get("queues"))
-        .and_then(TomlValue::as_table)
-        .expect("sumeragi.queues should be configured");
-    let authenticated_non_validator_sources = queues
-        .get("authenticated_non_validator_sources")
-        .and_then(TomlValue::as_integer)
-        .expect("Taira should configure authenticated non-validator ingress sources");
-    assert_eq!(
-        authenticated_non_validator_sources, 2,
-        "Taira should reserve two independent authenticated non-validator ingress source partitions"
-    );
-    let body_bytes = queues
-        .get("body_bytes")
-        .and_then(TomlValue::as_integer)
-        .expect("Taira should configure an aggregate canonical wire-byte budget");
-    assert_eq!(
-        body_bytes,
-        204 * 1024 * 1024,
-        "Taira aggregate canonical wire-byte budget should isolate its six ingress source partitions"
-    );
-    let body_source_bytes = queues
-        .get("body_source_bytes")
-        .and_then(TomlValue::as_integer)
-        .expect("Taira should configure a per-source canonical wire-byte budget");
-    assert_eq!(
-        body_source_bytes,
-        34 * 1024 * 1024,
-        "Taira should retain one canonical outer-ingress wire-byte quota per source"
-    );
-    assert_eq!(
-        body_bytes,
-        (TAIRA_VALIDATOR_COUNT + authenticated_non_validator_sources) * body_source_bytes,
-        "Taira aggregate body budget must equal (validator count + authenticated non-validator sources) times the per-source budget"
+    assert!(
+        sumeragi.get("queues").is_none(),
+        "retired ingress queues have no runtime owner"
     );
     let untrusted = doc
         .get("sorafs")

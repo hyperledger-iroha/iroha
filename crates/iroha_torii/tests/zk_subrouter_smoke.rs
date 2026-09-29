@@ -22,6 +22,18 @@ fn attachments_smoke_lock() -> MutexGuard<'static, ()> {
         .lock()
         .expect("attachments smoke lock")
 }
+fn attachment_router(
+    torii: &fixtures::StandardToriiHarness,
+    cfg: &iroha_config::parameters::actual::Root,
+) -> iroha_torii::TestApiRouterRuntime {
+    if cfg.torii.zk_attachments_enabled {
+        // The test router does not run Torii::start; retain its real durable
+        // attachment initialization before exercising requests on an empty store.
+        iroha_torii::zk_attachments::init_persistence()
+            .expect("initialize the configured attachment store");
+    }
+    torii.router()
+}
 fn request_with_headers(
     method: &str,
     uri: &str,
@@ -54,7 +66,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
-    let app = torii.router();
+    let app = attachment_router(&torii, &cfg);
     for retired_path in ["/v1/zk/verify", "/v1/zk/submit-proof"] {
         let resp = fixtures::request(
             &app,
@@ -70,6 +82,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     }
     // GET /v1/zk/attachments (signed; empty list by default); accept OK or 429
     let request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::get_request(&("/v1/zk/attachments")),
@@ -82,6 +95,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     ));
     // GET /v1/zk/attachments/{id} with a placeholder id; signed request accepts 404 or 429.
     let request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::get_request(&("/v1/zk/attachments/placeholder-id")),
@@ -106,7 +120,7 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
-    let app = torii.router();
+    let app = attachment_router(&torii, &cfg);
     for request in [
         fixtures::get_request(&("/v1/zk/attachments")),
         fixtures::get_request(&("/v1/zk/attachments/count")),
@@ -117,7 +131,13 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
             .body(axum::body::Body::empty())
             .unwrap(),
     ] {
-        let request = fixtures::app_signed_request(&account_id, &cfg.common.key_pair, request, &[]);
+        let request = fixtures::app_signed_request(
+            torii.state.network_id_ref(),
+            &account_id,
+            &cfg.common.key_pair,
+            request,
+            &[],
+        );
         let resp = fixtures::request(&app, request).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -135,23 +155,22 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
-    let app = torii.router();
+    let app = attachment_router(&torii, &cfg);
     let count_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::get_request(&("/v1/zk/attachments/count")),
         &[],
     );
     let count_resp = fixtures::request(&app, count_request).await.unwrap();
-    if count_resp.status() == StatusCode::OK {
-        let body = count_resp.into_body().collect().await.unwrap().to_bytes();
-        let json: norito::json::Value = norito::json::from_slice(&body).expect("json count body");
-        assert_eq!(json.get("count").and_then(|value| value.as_u64()), Some(0));
-    } else {
-        assert_eq!(count_resp.status(), StatusCode::TOO_MANY_REQUESTS);
-    }
+    assert_eq!(count_resp.status(), StatusCode::OK);
+    let body = count_resp.into_body().collect().await.unwrap().to_bytes();
+    let json: norito::json::Value = norito::json::from_slice(&body).expect("json count body");
+    assert_eq!(json.get("count").and_then(|value| value.as_u64()), Some(0));
     let missing_id = "0".repeat(64);
     let delete_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         Request::builder()
@@ -162,10 +181,14 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         &[],
     );
     let delete_resp = app.router().oneshot(delete_request).await.unwrap();
-    assert!(matches!(
-        delete_resp.status(),
-        StatusCode::NOT_FOUND | StatusCode::TOO_MANY_REQUESTS
-    ));
+    let status = delete_resp.status();
+    let body = delete_resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
     app.shutdown().await;
 }
 #[tokio::test]
@@ -182,9 +205,10 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
-    let app = torii.router();
+    let app = attachment_router(&torii, &cfg);
     let body = br#"{"backend":"demo","proof":{"bytes":[7,8,9]}}"#;
     let signed_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::post_json_request(
@@ -226,6 +250,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         "nonce already used",
     );
     let get_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::get_request(&(format!("/v1/zk/attachments/{id}"))),
@@ -248,6 +273,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         std::str::from_utf8(body).unwrap()
     );
     let delete_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         Request::builder()
@@ -260,6 +286,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
     let delete_resp = fixtures::request(&app, delete_request).await.unwrap();
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
     let get_after_delete_request = fixtures::app_signed_request(
+        torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
         fixtures::get_request(&(format!("/v1/zk/attachments/{id}"))),
@@ -281,7 +308,7 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
-    let app = torii.router();
+    let app = attachment_router(&torii, &cfg);
     for request in [
         fixtures::get_request(&("/v1/zk/attachments")),
         fixtures::get_request(&("/v1/zk/attachments/count")),

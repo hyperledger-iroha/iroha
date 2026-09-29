@@ -683,11 +683,17 @@ impl CertifiedTestChain {
         let policy = SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(10).unwrap(),
             epoch_seed: [0x61; 32],
+            evidence_horizon_blocks: 1,
+            slashing_delay_blocks: 1,
             ..SumeragiNposParameters::default()
         };
-        config
-            .genesis_parameters
-            .push(Parameter::Custom(policy.into_custom_parameter()));
+        policy.validate().expect("bounded ten-block fixture policy");
+        config.genesis_parameters.extend([
+            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                policy.epoch_length_blocks,
+            )),
+            Parameter::Custom(policy.into_custom_parameter()),
+        ]);
         let mut chain = Self::start(config).expect("actual signed NPoS genesis");
         while chain.height() < 8 {
             chain.commit(Vec::new());
@@ -1021,15 +1027,26 @@ impl CertifiedTestChain {
             .consensus_schedule()
             .ready(self.height() + 1)
             .expect("authenticated successor schedule");
+        let cadence = Duration::from_millis(schedule.params.block_time_ms);
+        let validation_time = crate::block::creation_time_after_inputs(
+            parent
+                .header()
+                .creation_time()
+                .checked_add(cadence)
+                .expect("fixture time fits"),
+            &entrypoints,
+        )
+        .expect("fixture input time fits");
         let accepted = entrypoints
             .into_iter()
             .map(|entrypoint| {
-                AcceptedTransaction::accept_entrypoint(
+                AcceptedTransaction::accept_entrypoint_at_time(
                     entrypoint,
                     &self.network_id(),
                     view.world().parameters().sumeragi().max_clock_drift(),
                     view.world().parameters().transaction(),
                     &self.state.crypto(),
+                    validation_time,
                 )
                 .expect("original entrypoint admission")
             })
@@ -1039,7 +1056,7 @@ impl CertifiedTestChain {
             Assembly {
                 parent: &parent,
                 view: 0,
-                cadence: Duration::from_millis(schedule.params.block_time_ms),
+                cadence,
             },
             &accepted,
         )
@@ -1776,6 +1793,14 @@ fn build_genesis(
     let builder = parameters
         .into_iter()
         .fold(builder, GenesisBuilder::append_parameter);
+    // A raw genesis transaction emits its custom instructions before topology.
+    // Put peer-dependent fixture instructions after the original topology batch,
+    // so staking and other consumers see the authenticated registered peers.
+    let builder = if instructions.is_empty() {
+        builder
+    } else {
+        builder.next_transaction()
+    };
     let builder = instructions
         .into_iter()
         .fold(builder, GenesisBuilder::append_instruction);
@@ -1799,6 +1824,130 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_genesis_staking_observes_the_original_topology_before_moving_funds() {
+        use iroha_data_model::{
+            asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+            isi::{RegisterBox, RegisterPublicLaneValidator},
+            nexus::PublicLaneMonetaryPlanV1,
+            transaction::Executable,
+        };
+        use iroha_model_base::{domain::DomainId, topology::LaneId};
+        use iroha_primitives::numeric::Quantity;
+
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let owner = AccountId::new(config.genesis_key.public_key().clone());
+        let (peer, _) = fixture_validators().remove(0);
+        let validator = AccountId::new(peer.public_key().clone());
+        let staking = iroha_config::parameters::actual::NexusStaking::default();
+        let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
+        let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
+        let source_asset = AssetId::new(definition.clone(), validator.clone());
+        let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
+        let amount = Quantity::from(1_000_u32);
+        config.world =
+            World::with_assets(
+                [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
+                [
+                    Account::new(validator.clone()).build(&owner),
+                    Account::new(escrow.clone()).build(&owner),
+                ],
+                [AssetDefinition::numeric(
+                    definition,
+                    "Staked XOR",
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&owner)],
+                [Asset::new(source_asset.clone(), amount.clone())],
+                [],
+            );
+        // This permissioned-chain fixture supplies the same initial staking policy
+        // as its application consumers; it does not declare an NPoS consensus mode.
+        let mut initial = config.world.block();
+        initial
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+        initial.commit();
+        config.genesis_instructions.push(
+            RegisterPublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: peer.clone(),
+                stake_account: validator.clone(),
+                initial_stake: amount.clone(),
+                metadata: Default::default(),
+                monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                    source_asset.clone(),
+                    escrow_asset.clone(),
+                    amount.clone(),
+                ),
+            }
+            .into(),
+        );
+        let chain = CertifiedTestChain::start(config)
+            .expect("original topology must precede peer-dependent genesis instructions");
+        assert_eq!(chain.height(), 1);
+        assert!(
+            chain
+                .genesis()
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
+        let mut topology_positions = Vec::new();
+        let mut registration_position = None;
+        for (index, transaction) in chain.genesis().external_transactions().enumerate() {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                panic!("genesis contains only original instruction batches")
+            };
+            for instruction in instructions {
+                if matches!(
+                    instruction.as_any().downcast_ref::<RegisterBox>(),
+                    Some(RegisterBox::Peer(_))
+                ) {
+                    topology_positions.push(index);
+                }
+                if instruction.as_any().is::<RegisterPublicLaneValidator>() {
+                    assert!(registration_position.replace(index).is_none());
+                }
+            }
+        }
+        assert_eq!(
+            topology_positions.len(),
+            4,
+            "no duplicate peer registration workaround"
+        );
+        let registration_position = registration_position.expect("original custom registration");
+        assert!(
+            topology_positions
+                .into_iter()
+                .all(|index| index < registration_position)
+        );
+        let view = chain.state().view();
+        let record = view
+            .world()
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, validator))
+            .expect("actual registered staking record");
+        assert_eq!(record.peer_id, peer);
+        assert_eq!(record.total_stake, amount);
+        assert_eq!(record.self_stake, amount);
+        assert_eq!(
+            view.world()
+                .assets()
+                .get(&source_asset)
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
+            Quantity::zero(),
+        );
+        assert_eq!(
+            view.world().assets().get(&escrow_asset).unwrap().as_ref(),
+            &amount
+        );
+    }
 
     #[test]
     fn configured_genesis_and_exact_certified_replay_preserve_native_ownership() {

@@ -803,7 +803,6 @@ public sealed class FeeQuoteResponseValidationTests
             60_000,
             null,
             intent,
-            TransactionAdmissionIntent.Ordinary,
             new Dictionary<string, JsonNode?>());
 
     private static ToriiClient CreateQuoteClient(

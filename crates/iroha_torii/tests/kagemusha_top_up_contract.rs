@@ -18,7 +18,7 @@ fn top_up_is_one_typed_async_kagemusha_v1_command() {
     assert!(KAGEMUSHA_API_SOURCE.contains("downcast_ref::<TopUpKagemushaV1>()"));
     assert!(KAGEMUSHA_API_SOURCE.contains("transaction.authority() != &request.payer"));
     assert!(KAGEMUSHA_API_SOURCE.contains("&request.network_id != expected_network"));
-    assert!(COMMANDS_SOURCE.contains("submit_signed_transaction_for_ingress_strict_durable"));
+    assert!(COMMANDS_SOURCE.contains("submit_signed_transaction_for_ingress"));
     assert!(COMMANDS_SOURCE.contains("StatusCode::ACCEPTED"));
     assert!(COMMANDS_SOURCE.contains("header::LOCATION"));
     assert!(COMMANDS_SOURCE.contains("header::RETRY_AFTER"));

@@ -142,6 +142,45 @@ def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
 
 
 
+def test_native_status_schema_accepts_the_rust_corpus_and_rejects_noncanonical_forms() -> None:
+    document = json.loads(OPENAPI_AUTHORITIES[0].read_text())
+    validator = Draft202012Validator({
+        "$ref": "#/components/schemas/SumeragiStatusResponse",
+        "components": document["components"],
+    })
+    corpus = REPO_ROOT / "fixtures/sumeragi/native_status_v1.tsv"
+    rows = {}
+    for line in corpus.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, payload, _wire = line.split("\t")
+        assert name not in rows
+        rows[name] = json.loads(payload)
+        validator.validate(rows[name])
+    assert set(rows) == {
+        "validator", "observer", "safety_record_corrupt", "safety_record_inconsistent",
+        "safety_violation", "apply_diverged", "publication_recovery_required", "driver_anomaly",
+    }
+    rejected = []
+    for field, value in (
+        ("protocol_version", 8), ("instance", rows["validator"]["instance"].upper()),
+        ("leader", "ed0120" + "A5" * 32), ("signer", "ea0130" + "ab" * 48),
+        ("view", 1 << 64), ("retired_height_context", {}),
+    ):
+        changed = copy.deepcopy(rows["validator"])
+        changed[field] = value
+        rejected.append(changed)
+    changed = copy.deepcopy(rows["validator"])
+    changed["beacon_horizon"]["active_session_id"] = [0xAB] * 32
+    rejected.append(changed)
+    for name in ("safety_record_corrupt", "publication_recovery_required"):
+        changed = copy.deepcopy(rows[name])
+        del changed["halted"]["details"]
+        rejected.append(changed)
+    for changed in rejected:
+        assert not validator.is_valid(changed), changed
+
+
 def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
     """The released proposal union must expose all three certified registry transitions."""
 

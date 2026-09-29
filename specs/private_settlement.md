@@ -663,15 +663,20 @@ protocol limits are configuration errors.
 - Loading verified relay caches never mutates canonical contract storage. Stale or mismatched-incarnation records remain ineligible; canonical removal occurs only through the committed lane lifecycle transition.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
-- Snapshot restore accepts exactly the current 188-field `World` schema,
+- Snapshot decoding accepts exactly the current `World` schema,
   including all eight private-settlement maps. Missing, reordered, renamed,
   additional, or retired fields are rejected; V1 has no predecessor-schema
-  migration path.
+  migration path. A positive-height signed snapshot remains an export rather than
+  execution authority; startup requires the original signed genesis and complete
+  native certified replay history.
 - Governed pool projections retain exact policy-revision lineage so historical
   finalized receipts remain restart-valid after a rotation while exact replay
   is rejected byte-silently and old-policy in-flight bundles remain inadmissible.
-- Mandatory signed RS16 DA/RBC remains enabled in every deployment and fault
-  test; there is no private-settlement bypass.
+- Signed RS16 `PayloadManifest`/`PayloadChunk` availability is mandatory for
+  deployment qualification. The native core's full-body transport does not yet
+  integrate that contract; private-settlement qualification fails closed until
+  the actual signed availability path is exercised. Full-body delivery is not
+  substitute evidence; see `sumeragi_goals.md`, open question 8.
 
 ## Verification and publication gates
 

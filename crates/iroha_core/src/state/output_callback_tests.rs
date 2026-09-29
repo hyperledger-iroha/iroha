@@ -92,11 +92,20 @@ fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
         ALICE_ID.clone(),
         FeePaymentIntent::authority(vec![], None),
     );
-    transaction.set_creation_time(header.creation_time());
+    transaction.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
     let signed = transaction
         .with_instructions([ExecuteTrigger::new(parent.clone())])
         .sign(ALICE_KEYPAIR.private_key());
     let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                signed.hash_as_entrypoint(),
+                iroha_model_base::topology::LaneId::SINGLE,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
     builder.push_transaction(signed);
     let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
     NestedCallbackFixture {
@@ -576,7 +585,7 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
         ALICE_ID.clone(),
         FeePaymentIntent::authority(vec![], None),
     );
-    source.set_creation_time(header.creation_time());
+    source.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
     let signed = source
         .with_instructions([
             InstructionBox::from(ExecuteTrigger::new(fixture.parent.clone())),
@@ -594,6 +603,15 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
         ])
         .sign(ALICE_KEYPAIR.private_key());
     let mut builder = BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                signed.hash_as_entrypoint(),
+                iroha_model_base::topology::LaneId::SINGLE,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
     builder.push_transaction(signed);
     fixture.source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
     exec_witness::start_block();

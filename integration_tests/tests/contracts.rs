@@ -42,6 +42,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
         abi_version: 1,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: Vec::new(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "integration-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),

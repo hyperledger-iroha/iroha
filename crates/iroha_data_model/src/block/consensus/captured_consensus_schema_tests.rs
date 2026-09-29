@@ -25,12 +25,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::EvidenceRecord>(
         "iroha_data_model::block::consensus::EvidenceRecord",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::SumeragiLaneCommitment>(
-        "iroha_data_model::block::consensus::SumeragiLaneCommitment",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::SumeragiDataspaceCommitment>(
-        "iroha_data_model::block::consensus::SumeragiDataspaceCommitment",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::LaneSettlementReceipt>(
         "iroha_data_model::block::consensus::LaneSettlementReceipt",
     ),
@@ -57,9 +51,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::SumeragiNposDiagnostics>(
         "iroha_data_model::block::consensus::SumeragiNposDiagnostics",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::SumeragiPipelineExecutionStatus>(
-        "iroha_data_model::block::consensus::SumeragiPipelineExecutionStatus",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::SumeragiDiagnosticsStatus>(
         "iroha_data_model::block::consensus::SumeragiDiagnosticsStatus",

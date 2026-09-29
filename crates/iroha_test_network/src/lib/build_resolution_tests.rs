@@ -204,8 +204,6 @@ struct ReleasePrebuiltFixture {
 impl Drop for ReleasePrebuiltFixture {
     fn drop(&mut self) {
         for directory in [
-            self.target.join("message-control/release"),
-            self.target.join("message-control"),
             self.target.join("release"),
             self.target.clone(),
         ] {
@@ -306,8 +304,6 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
     fs::write(&manifest, &manifest_text).expect("write prebuilt manifest");
     set_mode(&manifest, RELEASE_MANIFEST_MODE);
     for directory in [
-        target.join("message-control/release"),
-        target.join("message-control"),
         target.join("release"),
         target.clone(),
     ] {
@@ -1091,8 +1087,15 @@ fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
         &fixture.repo,
     )
     .unwrap();
-    assert_eq!(parsed.len(), 5);
-    assert_eq!(parsed[4].kind, ReleasePrebuiltBinary::IrohadTaira);
+    assert_eq!(
+        parsed.each_ref().map(|artifact| artifact.kind),
+        [
+            ReleasePrebuiltBinary::Irohad,
+            ReleasePrebuiltBinary::Iroha,
+            ReleasePrebuiltBinary::Kagami,
+            ReleasePrebuiltBinary::IrohadTaira,
+        ]
+    );
     let text = std::str::from_utf8(&source).unwrap();
     let missing = text
         .lines()

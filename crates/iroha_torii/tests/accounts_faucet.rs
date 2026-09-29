@@ -18,9 +18,7 @@ use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::AccountId,
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    isi::{
-        ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
-    },
+    isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     level::Level,
     nexus::PublicLaneMonetaryPlanV1,
     parameter::{Parameter, system::SumeragiNposParameters},
@@ -79,15 +77,9 @@ fn signed_faucet_beacon_fixture(
     iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
 ) {
-    static FIXTURE: std::sync::OnceLock<(
-        iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
-    )> = std::sync::OnceLock::new();
-    let fixture = FIXTURE.get_or_init(|| {
-        iroha_core::beacon::signed_persisted_pulse_fixture_for_world(network_id, 5)
-    });
-    assert_eq!(fixture.1.network_id, network_id);
-    (fixture.0.clone(), fixture.1)
+    // Each original signed genesis has its own network identity; a process-wide
+    // singleton would substitute the first test's authenticated beacon binding.
+    iroha_core::beacon::signed_persisted_pulse_fixture_for_world(network_id, 5)
 }
 #[test]
 fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
@@ -278,14 +270,6 @@ fn build_faucet_test_context_with_authority(
         );
     }
     for key_pair in &validator_keys {
-        seed_instructions.push(
-            RegisterPeerWithPop::new(
-                PeerId::new(key_pair.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
-                    .expect("validator proof of possession"),
-            )
-            .into(),
-        );
         let validator = AccountId::new(key_pair.public_key().clone());
         seed_instructions.push(
             RegisterPublicLaneValidator {

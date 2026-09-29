@@ -82,14 +82,6 @@ fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
 }
-fn checked_random_keypair_with_algorithm(
-    algorithm: Algorithm,
-    context: &str,
-) -> iroha_crypto::KeyPair {
-    iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
-        panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
-    })
-}
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
     /// Explicit entry point function to call on the contract.
@@ -975,7 +967,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,
-            bootstrap: Default::default(),
         },
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,

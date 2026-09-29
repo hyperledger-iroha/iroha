@@ -1017,7 +1017,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
         .saturating_add(1_000);
     sleep(Duration::from_millis(wait_ms)).await;
     // An idle test network need not create empty blocks. This transaction starts the first
-    // post-deadline QueuePlan sequence whose earliest committed carrier must pin the anchor.
+    // post-deadline candidate whose earliest committed carrier must pin the anchor.
     submit_instructions(
         &bob,
         [Log::new(
@@ -1045,7 +1045,7 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_queue_plan_s
         .await?;
 
     // Carry an unrelated transaction after the anchor before preparing sortition. The final
-    // QueuePlan carrier must still consume the pinned draw rather than whichever parent is latest.
+    // carrier must still consume the pinned draw rather than whichever parent is latest.
     submit_instructions(
         &bob,
         [Log::new(

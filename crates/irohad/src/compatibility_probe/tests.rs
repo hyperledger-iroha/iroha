@@ -3,10 +3,9 @@
 use super::*;
 use crate::config_tests::minimal_config_table;
 use iroha_config::base::{WithOrigin, toml::TomlSource};
-use iroha_core::{block::BlockBuilder, tx::AcceptedTransaction};
-use iroha_data_model::{block::SignedBlock, isi::Log, level::Level, prelude::*};
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-use std::{borrow::Cow, collections::BTreeMap, path::PathBuf, time::SystemTime};
+use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+use iroha_data_model::{block::SignedBlock, prelude::*};
+use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
 fn minimal_config() -> Config {
     Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -25,30 +24,7 @@ fn storage_config(root: &Path) -> Config {
     config
 }
 
-fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::new(b"irohad-check-storage-fixture"),
-    ));
-    let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let transaction = TransactionBuilder::new(
-        network_id,
-        authority,
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "check-storage".to_owned())])
-    .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-    .expect("sign fixture transaction");
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-    let block: SignedBlock = BlockBuilder::new(vec![accepted])
-        .chain(0, prev)
-        .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
-        .expect("sign fixture block")
-        .unpack(|_| {})
-        .into();
-    Arc::new(block)
-}
-
-/// Initialize the store with a Strict Kura and persist `blocks` fixture blocks.
+/// Persist original signed genesis and native certified successors into a Strict Kura.
 fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config.kura,
@@ -56,9 +32,15 @@ fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
         &config.nexus.configured_lane_catalog,
     )
     .expect("initialize Strict Kura");
+    let mut chain =
+        CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+            .expect("execute original signed genesis");
     let mut persisted: Vec<Arc<SignedBlock>> = Vec::new();
-    for _ in 0..blocks {
-        let block = fixture_block(persisted.last().map(AsRef::as_ref));
+    for height in 1..=blocks {
+        if height > 1 {
+            chain.commit(Vec::new());
+        }
+        let block = Arc::clone(chain.committed(height as u64).block());
         kura.persist_block_immediate_for_bench(&block)
             .expect("persist fixture block");
         persisted.push(block);
@@ -284,7 +266,7 @@ fn marker_hash(marker: u8) -> HashOf<BlockHeader> {
 }
 
 /// A snapshot whose retained hashes match Kura's at its tip but not in its prefix is refused, as
-/// the Strict startup refuses it; a snapshot-ahead suffix above Kura's tip is admitted.
+/// the Strict startup refuses it; a snapshot above Kura's durable tip is also refused.
 #[test]
 fn restored_hashes_are_reconciled_at_every_retained_height() {
     let kura: Vec<_> = (1_u8..=5).map(marker_hash).collect();
@@ -294,8 +276,9 @@ fn restored_hashes_are_reconciled_at_every_retained_height() {
         .expect("a snapshot below Kura's tip");
     let mut ahead = kura.clone();
     ahead.push(marker_hash(6));
-    reconcile_restored_hashes(ahead.into_iter(), 5, kura_hash)
-        .expect("a snapshot-ahead suffix is not compared");
+    let error = reconcile_restored_hashes(ahead.into_iter(), 5, kura_hash)
+        .expect_err("snapshot state cannot exceed durable certified history");
+    assert!(error.contains("height 6 exceeds"), "{error}");
 
     let mut tampered = kura.clone();
     tampered[1] = marker_hash(0xEE);

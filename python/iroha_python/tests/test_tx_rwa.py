@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from decimal import Decimal
-from pathlib import Path
-from types import ModuleType
 from typing import Any
+
+import pytest
+
+from iroha_python import NetworkId
+from iroha_python import tx
 
 AUTHORITY = "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"
 DESTINATION = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
@@ -135,30 +136,19 @@ def _load_tx_module(monkeypatch):
         def to_json(self) -> str:
             return json.dumps(self._payload)
 
-    fake_crypto = ModuleType("iroha_python.crypto")
-    fake_crypto.Ed25519KeyPair = object
-    fake_crypto.Instruction = FakeInstruction
-    fake_crypto.SignedTransactionEnvelope = object
-    fake_crypto.TransactionBuilder = object
-    fake_crypto._normalize_lane_privacy_attachment = lambda entry: entry
-    fake_crypto.build_signed_transaction = lambda *args, **kwargs: None
-
-    package = ModuleType("iroha_python")
-    package.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "src" / "iroha_python")
-    ]
-
-    monkeypatch.setitem(sys.modules, "iroha_python", package)
-    monkeypatch.setitem(sys.modules, "iroha_python.crypto", fake_crypto)
-    sys.modules.pop("iroha_python.tx", None)
-    tx = importlib.import_module("iroha_python.tx")
-    return importlib.reload(tx), FakeInstruction
+    monkeypatch.setattr(tx, "Instruction", FakeInstruction)
+    return tx, FakeInstruction
 
 
 def test_transaction_draft_register_and_merge_rwa_wrap_payload_mappings(monkeypatch) -> None:
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
-        tx.TransactionConfig(chain_id="dev-chain", authority=AUTHORITY, ttl_ms=60_000)
+        tx.TransactionConfig(
+            network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+            authority=AUTHORITY,
+            fee_payment=tx.authority_fee_payment(charge_limits=[]),
+            ttl_ms=60_000,
+        )
     )
 
     returned = draft.register_rwa(
@@ -193,17 +183,22 @@ def test_transaction_draft_register_and_merge_rwa_wrap_payload_mappings(monkeypa
         "register_rwa",
         "merge_rwas",
     ]
-    assert fake_instruction.calls[0]["payload"]["RegisterRwa"]["rwa"]["quantity"] == "10.500"
+    assert fake_instruction.calls[0]["payload"]["RegisterRwa"]["rwa"]["quantity"] == "10.5"
     assert (
         fake_instruction.calls[1]["payload"]["MergeRwas"]["parents"][0]["quantity"]
-        == "1.500"
+        == "1.5"
     )
 
 
 def test_transaction_draft_rwa_scalar_helpers_use_canonical_quantities(monkeypatch) -> None:
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
-        tx.TransactionConfig(chain_id="dev-chain", authority=AUTHORITY, ttl_ms=60_000)
+        tx.TransactionConfig(
+            network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+            authority=AUTHORITY,
+            fee_payment=tx.authority_fee_payment(charge_limits=[]),
+            ttl_ms=60_000,
+        )
     )
 
     returned = (
@@ -240,7 +235,12 @@ def test_transaction_draft_rwa_scalar_helpers_use_canonical_quantities(monkeypat
 def test_transaction_draft_rwa_metadata_helpers_forward_json_values(monkeypatch) -> None:
     tx, fake_instruction = _load_tx_module(monkeypatch)
     draft = tx.TransactionDraft(
-        tx.TransactionConfig(chain_id="dev-chain", authority=AUTHORITY, ttl_ms=60_000)
+        tx.TransactionConfig(
+            network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+            authority=AUTHORITY,
+            fee_payment=tx.authority_fee_payment(charge_limits=[]),
+            ttl_ms=60_000,
+        )
     )
 
     returned = draft.set_rwa_controls(
@@ -256,7 +256,7 @@ def test_transaction_draft_rwa_metadata_helpers_forward_json_values(monkeypatch)
     ).set_rwa_key_value(
         RWA_ID,
         "grade",
-        {"origin": "AE", "score": Decimal("9")},
+        {"origin": "AE", "score": "9"},
     ).remove_rwa_key_value(
         RWA_ID,
         "grade",
@@ -275,3 +275,5 @@ def test_transaction_draft_rwa_metadata_helpers_forward_json_values(monkeypatch)
     }
     payload = json.loads(next(iter(draft)).to_json())
     assert payload["SetRwaControls"]["rwa"] == RWA_ID
+    with pytest.raises(TypeError, match="only exact JSON values"):
+        draft.set_rwa_key_value(RWA_ID, "grade", {"score": Decimal("9")})

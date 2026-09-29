@@ -44,7 +44,7 @@ impl Fixture {
         transaction.set_creation_time(Duration::from_millis(1_002));
         let instruction: InstructionBox = if rejected {
             Unregister::domain(
-                iroha_data_model::domain::DomainId::try_new("absent_inclusion", "universal")
+                iroha_model_base::domain::DomainId::try_new("absent_inclusion", "universal")
                     .unwrap(),
             )
             .into()
@@ -200,10 +200,64 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
         result["context_id"],
         json::to_value(&tip.context_id()).unwrap()
     );
-    assert_eq!(
-        result["execution_commitment"],
-        json::to_value(tip.execution()).unwrap()
-    );
+    let execution = tip.execution();
+    let execution_json = &result["execution_commitment"];
+    assert_eq!(execution_json.as_object().unwrap().len(), 9);
+    for (field, expected) in [
+        (
+            "parent_state_root",
+            json::to_value(&execution.parent_state_root).unwrap(),
+        ),
+        (
+            "post_state_root",
+            json::to_value(&execution.post_state_root).unwrap(),
+        ),
+        (
+            "ordinary_writes_root",
+            json::to_value(&execution.ordinary_writes_root).unwrap(),
+        ),
+        (
+            "kagemusha_top_up_root",
+            json::to_value(&execution.kagemusha_top_up_root).unwrap(),
+        ),
+        (
+            "kagemusha_top_up_count",
+            json::to_value(&execution.kagemusha_top_up_count).unwrap(),
+        ),
+        (
+            "executed_block_wire_len",
+            json::to_value(&execution.executed_block_wire_len).unwrap(),
+        ),
+        (
+            "executed_block_wire_hash",
+            json::to_value(&execution.executed_block_wire_hash).unwrap(),
+        ),
+    ] {
+        assert_eq!(execution_json[field], expected, "{field}");
+    }
+    let inputs = execution.transaction_input_commitment.as_ref().unwrap();
+    let outputs = execution.transaction_output_commitment.as_ref().unwrap();
+    for (field, root, count) in [
+        (
+            "transaction_input_commitment",
+            json::to_value(&inputs.root()).unwrap(),
+            inputs.leaf_count().get(),
+        ),
+        (
+            "transaction_output_commitment",
+            json::to_value(&outputs.root()).unwrap(),
+            outputs.leaf_count().get(),
+        ),
+    ] {
+        let tree = &execution_json[field];
+        assert_eq!(tree.as_object().unwrap().len(), 2, "{field}");
+        assert_eq!(tree["root"], root, "{field}");
+        assert_eq!(
+            tree["leaf_count"],
+            json::to_value(&count).unwrap(),
+            "{field}"
+        );
+    }
     assert_eq!(result["result_ok"].as_bool(), Some(true));
     assert_eq!(result["proof_kind"].as_str(), Some("selective-v1"));
     assert_eq!(
@@ -269,6 +323,36 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
     let mut trailing = checkpoint.clone();
     trailing.push(0);
     assert!(f.verify(&f.selected, &f.proofs, &trailing).is_err());
+    // Export only the original executed/certified inputs and the native verifier's
+    // own result. This lets an installed wheel exercise its actual PyO3 dispatch
+    // against the same proof without a second handwritten fixture authority.
+    if std::env::var("IROHA_PRINT_PYTHON_NATIVE_FINALITY_FIXTURE").as_deref() == Ok("1") {
+        let capture = json::Value::Object(
+            [
+                (
+                    "transaction_hash",
+                    hex::encode(f.selected.entrypoint_hash.as_ref()),
+                ),
+                (
+                    "transaction_response_hex",
+                    hex::encode(response(vec![f.selected.clone()])),
+                ),
+                ("proof_chain_json", f.chain_json()),
+                ("network_id", f.network().to_string()),
+                ("chain_id", f.checkpoint.chain_id().to_owned()),
+                ("trusted_checkpoint_hex", hex::encode(&checkpoint)),
+                ("expected_projection_json", projection),
+                ("promoted_checkpoint_hex", hex::encode(&promoted)),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), json::Value::from(value)))
+            .collect(),
+        );
+        println!(
+            "PYTHON_NATIVE_FINALITY_FIXTURE={}",
+            json::to_json(&capture).unwrap()
+        );
+    }
 }
 
 #[test]

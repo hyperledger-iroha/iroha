@@ -205,6 +205,7 @@ pub(crate) mod kagemusha_top_up_admission_tests {
             transaction,
             &mut state_transaction,
             Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)),
+            None,
         )
         .expect_err("stateful admission must repeat the KAGEMUSHA top-up invariant");
         assert!(matches!(

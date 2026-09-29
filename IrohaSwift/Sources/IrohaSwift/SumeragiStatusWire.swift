@@ -74,13 +74,19 @@ public enum SumeragiStatusWire {
     }
     private static func encodeHorizon(_ v: ToriiSumeragiBeaconHorizon) throws -> Data {
         record([integer(v.epochLengthBlocks, 8), option(v.nextRequiredPulseHeight.map { integer($0, 8) }),
-                option(v.activeSessionId.map { Data(hexString: $0)! }), boolean(v.sessionCoversNextPulse), boolean(v.localProviderReady)])
+                option(v.activeSessionId.map { record(Data(hexString: $0)!.map { Data([$0]) }) }), boolean(v.sessionCoversNextPulse), boolean(v.localProviderReady)])
     }
     private static func decodeHorizon(_ bytes: Data) throws -> [String: Any] {
         var r = Reader(bytes)
         let object: [String: Any] = ["epoch_length_blocks": try r.number(8),
             "next_required_pulse_height": try r.optional { try wholeNumber($0, 8) },
-            "active_session_id": try r.optional { guard $0.count == 32 else { throw failure() }; return $0.hexUppercased() },
+            "active_session_id": try r.optional {
+                var array = Reader($0)
+                var session = Data()
+                for _ in 0..<32 { session.append(try array.bytes(1)) }
+                try array.finish()
+                return session.hexUppercased()
+            },
             "session_covers_next_pulse": try r.boolean(), "local_provider_ready": try r.boolean()]
         try r.finish(); return object
     }

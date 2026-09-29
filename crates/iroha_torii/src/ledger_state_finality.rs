@@ -61,7 +61,6 @@ fn load(app: &AppState, height: u64) -> Result<StateFinalityResponse, Error> {
     // The native builder verifies durable frames, the complete authenticated
     // prefix and application attestations before returning this exact proof.
     let view = app.state.view();
-    use iroha_core::state::StateReadOnly as _;
     let block_hash = view
         .block_hashes()
         .get(height_usize.get() - 1)
