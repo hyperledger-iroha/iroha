@@ -7,6 +7,108 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ToriiIdentifierReceiptTests
 {
+    [Theory]
+    [InlineData("hkdf-sha3-512-prf-v1")]
+    [InlineData("bfv-affine-v1")]
+    [InlineData("bfv-programmed-v1")]
+    public void IdentifierPolicyAcceptsOnlyCurrentBackendTags(string backend)
+    {
+        var policy = ValidIdentifierPolicySummary();
+        policy["backend"] = backend;
+        var decoded = JsonSerializer.Deserialize<ToriiIdentifierPolicySummary>(policy.ToJsonString())!;
+        Assert.Equal(backend, decoded.Backend);
+        Assert.Equal(backend, JsonSerializer.Deserialize<ToriiIdentifierPolicySummary>(
+            JsonSerializer.Serialize(decoded))!.Backend);
+    }
+
+    [Theory]
+    [InlineData("bfv-affine-sha3-256-v1")]
+    [InlineData("bfv-programmed-sha3-256-v1")]
+    [InlineData("unknown")]
+    [InlineData("BFV-PROGRAMMED-V1")]
+    [InlineData(" bfv-programmed-v1")]
+    [InlineData("bfv-programmed-v1 ")]
+    public void IdentifierPolicyRejectsRetiredOrUnknownBackendTagsOnReadAndWrite(string backend)
+    {
+        var policy = ValidIdentifierPolicySummary();
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierPolicySummary>(policy.ToJsonString())!;
+        policy["backend"] = backend;
+        var readError = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<ToriiIdentifierPolicySummary>(policy.ToJsonString()));
+        Assert.Contains("backend", readError.Message);
+        var writeError = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Serialize(valid with { Backend = backend }));
+        Assert.Contains("backend", writeError.Message);
+    }
+
+    [Theory]
+    [InlineData("hkdf-sha3-512-prf-v1", "signed")]
+    [InlineData("hkdf-sha3-512-prf-v1", "proof")]
+    [InlineData("bfv-affine-v1", "signed")]
+    [InlineData("bfv-affine-v1", "proof")]
+    [InlineData("bfv-programmed-v1", "signed")]
+    [InlineData("bfv-programmed-v1", "proof")]
+    public void IdentifierReceiptAcceptsCurrentBackendAndModeTags(string backend, string mode)
+    {
+        var receipt = ValidIdentifierResolveResponse();
+        SetNestedString(receipt, "payload.execution.backend", backend);
+        SetNestedString(receipt, "payload.execution.verification_mode", mode);
+        var decoded = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString())!;
+        Assert.Equal(backend, decoded.Backend);
+        var roundTrip = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(JsonSerializer.Serialize(decoded))!;
+        Assert.Equal(backend, roundTrip.Backend);
+        Assert.Equal(mode, roundTrip.SignaturePayload!["payload"]!["execution"]!["verification_mode"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("backend", "bfv-affine-sha3-256-v1")]
+    [InlineData("backend", "bfv-programmed-sha3-256-v1")]
+    [InlineData("backend", "unknown")]
+    [InlineData("backend", "BFV-PROGRAMMED-V1")]
+    [InlineData("backend", " bfv-programmed-v1")]
+    [InlineData("backend", "bfv-programmed-v1 ")]
+    [InlineData("verification_mode", "unknown")]
+    [InlineData("verification_mode", "signed-v1")]
+    [InlineData("verification_mode", "Signed")]
+    [InlineData("verification_mode", " signed")]
+    [InlineData("verification_mode", "signed ")]
+    public void IdentifierReceiptRejectsInvalidBackendAndModeTagsOnReadAndWrite(string field, string value)
+    {
+        var receipt = ValidIdentifierResolveResponse();
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString())!;
+        SetNestedString(receipt, $"payload.execution.{field}", value);
+        var readError = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
+        Assert.Contains($"payload.execution.{field}", readError.Message);
+        var writeError = Assert.Throws<JsonException>(() =>
+            JsonSerializer.Serialize(valid with { SignaturePayload = receipt }));
+        Assert.Contains($"payload.execution.{field}", writeError.Message);
+    }
+
+    [Theory]
+    [InlineData("backend")]
+    [InlineData("verification_mode")]
+    public void IdentifierReceiptRequiresBackendAndMode(string field)
+    {
+        foreach (var remove in new[] { false, true })
+        {
+            var receipt = ValidIdentifierResolveResponse();
+            var execution = receipt["payload"]!["execution"]!.AsObject();
+            if (remove)
+            {
+                execution.Remove(field);
+            }
+            else
+            {
+                execution[field] = null;
+            }
+
+            var error = Assert.Throws<JsonException>(() =>
+                JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
+            Assert.Contains($"payload.execution.{field}", error.Message);
+        }
+    }
+
     [Fact]
     public async Task ResolveIdentifierAsyncRejectsPaddedPolicyIdBeforePost()
     {
@@ -22,7 +124,8 @@ public sealed class ToriiIdentifierReceiptTests
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = " phone#retail ",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("PolicyId", error.Message);
@@ -36,7 +139,7 @@ public sealed class ToriiIdentifierReceiptTests
     [InlineData("payload.receipt_hash", " receipt-1 ")]
     [InlineData("payload.uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ")]
     [InlineData("payload.account_id", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
-    [InlineData("payload.execution.backend", " bfv-programmed-sha3-256-v1 ")]
+    [InlineData("payload.execution.backend", " bfv-programmed-v1 ")]
     [InlineData("attestation.signature", " ABCD ")]
     public void IdentifierResolveResponseRejectsPaddedReceiptFields(string field, string value)
     {
@@ -236,7 +339,7 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", receipt.AccountId);
         Assert.Equal(1710000000000L, receipt.ResolvedAtMilliseconds);
         Assert.Equal(1710003600000L, receipt.ExpiresAtMilliseconds);
-        Assert.Equal("bfv-programmed-sha3-256-v1", receipt.Backend);
+        Assert.Equal("bfv-programmed-v1", receipt.Backend);
         Assert.Equal("ABCD", receipt.Signature);
         Assert.Equal(string.Empty, receipt.SignaturePayloadHex);
         Assert.Equal("signed", receipt.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
@@ -366,7 +469,8 @@ public sealed class ToriiIdentifierReceiptTests
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -476,7 +580,7 @@ public sealed class ToriiIdentifierReceiptTests
     [InlineData("owner", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
     [InlineData("normalization", " phone_e164 ")]
     [InlineData("resolver_public_key", " ed25519:0123456789abcdef ")]
-    [InlineData("backend", " bfv-programmed-sha3-256-v1 ")]
+    [InlineData("backend", " bfv-programmed-v1 ")]
     [InlineData("input_encryption", " bfv-v1 ")]
     [InlineData("input_encryption_public_parameters", " params-b64 ")]
     public void IdentifierPolicySummaryRejectsPaddedProofMetadata(string field, string value)
@@ -583,8 +687,10 @@ public sealed class ToriiIdentifierReceiptTests
             ["owner"] = "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
             ["active"] = true,
             ["normalization"] = "phone_e164",
+            ["program_id"] = "identifier_lookup_retail",
+            ["output_opening_public_key"] = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             ["resolver_public_key"] = "ed25519:0123456789abcdef",
-            ["backend"] = "bfv-programmed-sha3-256-v1",
+            ["backend"] = "bfv-programmed-v1",
             ["input_encryption"] = "bfv-v1",
             ["input_encryption_public_parameters"] = "params-b64",
             ["input_encryption_public_parameters_decoded"] = null,
@@ -601,8 +707,10 @@ public sealed class ToriiIdentifierReceiptTests
               "owner": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "active": true,
               "normalization": "phone_e164",
+              "program_id": "identifier_lookup_retail",
+              "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
               "resolver_public_key": "ed25519:0123456789abcdef",
-              "backend": "bfv-programmed-sha3-256-v1",
+              "backend": "bfv-programmed-v1",
               "input_encryption": "bfv-v1",
               "input_encryption_public_parameters": "params-b64",
               "input_encryption_public_parameters_decoded": {
@@ -642,7 +750,7 @@ public sealed class ToriiIdentifierReceiptTests
                 "execution": {
                   "program_id": "identifier_lookup_retail",
                   "program_digest": "program-digest",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_ciphertext_hash": "input-hash",
                   "output_ciphertext_hash": "output-hash",
@@ -682,8 +790,8 @@ public sealed class ToriiIdentifierReceiptTests
                 "execution": {
                   "program_id": "identifier_lookup_retail",
                   "program_digest": "program-digest",
-                  "backend": "bfv-programmed-sha3-256-v1",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_ciphertext_hash": "input-hash",
                   "output_ciphertext_hash": "output-hash",

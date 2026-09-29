@@ -19,6 +19,7 @@ on:
       - "crates/iroha_data_model/src/isi/registry.rs"
       - "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
       - "crates/iroha_core/**"
+      - "crates/iroha_panic_hook/**"
       - "crates/kotodama_lang/src/samples/native_escrow.ko"
       - "crates/kotodama_lang/src/samples/native_escrow.to"
       - "fixtures/sorafs_chunker/**"

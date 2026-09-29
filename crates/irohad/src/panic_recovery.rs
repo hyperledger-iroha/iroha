@@ -18,7 +18,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || iroha_core::panic_hook::catch_unwind_suppressed(operation))
+    tokio::task::spawn_blocking(move || iroha_panic_hook::catch_unwind_suppressed(operation))
 }
 
 /// Decode a completed recoverable Tokio task.
@@ -54,7 +54,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    builder.spawn(move || iroha_core::panic_hook::catch_unwind_suppressed(operation))
+    builder.spawn(move || iroha_panic_hook::catch_unwind_suppressed(operation))
 }
 
 /// Join an explicitly recoverable OS thread without exposing its panic payload.
@@ -78,11 +78,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn blocking_panic_is_controlled_and_suppression_clears() {
         let task = spawn_blocking_recoverable(|| {
-            assert!(iroha_core::panic_hook::is_suppressed());
+            assert!(iroha_panic_hook::is_suppressed());
             panic!("injected recoverable blocking panic");
         });
         assert_eq!(join_recoverable(task).await, Err(RecoverablePanic));
-        let stale = tokio::task::spawn_blocking(iroha_core::panic_hook::is_suppressed)
+        let stale = tokio::task::spawn_blocking(iroha_panic_hook::is_suppressed)
             .await
             .expect("blocking worker probe must join");
         assert!(!stale, "suppression must clear before worker reuse");
@@ -91,12 +91,12 @@ mod tests {
     #[test]
     fn os_thread_panic_is_controlled_and_suppression_clears() {
         let task = spawn_thread_recoverable(thread::Builder::new(), || {
-            assert!(iroha_core::panic_hook::is_suppressed());
+            assert!(iroha_panic_hook::is_suppressed());
             panic!("injected recoverable OS-thread panic");
         })
         .expect("spawn recoverable test thread");
         assert_eq!(join_thread_recoverable(task), Err(RecoverablePanic));
-        assert!(!iroha_core::panic_hook::is_suppressed());
+        assert!(!iroha_panic_hook::is_suppressed());
     }
 
     #[tokio::test]
@@ -105,17 +105,17 @@ mod tests {
         task.abort();
         let joined = task.await;
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            assert!(!iroha_core::panic_hook::is_suppressed());
+            assert!(!iroha_panic_hook::is_suppressed());
             let _ = recover_joined(joined);
         }));
         assert!(panic.is_err());
-        assert!(!iroha_core::panic_hook::is_suppressed());
+        assert!(!iroha_panic_hook::is_suppressed());
     }
 
     #[test]
     fn ordinary_invariant_panics_remain_unsuppressed() {
         let result = std::panic::catch_unwind(|| {
-            assert!(!iroha_core::panic_hook::is_suppressed());
+            assert!(!iroha_panic_hook::is_suppressed());
             panic!("injected invariant panic");
         });
         assert!(result.is_err());

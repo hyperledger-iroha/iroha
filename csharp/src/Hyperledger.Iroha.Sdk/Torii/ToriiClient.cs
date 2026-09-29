@@ -7093,6 +7093,9 @@ public sealed partial class ToriiClient : IDisposable
             request.PolicyId,
             "identifier resolve request.policy_id",
             message => new ArgumentException(message, nameof(request.PolicyId)));
+        _ = NormalizeIdentifierCiphertext(request.EncryptedInput, nameof(request.EncryptedInput));
+        ArgumentNullException.ThrowIfNull(request.OutputOpening);
+        request.OutputOpening.Validate();
     }
 
     private static void ValidateIdentifierPoliciesResponse(ToriiIdentifierPoliciesResponse response)
@@ -7192,8 +7195,12 @@ public sealed partial class ToriiClient : IDisposable
         {
             ValidateOptionalExactJsonStringProperty(execution, "program_id", $"{context}.execution.program_id");
             ValidateOptionalExactJsonStringProperty(execution, "program_digest", $"{context}.execution.program_digest");
-            ValidateOptionalExactJsonStringProperty(execution, "backend", $"{context}.execution.backend");
-            ValidateOptionalExactJsonStringProperty(execution, "verification_mode", $"{context}.execution.verification_mode");
+            _ = ToriiIdentifierJson.RequireRamLfeBackend(
+                RequireExactJsonStringProperty(execution, "backend", $"{context}.execution.backend"),
+                $"{context}.execution.backend");
+            _ = ToriiIdentifierJson.RequireRamLfeVerificationMode(
+                RequireExactJsonStringProperty(execution, "verification_mode", $"{context}.execution.verification_mode"),
+                $"{context}.execution.verification_mode");
             ValidateOptionalExactJsonStringProperty(
                 execution,
                 "input_ciphertext_hash",
@@ -10046,9 +10053,17 @@ public sealed partial class ToriiClient : IDisposable
         return exact;
     }
 
-    private static string? NormalizeOptionalIdentifierCiphertext(string? value, string paramName)
+    private static string NormalizeIdentifierCiphertext(string? value, string paramName)
     {
-        return value is null ? null : NormalizeExactIdentifierValue(value, paramName);
+        var exact = NormalizeExactIdentifierValue(value, paramName);
+        try
+        {
+            return IdentifierRequestWire.RequireLowerHex(exact, paramName);
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException(exception.Message, paramName, exception);
+        }
     }
 
     private static string NormalizeExactIdentifierValue(string? value, string paramName)

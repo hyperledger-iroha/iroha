@@ -13,6 +13,7 @@ mod config_utils;
 mod content;
 mod contracts;
 mod crypto;
+mod dataspace_definition;
 mod endorsement;
 mod execution;
 mod execution_finality;
@@ -368,7 +369,8 @@ struct Args {
     ///
     /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and
     /// readable. `taira doctor` and the runtime-authorized `taira public-reset` surface never read
-    /// client configuration or ledger signing material.
+    /// client configuration or ledger signing material. `dataspace` builds its runtime client
+    /// directly from its definition and explicitly selected public trust profile.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
     /// Read an owner-private regular inherited configuration descriptor without environment overrides.
@@ -461,6 +463,9 @@ enum Command {
     /// Developer utilities and diagnostics
     #[command(subcommand)]
     Tools(tools::Command),
+    /// Plan, apply, and inspect a dataspace definition
+    #[command(subcommand)]
+    Dataspace(taira_dataspace_deploy::Command),
     /// SORA Taira public testnet diagnostics and canaries
     #[command(subcommand)]
     Taira(taira::Command),
@@ -687,6 +692,9 @@ impl Run for Command {
             App(variant) => Run::run(variant, context),
             Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
+            Dataspace(_) => {
+                eyre::bail!("`dataspace` must run before client configuration is loaded")
+            }
             Taira(variant) => Run::run(variant, context),
             Offline(variant) => Run::run(variant, context),
             Soracloud(variant) => Run::run(variant, context),
@@ -705,6 +713,7 @@ impl Command {
             | Self::Trigger(_)
             | Self::Ops(_)
             | Self::Taira(_)
+            | Self::Dataspace(_)
             | Self::Sccp(_) => false,
             Self::Contract(command) => command.allows_fallback_config(),
             Self::Offline(command) => command.allows_fallback_config(),
@@ -1211,6 +1220,15 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     if let Some(result) = run_local_dataspace_profile(&args, io::stdout()) {
         return result.map(|()| std::process::ExitCode::SUCCESS);
     }
+    if matches!(&args.command, Command::Dataspace(_)) {
+        return map_command_result(dataspace_definition::run(
+            &args,
+            io::stdout(),
+            io::stderr(),
+            i18n.clone(),
+        ))
+        .map(|()| std::process::ExitCode::SUCCESS);
+    }
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
@@ -1359,14 +1377,12 @@ fn run_local_dataspace_profile(
     args: &Args,
     output: impl std::io::Write,
 ) -> Option<ReportResult<(), MainError>> {
-    let Command::Taira(taira::Command::DataspaceDeploy(
-        taira_dataspace_deploy::Command::ExportProfile(command),
-    )) = &args.command
+    let Command::Dataspace(taira_dataspace_deploy::Command::ExportProfile(command)) = &args.command
     else {
         return None;
     };
     Some((|| {
-        reject_irrelevant_local_tool_globals(args, "taira dataspace-deploy export-profile")?;
+        reject_irrelevant_local_tool_globals(args, "dataspace export-profile")?;
         map_command_result(command.run_without_client_config(output))
     })())
 }
@@ -1672,6 +1688,22 @@ fn try_fallback_config() -> Result<Config> {
     let seed = b"iroha-cli-offline-fallback-ed25519-v1".to_vec();
     let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
+    Ok(client_config_with_defaults(
+        chain,
+        network_id,
+        key_pair,
+        defaults::common::chain_discriminant(),
+        Url::parse("http://127.0.0.1:8080/").expect("fallback url"),
+    ))
+}
+
+fn client_config_with_defaults(
+    chain: ChainId,
+    network_id: NetworkId,
+    key_pair: KeyPair,
+    account_chain_discriminant: u16,
+    torii_api_url: Url,
+) -> Config {
     let account = AccountId::new(key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
         Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
@@ -1683,14 +1715,14 @@ fn try_fallback_config() -> Result<Config> {
         Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
         Duration::from_secs(iroha_service_model::sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
     );
-    Ok(Config {
+    Config {
         chain,
         network_id,
         account,
-        account_chain_discriminant: defaults::common::chain_discriminant(),
+        account_chain_discriminant,
         key_pair,
         basic_auth: None,
-        torii_api_url: Url::parse("http://127.0.0.1:8080/").expect("fallback url"),
+        torii_api_url,
         torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
         transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
@@ -1698,7 +1730,7 @@ fn try_fallback_config() -> Result<Config> {
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: RolloutPhase::Default,
-    })
+    }
 }
 #[cfg(test)]
 pub(crate) fn fallback_config() -> Config {

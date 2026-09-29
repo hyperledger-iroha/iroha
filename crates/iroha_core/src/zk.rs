@@ -86,6 +86,14 @@ pub(crate) mod pasta_native_poseidon;
 pub(crate) mod pasta_sha256;
 /// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
 pub(crate) mod pasta_sha256_table8;
+// TODO: Qualify the complete private RAM-LFE relation before admitting a circuit.
+// These internal experiments have no production verifier entry point.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_byte;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_poseidon;
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+mod ram_lfe_word;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-preverify")]

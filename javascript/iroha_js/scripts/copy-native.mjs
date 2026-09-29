@@ -41,6 +41,7 @@ import {
   syncDirectory,
 } from "./build-dist.mjs";
 import { resolveNativeBuildProfile } from "./native-build-profile.mjs";
+import { nativeBuildOutputPath } from "./build-native.mjs";
 import {
   readNativeBuildSourceState,
   readNativeBuildProvenance,
@@ -2538,15 +2539,6 @@ export async function recoverNativeBindingPublication({
 
 function defaultNativePaths() {
   const cargoProfile = resolveNativeBuildProfile();
-  const configuredTarget = process.env.CARGO_TARGET_DIR;
-  const targetRoot = configuredTarget
-    ? isAbsolute(configuredTarget)
-      ? configuredTarget
-      : join(repoRoot, configuredTarget)
-    : join(repoRoot, "target");
-  const libName = process.platform === "win32"
-    ? "iroha_js_host.dll"
-    : `libiroha_js_host.${process.platform === "darwin" ? "dylib" : "so"}`;
   const configuredDestDir = process.env.IROHA_JS_NATIVE_DIR;
   const destDir = configuredDestDir
     ? isAbsolute(configuredDestDir)
@@ -2554,7 +2546,7 @@ function defaultNativePaths() {
       : join(repoRoot, configuredDestDir)
     : join(repoRoot, "javascript", "iroha_js", "native");
   return {
-    source: join(targetRoot, cargoProfile, libName),
+    source: nativeBuildOutputPath({ repoRoot, cargoProfile }),
     destDir,
     cargoProfile,
   };

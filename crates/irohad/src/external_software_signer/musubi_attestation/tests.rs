@@ -148,7 +148,7 @@ fn encoded(payload: &MusubiProviderBundleVerificationPayloadV1) -> Vec<u8> {
 #[tokio::test]
 async fn approval_worker_panic_is_unavailable() {
     let result: Result<(), _> = approve_payload_recoverably(|| {
-        assert!(iroha_core::panic_hook::is_suppressed());
+        assert!(iroha_panic_hook::is_suppressed());
         panic!("injected approval worker failure");
     })
     .await;

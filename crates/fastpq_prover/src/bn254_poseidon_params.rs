@@ -19,7 +19,7 @@ pub(crate) struct Bn254PoseidonWidth3Params {
 pub(crate) fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Params {
     static PARAMS: OnceLock<Bn254PoseidonWidth3Params> = OnceLock::new();
     PARAMS.get_or_init(|| {
-        let params = iroha_zkp_halo2::poseidon::poseidon2_params_width3();
+        let params = iroha_zkp_halo2::poseidon::bn254_poseidon_params_width3();
         let mut round_constants = Vec::with_capacity(
             params
                 .round_constants

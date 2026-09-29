@@ -16,6 +16,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import {
   basename,
@@ -435,11 +436,12 @@ function nativeFilename(platform) {
   return "libiroha_js_host." + (platform === "darwin" ? "dylib" : "so");
 }
 
-export function nativeBuildOutputPath({
+export function nativeBuildNamespace({
   repoRoot = defaultRepoRoot,
   cargoProfile,
   env = process.env,
   platform = process.platform,
+  sourceState,
 }) {
   if (
     cargoProfile !== "debug" &&
@@ -461,8 +463,142 @@ export function nativeBuildOutputPath({
       "Native build requires CARGO_TARGET_DIR to be an absolute canonical path.",
     );
   }
-  void repoRoot;
-  return join(targetRoot, cargoProfile, nativeFilename(platform));
+  const root = canonicalRepoRoot(repoRoot);
+  const source = sourceState ?? readNativeBuildSourceState(root, { env });
+  if (!/^[0-9a-f]{64}$/u.test(source.sourceTreeSha256)) {
+    throw new Error("Native build requires an authenticated complete source fingerprint.");
+  }
+  const toolchain = [
+    [CARGO_PATH_ENV, "cargo"], ["RUSTC", "rustc"], ["RUSTDOC", "rustdoc"],
+  ].map(([key, name]) => {
+    const path = requiredExecutable(env, key, name);
+    const { sha256 } = readStableRegularFileDigest(path, {
+      label: "Native build " + name,
+      maximumBytes: 512 * 1024 * 1024,
+      requireNonempty: true,
+    });
+    return { path, sha256 };
+  });
+  // Keep the complete authenticated inventory. A narrowed Rust-only input
+  // closure would need its own audit of build scripts and generated inputs.
+  const buildEnvironment = Object.fromEntries(Object.keys(env).sort()
+    .filter((key) => /^(?:CARGO_(?:BUILD_|TARGET_|ENCODED_RUSTFLAGS$)|RUSTFLAGS$|RUSTC_(?:WRAPPER|WORKSPACE_WRAPPER)$|SDKROOT$|MACOSX_DEPLOYMENT_TARGET$)/u.test(key))
+    .map((key) => [key, env[key]]));
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    version: 1,
+    root,
+    source,
+    toolchain,
+    toolchainChannel: readPinnedToolchain(root),
+    cargoProfile,
+    platform,
+    arch: process.arch,
+    buildEnvironment,
+  })).digest("hex");
+  return join(targetRoot, "iroha-js-source", fingerprint);
+}
+
+
+function completedNamespace(namespace, { cargoProfile, platform, repoRoot, sourceState }) {
+  const completedPath = join(namespace, "completed.json");
+  const completed = JSON.parse(readUtf8RegularFile(completedPath,
+    "Completed native namespace", 16 * 1024));
+  if (completed.version !== 1 ||
+      !/^[0-9a-f-]{36}$/u.test(completed.attempt_id) ||
+      !/^iroha-js-cargo-[0-9a-f-]{36}\.jsonl\.inputs\.json$/u.test(completed.receipt) ||
+      !/^[0-9a-f]{64}$/u.test(completed.receipt_sha256)) {
+    throw new Error("Completed native namespace has an invalid identity.");
+  }
+  const target = join(namespace, completed.attempt_id);
+  canonicalDirectory(target, "Completed native target");
+  try {
+    lstatSync(join(target, ".in-progress.json"));
+    throw new Error("Native namespace contains an unfinished build attempt.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const profile = join(target, cargoProfile);
+  const receiptPath = join(profile, completed.receipt);
+  const receiptFile = readStableRegularFile(receiptPath, {
+    label: "Completed native dependency receipt", maximumBytes: MAX_CARGO_JSON_BYTES,
+  });
+  if (receiptFile.sha256 !== completed.receipt_sha256) {
+    throw new Error("Completed native dependency receipt changed.");
+  }
+  const receipt = JSON.parse(receiptFile.bytes.toString("utf8"));
+  const nativePath = join(profile, nativeFilename(platform));
+  if (receipt.version !== 1 || receipt.target_root !== target ||
+      receipt.native_path !== nativePath ||
+      receipt.repo_root !== repoRoot || !sameSourceState(receipt.source, sourceState) ||
+      !Array.isArray(receipt.local_files) || receipt.local_files.length === 0) {
+    throw new Error("Completed native dependency receipt has a foreign target.");
+  }
+  const logPath = receiptPath.slice(0, -".inputs.json".length);
+  const compilerLog = readStableRegularFile(logPath, {
+    label: "Completed Cargo compiler stream", maximumBytes: MAX_CARGO_JSON_BYTES,
+  });
+  if (compilerLog.sha256 !== receipt.compiler_log_sha256) {
+    throw new Error("Completed Cargo compiler stream changed.");
+  }
+  const local = verifyCargoDependencyArtifacts(compilerLog.bytes, {
+    repoRoot: receipt.repo_root, targetRoot: target,
+  });
+  const expectedFiles = [...new Set(local.flatMap(({ filenames }) => filenames))].sort();
+  if (!exactStringArray(receipt.local_files.map(({ path }) => path), expectedFiles)) {
+    throw new Error("Completed native dependency receipt omitted local artifacts.");
+  }
+  for (const file of receipt.local_files) {
+    if (!/^[0-9a-f]{64}$/u.test(file.sha256) ||
+        digestCargoArtifactSource(file.path).sha256 !== file.sha256) {
+      throw new Error("Completed native dependency output changed: " + file.path);
+    }
+  }
+  if (receipt.local_files.find(({ path }) => path === nativePath)?.sha256 !== receipt.native_sha256) {
+    throw new Error("Completed native dependency receipt omitted the addon.");
+  }
+  return { target, nativePath, receipt, completed };
+}
+
+/** Resolve only an authenticated completed attempt for publication. */
+export function nativeBuildOutputPath(options) {
+  const repoRoot = canonicalRepoRoot(options.repoRoot ?? defaultRepoRoot);
+  const sourceState = options.sourceState ?? readNativeBuildSourceState(repoRoot, { env: options.env ?? process.env });
+  const namespace = nativeBuildNamespace({ ...options, repoRoot, sourceState });
+  return completedNamespace(namespace, {
+    cargoProfile: options.cargoProfile, platform: options.platform ?? process.platform,
+    repoRoot, sourceState,
+  }).nativePath;
+}
+
+function selectBuildAttempt(namespace, { cargoProfile, platform, repoRoot, sourceState, newAttemptId }) {
+  let previous;
+  try {
+    previous = completedNamespace(namespace, { cargoProfile, platform, repoRoot, sourceState });
+  } catch (error) {
+    // Retain incomplete/corrupt attempts. Only a successfully authenticated
+    // receipt allows local Cargo cache reuse; a retry starts a fresh directory.
+    if (error.code !== "ENOENT") process.stderr.write("Native cache retry: " + error.message + "\n");
+  }
+  let target = previous?.target;
+  for (;;) {
+    if (target === undefined) {
+      const id = newAttemptId();
+      if (!/^[0-9a-f-]{36}$/u.test(id)) throw new Error("Native build attempt ID is invalid.");
+      target = join(namespace, id);
+      canonicalDirectory(target, "Native build attempt directory", { create: true });
+    }
+    const ownerPath = join(target, ".in-progress.json");
+    const owner = Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID() }) + "\n");
+    try {
+      writeFileSync(ownerPath, owner, { flag: "wx", mode: 0o600 });
+      return { target, previous: previous?.target === target ? previous.receipt : undefined,
+        ownerPath, owner };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      target = undefined;
+      previous = undefined;
+    }
+  }
 }
 
 function parseCargoMessages(stdout) {
@@ -671,6 +807,48 @@ function verifyCargoArtifactMessages(
     );
   }
   return artifact;
+}
+
+/** Validate the complete local dependency closure reported by Cargo. */
+export function verifyCargoDependencyArtifacts(stdout, { repoRoot, targetRoot, nativePath }) {
+  const root = canonicalRepoRoot(repoRoot);
+  const target = realpathSync(targetRoot);
+  const local = [];
+  for (const artifact of parseCargoMessages(stdout)) {
+    if (artifact.reason !== "compiler-artifact") continue;
+    if (typeof artifact.package_id !== "string" ||
+        !/^(?:path|registry|git)\+/u.test(artifact.package_id)) {
+      throw new Error("Cargo dependency has an unsupported package identity.");
+    }
+    const manifest = canonicalRegularFile(artifact.manifest_path, "Cargo dependency manifest");
+    const source = canonicalRegularFile(artifact.target?.src_path, "Cargo dependency source");
+    if (!Array.isArray(artifact.filenames) || artifact.filenames.length === 0 ||
+        typeof artifact.fresh !== "boolean") {
+      throw new Error("Cargo dependency has no exact artifact files or freshness state.");
+    }
+    for (const filename of artifact.filenames) {
+      // The final addon has the stricter inode/digest seal immediately below.
+      if (filename !== nativePath) canonicalRegularFile(filename, "Cargo dependency artifact");
+      if (!isPathInside(target, filename)) {
+        throw new Error("Cargo dependency artifact is outside the authenticated source target.");
+      }
+    }
+    if (!artifact.package_id.startsWith("path+")) {
+      if (isPathInside(root, manifest) || isPathInside(root, source)) {
+        throw new Error("Cargo mislabeled a local dependency as an external package.");
+      }
+      continue;
+    }
+    const packageRoot = dirname(manifest);
+    if (!isPathInside(root, manifest) || !isPathInside(root, source) ||
+        basename(manifest) !== "Cargo.toml" ||
+        !artifact.package_id.startsWith("path+" + pathToFileURL(packageRoot).href + "#")) {
+      throw new Error("Cargo local dependency does not belong to the authenticated checkout.");
+    }
+    local.push(artifact);
+  }
+  if (local.length === 0) throw new Error("Cargo reported no authenticated local dependencies.");
+  return local;
 }
 
 function forwardCargoRenderedDiagnostics(stdout) {
@@ -1074,6 +1252,7 @@ export function runNativeBuild({
   createProvenance = createNativeBuildProvenance,
   invalidateProvenance = invalidateNativeBuildProvenance,
   writeProvenance = writeNativeBuildProvenance,
+  newAttemptId = randomUUID,
 } = {}) {
   assertCargoProfileEnvironment(env);
   validateRequiredEnvironment(env);
@@ -1084,12 +1263,16 @@ export function runNativeBuild({
   const macosBuild = platform === "darwin"
     ? macosBuildIdentity(root, env, runTool) : undefined;
   const target = canonicalTargetRoot(root, env);
-  const nativePath = nativeBuildOutputPath({
-    repoRoot: root,
-    cargoProfile,
-    env: { ...env, CARGO_TARGET_DIR: target.canonicalPath },
-    platform,
+  const sourceBefore = readSourceState(root, { env });
+  const namespacePath = nativeBuildNamespace({
+    repoRoot: root, cargoProfile, env, platform, sourceState: sourceBefore,
   });
+  const namespace = canonicalDirectory(namespacePath, "Native build namespace", { create: true });
+  const attempt = selectBuildAttempt(namespacePath, {
+    cargoProfile, platform, repoRoot: root, sourceState: sourceBefore, newAttemptId,
+  });
+  const sourceTarget = canonicalDirectory(attempt.target, "Native build source target directory");
+  const nativePath = join(attempt.target, cargoProfile, nativeFilename(platform));
   const profileDirectory = canonicalDirectory(
     dirname(nativePath),
     "Native build Cargo profile directory",
@@ -1100,10 +1283,11 @@ export function runNativeBuild({
   }
   const assertDirectories = () => {
     assertDirectoryIdentity(target, "Native build Cargo target directory");
+    assertDirectoryIdentity(namespace, "Native build namespace");
+    assertDirectoryIdentity(sourceTarget, "Native build source target directory");
     assertDirectoryIdentity(profileDirectory, "Native build Cargo profile directory");
   };
 
-  const sourceBefore = readSourceState(root, { env });
   const suppliedRevision = env.IROHA_GIT_COMMIT_HASH;
   if (
     suppliedRevision !== undefined &&
@@ -1134,7 +1318,7 @@ export function runNativeBuild({
     INTENDED_PACKAGE,
     "--lib",
     "--target-dir",
-    target.canonicalPath,
+    sourceTarget.canonicalPath,
     "--message-format=json-render-diagnostics",
     ...cargoBuildArgsForNativeProfile(cargoProfile),
     // rustc's debug-info stripping can leave a misaligned Mach-O LINKEDIT
@@ -1145,7 +1329,7 @@ export function runNativeBuild({
   const cargoEnv = {
     ...(macosBuild === undefined ? env : macosCargoEnvironment(env, macosBuild)),
     CARGO: executables.cargoPath,
-    CARGO_TARGET_DIR: target.canonicalPath,
+    CARGO_TARGET_DIR: sourceTarget.canonicalPath,
     [NATIVE_BUILD_CARGO_LOCK_ENV]: inputs.cargoLock,
     IROHA_GIT_COMMIT_HASH: sourceBefore.sourceGitRevision,
     RUSTC: executables.rustcPath,
@@ -1157,6 +1341,12 @@ export function runNativeBuild({
     cwd: root,
   });
   assertDirectories();
+  // Preserve the actual compiler stream, including failed builds. A later
+  // mutable target directory is not evidence of the dependencies used here.
+  const compilerLogPath = join(profileDirectory.canonicalPath,
+    "iroha-js-cargo-" + randomUUID() + ".jsonl");
+  const compilerBytes = Buffer.from(build?.stdout ?? "", "utf8");
+  writeFileSync(compilerLogPath, compilerBytes, { flag: "wx", mode: 0o600 });
   forwardCargoRenderedDiagnostics(build?.stdout);
   if (build?.error !== undefined) {
     throw new Error(
@@ -1175,6 +1365,19 @@ export function runNativeBuild({
     nativePath,
     repoRoot: root,
   });
+  const localArtifacts = verifyCargoDependencyArtifacts(build.stdout, {
+    repoRoot: root,
+    targetRoot: sourceTarget.canonicalPath,
+    nativePath,
+  });
+  for (const dependency of localArtifacts.filter(({ fresh }) => fresh)) {
+    for (const filename of dependency.filenames) {
+      const previous = attempt.previous?.local_files.find(({ path }) => path === filename);
+      if (previous === undefined || digestCargoArtifactSource(filename).sha256 !== previous.sha256) {
+        throw new Error("Cargo reused a local artifact without a matching completed dependency receipt.");
+      }
+    }
+  }
   const outputAfterCargo = cargoArtifactSourceIdentity(nativePath);
   if (
     artifact.fresh === false &&
@@ -1198,12 +1401,30 @@ export function runNativeBuild({
     sourceBefore,
     sourceAfter,
   });
+  if (nativeBuildNamespace({ repoRoot: root, cargoProfile, env, platform,
+    sourceState: sourceAfter }) !== namespacePath) {
+    throw new Error("Native build toolchain or input namespace changed while Cargo was running.");
+  }
   if (provenance.native_sha256 !== sealedOutput.sha256) {
     throw new Error(
       "Native build provenance does not match the authenticated output.",
     );
   }
   const expectedReceiptBytes = Buffer.from(`${JSON.stringify(provenance, null, 2)}\n`, "utf8");
+  const localFiles = [...new Set(localArtifacts.flatMap(({ filenames }) => filenames))]
+    .sort().map((path) => ({ path, sha256: path === nativePath
+      ? sealedOutput.sha256 : digestCargoArtifactSource(path).sha256 }));
+  const dependencyReceipt = {
+    version: 1,
+    repo_root: root,
+    target_root: sourceTarget.canonicalPath,
+    source: sourceAfter,
+    native_path: nativePath,
+    native_sha256: sealedOutput.sha256,
+    compiler_log_sha256: createHash("sha256").update(compilerBytes).digest("hex"),
+    local_artifacts: localArtifacts,
+    local_files: localFiles,
+  };
   try {
     assertDirectories();
     writeProvenance(nativePath, provenance);
@@ -1217,6 +1438,10 @@ export function runNativeBuild({
         "Native build source changed while provenance was published.",
       );
     }
+    if (nativeBuildNamespace({ repoRoot: root, cargoProfile, env, platform,
+      sourceState: sourceAfterPublication }) !== namespacePath) {
+      throw new Error("Native build toolchain or input namespace changed during publication.");
+    }
     if (macosBuild !== undefined &&
         JSON.stringify(macosBuildIdentity(root, env, runTool)) !== JSON.stringify(macosBuild)) {
       throw new Error("Native build macOS SDK or Apple toolchain changed during publication.");
@@ -1224,6 +1449,30 @@ export function runNativeBuild({
     verifyFinalPublication(
       nativePath, sealedOutput, expectedReceiptBytes, publishedReceipt.identity, assertDirectories,
     );
+    const compilerLog = readStableRegularFileDigest(compilerLogPath, {
+      label: "Retained Cargo compiler stream", maximumBytes: MAX_CARGO_JSON_BYTES,
+    });
+    if (compilerLog.sha256 !== dependencyReceipt.compiler_log_sha256) {
+      throw new Error("Retained Cargo compiler stream changed before publication.");
+    }
+    writeFileSync(compilerLogPath + ".inputs.json", JSON.stringify(dependencyReceipt, null, 2) + "\n",
+      { flag: "wx", mode: 0o600 });
+    const dependencyReceiptHash = readStableRegularFileDigest(compilerLogPath + ".inputs.json", {
+      label: "Completed dependency receipt", maximumBytes: MAX_CARGO_JSON_BYTES,
+    }).sha256;
+    const owner = readStableRegularFile(attempt.ownerPath, {
+      label: "Native build attempt owner", maximumBytes: 1024,
+    });
+    if (!owner.bytes.equals(attempt.owner)) throw new Error("Native build attempt owner changed.");
+    assertDirectories();
+    rmSync(attempt.ownerPath);
+    const completed = Buffer.from(JSON.stringify({ version: 1, attempt_id: basename(attempt.target),
+      receipt: basename(compilerLogPath) + ".inputs.json", receipt_sha256: dependencyReceiptHash }) + "\n");
+    const pending = join(namespacePath, ".completed-" + randomUUID());
+    writeFileSync(pending, completed, { flag: "wx", mode: 0o600 });
+    assertDirectories();
+    renameSync(pending, join(namespacePath, "completed.json"));
+    syncDirectory(namespacePath);
   } catch (error) {
     assertDirectories();
     invalidateProvenance(nativePath);

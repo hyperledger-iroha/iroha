@@ -1,7 +1,9 @@
 //! Finalized source ownership remains mandatory through state publication.
 
 use super::{
-    tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
+    tests::{
+        apply_source, cache_canonical_test_transaction_set, delta, header, recorded_block, state,
+    },
     *,
 };
 use crate::state::{State, TransactionsBlockError};
@@ -75,12 +77,10 @@ fn assert_unpublished(state: &State) {
 
 #[test]
 fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         {
             let state = state_with_marker();
-            crate::exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let source = with_transfer.then(|| Hash::new(b"committable finalized source"));
             apply_marker(&mut block, 1, source);
@@ -105,13 +105,11 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     for same_key in [false, true] {
         for drain_late in [false, true] {
             {
                 let state = state_with_marker();
-                crate::exec_witness::start_block();
-                let mut block = state.block(header());
+                let (mut block, _recording) = recorded_block(&state, header());
                 cache_canonical_test_transaction_set(&mut block, &[]);
                 let original = Hash::new(b"captured source before extraction");
                 apply_marker(&mut block, 1, Some(original));
@@ -151,11 +149,9 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     {
         let state = state_with_marker();
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"failed inventory construction");
         apply_source(&mut block, source, false, None);

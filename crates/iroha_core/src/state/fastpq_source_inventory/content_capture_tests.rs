@@ -1,7 +1,9 @@
 //! Final public transcript contents remain bound through witness capture, extraction and commit.
 
 use super::{
-    tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
+    tests::{
+        apply_source, cache_canonical_test_transaction_set, delta, header, recorded_block, state,
+    },
     *,
 };
 use crate::{
@@ -127,11 +129,9 @@ fn assert_not_published(state: &State) {
 
 #[test]
 fn raw_recorder_public_change_or_missing_digest_rejects_before_synthetic_capture() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for missing_digest in [false, true] {
-        exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"raw recorder public content rejection");
         let original = finalized_source(&mut block, source);
@@ -155,10 +155,8 @@ fn raw_recorder_public_change_or_missing_digest_rejects_before_synthetic_capture
 
 #[test]
 fn inactive_first_capture_rejects_even_empty_inventory_after_ordinary_witness_was_drained() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
-    exec_witness::start_block();
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     block
         .finalize_fastpq_source_inventory(&[], &[], &[])
@@ -178,22 +176,79 @@ fn inactive_first_capture_rejects_even_empty_inventory_after_ordinary_witness_wa
     assert!(omitted.fastpq_transcripts.is_empty());
 
     let error = block.capture_exec_witness().unwrap_err();
-    assert_eq!(
-        error,
-        "ordinary witness capture has no active global recorder"
-    );
+    assert_eq!(error, "execution prefix recorder was reset or retired");
     assert_eq!(assert_raw_content_failure(&block), error);
     assert_getters_refuse(&mut block, &error);
     assert_recorder_discarded();
 }
 
 #[test]
+fn original_recorder_authority_failure_is_sticky_without_consuming_another_recorder() {
+    for mutation in 0..3 {
+        let state = state();
+        let (mut block, recording) = recorded_block(&state, header());
+        let mut recording = Some(recording);
+        cache_canonical_test_transaction_set(&mut block, &[]);
+        let archive = finalized_source(&mut block, Hash::new(b"original recorder authority"));
+        assert!(block.verified_fastpq_source_inventory_for_capture().is_ok());
+        let mut foreign = None;
+        let expected = match mutation {
+            0 => {
+                block.original_execution_recorder = None;
+                "State execution has no original recorder"
+            }
+            1 => {
+                exec_witness::start_block();
+                exec_witness::synchronize_fastpq_transcripts(&archive);
+                "execution prefix recorder was reset or retired"
+            }
+            2 => {
+                drop(recording.take());
+                let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+                let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+                let foreign_archive = archive.clone();
+                let worker = std::thread::spawn(move || {
+                    let _recording = exec_witness::begin_exec_witness_capture().unwrap();
+                    exec_witness::synchronize_fastpq_transcripts(&foreign_archive);
+                    ready_tx.send(()).unwrap();
+                    finish_rx.recv().unwrap();
+                    exec_witness::drain_exec_witness()
+                });
+                ready_rx.recv().unwrap();
+                foreign = Some((finish_tx, worker));
+                "execution prefix lost its original recording scope"
+            }
+            _ => unreachable!(),
+        };
+        let error = block.capture_exec_witness().unwrap_err();
+        assert_eq!(error, expected);
+        assert_eq!(assert_raw_content_failure(&block), error);
+        assert_getters_refuse(&mut block, &error);
+        assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+        assert!(matches!(
+            block.commit(),
+            Err(TransactionsBlockError::FastpqSourceInventory)
+        ));
+        let retained = if let Some((finish, worker)) = foreign {
+            finish.send(()).unwrap();
+            worker.join().unwrap()
+        } else {
+            exec_witness::drain_exec_witness()
+        };
+        assert_eq!(retained.fastpq_transcripts.len(), 1);
+        let (source, transcripts) = archive.iter().next().unwrap();
+        assert_eq!(retained.fastpq_transcripts[0].entry_hash, *source);
+        assert_eq!(&retained.fastpq_transcripts[0].transcripts, transcripts);
+        drop(recording);
+        assert_not_published(&state);
+    }
+}
+
+#[test]
 fn content_failure_survives_resynchronization_retry_getters_and_commit() {
-    let _guard = exec_witness::exec_witness_guard();
     {
         let state = state();
-        exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         stage_marker_and_membership(&mut block);
         let source = Hash::new(b"sticky recorder content rejection");
@@ -222,12 +277,10 @@ fn content_failure_survives_resynchronization_retry_getters_and_commit() {
 
 #[test]
 fn cached_public_mutation_rejects_repeat_capture_and_each_getter_as_first_operation() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for missing_digest in [false, true] {
         for first_operation in 0..4 {
-            exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             finalized_source(&mut block, Hash::new(b"cached public content mutation"));
             block.capture_exec_witness().unwrap();
@@ -252,11 +305,9 @@ fn cached_public_mutation_rejects_repeat_capture_and_each_getter_as_first_operat
 
 #[test]
 fn cached_capture_rejects_restarted_active_recorder_even_with_empty_fastpq() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for with_transfer in [false, true] {
-        exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         if with_transfer {
             finalized_source(&mut block, Hash::new(b"cached recorder restart"));
@@ -288,11 +339,9 @@ fn cached_capture_rejects_restarted_active_recorder_even_with_empty_fastpq() {
 
 #[test]
 fn pending_overlay_prevents_first_or_cached_capture_and_leaves_failure_sticky() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for already_captured in [false, true] {
-        exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let original = finalized_source(&mut block, Hash::new(b"pending witness overlay"));
         if already_captured {
@@ -313,7 +362,6 @@ fn pending_overlay_prevents_first_or_cached_capture_and_leaves_failure_sticky() 
 
 #[test]
 fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction() {
-    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for order in [
         [0, 1, 2],
@@ -323,8 +371,7 @@ fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction
         [2, 0, 1],
         [2, 1, 0],
     ] {
-        exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"private paths do not change public source seal");
         let mut substituted = finalized_source(&mut block, source);
@@ -382,12 +429,10 @@ fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction
 
 #[test]
 fn directly_mutated_cached_public_bundles_cannot_commit_without_recapture_or_getters() {
-    let _guard = exec_witness::exec_witness_guard();
     for missing_digest in [false, true] {
         {
             let state = state();
-            exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             stage_marker_and_membership(&mut block);
             finalized_source(&mut block, Hash::new(b"cached public mutation at commit"));
@@ -426,12 +471,10 @@ fn unexpected_prebuilt_batch() -> iroha_data_model::fastpq::FastpqTransitionBatc
 
 #[test]
 fn cached_prebuilt_batches_reject_recapture_and_every_first_getter_with_sticky_failure() {
-    let _guard = exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         for first_operation in 0..4 {
             let state = state();
-            exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             stage_marker_and_membership(&mut block);
             let original = if with_transfer {
@@ -478,12 +521,10 @@ fn cached_prebuilt_batches_reject_recapture_and_every_first_getter_with_sticky_f
 
 #[test]
 fn cached_prebuilt_batches_cannot_commit_without_recapture_or_getters() {
-    let _guard = exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         {
             let state = state();
-            exec_witness::start_block();
-            let mut block = state.block(header());
+            let (mut block, _recording) = recorded_block(&state, header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             stage_marker_and_membership(&mut block);
             if with_transfer {
@@ -522,11 +563,9 @@ fn cached_prebuilt_batches_cannot_commit_without_recapture_or_getters() {
 #[test]
 fn failed_output_binding_publishes_no_partial_capture_and_cannot_be_retried() {
     use crate::state::output_capacity::ExecutionOutputPlanState;
-    let _guard = crate::exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         let state = state();
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         stage_marker_and_membership(&mut block);
         let archive = if with_transfer {
@@ -573,11 +612,9 @@ fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure(
     use crate::state::{
         exec_witness_capture::WitnessCaptureGuard, output_capacity::ExecutionOutputPlanState,
     };
-    let _guard = crate::exec_witness::exec_witness_guard();
     for had_lane_seal in [false, true] {
         let state = state();
-        crate::exec_witness::start_block();
-        let mut block = state.block(header());
+        let (mut block, _recording) = recorded_block(&state, header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let original = finalized_source(&mut block, Hash::new(b"interrupted capture source"));
         let prior = had_lane_seal.then(|| {

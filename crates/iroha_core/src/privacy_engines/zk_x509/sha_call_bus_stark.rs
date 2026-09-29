@@ -697,14 +697,18 @@ impl ZkX509ShaSegmentProductStateV1 {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ZkX509ShaRfcConsumerChannelsV1 {
-    role: ZkX509Rfc5280OutputRoleV1,
-    message_channel: u32,
-    length_channel: Option<u32>,
+/// Public-shape RFC consumer address shared by native and algebraic fixed schedules.
+pub(crate) struct ZkX509ShaRfcConsumerChannelsV1 {
+    /// Typed RFC output family.
+    pub(crate) role: ZkX509Rfc5280OutputRoleV1,
+    /// Canonical strict-DER message channel.
+    pub(crate) message_channel: u32,
+    /// Canonical raw-length channel, when the message length is variable.
+    pub(crate) length_channel: Option<u32>,
     /// Byte offset of the RFC-owned raw value in the SHA preimage.
-    message_prefix_bytes: usize,
+    pub(crate) message_prefix_bytes: usize,
     /// Fixed RFC channel capacity, not the private exact length.
-    message_capacity_bytes: usize,
+    pub(crate) message_capacity_bytes: usize,
 }
 /// One challenge-independent fixed-capacity SHA call.
 ///
@@ -2597,7 +2601,8 @@ fn sha_rfc_framed_field_offset_v1(
         _ => Ok(0),
     }
 }
-fn sha_rfc_consumer_channels_v1(
+/// Derive a canonical RFC address from only the verifier-owned SHA call and public shape.
+pub(crate) fn sha_rfc_consumer_channels_v1(
     call: u8,
     role: ZkX509ShaCallRoleV1,
     disclosed_attributes: usize,
@@ -2647,7 +2652,8 @@ fn sha_rfc_consumer_channels_v1(
         }),
         ZkX509ShaCallRoleV1::CrlIssuerSpki => Some(ZkX509ShaRfcConsumerChannelsV1 {
             role: ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
-            message_channel: channel(22)?,
+            // The CRL signer and wallet-owner P-256 keys precede the issuer SPKI.
+            message_channel: channel(24)?,
             length_channel: None,
             message_prefix_bytes: sha_rfc_framed_field_offset_v1(role)?,
             message_capacity_bytes: ZK_X509_CA_SPKI_DER_BYTES_V1,
@@ -3428,6 +3434,7 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 }
 #[cfg(test)]
 mod tests {
+    include!("sha_call_bus_rfc_binding_tests.rs");
     #[test]
     fn retained_sha_witness_erasure_clears_live_message_and_digest_cells() {
         let mut witness = ZkX509ShaCallWitnessV1 {
@@ -4816,7 +4823,7 @@ mod tests {
                 (
                     12,
                     ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
-                    22,
+                    canonical_issuer_spki_channel_v1(disclosed_attributes) as usize - prefix,
                     None,
                     73,
                     91,
@@ -5115,6 +5122,7 @@ mod tests {
     }
     #[test]
     fn framed_issuer_spki_rows_produce_only_proof_bound_rfc_terminals() {
+        let issuer_channel = canonical_issuer_spki_channel_v1(4);
         let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 4,
         })
@@ -5143,7 +5151,7 @@ mod tests {
                 *product = product.mul(
                     zk_x509_rfc5280_opened_output_factor_v1(
                         ZkX509Rfc5280OutputRoleV1::IssuerSpkiSha,
-                        F(35),
+                        F(u64::from(issuer_channel)),
                         endpoint,
                         F(offset as u64),
                         F(u64::from(value)),

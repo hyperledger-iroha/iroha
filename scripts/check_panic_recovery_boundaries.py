@@ -69,7 +69,7 @@ NO_BARE_STD_THREAD = tuple(
 )
 
 REQUIRED_SNIPPETS = {
-    "crates/iroha_core/src/panic_hook.rs": (
+    "crates/iroha_panic_hook/src/lib.rs": (
         "pub fn catch_unwind_suppressed",
         "with_hook_suppressed_async",
         "blocking_worker_reuse_does_not_retain_suppression",
@@ -142,13 +142,13 @@ REQUIRED_SNIPPETS = {
         "crate::panic_recovery::join_recoverable",
     ),
     "crates/iroha_core/src/executor.rs": (
-        "crate::panic_hook::catch_unwind_suppressed",
+        "iroha_panic_hook::catch_unwind_suppressed",
     ),
     "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
-        "crate::panic_hook::catch_unwind_suppressed",
+        "iroha_panic_hook::catch_unwind_suppressed",
     ),
     "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": (
-        "crate::panic_hook::catch_unwind_suppressed",
+        "iroha_panic_hook::catch_unwind_suppressed",
     ),
 }
 
@@ -206,7 +206,7 @@ AUDITED_SOURCE_PATHS = (
     Path("crates/iroha_torii"),
     Path("crates/build-support"),
     Path("crates/irohad"),
-    Path("crates/iroha_core/src/panic_hook.rs"),
+    Path("crates/iroha_panic_hook/src"),
     Path("crates/iroha_core/src/zk"),
     Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"),
     Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message"),

@@ -193,7 +193,7 @@ fn resolver_worker(receiver: Arc<Mutex<Receiver<ResolveJob>>>, resolver: Arc<Res
         let result = if Instant::now() >= job.deadline {
             Err(ResolveFailure::Deadline)
         } else {
-            iroha_core::panic_hook::catch_unwind_suppressed(|| resolver(&job.hostname))
+            iroha_panic_hook::catch_unwind_suppressed(|| resolver(&job.hostname))
                 .unwrap_or(Err(ResolveFailure::ProviderPanic))
         };
         let _ = job.reply.try_send(result);
@@ -1027,7 +1027,7 @@ mod tests {
         let resolver: Arc<Resolver> = Arc::new(move |_| {
             let call_index = resolver_calls.fetch_add(1, Ordering::Relaxed);
             assert!(
-                iroha_core::panic_hook::is_suppressed(),
+                iroha_panic_hook::is_suppressed(),
                 "resolver provider panic must not trigger the process panic hook"
             );
             if call_index == 0 {

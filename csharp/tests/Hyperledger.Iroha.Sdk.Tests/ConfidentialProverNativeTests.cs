@@ -22,6 +22,9 @@ public sealed class ConfidentialProverNativeTests
         var key = RandomNumberGenerator.GetBytes(32);
         try
         {
+            Assert.Equal(25u, ConfidentialWalletNative.Abi());
+            Assert.Equal(1u, ConfidentialWalletNative.Revision());
+            Assert.Equal(1u, ConfidentialWalletNative.DerivationRevision());
             var diversifier = ConfidentialNotes.DefaultDiversifier();
             var first = ConfidentialNotes.OwnerTag(key, diversifier);
             using var change = new ConfidentialChangeNote(2, Word(9));

@@ -1,12 +1,11 @@
 //! Lane routing (`specs/sumeragi_lanes.md` §5.1): the lane a transaction belongs to at a global
 //! height, from committed state only.
 //!
-//! The policy's explicit routes come first and send a matching transaction to their lane (lane
-//! `0` or a fixed lane) when that lane is admitted at the height. Every other transaction takes
-//! the default route: lane `0` (sequenced by the global chain itself) and the admitted elastic
-//! lanes, sharded by `H(authority)` so that one account's transactions stay in one lane while the
-//! lane set is unchanged. The global chain re-evaluates the route at merge, so routing is a
-//! single authority.
+//! Concrete instruction/address scopes choose the matching admitted fixed dataspace lane;
+//! control-plane registry batches use lane zero. Otherwise the policy's explicit routes apply,
+//! followed by lane zero and the admitted elastic lanes sharded by `H(authority)`. A concrete
+//! universal target may use only universal lanes. An inactive or absent private lane has no
+//! execution route. The global chain re-evaluates the route at merge from committed state.
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -17,7 +16,7 @@ use iroha_model_base::topology::LaneId;
 use norito::codec::Encode as _;
 
 use crate::{
-    queue::{TransactionRoutingView, matchers_match_with_world},
+    queue::{TransactionRoutingView, matchers_match_with_world, native_execution_target},
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -68,7 +67,7 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
         tx: &dyn TransactionRoutingView,
         height: u64,
     ) -> Option<crate::queue::RoutingDecision> {
-        let lane = self.route(tx, height);
+        let lane = self.route(tx, height)?;
         let dataspace = if lane == GLOBAL_LANE {
             iroha_model_base::topology::DataSpaceId::UNIVERSAL
         } else {
@@ -96,11 +95,37 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
         shards
     }
 
-    /// The lane of `tx` at global height `height`.
+    /// The lane of `tx` at global height `height`. An unresolved or inactive concrete
+    /// dataspace fails closed; it must never be executed in the universal dataspace.
     #[must_use]
-    pub fn route(&self, tx: &dyn TransactionRoutingView, height: u64) -> LaneId {
+    pub fn route(&self, tx: &dyn TransactionRoutingView, height: u64) -> Option<LaneId> {
+        let target =
+            native_execution_target(tx, self.dataspaces, self.world, self.ledger_time_ms).ok()?;
+        if target.global {
+            return Some(GLOBAL_LANE);
+        }
+        if let Some(dataspace) = target
+            .dataspace
+            .filter(|dataspace| *dataspace != iroha_model_base::topology::DataSpaceId::UNIVERSAL)
+        {
+            self.dataspaces.by_id(dataspace)?;
+            // Physical dataspace routing selects its first admitted fixed lane. The
+            // policy binds that lane's exact committee and its record pins the scope.
+            let policy = self.policy?;
+            return policy
+                .fixed
+                .iter()
+                .find(|fixed| {
+                    fixed.dataspace == dataspace
+                        && self.admitted(fixed.lane, height)
+                        && self.lanes.lane(fixed.lane).is_some_and(|record| {
+                            record.dataspace == dataspace && record.committee == fixed.committee
+                        })
+                })
+                .map(|fixed| fixed.lane);
+        }
         let Some(policy) = self.policy else {
-            return GLOBAL_LANE;
+            return Some(GLOBAL_LANE);
         };
         for route in &policy.routes {
             if matchers_match_with_world(
@@ -111,18 +136,37 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
                 self.world,
                 Some(self.ledger_time_ms),
             ) {
-                return if self.admitted(route.lane, height) {
-                    route.lane
-                } else {
-                    GLOBAL_LANE
-                };
+                return Some(
+                    if self.admitted(route.lane, height)
+                        && target.dataspace.is_none_or(|dataspace| {
+                            route.lane == GLOBAL_LANE
+                                || self
+                                    .lanes
+                                    .lane(route.lane)
+                                    .is_some_and(|record| record.dataspace == dataspace)
+                        })
+                    {
+                        route.lane
+                    } else {
+                        GLOBAL_LANE
+                    },
+                );
             }
         }
-        let shards = self.shards(height);
+        let mut shards = self.shards(height);
+        if let Some(dataspace) = target.dataspace {
+            shards.retain(|lane| {
+                *lane == GLOBAL_LANE
+                    || self
+                        .lanes
+                        .lane(*lane)
+                        .is_some_and(|record| record.dataspace == dataspace)
+            });
+        }
         let Some(authority) = tx.authority_opt() else {
-            return GLOBAL_LANE;
+            return Some(GLOBAL_LANE);
         };
-        shards[default_shard(authority, shards.len())]
+        Some(shards[default_shard(authority, shards.len())])
     }
 }
 
@@ -294,7 +338,7 @@ mod tests {
             .collect::<Vec<_>>();
         for lane in [0, 16, 17] {
             assert!(
-                routed.contains(&LaneId::new(lane)),
+                routed.contains(&Some(LaneId::new(lane))),
                 "lane {lane} receives traffic"
             );
         }
@@ -308,12 +352,12 @@ mod tests {
         assert!(
             transactions
                 .iter()
-                .all(|tx| inputs.route(tx, 10) == GLOBAL_LANE)
+                .all(|tx| inputs.route(tx, 10) == Some(GLOBAL_LANE))
         );
         assert!(
             transactions
                 .iter()
-                .any(|tx| inputs.route(tx, 11) != GLOBAL_LANE)
+                .any(|tx| inputs.route(tx, 11) != Some(GLOBAL_LANE))
         );
         let closing = lanes(vec![record(16, 10, Some(15)), record(17, 10, Some(15))]);
         let inputs = RoutingInputs {
@@ -323,12 +367,12 @@ mod tests {
         assert!(
             transactions
                 .iter()
-                .any(|tx| inputs.route(tx, 15) != GLOBAL_LANE)
+                .any(|tx| inputs.route(tx, 15) != Some(GLOBAL_LANE))
         );
         assert!(
             transactions
                 .iter()
-                .all(|tx| inputs.route(tx, 16) == GLOBAL_LANE)
+                .all(|tx| inputs.route(tx, 16) == Some(GLOBAL_LANE))
         );
         // Without a policy every transaction belongs to lane 0.
         let inputs = RoutingInputs {
@@ -339,7 +383,7 @@ mod tests {
         assert!(
             transactions
                 .iter()
-                .all(|tx| inputs.route(tx, 20) == GLOBAL_LANE)
+                .all(|tx| inputs.route(tx, 20) == Some(GLOBAL_LANE))
         );
     }
 
@@ -365,11 +409,20 @@ mod tests {
             account: None,
             instruction: Some(instruction.to_owned()),
         };
-        assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 6), LaneId::new(3));
+        assert_eq!(
+            with_policy(&policy(vec![to(3, "Log")]), 6),
+            Some(LaneId::new(3))
+        );
         // A fixed lane that is not admitted at the height falls back to the global lane.
-        assert_eq!(with_policy(&policy(vec![to(3, "Log")]), 5), GLOBAL_LANE);
+        assert_eq!(
+            with_policy(&policy(vec![to(3, "Log")]), 5),
+            Some(GLOBAL_LANE)
+        );
         // A route whose matcher does not match leaves the default route (lane 0 only here).
-        assert_eq!(with_policy(&policy(vec![to(3, "Mint")]), 6), GLOBAL_LANE);
+        assert_eq!(
+            with_policy(&policy(vec![to(3, "Mint")]), 6),
+            Some(GLOBAL_LANE)
+        );
     }
     #[test]
     fn execution_route_preserves_actual_pinned_dataspace_and_closing_boundary() {

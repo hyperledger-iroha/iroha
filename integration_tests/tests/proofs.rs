@@ -212,15 +212,24 @@ async fn submit_proof_and_query_record() -> Result<()> {
     // even if another peer is timing out under load.
     let tx = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [isi],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 iroha_model_base::metadata::Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed selected payer or gas limit"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)?
+    };
     let mut accepted = false;
     let mut submit_last_err: Option<Report> = None;
     for submit_client in &peer_clients {

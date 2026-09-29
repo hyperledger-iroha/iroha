@@ -279,6 +279,17 @@ the instruction commits; only a receipt read from committed WSV state uses
 `settled`. The parser also retains the exact `disconnected`, `expired`, and
 `replaced` lifecycle values.
 
+Encrypted RAM-LFE is unavailable: the diagnostic exact-lift BFV profile must be
+replaced before production activation. `RamLfeExecuteResponse` represents
+ciphertext and an execution receipt; it never supplies a plaintext opening.
+Identifier requests require an independently authenticated opening bound to the
+same execution. The parser rejects the retired execute `output_opening` field.
+Local `encryptInput` and plaintext request factories throw
+`RamLfeEncryptionUnavailableException` with code `ram_lfe_encryption_unavailable`
+before processing input. Seed overrides and the insecure encryptor are absent
+from the shipped JAR. JSON and Norito accept only the three exact backend tags
+and `signed`/`proof`; accepting metadata does not activate either encrypted backend.
+
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
 `ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The auth context accepts a
 `RequestSigner` callback; applications retain ownership of software, hardware, or remote keys.

@@ -714,7 +714,7 @@ final class ToriiClientTests: XCTestCase {
         programId: String = "identifier_lookup_retail",
         owner: String = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         resolverPublicKey: String = "ed25519:resolver-key",
-        backend: String = "bfv-programmed-sha3-256-v1",
+        backend: String = "bfv-programmed-v1",
         verificationMode: String = "signed",
         inputEncryption: String = "bfv-v1",
         inputEncryptionPublicParameters: String = "ABCD",
@@ -934,14 +934,16 @@ final class ToriiClientTests: XCTestCase {
         owner: String,
         resolverPublicKey: String,
         active: Bool = true,
-        backend: String = "bfv-affine-sha3-256-v1"
+        backend: String = "bfv-affine-v1"
     ) -> ToriiIdentifierPolicySummary {
         ToriiIdentifierPolicySummary(
             policyId: policyId,
+            programId: "identifier_lookup_retail",
             owner: owner,
             active: active,
             normalization: .phoneE164,
             resolverPublicKey: resolverPublicKey,
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             backend: backend,
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
@@ -1649,11 +1651,13 @@ final class ToriiClientTests: XCTestCase {
               "total": 1,
               "items": [{
                 "policy_id":"phone#retail",
+                "program_id":"identifier_lookup_retail",
+                "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                 "owner":"\(owner)",
                 "active":true,
                 "normalization":"phone_e164",
                 "resolver_public_key":"ed25519:resolver-key",
-                "backend":"bfv-affine-sha3-256-v1",
+                "backend":"bfv-affine-v1",
                 "input_encryption":"bfv-v1",
                 "input_encryption_public_parameters":"ABCD",
                 "input_encryption_public_parameters_decoded":{
@@ -1696,8 +1700,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.total, 1)
         XCTAssertEqual(response.items.count, 1)
         XCTAssertEqual(response.items.first?.policyId, "phone#retail")
-        XCTAssertEqual(response.items.first?.programId, "")
-        XCTAssertEqual(response.items.first?.outputOpeningPublicKey, "")
+        XCTAssertEqual(response.items.first?.programId, "identifier_lookup_retail")
+        XCTAssertEqual(response.items.first?.outputOpeningPublicKey, "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE")
         XCTAssertEqual(response.items.first?.owner, owner)
         XCTAssertEqual(response.items.first?.normalization, .phoneE164)
         XCTAssertEqual(response.items.first?.inputEncryption, "bfv-v1")
@@ -1733,11 +1737,13 @@ final class ToriiClientTests: XCTestCase {
           "total": 1,
           "items": [{
             "policy_id":"phone#retail",
+            "program_id":"identifier_lookup_retail",
+            "output_opening_public_key":"ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             "owner":"\(owner)",
             "active":true,
             "normalization":"phone_e164",
             "resolver_public_key":"ed25519:resolver-key",
-            "backend":"bfv-affine-sha3-256-v1",
+            "backend":"bfv-affine-v1",
             "input_encryption":"bfv-v1",
             "input_encryption_public_parameters":"ABCD",
             "input_encryption_public_parameters_decoded":{
@@ -1771,8 +1777,8 @@ final class ToriiClientTests: XCTestCase {
             ),
             (
                 "identifier policy.backend",
-                "\"backend\":\"bfv-affine-sha3-256-v1\"",
-                "\"backend\":\"bfv-affine-sha3-256-v1 \""
+                "\"backend\":\"bfv-affine-v1\"",
+                "\"backend\":\"bfv-affine-v1 \""
             ),
             (
                 "identifier policy.input_encryption",
@@ -1847,7 +1853,7 @@ final class ToriiClientTests: XCTestCase {
                 "active":true,
                 "normalization":"email_address",
                 "resolver_public_key":"ed25519:resolver-key",
-                "backend":"bfv-programmed-sha3-256-v1",
+                "backend":"bfv-programmed-v1",
                 "input_encryption":"bfv-v1",
                 "input_encryption_public_parameters":"ABCD",
                 "input_encryption_public_parameters_decoded":{
@@ -1912,7 +1918,7 @@ final class ToriiClientTests: XCTestCase {
                 "active":true,
                 "normalization":"email_address",
                 "resolver_public_key":"ed25519:resolver-key",
-                "backend":"bfv-programmed-sha3-256-v1",
+                "backend":"bfv-programmed-v1",
                 "input_encryption":"bfv-v1",
                 "input_encryption_public_parameters_decoded":{
                   "parameters":{
@@ -2085,7 +2091,7 @@ final class ToriiClientTests: XCTestCase {
             "payload": .object([
                 "program_id": .string("identifier_lookup_retail"),
                 "program_digest": .string(String(repeating: "11", count: 32)),
-                "backend": .string("bfv-programmed-sha3-256-v1"),
+                "backend": .string("bfv-programmed-v1"),
                 "verification_mode": .string("signed"),
                 "output_hash": .string(String(repeating: "22", count: 32)),
                 "associated_data_hash": .string(String(repeating: "33", count: 32)),
@@ -2126,6 +2132,117 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.outputHashMatches, true)
     }
 
+    func testIdentifierPolicyRequiresProgramAndOpeningKey() throws {
+        let policy: [String: Any] = [
+            "policy_id": "email#retail",
+            "program_id": "identifier_lookup_retail",
+            "owner": try canonicalOwnerLiteral(),
+            "active": true,
+            "normalization": "email_address",
+            "resolver_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            "output_opening_public_key": "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "backend": "bfv-programmed-v1"
+        ]
+        func decode(_ value: [String: Any]) throws -> ToriiIdentifierPolicySummary {
+            try JSONDecoder().decode(
+                ToriiIdentifierPolicySummary.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+        let decoded = try decode(policy)
+        XCTAssertEqual(decoded.programId, "identifier_lookup_retail")
+        XCTAssertNotEqual(decoded.outputOpeningPublicKey, decoded.resolverPublicKey)
+        for field in ["program_id", "output_opening_public_key"] {
+            var missing = policy
+            missing.removeValue(forKey: field)
+            XCTAssertThrowsError(try decode(missing), "missing \(field) must fail")
+            for invalid in [NSNull(), "", " ", " padded", "padded ", "embedded space", "control\u{01}", 1] as [Any] {
+                var malformed = policy
+                malformed[field] = invalid
+                XCTAssertThrowsError(try decode(malformed), "invalid \(field) must fail")
+            }
+        }
+    }
+
+    func testRamLfeResponseParsersAcceptOnlyCurrentBackendAndModeTags() throws {
+        let decoder = JSONDecoder()
+        func object(_ data: Data) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        let execute = try object(ramLfeExecuteResponseJSON())
+        let receipt = try XCTUnwrap(execute["receipt"] as? [String: Any])
+        let execution = try XCTUnwrap(receipt["payload"] as? [String: Any])
+        let programList = try object(ramLfeProgramPoliciesJSON())
+        let policies = try XCTUnwrap(programList["items"] as? [[String: Any]])
+        let identifierPolicy: [String: Any] = [
+            "policy_id": "email#retail",
+            "program_id": "identifier_lookup_retail",
+            "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            "owner": try canonicalOwnerLiteral(),
+            "active": true,
+            "normalization": "email_address",
+            "resolver_public_key": "ed25519:resolver-key",
+            "backend": "bfv-programmed-v1",
+        ]
+        let surfaces: [(name: String, body: [String: Any], decode: (Data) throws -> Void)] = [
+            ("identifier policy", identifierPolicy, { _ = try decoder.decode(ToriiIdentifierPolicySummary.self, from: $0) }),
+            ("ram-lfe program policy", try XCTUnwrap(policies.first), { _ = try decoder.decode(ToriiRamLfeProgramPolicySummary.self, from: $0) }),
+            ("ram-lfe execute response", execute, { _ = try decoder.decode(ToriiRamLfeExecuteResponse.self, from: $0) }),
+            ("ram-lfe receipt verify response", try object(ramLfeReceiptVerifyResponseJSON()), { _ = try decoder.decode(ToriiRamLfeReceiptVerifyResponse.self, from: $0) }),
+            ("payload.execution", execution, { _ = try decoder.decode(ToriiIdentifierResolutionExecutionPayload.self, from: $0) }),
+        ]
+        func setting(_ fields: [String: String], in body: [String: Any]) -> [String: Any] {
+            var result = body
+            for (field, value) in fields where result[field] != nil {
+                result[field] = value
+            }
+            // Keep execution-response duplication consistent so it cannot mask tag validation.
+            if var receipt = result["receipt"] as? [String: Any],
+               var payload = receipt["payload"] as? [String: Any] {
+                for (field, value) in fields { payload[field] = value }
+                receipt["payload"] = payload
+                result["receipt"] = receipt
+            }
+            return result
+        }
+        for surface in surfaces {
+            for backend in ["hkdf-sha3-512-prf-v1", "bfv-affine-v1", "bfv-programmed-v1"] {
+                for mode in ["signed", "proof"] {
+                    let body = setting(["backend": backend, "verification_mode": mode], in: surface.body)
+                    XCTAssertNoThrow(try surface.decode(JSONSerialization.data(withJSONObject: body)), surface.name)
+                }
+            }
+            for (field, value) in [
+                ("backend", "bfv-affine-sha3-256-v1"),
+                ("backend", "bfv-programmed-sha3-256-v1"),
+                ("backend", "unknown"),
+                ("verification_mode", "signed-v1"),
+                ("verification_mode", "unknown"),
+            ] where surface.body[field] != nil {
+                let body = setting([field: value], in: surface.body)
+                XCTAssertThrowsError(try surface.decode(JSONSerialization.data(withJSONObject: body))) { error in
+                    guard case let DecodingError.dataCorrupted(context) = error else {
+                        return XCTFail("expected dataCorrupted for \(surface.name).\(field), got \(error)")
+                    }
+                    XCTAssertTrue(context.debugDescription.contains("\(surface.name).\(field) must be one of:"))
+                }
+            }
+        }
+    }
+
+    func testRamLfeExecuteResponseRejectsRetiredOutputOpening() throws {
+        let valid = ramLfeExecuteResponseJSON()
+        _ = try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: valid)
+        for retiredValue in [NSNull(), ["payload": [:], "signature": "ab"]] as [Any] {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+            object["output_opening"] = retiredValue
+            let data = try JSONSerialization.data(withJSONObject: object)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: data)) { error in
+                XCTAssertTrue(String(describing: error).contains("unknown or retired field"))
+            }
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testRamLfeResponseParsersRejectNonExactFieldsAsync() async throws {
         let executeCases: [(field: String, body: Data)] = [
@@ -2151,7 +2268,7 @@ final class ToriiClientTests: XCTestCase {
 
         let verifyCases: [(field: String, body: Data)] = [
             ("program_id", ramLfeReceiptVerifyResponseJSON(programId: "identifier_lookup_retail ")),
-            ("backend", ramLfeReceiptVerifyResponseJSON(backend: " bfv-programmed-sha3-256-v1")),
+            ("backend", ramLfeReceiptVerifyResponseJSON(backend: " bfv-programmed-v1")),
             ("verification_mode", ramLfeReceiptVerifyResponseJSON(verificationMode: "Signed")),
             ("output_hash", ramLfeReceiptVerifyResponseJSON(outputHash: " \(String(repeating: "44", count: 32))")),
             (
@@ -2182,7 +2299,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
@@ -2224,14 +2341,16 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(receipt?.accountId, accountId)
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
-        XCTAssertEqual(receipt?.backend, "bfv-affine-sha3-256-v1")
+        XCTAssertEqual(receipt?.backend, "bfv-affine-v1")
         let policy = ToriiIdentifierPolicySummary(
             policyId: "phone#retail",
+            programId: "identifier_lookup_retail",
             owner: accountId,
             active: true,
             normalization: .phoneE164,
             resolverPublicKey: signed.resolverPublicKey,
-            backend: "bfv-affine-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-affine-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
@@ -2249,7 +2368,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         var receiptObject = try XCTUnwrap(
@@ -2283,7 +2402,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let json = try JSONEncoder().encode(payload)
         let decoded = try JSONDecoder().decode(
@@ -2310,7 +2429,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: "FAFBFC"
         )
 
@@ -2332,7 +2451,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: longSignature.hexUppercased()
         )
 
@@ -2355,7 +2474,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: "0xGG"
         )
 
@@ -2375,7 +2494,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: "FAFBFC"
         )
         let currentSigned = try signedIdentifierReceiptFixture(payload: payload)
@@ -2385,11 +2504,13 @@ final class ToriiClientTests: XCTestCase {
         )
         let policy = ToriiIdentifierPolicySummary(
             policyId: "phone#retail",
+            programId: "identifier_lookup_retail",
             owner: accountId,
             active: true,
             normalization: .phoneE164,
             resolverPublicKey: currentSigned.resolverPublicKey,
-            backend: "bfv-affine-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-affine-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
@@ -2423,7 +2544,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: String(repeating: "fa", count: 64)
         )
         let mutatedPayload = makeSignedIdentifierReceiptPayload(
@@ -2431,17 +2552,19 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             openingSignatureHex: String(repeating: "fb", count: 64)
         )
         let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
         let policy = ToriiIdentifierPolicySummary(
             policyId: "phone#retail",
+            programId: "identifier_lookup_retail",
             owner: accountId,
             active: true,
             normalization: .phoneE164,
             resolverPublicKey: signed.resolverPublicKey,
-            backend: "bfv-affine-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-affine-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
@@ -2475,14 +2598,14 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let mutatedPayload = makeSignedIdentifierReceiptPayload(
             accountId: accountId,
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "25",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
         let policy = identifierPolicy(
@@ -2509,7 +2632,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let params = MlDsaSuite.mlDsa65.parameters()
         let publicKey = Data(repeating: 0xA5, count: params.publicKeyLength)
@@ -2565,7 +2688,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
         var message = Blake2b.hash256(payloadBytes)
@@ -2604,7 +2727,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let policy = identifierPolicy(
@@ -2652,14 +2775,14 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let mutatedPayload = makeSignedIdentifierReceiptPayload(
             accountId: accountId,
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))37",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: originalPayload)
         let policy = identifierPolicy(
@@ -2686,7 +2809,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
@@ -2712,7 +2835,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let otherSigned = try signedIdentifierReceiptFixture(payload: payload)
@@ -2738,7 +2861,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
@@ -2768,7 +2891,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let multihash = try XCTUnwrap(signed.resolverPublicKey.split(separator: ":").last)
@@ -2803,7 +2926,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
@@ -2856,7 +2979,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let multihash = try XCTUnwrap(signed.resolverPublicKey.split(separator: ":").last)
@@ -2887,7 +3010,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
 
         XCTAssertThrowsError(try identifierReceipt(payload: payload, signatureHex: "GG")) { error in
@@ -2910,7 +3033,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "policyId"
             ),
@@ -2921,7 +3044,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "policyId"
             ),
@@ -2932,7 +3055,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "policyId"
             ),
@@ -2943,7 +3066,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "policyId"
             ),
@@ -2953,7 +3076,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     programId: " identifier_lookup_retail"
                 ),
                 "programId"
@@ -2964,7 +3087,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "accountId"
             ),
@@ -2974,7 +3097,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "accountId"
             ),
@@ -2984,7 +3107,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: " opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "opaque_id"
             ),
@@ -2994,7 +3117,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: "\(String(repeating: "22", count: 31))23 ",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "receipt_hash"
             ),
@@ -3004,7 +3127,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: " uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1"
+                    backend: "bfv-affine-v1"
                 ),
                 "uaid"
             ),
@@ -3014,7 +3137,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     programDigestHex: " \(String(repeating: "11", count: 32))"
                 ),
                 "program_digest"
@@ -3025,7 +3148,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     inputCiphertextHashHex: "\(String(repeating: "ab", count: 32)) "
                 ),
                 "input_ciphertext_hash"
@@ -3036,7 +3159,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     programId: "identifier_lookup_retail "
                 ),
                 "programId"
@@ -3047,7 +3170,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     openingProgramId: " identifier_lookup_retail"
                 ),
                 "programId"
@@ -3058,7 +3181,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     openingProgramId: "identifier_lookup_retail "
                 ),
                 "programId"
@@ -3069,7 +3192,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: " bfv-affine-sha3-256-v1"
+                    backend: " bfv-affine-v1"
                 ),
                 "backend"
             ),
@@ -3089,7 +3212,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     verificationMode: "signed "
                 ),
                 "verificationMode"
@@ -3100,7 +3223,7 @@ final class ToriiClientTests: XCTestCase {
                     opaqueId: "opaque:\(String(repeating: "11", count: 32))",
                     receiptHash: String(repeating: "22", count: 31) + "23",
                     uaid: "uaid:\(String(repeating: "33", count: 31))35",
-                    backend: "bfv-affine-sha3-256-v1",
+                    backend: "bfv-affine-v1",
                     verificationMode: "Signed"
                 ),
                 "verificationMode"
@@ -3125,7 +3248,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadData = try JSONEncoder().encode(payload)
         let payloadObject = try XCTUnwrap(
@@ -3295,7 +3418,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         for (field, value) in [
-            ("backend", " bfv-affine-sha3-256-v1"),
+            ("backend", " bfv-affine-v1"),
             ("backend", "BFV-AFFINE-SHA3-256-V1"),
             ("verification_mode", "signed "),
             ("verification_mode", "Signed"),
@@ -3331,7 +3454,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3372,7 +3495,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(payload), encoding: .utf8)
@@ -3412,7 +3535,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(payload), encoding: .utf8)
@@ -3451,7 +3574,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3496,7 +3619,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(payload), encoding: .utf8)
@@ -3533,7 +3656,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(payload), encoding: .utf8)
@@ -3675,7 +3798,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let payloadJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(payload), encoding: .utf8)
@@ -3710,7 +3833,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3747,7 +3870,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3787,7 +3910,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3826,7 +3949,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: "opaque:\(String(repeating: "11", count: 32))",
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: payload)
         let payloadJSON = try XCTUnwrap(
@@ -3865,7 +3988,7 @@ final class ToriiClientTests: XCTestCase {
             "execution":{
               "program_id":"email_retail",
               "program_digest":"fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
-              "backend":"bfv-programmed-sha3-256-v1",
+              "backend":"bfv-programmed-v1",
               "verification_mode":"signed",
               "input_ciphertext_hash":"abababababababababababababababababababababababababababababababab",
               "output_ciphertext_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -3907,11 +4030,13 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).isEmpty)
         let policy = ToriiIdentifierPolicySummary(
             policyId: "email#retail",
+            programId: "identifier_lookup_retail",
             owner: accountId,
             active: true,
             normalization: .emailAddress,
             resolverPublicKey: "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
-            backend: "bfv-programmed-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-programmed-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
@@ -3933,7 +4058,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-sha3-256-v1"
+            backend: "bfv-affine-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
 
@@ -3952,7 +4077,7 @@ final class ToriiClientTests: XCTestCase {
               "account_id":"\(accountId)",
               "resolved_at_ms":42,
               "expires_at_ms":142,
-              "backend":"bfv-affine-sha3-256-v1",
+              "backend":"bfv-affine-v1",
               "signature":"\(signed.signatureHex)",
               "signature_payload_hex":"01020304A0"
             }
@@ -4014,7 +4139,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-programmed-sha3-256-v1",
+            backend: "bfv-programmed-v1",
             outputHashHex: outputHash,
             resolvedAtMs: 42,
             expiresAtMs: 142
@@ -4070,7 +4195,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-sha3-256-v1",
+            backend: "bfv-affine-v1",
             resolvedAtMs: 7,
             expiresAtMs: nil
         )
@@ -4123,7 +4248,7 @@ final class ToriiClientTests: XCTestCase {
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-programmed-sha3-256-v1",
+            backend: "bfv-programmed-v1",
             programDigestHex: programDigest,
             outputHashHex: outputHash,
             associatedDataHashHex: associatedDataHash,
@@ -4297,11 +4422,13 @@ final class ToriiClientTests: XCTestCase {
     func testIdentifierBfvEnvelopeBuilderProducesDeterministicCiphertext() throws {
         let policy = ToriiIdentifierPolicySummary(
             policyId: "string#retail",
+            programId: "identifier_lookup_retail",
             owner: try canonicalOwnerLiteral(),
             active: true,
             normalization: .exact,
             resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
-            backend: "bfv-affine-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-affine-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
@@ -4325,24 +4452,56 @@ final class ToriiClientTests: XCTestCase {
         let expected =
             "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000"
 
-        XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
+        XCTAssertEqual(try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input: "ab", seedHex: seedHex), expected)
         let request = try policy.encryptedRequest(
-            input: "ab",
-            outputOpening: sampleOpening(),
-            seedHex: seedHex
+            encryptedInputHex: expected,
+            outputOpening: sampleOpening()
         )
         XCTAssertEqual(request.policyId, "string#retail")
         XCTAssertEqual(request.encryptedInputHex, expected)
     }
 
+    func testPublicIdentifierEncryptionIsUnavailableBeforeInputHandling() throws {
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "malformed",
+            programId: "identifier_lookup_retail",
+            owner: "not-an-account",
+            active: true,
+            normalization: .exact,
+            resolverPublicKey: "invalid",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-programmed-v1",
+            inputEncryption: nil,
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        for call in [
+            { _ = try policy.encryptInput("invalid\0plaintext") },
+            { _ = try policy.encryptedRequest(input: "invalid\0plaintext", outputOpening: self.sampleOpening()) },
+            { _ = try ToriiIdentifierLookupRequest.encrypted(policy: policy, input: "invalid\0plaintext", outputOpening: self.sampleOpening()) },
+        ] {
+            XCTAssertThrowsError(try call()) { error in
+                guard case ToriiClientError.ramLfeEncryptionUnavailable = error else {
+                    return XCTFail("expected typed unavailable error before input handling, got \(error)")
+                }
+                XCTAssertTrue(error.localizedDescription.contains("ram_lfe_encryption_unavailable"))
+            }
+        }
+    }
+
     func testIdentifierBfvEnvelopeBuilderRejectsOverwideInputProfile() throws {
         let policy = ToriiIdentifierPolicySummary(
             policyId: "string#retail",
+            programId: "identifier_lookup_retail",
             owner: try canonicalOwnerLiteral(),
             active: true,
             normalization: .exact,
             resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
-            backend: "bfv-affine-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-affine-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
@@ -4364,7 +4523,7 @@ final class ToriiClientTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try policy.encryptInput(
+            try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input:
                 "ab",
                 seedHex: "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
             )
@@ -4391,7 +4550,7 @@ final class ToriiClientTests: XCTestCase {
 
         for vector in vectors {
             let vectorName = try string(vector, "name")
-            let ciphertextHex = try policy.encryptInput(
+            let ciphertextHex = try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input:
                 string(vector, "input_utf8"),
                 seedHex: string(vector, "seed_hex")
             )
@@ -4425,11 +4584,13 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1")
         let policy = ToriiIdentifierPolicySummary(
             policyId: "soracloud-operation#fixture",
+            programId: "identifier_lookup_retail",
             owner: try canonicalOwnerLiteral(),
             active: true,
             normalization: .exact,
             resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
-            backend: "bfv-programmed-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-programmed-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: try bfvParameters(
@@ -4451,7 +4612,7 @@ final class ToriiClientTests: XCTestCase {
                 let inputBytes = try XCTUnwrap(Data(hexString: try string(input, "input_hex")))
                 let inputString = String(decoding: inputBytes, as: UTF8.self)
                 let seed = Data(seedUtf8.utf8).hexEncodedString()
-                let ciphertextHex = try policy.encryptInput(inputString, seedHex: seed)
+                let ciphertextHex = try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input: inputString, seedHex: seed)
                 XCTAssertEqual(
                     ciphertextHex.count / 2,
                     try int(input, "expected_ciphertext_bytes"),
@@ -4555,11 +4716,13 @@ final class ToriiClientTests: XCTestCase {
 
         let policy = ToriiIdentifierPolicySummary(
             policyId: "email#retail",
+            programId: "identifier_lookup_retail",
             owner: try canonicalOwnerLiteral(),
             active: true,
             normalization: .emailAddress,
             resolverPublicKey: "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
-            backend: "bfv-programmed-sha3-256-v1",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-programmed-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
@@ -4614,7 +4777,7 @@ final class ToriiClientTests: XCTestCase {
             note: nil
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
-        let actual = try policy.encryptInput("ios.bankb.live@example.com", seedHex: seedHex)
+        let actual = try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input: "ios.bankb.live@example.com", seedHex: seedHex)
 
         if actual != expected {
             let mismatchIndex = {
@@ -4895,10 +5058,12 @@ final class ToriiClientTests: XCTestCase {
     ) throws -> ToriiIdentifierPolicySummary {
         ToriiIdentifierPolicySummary(
             policyId: try string(policy, "policy_id"),
+            programId: "identifier_lookup_retail",
             owner: try string(policy, "owner"),
             active: try bool(policy, "active"),
             normalization: .phoneE164,
             resolverPublicKey: try string(policy, "resolver_public_key"),
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             backend: try string(policy, "backend"),
             inputEncryption: policy["input_encryption"] as? String,
             inputEncryptionPublicParameters: nil,
@@ -4926,10 +5091,12 @@ final class ToriiClientTests: XCTestCase {
     private func bfvPolicy(fromFixture policy: [String: Any]) throws -> ToriiIdentifierPolicySummary {
         ToriiIdentifierPolicySummary(
             policyId: try string(policy, "policy_id"),
+            programId: "identifier_lookup_retail",
             owner: try string(policy, "owner"),
             active: try bool(policy, "active"),
             normalization: .exact,
             resolverPublicKey: try string(policy, "resolver_public_key"),
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             backend: try string(policy, "backend"),
             inputEncryption: try string(policy, "input_encryption"),
             inputEncryptionPublicParameters: nil,

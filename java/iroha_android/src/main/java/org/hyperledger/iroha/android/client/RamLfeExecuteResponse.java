@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Successful response emitted by `POST /v1/ram-lfe/programs/{program_id}/execute`. */
+/** Ciphertext and execution receipt; authenticated plaintext opening is a separate operation. */
 public final class RamLfeExecuteResponse {
   private final String programId;
   private final String opaqueHash;
@@ -18,7 +18,6 @@ public final class RamLfeExecuteResponse {
   private final String backend;
   private final String verificationMode;
   private final Map<String, Object> receipt;
-  private final RamLfeOutputOpening outputOpening;
 
   public RamLfeExecuteResponse(
       final String programId,
@@ -31,8 +30,7 @@ public final class RamLfeExecuteResponse {
       final Long expiresAtMs,
       final String backend,
       final String verificationMode,
-      final Map<String, Object> receipt,
-      final RamLfeOutputOpening outputOpening) {
+      final Map<String, Object> receipt) {
     this.programId = Objects.requireNonNull(programId, "programId");
     this.opaqueHash = Objects.requireNonNull(opaqueHash, "opaqueHash");
     this.receiptHash = Objects.requireNonNull(receiptHash, "receiptHash");
@@ -45,7 +43,6 @@ public final class RamLfeExecuteResponse {
     this.verificationMode = Objects.requireNonNull(verificationMode, "verificationMode");
     this.receipt =
         Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(receipt, "receipt")));
-    this.outputOpening = Objects.requireNonNull(outputOpening, "outputOpening");
   }
 
   public String programId() {
@@ -92,7 +89,4 @@ public final class RamLfeExecuteResponse {
     return receipt;
   }
 
-  public RamLfeOutputOpening outputOpening() {
-    return outputOpening;
-  }
 }

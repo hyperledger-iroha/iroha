@@ -177,6 +177,9 @@ impl SoracloudInrouPersistedStateV1<'_> {
         let mut authoritative_sequences = std::collections::BTreeSet::new();
         let service_revisions = self.service_revisions.view();
         for (key, bundle) in service_revisions.iter() {
+            bundle.require_production_support().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_revisions", error.to_string())
+            })?;
             bundle.validate_for_admission().map_err(|error| {
                 invalid_soracloud_state("soracloud_service_revisions", error.to_string())
             })?;
@@ -226,6 +229,9 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
         for (key, deployment) in service_deployments.iter() {
+            deployment.require_production_support().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_deployments", error.to_string())
+            })?;
             deployment.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_service_deployments", error.to_string())
             })?;
@@ -1642,6 +1648,12 @@ impl SoracloudInrouPersistedStateV1<'_> {
         let mut service_binding_total_bytes =
             std::collections::BTreeMap::<(String, String), u64>::new();
         for (key, entry) in self.service_state_entries.view().iter() {
+            entry
+                .encryption
+                .require_production_support()
+                .map_err(|error| {
+                    invalid_soracloud_state("soracloud_service_state_entries", error.to_string())
+                })?;
             entry.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_service_state_entries", error.to_string())
             })?;

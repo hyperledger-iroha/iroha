@@ -27,15 +27,9 @@ public final class IdentifierJsonParser {
       items.add(
           new IdentifierPolicySummary(
               requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id"),
-              optionalString(
-                          item.get("program_id"),
-                          "identifier policy list.items[" + i + "].program_id")
-                      == null
-                  ? requiredExactString(item.get("policy_id"), "identifier policy list.items[" + i + "].policy_id")
-                      .replace('#', '_')
-                  : requiredExactString(
-                      item.get("program_id"),
-                      "identifier policy list.items[" + i + "].program_id"),
+              requiredProgramId(
+                  item.get("program_id"),
+                  "identifier policy list.items[" + i + "].program_id"),
               requiredExactString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
               asBoolean(
                   item.get("active"), "identifier policy list.items[" + i + "].active"),
@@ -46,14 +40,10 @@ public final class IdentifierJsonParser {
               requiredPublicKeyLiteral(
                   item.get("resolver_public_key"),
                   "identifier policy list.items[" + i + "].resolver_public_key"),
-              !item.containsKey("output_opening_public_key")
-                  ? requiredPublicKeyLiteral(
-                      item.get("resolver_public_key"),
-                      "identifier policy list.items[" + i + "].resolver_public_key")
-                  : requiredPublicKeyLiteral(
+              requiredPublicKeyLiteral(
                       item.get("output_opening_public_key"),
                       "identifier policy list.items[" + i + "].output_opening_public_key"),
-              requiredExactLowercaseString(
+              RamLfeJsonParser.requiredBackend(
                   item.get("backend"), "identifier policy list.items[" + i + "].backend"),
               optionalExactLowercaseString(
                   item.get("input_encryption"),
@@ -168,6 +158,18 @@ public final class IdentifierJsonParser {
       throw new IllegalStateException(path + " must not contain surrounding whitespace");
     }
     return string;
+  }
+
+  private static String requiredProgramId(final Object value, final String path) {
+    final String programId = requiredExactString(value, path);
+    for (int i = 0; i < programId.length(); i++) {
+      final char character = programId.charAt(i);
+      if (Character.isWhitespace(character) || Character.isSpaceChar(character)
+          || Character.isISOControl(character)) {
+        throw new IllegalStateException(path + " must not contain whitespace or control characters");
+      }
+    }
+    return programId;
   }
 
   private static String requiredExactLowercaseString(final Object value, final String path) {
@@ -398,8 +400,8 @@ public final class IdentifierJsonParser {
         canonicalizeHex32(
             requiredExactString(root.get("program_digest"), context + ".program_digest"),
             context + ".program_digest"),
-        requiredExactLowercaseString(root.get("backend"), context + ".backend"),
-        requiredExactLowercaseString(root.get("verification_mode"), context + ".verification_mode"),
+        RamLfeJsonParser.requiredBackend(root.get("backend"), context + ".backend"),
+        RamLfeJsonParser.requiredVerificationMode(root.get("verification_mode"), context + ".verification_mode"),
         canonicalizeHex32(
             requiredExactString(root.get("input_ciphertext_hash"), context + ".input_ciphertext_hash"),
             context + ".input_ciphertext_hash"),

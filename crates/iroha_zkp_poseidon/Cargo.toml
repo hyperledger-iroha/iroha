@@ -3,7 +3,7 @@ name = "iroha_zkp_poseidon"
 version.workspace = true
 edition = "2024"
 license = "Apache-2.0"
-description = "Canonical BN254 Poseidon2 helpers and Vega wire-shape constants shared by the data model, IVM and the Halo2 engine"
+description = "Canonical BN254 Poseidon helpers and Vega wire-shape constants shared by the data model, IVM and the Halo2 engine"
 repository = "https://github.com/hyperledger-iroha/iroha"
 categories = ["cryptography"]
 
@@ -14,3 +14,8 @@ categories = ["cryptography"]
 halo2curves = { workspace = true }
 once_cell = { workspace = true }
 poseidon-primitives = "0.2.0"
+zeroize = { workspace = true }
+
+[dev-dependencies]
+halo2curves-axiom = { version = "0.7.0", default-features = false }
+sha2 = "0.10.9"

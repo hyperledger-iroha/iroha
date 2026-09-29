@@ -7,6 +7,27 @@ namespace Hyperledger.Iroha.Torii;
 
 internal static class ToriiIdentifierJson
 {
+    private static readonly string[] RamLfeBackends =
+        { "hkdf-sha3-512-prf-v1", "bfv-affine-v1", "bfv-programmed-v1" };
+    private static readonly string[] RamLfeVerificationModes = { "signed", "proof" };
+
+    internal static string RequireRamLfeBackend(string? value, string field) =>
+        RequireRamLfeTag(value, field, RamLfeBackends);
+
+    internal static string RequireRamLfeVerificationMode(string? value, string field) =>
+        RequireRamLfeTag(value, field, RamLfeVerificationModes);
+
+    private static string RequireRamLfeTag(string? value, string field, string[] allowed)
+    {
+        var exact = RequireExactNonBlank(value, field);
+        if (!allowed.Contains(exact, StringComparer.Ordinal))
+        {
+            throw new JsonException($"{field} must be one of: {string.Join(", ", allowed)}.");
+        }
+
+        return exact;
+    }
+
     internal static string RequireExactPolicyId(string? value, string field)
     {
         var exact = RequireNonBlankWithoutSurroundingWhitespaceOrControl(value, field);
@@ -179,10 +200,12 @@ internal static class ToriiIdentifierJson
         }
 
         RequireExactPolicyId(value.PolicyId, $"{context}.policy_id");
+        RequireExactNonBlank(value.ProgramId, $"{context}.program_id");
+        RequireExactNonBlank(value.OutputOpeningPublicKey, $"{context}.output_opening_public_key");
         RequireExactNonBlank(value.Owner, $"{context}.owner");
         RequireExactNonBlank(value.Normalization, $"{context}.normalization");
         RequireExactNonBlank(value.ResolverPublicKey, $"{context}.resolver_public_key");
-        RequireExactNonBlank(value.Backend, $"{context}.backend");
+        RequireRamLfeBackend(value.Backend, $"{context}.backend");
         RequireOptionalExactNonBlank(value.InputEncryption, $"{context}.input_encryption");
         RequireOptionalExactNonBlank(
             value.InputEncryptionPublicParameters,
@@ -287,6 +310,8 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         string? policyId = null;
+        string? programId = null;
+        string? outputOpeningPublicKey = null;
         string? owner = null;
         bool? active = null;
         string? normalization = null;
@@ -305,6 +330,8 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
                 return new ToriiIdentifierPolicySummary
                 {
                     PolicyId = policyId ?? throw new JsonException("policy.policy_id is required."),
+                    ProgramId = programId ?? throw new JsonException("policy.program_id is required."),
+                    OutputOpeningPublicKey = outputOpeningPublicKey ?? throw new JsonException("policy.output_opening_public_key is required."),
                     Owner = owner ?? throw new JsonException("policy.owner is required."),
                     Active = active ?? throw new JsonException("policy.active is required."),
                     Normalization = normalization ?? throw new JsonException("policy.normalization is required."),
@@ -335,6 +362,12 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
                 case "policy_id":
                     policyId = ToriiIdentifierJson.ReadPolicyId(ref reader, "policy.policy_id");
                     break;
+                case "program_id":
+                    programId = ToriiIdentifierJson.ReadExactString(ref reader, "policy.program_id");
+                    break;
+                case "output_opening_public_key":
+                    outputOpeningPublicKey = ToriiIdentifierJson.ReadExactString(ref reader, "policy.output_opening_public_key");
+                    break;
                 case "owner":
                     owner = ToriiIdentifierJson.ReadExactString(ref reader, "policy.owner");
                     break;
@@ -352,7 +385,8 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
                     resolverPublicKey = ToriiIdentifierJson.ReadExactString(ref reader, "policy.resolver_public_key");
                     break;
                 case "backend":
-                    backend = ToriiIdentifierJson.ReadExactString(ref reader, "policy.backend");
+                    backend = ToriiIdentifierJson.RequireRamLfeBackend(
+                        ToriiIdentifierJson.ReadExactString(ref reader, "policy.backend"), "policy.backend");
                     break;
                 case "input_encryption":
                     inputEncryption = ToriiIdentifierJson.ReadOptionalExactString(ref reader, "policy.input_encryption");
@@ -404,6 +438,8 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
 
         writer.WriteStartObject();
         writer.WriteString("policy_id", value.PolicyId);
+        writer.WriteString("program_id", value.ProgramId);
+        writer.WriteString("output_opening_public_key", value.OutputOpeningPublicKey);
         writer.WriteString("owner", value.Owner);
         writer.WriteBoolean("active", value.Active);
         writer.WriteString("normalization", value.Normalization);
@@ -764,8 +800,12 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
     {
         ValidateOptionalExactString(execution, "program_id", "identifier receipt.payload.execution.program_id");
         ValidateOptionalExactString(execution, "program_digest", "identifier receipt.payload.execution.program_digest");
-        ValidateOptionalExactString(execution, "backend", "identifier receipt.payload.execution.backend");
-        ValidateOptionalExactString(execution, "verification_mode", "identifier receipt.payload.execution.verification_mode");
+        _ = ToriiIdentifierJson.RequireRamLfeBackend(
+            RequireExactString(execution, "backend", "identifier receipt.payload.execution.backend"),
+            "identifier receipt.payload.execution.backend");
+        _ = ToriiIdentifierJson.RequireRamLfeVerificationMode(
+            RequireExactString(execution, "verification_mode", "identifier receipt.payload.execution.verification_mode"),
+            "identifier receipt.payload.execution.verification_mode");
         ValidateOptionalExactString(
             execution,
             "input_ciphertext_hash",

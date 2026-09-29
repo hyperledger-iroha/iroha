@@ -392,10 +392,11 @@ class HttpClientTransportTest {
             }
         }
 
-        for (backend in listOf(" bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
+        for (backend in listOf(" bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1",
+            "bfv-affine-sha3-256-v1", "bfv-programmed-sha3-256-v1", "unknown")) {
             assertRejects(receiptJson(backend = backend))
         }
-        for (mode in listOf(" signed", "signed ", "Signed")) {
+        for (mode in listOf(" signed", "signed ", "Signed", "unknown", "ivm-proved")) {
             assertRejects(receiptJson(verificationMode = mode))
         }
         for (kind in listOf(" signed", "signed ", "Signed")) {
@@ -524,7 +525,7 @@ class HttpClientTransportTest {
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                       "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-                      "backend": "bfv-affine-sha3-256-v1",
+                      "backend": "bfv-affine-v1",
                       "input_encryption": "bfv-v1",
                       "input_encryption_public_parameters": "ABCD",
                       "input_encryption_public_parameters_decoded": {
@@ -561,6 +562,15 @@ class HttpClientTransportTest {
         assertEquals("halo2-ipa", proofVerifier.proofBackend)
         assertEquals("66".repeat(32), proofVerifier.publicInputsSchemaHash)
 
+        for (backend in listOf("bfv-affine-sha3-256-v1", "bfv-programmed-sha3-256-v1", "unknown")) {
+            val changed = canonical.replace("\"backend\": \"bfv-affine-v1\"", "\"backend\": \"$backend\"")
+            assertTrue(changed != canonical)
+            val error = assertFailsWith<IllegalStateException> {
+                IdentifierJsonParser.parsePolicyList(changed.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertContains(error.message.orEmpty(), "identifier policy list.items[0].backend")
+        }
+
         val cases = listOf(
             "identifier policy list.items[0].program_id" to canonical.replace(
                 "\"program_id\": \"identifier_lookup_retail\",",
@@ -579,8 +589,8 @@ class HttpClientTransportTest {
                 "\"normalization\": \"Phone_E164\"",
             ),
             "identifier policy list.items[0].backend" to canonical.replace(
-                "\"backend\": \"bfv-affine-sha3-256-v1\"",
-                "\"backend\": \"bfv-affine-sha3-256-v1 \"",
+                "\"backend\": \"bfv-affine-v1\"",
+                "\"backend\": \"bfv-affine-v1 \"",
             ),
             "identifier policy list.items[0].input_encryption" to canonical.replace(
                 "\"input_encryption\": \"bfv-v1\"",
@@ -757,6 +767,33 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun identifierEncryptionPublicHelpersRefuseBeforeProcessingInput() {
+        val policy = sampleBfvPolicy(sampleBfvParameters())
+        val opening = sampleOpening()
+        for (input in listOf("", "private@example.org", "x".repeat(1_000))) {
+            val failures = listOf(
+                assertFailsWith<RamLfeEncryptionUnavailableException> { policy.encryptInput(input) },
+                assertFailsWith<RamLfeEncryptionUnavailableException> {
+                    policy.encryptedRequestFromInput(input, opening)
+                },
+                assertFailsWith<RamLfeEncryptionUnavailableException> {
+                    IdentifierResolveRequest.encryptedFromInput(policy, input, opening)
+                },
+            )
+            for (error in failures) {
+                assertEquals("ram_lfe_encryption_unavailable", error.code)
+                assertEquals(
+                    "RAM-LFE encryption is unavailable: the insecure exact-lift BFV profile must be replaced",
+                    error.message,
+                )
+            }
+        }
+        val encrypted = policy.encryptedRequest("abcd", opening)
+        assertEquals("abcd", encrypted.encryptedInputHex)
+        assertEquals(opening, encrypted.outputOpening)
+    }
+
+    @Test
     fun identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors() {
         val fixture = loadSharedBfvFixture()
         assertEquals("soracloud-bfv-identifier-envelope-v1", fixture["vector_set"])
@@ -766,7 +803,7 @@ class HttpClientTransportTest {
         val observedDigests = mutableSetOf<String>()
 
         for (vector in vectors) {
-            val ciphertextHex = policy.encryptInput(
+            val ciphertextHex = DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy,
                 string(vector, "input_utf8"),
                 hexToBytes(string(vector, "seed_hex")),
             )
@@ -799,7 +836,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.EXACT,
             resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            backend = "bfv-programmed-sha3-256-v1",
+            backend = "bfv-programmed-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = bfvParametersFromFixture(
@@ -816,7 +853,7 @@ class HttpClientTransportTest {
                 if (input["packed_slots"] != null) continue
                 val seedUtf8 = string(input, "seed_utf8")
                 val inputBytes = hexToBytes(string(input, "input_hex"))
-                val ciphertextHex = policy.encryptInput(
+                val ciphertextHex = DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy,
                     String(inputBytes, StandardCharsets.UTF_8),
                     seedUtf8.toByteArray(StandardCharsets.UTF_8),
                 )
@@ -909,7 +946,7 @@ class HttpClientTransportTest {
         val baseParameters = sampleBfvParameters()
 
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(baseParameters).encryptInput("abcd", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(baseParameters), "abcd", seed)
         }
 
         val nonDivisibleModulus = IdentifierBfvPublicParameters(
@@ -918,7 +955,7 @@ class HttpClientTransportTest {
             3,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(nonDivisibleModulus).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(nonDivisibleModulus), "ab", seed)
         }
 
         val nonPowerOfTwoDegree = IdentifierBfvPublicParameters(
@@ -927,7 +964,7 @@ class HttpClientTransportTest {
             3,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(nonPowerOfTwoDegree).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(nonPowerOfTwoDegree), "ab", seed)
         }
 
         val invalidDecompositionBase = IdentifierBfvPublicParameters(
@@ -936,7 +973,7 @@ class HttpClientTransportTest {
             3,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(invalidDecompositionBase).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(invalidDecompositionBase), "ab", seed)
         }
 
         val truncatedPublicKey = IdentifierBfvPublicParameters(
@@ -948,7 +985,7 @@ class HttpClientTransportTest {
             3,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(truncatedPublicKey).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(truncatedPublicKey), "ab", seed)
         }
 
         val zeroInputLimit = IdentifierBfvPublicParameters(
@@ -957,7 +994,7 @@ class HttpClientTransportTest {
             0,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(zeroInputLimit).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(zeroInputLimit), "ab", seed)
         }
 
         val overwideInputLimit = IdentifierBfvPublicParameters(
@@ -966,7 +1003,7 @@ class HttpClientTransportTest {
             64,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(overwideInputLimit).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(overwideInputLimit), "ab", seed)
         }
 
         val oversizedCoefficient = IdentifierBfvPublicParameters(
@@ -978,7 +1015,7 @@ class HttpClientTransportTest {
             3,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(oversizedCoefficient).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(oversizedCoefficient), "ab", seed)
         }
 
         val oversizedInputLimit = IdentifierBfvPublicParameters(
@@ -987,7 +1024,7 @@ class HttpClientTransportTest {
             257,
         )
         assertFailsWith<IllegalArgumentException> {
-            sampleBfvPolicy(oversizedInputLimit).encryptInput("ab", seed)
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleBfvPolicy(oversizedInputLimit), "ab", seed)
         }
     }
 
@@ -2364,7 +2401,7 @@ class HttpClientTransportTest {
                 "\"resolver_public_key\": \" ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
             ),
             "ram-lfe program policy list.items[0].backend" to canonical.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
                 "\"backend\": \"BFV-programmed-sha3-256-v1\"",
             ),
             "ram-lfe program policy list.items[0].verification_mode" to canonical.replace(
@@ -2418,7 +2455,7 @@ class HttpClientTransportTest {
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_encryption": "bfv-v1",
                   "input_encryption_public_parameters": "ABCD",
@@ -2471,7 +2508,6 @@ class HttpClientTransportTest {
         assertEquals("identifier_lookup_retail", execute.programId)
         assertEquals("44".repeat(32), execute.outputHash)
         assertEquals("abcd", execute.outputCiphertext)
-        assertEquals("identifier_lookup_retail", execute.outputOpening.payload.programId)
         assertEquals("signed", execute.verificationMode)
         assertTrue(execute.receipt.containsKey("payload"))
 
@@ -2523,7 +2559,7 @@ class HttpClientTransportTest {
         val receipt = linkedMapOf<String, Any>(
             "payload" to linkedMapOf<String, Any?>(
                 "program_id" to mapOf("name" to "identifier_lookup_retail"),
-                "backend" to "bfv-programmed-sha3-256-v1",
+                "backend" to "bfv-programmed-v1",
                 "verification_mode" to mapOf("mode" to "Signed", "value" to null),
                 "program_digest" to "hash:${"11".repeat(32).uppercase()}#ABCD",
                 "output_hash" to "hash:${"22".repeat(32).uppercase()}#BCDE",
@@ -2557,10 +2593,7 @@ class HttpClientTransportTest {
                 "\"output_ciphertext\": \"abcd\",",
                 "",
             ),
-            "output_opening" to canonicalExecute.replace(
-                "\"output_opening\": {",
-                "\"removed_output_opening\": {",
-            ),
+            "output_opening" to canonicalExecute.replaceFirst("{", "{\"output_opening\":{},"),
             "program_id" to canonicalExecute.replace(
                 "\"program_id\": \"identifier_lookup_retail\"",
                 "\"program_id\": \" identifier_lookup_retail\"",
@@ -2582,8 +2615,8 @@ class HttpClientTransportTest {
                 "\"associated_data_hash\": \"${"55".repeat(32)} \"",
             ),
             "backend" to canonicalExecute.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
-                "\"backend\": \" bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
+                "\"backend\": \" bfv-programmed-v1\"",
             ),
             "verification_mode" to canonicalExecute.replace(
                 "\"verification_mode\": \"signed\"",
@@ -2599,14 +2632,12 @@ class HttpClientTransportTest {
                 "expected ram-lfe execute response.$field failure, got $error",
             )
         }
-        val wrongOpeningHash = canonicalExecute.replace(
-            "\"opened_output_hash\": \"${"44".repeat(32)}\"",
-            "\"opened_output_hash\": \"${"66".repeat(32)}\"",
-        )
-        val openingError = assertFailsWith<IllegalArgumentException> {
-            RamLfeJsonParser.parseExecuteResponse(wrongOpeningHash.toByteArray(StandardCharsets.UTF_8))
+        // Even a null retired field must not be silently accepted.
+        val retiredOpening = canonicalExecute.replaceFirst("{", "{\"output_opening\":null,")
+        val openingError = assertFailsWith<IllegalStateException> {
+            RamLfeJsonParser.parseExecuteResponse(retiredOpening.toByteArray(StandardCharsets.UTF_8))
         }
-        assertTrue(openingError.message.orEmpty().contains("opening hash does not match execution"))
+        assertContains(openingError.message.orEmpty(), "ram-lfe execute response.output_opening")
 
         val canonicalVerify = ramLfeReceiptVerifyResponseJson()
         val verifyCases = listOf(
@@ -2615,7 +2646,7 @@ class HttpClientTransportTest {
                 "\"program_id\": \"identifier_lookup_retail \"",
             ),
             "backend" to canonicalVerify.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
                 "\"backend\": \"BFV-programmed-sha3-256-v1\"",
             ),
             "verification_mode" to canonicalVerify.replace(
@@ -2639,6 +2670,33 @@ class HttpClientTransportTest {
                 error.message?.contains("ram-lfe receipt verify response.$field") == true,
                 "expected ram-lfe receipt verify response.$field failure, got $error",
             )
+        }
+    }
+
+    @Test
+    fun ramLfeResponseParsersRejectRetiredAndUnknownTags() {
+        val surfaces = listOf<Triple<String, String, (ByteArray) -> Any>>(
+            Triple("ram-lfe program policy list.items[0]", ramLfeProgramPoliciesJson(), RamLfeJsonParser::parsePolicyList),
+            Triple("ram-lfe execute response", ramLfeExecuteResponseJson(), RamLfeJsonParser::parseExecuteResponse),
+            Triple("ram-lfe receipt verify response", ramLfeReceiptVerifyResponseJson(), RamLfeJsonParser::parseReceiptVerifyResponse),
+        )
+        for ((path, canonical, parse) in surfaces) {
+            parse(canonical.toByteArray(StandardCharsets.UTF_8))
+            val invalid = mapOf(
+                "backend" to listOf("bfv-affine-sha3-256-v1", "bfv-programmed-sha3-256-v1", "unknown"),
+                "verification_mode" to listOf("unknown", "ivm-proved"),
+            )
+            for ((field, values) in invalid) {
+                val original = if (field == "backend") "bfv-programmed-v1" else "signed"
+                for (value in values) {
+                    val changed = canonical.replace("\"$field\": \"$original\"", "\"$field\": \"$value\"")
+                    assertTrue(changed != canonical, "$path.$field mutation must change the fixture")
+                    val error = assertFailsWith<IllegalStateException>("$path.$field = $value") {
+                        parse(changed.toByteArray(StandardCharsets.UTF_8))
+                    }
+                    assertContains(error.message.orEmpty(), "$path.$field")
+                }
+            }
         }
     }
 
@@ -5442,7 +5500,7 @@ class HttpClientTransportTest {
             execution = IdentifierResolutionExecutionPayload(
                 programId = "identifier_lookup_retail",
                 programDigest = "44".repeat(32),
-                backend = "bfv-programmed-sha3-256-v1",
+                backend = "bfv-programmed-v1",
                 verificationMode = "signed",
                 inputCiphertextHash = "55".repeat(32),
                 outputCiphertextHash = outputCiphertextHash,
@@ -5471,7 +5529,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.PHONE_E164,
             resolverPublicKey = resolverPublicKey,
-            backend = "bfv-programmed-sha3-256-v1",
+            backend = "bfv-programmed-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
@@ -6123,7 +6181,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.EXACT,
             resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            backend = "bfv-affine-sha3-256-v1",
+            backend = "bfv-affine-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = parameters,

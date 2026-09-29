@@ -93,7 +93,12 @@ impl Fixture {
     }
 
     fn observer(&self) -> AuthenticatedHeightObserverV1 {
-        AuthenticatedHeightObserverV1::new(&self.genesis, self.peers.clone()).unwrap()
+        AuthenticatedHeightObserverV1::new(
+            &self.genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            self.peers.clone(),
+        )
+        .unwrap()
     }
 
     fn resign_certificate(&self, certificate: &mut Qc, view: u64, omitted: usize) {
@@ -422,13 +427,34 @@ fn authenticated_height_requires_prepared_genesis_roster_and_exact_peer_selectio
     fixture.observer();
     let mut peers = fixture.peers.clone();
     peers[1] = peers[0].clone();
-    assert!(AuthenticatedHeightObserverV1::new(&fixture.genesis, peers).is_err());
+    assert!(
+        AuthenticatedHeightObserverV1::new(
+            &fixture.genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            peers
+        )
+        .is_err()
+    );
     let mut peers = fixture.peers.clone();
     peers[0].node_fingerprint = Hash::new(b"foreign node");
-    assert!(AuthenticatedHeightObserverV1::new(&fixture.genesis, peers).is_err());
+    assert!(
+        AuthenticatedHeightObserverV1::new(
+            &fixture.genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            peers
+        )
+        .is_err()
+    );
     let mut peers = fixture.peers.clone();
     peers[0].torii_origin = "http://secret@127.0.0.1/".into();
-    assert!(AuthenticatedHeightObserverV1::new(&fixture.genesis, peers).is_err());
+    assert!(
+        AuthenticatedHeightObserverV1::new(
+            &fixture.genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            peers
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -491,12 +517,26 @@ fn authenticated_height_retained_evidence_revalidates_every_binding_and_certific
     let encoded = json::to_value(&evidence).unwrap();
     let restored = VerifiedCommittedHeightV1::validate_retained(
         &fixture.genesis,
+        "fc56984b-2be7-431d-840e-21514d1883f0",
         fixture.peers.clone(),
         encoded.clone(),
     )
     .unwrap();
     assert_eq!(restored.block_hash(), evidence.block_hash);
     assert_eq!(restored.committed_height(), evidence.committed_height());
+    assert!(
+        VerifiedCommittedHeightV1::validate_retained(
+            &fixture.genesis,
+            "different-explicit-chain",
+            fixture.peers.clone(),
+            encoded.clone(),
+        )
+        .is_err(),
+        "retained certificates must not fall back to another chain pin"
+    );
+    assert!(
+        AuthenticatedHeightObserverV1::new(&fixture.genesis, "", fixture.peers.clone()).is_err()
+    );
     for mutation in 0..9 {
         let mut raw: RetainedCommittedHeightV1 = json::from_value(encoded.clone()).unwrap();
         match mutation {
@@ -526,6 +566,7 @@ fn authenticated_height_retained_evidence_revalidates_every_binding_and_certific
         assert!(
             VerifiedCommittedHeightV1::validate_retained(
                 &fixture.genesis,
+                "fc56984b-2be7-431d-840e-21514d1883f0",
                 fixture.peers.clone(),
                 json::to_value(&changed).unwrap()
             )
@@ -870,7 +911,10 @@ mod deployment_prefix {
     use super::*;
     use crate::taira_dataspace_deploy::{
         Journal,
-        finality::{Authority, MAX_NEW_PROOFS, ProofPrefix, TrustV1},
+        definition::preflight_test_journal,
+        finality::{
+            Authority, MAX_NEW_PROOFS, PREFLIGHT_DIRECTORY, Preflight, ProofPrefix, TrustV1,
+        },
     };
     use std::{os::unix::fs::PermissionsExt as _, time::Instant};
 
@@ -879,19 +923,25 @@ mod deployment_prefix {
         FIXTURE.get_or_init(Fixture::new)
     }
 
-    fn authority() -> Authority {
+    fn trust() -> TrustV1 {
         let fixture = fixture();
         TrustV1 {
+            chain: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+            account_chain_discriminant: 369,
             genesis_public_key: fixture.genesis.public_key().clone(),
             // Release trust consumes the genuinely executed genesis frame; the original
             // signed manifest fixture intentionally predates deterministic execution.
             genesis_signed_wire_hex: hex::encode(&fixture.proofs[0].block_wire),
             peers: fixture.peers.clone(),
         }
-        .authority(NetworkId::from_genesis_hash(
-            fixture.genesis.expected_hash(),
-        ))
-        .unwrap()
+    }
+
+    fn authority() -> Authority {
+        trust()
+            .authority(NetworkId::from_genesis_hash(
+                fixture().genesis.expected_hash(),
+            ))
+            .unwrap()
     }
 
     fn journal() -> (tempfile::TempDir, Journal) {
@@ -903,6 +953,169 @@ mod deployment_prefix {
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(30)
+    }
+
+    #[test]
+    fn deployment_preflight_cache_composes_batches_and_retries_without_refetching() {
+        let root = crate::taira_dataspace_deploy::tests::private_tempdir();
+        let trust = trust();
+        let network = authority().network;
+        let parent = preflight_test_journal(root.path(), &trust, network);
+        let mut preflight = Preflight::new(&parent, &trust, network, deadline()).unwrap();
+        let child = Journal::open(&parent.path.join(PREFLIGHT_DIRECTORY), false).unwrap();
+        // One-proof batches must continue automatically, without another command or owner.
+        let mut fetched = Vec::new();
+        let interrupted = preflight
+            .synchronize_until(
+                &child,
+                &fixture().proofs[2],
+                &fixture().proofs[0],
+                1,
+                |height, trial| {
+                    fetched.push(height.get());
+                    if height.get() == 3 {
+                        eyre::bail!("injected transport interruption after durable progress");
+                    }
+                    let proof = fixture().proofs[height.get() as usize - 1].clone();
+                    trial.verify(&proof)?;
+                    Ok(proof)
+                },
+            )
+            .unwrap_err();
+        assert!(format!("{interrupted:#}").contains("injected transport interruption"));
+        assert!(interrupted.to_string().contains("rerun the same command"));
+        assert_eq!(fetched, vec![2, 3]);
+        assert_eq!(preflight.prefix.authenticated_rows, 2);
+        assert_eq!(preflight.prefix.proofs.len(), 2);
+        preflight.deadline = Instant::now();
+        let expired = preflight
+            .synchronize_until(
+                &child,
+                &fixture().proofs[2],
+                &fixture().proofs[0],
+                1,
+                |_, _| panic!("elapsed deadline must not fetch another proof"),
+            )
+            .unwrap_err();
+        assert_eq!(
+            expired.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut,
+        );
+        assert!(expired.to_string().contains("rerun the same command"));
+        assert_eq!(preflight.prefix.proofs.len(), 2);
+        drop(child);
+        drop(preflight);
+        parent.require_definition_only().unwrap();
+        let path = parent.path.clone();
+        drop(parent);
+
+        let parent = Journal::open_unpublished(&path).unwrap();
+        let mut resumed = Preflight::new(&parent, &trust, network, deadline()).unwrap();
+        let child = Journal::open(&parent.path.join(PREFLIGHT_DIRECTORY), false).unwrap();
+        fetched.clear();
+        resumed
+            .synchronize_until(
+                &child,
+                &fixture().proofs[2],
+                &fixture().proofs[0],
+                1,
+                |height, trial| {
+                    fetched.push(height.get());
+                    let proof = fixture().proofs[height.get() as usize - 1].clone();
+                    trial.verify(&proof)?;
+                    Ok(proof)
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fetched,
+            vec![3],
+            "retained proofs are verified locally, not fetched again"
+        );
+        assert_eq!(resumed.prefix.authenticated_rows, 3);
+        resumed
+            .synchronize_until(
+                &child,
+                &fixture().proofs[1],
+                &fixture().proofs[0],
+                1,
+                |_, _| panic!("unchanged lower tip must reuse this invocation's prefix"),
+            )
+            .unwrap();
+        assert_eq!(resumed.prefix.authenticated_rows, 3);
+        assert_eq!(resumed.prefix.proofs.len(), 3);
+    }
+
+    #[test]
+    fn deployment_preflight_reauthenticates_cache_and_rejects_lost_custody() {
+        for mutation in 0..6 {
+            let root = crate::taira_dataspace_deploy::tests::private_tempdir();
+            let trust = trust();
+            let network = authority().network;
+            let parent = preflight_test_journal(root.path(), &trust, network);
+            let mut first = Preflight::new(&parent, &trust, network, deadline()).unwrap();
+            let child_path = parent.path.join(PREFLIGHT_DIRECTORY);
+            let child = Journal::open(&child_path, false).unwrap();
+            first
+                .synchronize_until(
+                    &child,
+                    &fixture().proofs[2],
+                    &fixture().proofs[0],
+                    2,
+                    |height, trial| {
+                        let proof = fixture().proofs[height.get() as usize - 1].clone();
+                        trial.verify(&proof)?;
+                        Ok(proof)
+                    },
+                )
+                .unwrap();
+            drop(child);
+            drop(first);
+            match mutation {
+                0 => {
+                    let mut changed = fixture().proofs[1].clone();
+                    Fixture::corrupt_signature(&mut changed);
+                    std::fs::write(
+                        child_path.join("proof-00000000000000000002.json"),
+                        norito::json::to_vec(&changed).unwrap(),
+                    )
+                    .unwrap();
+                    let mut fresh = Preflight::new(&parent, &trust, network, deadline()).unwrap();
+                    let child = Journal::open(&child_path, false).unwrap();
+                    assert!(
+                        fresh
+                            .synchronize_until(
+                                &child,
+                                &fixture().proofs[2],
+                                &fixture().proofs[0],
+                                2,
+                                |_, _| panic!(
+                                    "corrupted retained proof must not be replaced by HTTP"
+                                ),
+                            )
+                            .is_err()
+                    );
+                    assert_eq!(fresh.prefix.authenticated_rows, 1);
+                    continue;
+                }
+                1 => std::fs::remove_file(child_path.join("binding.json")).unwrap(),
+                2 => std::fs::remove_file(child_path.join("lock")).unwrap(),
+                3 => std::fs::remove_file(child_path.join("proof-00000000000000000002.json"))
+                    .unwrap(),
+                4 => std::fs::remove_file(parent.path.join("lock")).unwrap(),
+                5 => {
+                    let child = Journal::open(&child_path, false).unwrap();
+                    child
+                        .install_json("catalog.prepared.json", &"forbidden signed state")
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                Preflight::new(&parent, &trust, network, deadline()).is_err(),
+                "mutation {mutation}"
+            );
+        }
     }
 
     fn synchronize(

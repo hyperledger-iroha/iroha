@@ -329,8 +329,50 @@ fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> V
 }
 #[test]
 fn halo2_attachment_statement_changes_proof_hash() {
+    use iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1;
+
     let a = halo2_attachment("statement-a");
     let b = halo2_attachment("statement-b");
+    let inputs = |attachment: &ProofAttachment| {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&attachment.proof.bytes).expect("canonical proof envelope");
+        let carrier = &envelope.proof_bytes;
+        assert_eq!(&carrier[..8], b"ZK1\0PROF");
+        let native_length = u32::from_le_bytes(carrier[8..12].try_into().unwrap()) as usize;
+        let public = &carrier[12 + native_length..];
+        assert_eq!(&public[..4], b"I10P");
+        let length = u32::from_le_bytes(public[4..8].try_into().unwrap()) as usize;
+        assert_eq!(public.len(), 8 + length, "exact public-input TLV extent");
+        let columns = u32::from_le_bytes(public[8..12].try_into().unwrap()) as usize;
+        let rows = u32::from_le_bytes(public[12..16].try_into().unwrap()) as usize;
+        assert_eq!(
+            columns,
+            CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1.len()
+        );
+        assert_eq!(rows, 1);
+        assert_eq!(length, 8 + columns * 32);
+        public[16..]
+            .chunks_exact(32)
+            .map(|value| <[u8; 32]>::try_from(value).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let inputs_a = inputs(&a);
+    let inputs_b = inputs(&b);
+    for (column, name) in CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1
+        .iter()
+        .enumerate()
+    {
+        // The network also domains the active spend nullifier. The absent
+        // second input remains zero and all note/tree/asset fields stay fixed.
+        if matches!(*name, "network_tag" | "nullifier_0") {
+            assert_ne!(
+                inputs_a[column], inputs_b[column],
+                "{name} must bind the network"
+            );
+        } else {
+            assert_eq!(inputs_a[column], inputs_b[column], "{name} must stay fixed");
+        }
+    }
     let hash_a = iroha_core::zk::hash_proof(&a.proof);
     let hash_b = iroha_core::zk::hash_proof(&b.proof);
     assert_ne!(

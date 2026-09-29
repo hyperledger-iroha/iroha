@@ -20103,7 +20103,7 @@ impl World {
                         format!("Phone retail claim {opaque_id} lacks its pinned program")
                     })?;
                 if program.owner != policy.owner
-                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1
+                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedV1
                     || program.commitment.backend != program.backend
                     || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
                 {
@@ -36738,13 +36738,12 @@ impl<'state> StateBlock<'state> {
             }
         };
         if self.exec_witness.is_none() {
-            if let Err(error) = self.require_original_execution_recorder() {
-                self.clear_cached_exec_witness();
-                return Err(error);
-            }
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
             let result = (|| {
                 let state = &mut *capture.state;
+                // Authority loss is a terminal local capture failure. Latch it without
+                // draining a recorder that may now belong to another execution.
+                state.require_original_execution_recorder()?;
                 let mut witness =
                     match crate::exec_witness::drain_exec_witness_checked(|transcripts| {
                         source_inventory.verify_finalized_transcript_map(transcripts)

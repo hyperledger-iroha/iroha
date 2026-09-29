@@ -3008,7 +3008,6 @@ pub struct RamLfeExecuteResponseDto {
     pub backend: String,
     pub verification_mode: String,
     pub receipt: RamLfeExecutionReceiptDto,
-    pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Canonical public RAM-LFE execution receipt payload.

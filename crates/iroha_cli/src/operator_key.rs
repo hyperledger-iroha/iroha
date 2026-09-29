@@ -1,9 +1,9 @@
-//! Secure runtime loading for the CLI operator-signing key.
+//! Secure runtime loading for explicitly selected CLI signing keys.
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use std::path::Path;
 use zeroize::Zeroizing;
-const MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
+const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 /// Load one canonical operator private key from an owner-only runtime file.
 ///
 /// The operator credential is intentionally unavailable through environment variables, client
@@ -11,18 +11,31 @@ const MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 /// the opened descriptor must remain a stable, singly linked, owner-only regular file throughout
 /// the bounded read.
 pub(crate) fn load_operator_key_pair(path: &Path) -> Result<KeyPair> {
+    load_private_key_file(path).wrap_err("invalid operator private-key file")
+}
+
+/// Load the dataspace owner from its explicit definition path, independently of the operator key.
+pub(crate) fn load_owner_key_pair(path: &Path) -> Result<KeyPair> {
+    let key = load_private_key_file(path).wrap_err("invalid dataspace owner private-key file")?;
+    if key.public_key().algorithm() != iroha_crypto::Algorithm::Ed25519 {
+        bail!("dataspace owner key must use Ed25519");
+    }
+    Ok(key)
+}
+
+fn load_private_key_file(path: &Path) -> Result<KeyPair> {
     if !path.is_absolute() {
-        bail!("operator private-key file path must be absolute");
+        bail!("private-key file path must be absolute");
     }
     #[cfg(unix)]
     {
-        load_operator_key_pair_unix(path)
+        load_private_key_file_unix(path)
     }
     #[cfg(not(unix))]
     {
         let _ = path;
         bail!(
-            "operator private-key loading is unavailable on this platform because secure O_NOFOLLOW file opens are unsupported"
+            "private-key loading is unavailable on this platform because secure O_NOFOLLOW file opens are unsupported"
         )
     }
 }
@@ -46,7 +59,7 @@ pub(crate) fn load_operator_key_pair_fd(fd: u32) -> Result<KeyPair> {
             bail!("operator private-key fd must be read-only");
         }
         let bytes = read_operator_key_descriptor(&file)?;
-        parse_operator_private_key(&bytes)
+        parse_private_key(&bytes)
     }
     #[cfg(not(unix))]
     {
@@ -109,7 +122,7 @@ fn read_operator_key_descriptor_with(
     let before = file
         .metadata()
         .map_err(|_| eyre!("failed to inspect operator private-key fd"))?;
-    validate_operator_key_metadata(&before)?;
+    validate_private_key_metadata(&before)?;
     let capacity = usize::try_from(before.len())
         .map_err(|_| eyre!("operator private-key fd length exceeds host width"))?;
     let mut bytes = Zeroizing::new(Vec::new());
@@ -141,81 +154,81 @@ fn read_operator_key_descriptor_with(
     let after = file
         .metadata()
         .map_err(|_| eyre!("failed to re-inspect operator private-key fd"))?;
-    validate_operator_key_metadata(&after)?;
-    if !operator_key_metadata_unchanged(&before, &after) {
+    validate_private_key_metadata(&after)?;
+    if !private_key_metadata_unchanged(&before, &after) {
         bail!("operator private-key fd changed during bounded read");
     }
     Ok(bytes)
 }
 
 #[cfg(unix)]
-fn load_operator_key_pair_unix(path: &Path) -> Result<KeyPair> {
+fn load_private_key_file_unix(path: &Path) -> Result<KeyPair> {
     use std::{
         fs,
         io::{Read as _, Take},
     };
     let path_metadata =
-        fs::symlink_metadata(path).wrap_err("failed to inspect operator private-key file")?;
-    validate_operator_key_metadata(&path_metadata)?;
+        fs::symlink_metadata(path).wrap_err("failed to inspect private-key file")?;
+    validate_private_key_metadata(&path_metadata)?;
     let descriptor = rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
         rustix::fs::Mode::empty(),
     )
-    .wrap_err("failed to securely open operator private-key file")?;
+    .wrap_err("failed to securely open private-key file")?;
     let mut file = fs::File::from(descriptor);
     let before = file
         .metadata()
-        .wrap_err("failed to inspect opened operator private-key file")?;
-    validate_operator_key_metadata(&before)?;
-    if !operator_key_metadata_unchanged(&path_metadata, &before) {
-        bail!("operator private-key file changed during secure open");
+        .wrap_err("failed to inspect opened private-key file")?;
+    validate_private_key_metadata(&before)?;
+    if !private_key_metadata_unchanged(&path_metadata, &before) {
+        bail!("private-key file changed during secure open");
     }
     let capacity = usize::try_from(before.len())
-        .map_err(|_| eyre!("operator private-key file length exceeds host width"))?;
+        .map_err(|_| eyre!("private-key file length exceeds host width"))?;
     let mut bytes = Zeroizing::new(Vec::new());
     bytes
         .try_reserve_exact(capacity)
-        .map_err(|_| eyre!("operator private-key file allocation failed"))?;
+        .map_err(|_| eyre!("private-key file allocation failed"))?;
     let mut bounded: Take<&mut fs::File> =
-        (&mut file).take(MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES.saturating_add(1));
+        (&mut file).take(MAX_PRIVATE_KEY_FILE_BYTES.saturating_add(1));
     bounded
         .read_to_end(&mut bytes)
-        .wrap_err("failed to read operator private-key file")?;
+        .wrap_err("failed to read private-key file")?;
     let after = file
         .metadata()
-        .wrap_err("failed to re-inspect operator private-key file")?;
-    validate_operator_key_metadata(&after)?;
-    if !operator_key_metadata_unchanged(&before, &after)
+        .wrap_err("failed to re-inspect private-key file")?;
+    validate_private_key_metadata(&after)?;
+    if !private_key_metadata_unchanged(&before, &after)
         || u64::try_from(bytes.len()).ok() != Some(before.len())
-        || bytes.len() > usize::try_from(MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES).unwrap_or(usize::MAX)
+        || bytes.len() > usize::try_from(MAX_PRIVATE_KEY_FILE_BYTES).unwrap_or(usize::MAX)
     {
-        bail!("operator private-key file changed during bounded read");
+        bail!("private-key file changed during bounded read");
     }
-    parse_operator_private_key(&bytes)
+    parse_private_key(&bytes)
 }
 
 #[cfg(unix)]
-fn validate_operator_key_metadata(metadata: &std::fs::Metadata) -> Result<()> {
+fn validate_private_key_metadata(metadata: &std::fs::Metadata) -> Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
         || metadata.nlink() != 1
         || metadata.len() == 0
-        || metadata.len() > MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES
+        || metadata.len() > MAX_PRIVATE_KEY_FILE_BYTES
     {
-        bail!("operator private-key file must be a non-empty, bounded, singly linked regular file");
+        bail!("private-key file must be a non-empty, bounded, singly linked regular file");
     }
     if metadata.permissions().mode() & 0o7777 != 0o600 {
-        bail!("operator private-key file must have exact mode 0600");
+        bail!("private-key file must have exact mode 0600");
     }
     if metadata.uid() != rustix::process::geteuid().as_raw() {
-        bail!("operator private-key file must be owned by the current user");
+        bail!("private-key file must be owned by the current user");
     }
     Ok(())
 }
 #[cfg(unix)]
-fn operator_key_metadata_unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+fn private_key_metadata_unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     before.dev() == after.dev()
         && before.ino() == after.ino()
@@ -231,29 +244,29 @@ fn operator_key_metadata_unchanged(before: &std::fs::Metadata, after: &std::fs::
 }
 
 /// Parse native-only held bytes with the same canonical checks as the file and FD loaders.
-pub(crate) fn parse_operator_private_key(bytes: &[u8]) -> Result<KeyPair> {
+fn parse_private_key(bytes: &[u8]) -> Result<KeyPair> {
     let encoded = std::str::from_utf8(bytes)
-        .map_err(|_| eyre!("operator private-key file must contain one canonical ASCII key"))?;
+        .map_err(|_| eyre!("private-key file must contain one canonical ASCII key"))?;
     let encoded = encoded.strip_suffix('\n').unwrap_or(encoded);
     if encoded.is_empty()
         || !encoded.is_ascii()
         || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n'))
     {
-        bail!("operator private-key file must contain one canonical ASCII key");
+        bail!("private-key file must contain one canonical ASCII key");
     }
     let private_key = encoded
         .parse::<PrivateKey>()
-        .map_err(|_| eyre!("operator private-key file does not contain a canonical private key"))?;
+        .map_err(|_| eyre!("private-key file does not contain a canonical private key"))?;
     let canonical = Zeroizing::new(
         ExposedPrivateKey(private_key.clone())
             .try_to_multihash_string()
-            .map_err(|_| eyre!("operator private-key canonical encoding failed"))?,
+            .map_err(|_| eyre!("private-key canonical encoding failed"))?,
     );
     if canonical.as_str() != encoded {
-        bail!("operator private-key file does not contain a canonical private key");
+        bail!("private-key file does not contain a canonical private key");
     }
     KeyPair::from_private_key(private_key)
-        .map_err(|_| eyre!("operator private-key file contains an invalid signing key"))
+        .map_err(|_| eyre!("private-key file contains an invalid signing key"))
 }
 #[cfg(test)]
 mod tests {
@@ -278,6 +291,37 @@ mod tests {
         write_private_key(&path, format!("{encoded}\n").as_bytes());
         let actual = load_operator_key_pair(&path).expect("load secure operator key");
         assert_eq!(actual.public_key(), expected.public_key());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn loads_explicit_ed25519_owner_without_operator_fallback() {
+        let directory = tempfile::tempdir().expect("owner key directory");
+        let owner = directory.path().join("owner.key");
+        let expected = KeyPair::try_from_seed(vec![0xB3; 32], Algorithm::Ed25519).unwrap();
+        write_private_key(
+            &owner,
+            ExposedPrivateKey(expected.private_key().clone())
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(
+            load_owner_key_pair(&owner).unwrap().public_key(),
+            expected.public_key()
+        );
+        assert!(load_owner_key_pair(&directory.path().join("missing.key")).is_err());
+        let other = KeyPair::try_from_seed(vec![0xB4; 32], Algorithm::Secp256k1).unwrap();
+        write_private_key(
+            &owner,
+            ExposedPrivateKey(other.private_key().clone())
+                .to_string()
+                .as_bytes(),
+        );
+        assert!(
+            load_owner_key_pair(&owner)
+                .unwrap_err()
+                .to_string()
+                .contains("Ed25519")
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -308,7 +352,7 @@ mod tests {
         let oversized = directory.path().join("oversized.key");
         write_private_key(
             &oversized,
-            &vec![b'A'; usize::try_from(MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES).unwrap() + 1],
+            &vec![b'A'; usize::try_from(MAX_PRIVATE_KEY_FILE_BYTES).unwrap() + 1],
         );
         assert!(load_operator_key_pair(&oversized).is_err());
         let invalid = directory.path().join("invalid.key");
@@ -343,7 +387,7 @@ mod tests {
         assert_eq!(actual.public_key(), expected.public_key());
         assert_eq!(file.stream_position().expect("caller fd still open"), 7);
         assert_eq!(rustix::fs::fcntl_getfl(&file).unwrap(), flags);
-        assert!(operator_key_metadata_unchanged(
+        assert!(private_key_metadata_unchanged(
             &before,
             &file.metadata().unwrap()
         ));
@@ -411,7 +455,7 @@ mod tests {
         let secret = "FD_PRIVATE_KEY_MUST_NOT_APPEAR_IN_ERROR";
         for body in [
             Vec::new(),
-            vec![b'A'; MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES as usize + 1],
+            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize + 1],
             secret.as_bytes().to_vec(),
             format!(" {encoded}").into_bytes(),
             format!("{encoded}\r\n").into_bytes(),
@@ -471,7 +515,7 @@ mod tests {
                 Ok(count)
             });
             assert!(result.is_err(), "must reject {mutation}");
-            assert!(!operator_key_metadata_unchanged(
+            assert!(!private_key_metadata_unchanged(
                 &before,
                 &file.metadata().unwrap()
             ));

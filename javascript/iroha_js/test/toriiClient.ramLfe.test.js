@@ -39,7 +39,7 @@ const RECEIPT = {
   payload: {
     program_id: PROGRAM_ID,
     program_digest: "bb".repeat(32),
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
     output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
@@ -80,10 +80,9 @@ function ramLfeExecuteResponse(overrides = {}) {
     associated_data_hash: ASSOCIATED_DATA_HASH,
     executed_at_ms: 42,
     expires_at_ms: 142,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     receipt: RECEIPT,
-    output_opening: ramLfeOutputOpening(),
     ...overrides,
   };
 }
@@ -92,7 +91,7 @@ function ramLfeReceiptVerifyResponse(overrides = {}) {
   return {
     valid: true,
     program_id: PROGRAM_ID,
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     output_hash: OUTPUT_HASH,
     associated_data_hash: ASSOCIATED_DATA_HASH,
@@ -108,7 +107,7 @@ function ramLfeProgramPolicy(overrides = {}) {
     active: true,
     resolver_public_key: "ed25519:resolver-key",
     output_opening_public_key: "ed25519:output-opening-key",
-    backend: "bfv-programmed-sha3-256-v1",
+    backend: "bfv-programmed-v1",
     verification_mode: "signed",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters: "ABCD",
@@ -197,6 +196,62 @@ test("listRamLfeProgramPolicies rejects non-exact policy metadata", async () => 
   }
 });
 
+test("RAM-LFE response parsers accept only current backend and verification mode tags", async () => {
+  async function parseAll(overrides, rejectField = null) {
+    const bodies = [
+      ramLfeProgramPolicyListResponse(overrides),
+      ramLfeExecuteResponse({
+        ...overrides,
+        receipt: { ...RECEIPT, payload: { ...RECEIPT.payload, ...overrides } },
+      }),
+      ramLfeReceiptVerifyResponse(overrides),
+    ];
+    for (const [index, body] of bodies.entries()) {
+      const client = new ToriiClient("https://example.test", {
+        localSigningContext: APPLICATION_SIGNING_CONTEXT,
+        fetchImpl: async () => jsonResponse(200, body),
+      });
+      const parse = [
+        () => client.listRamLfeProgramPolicies(),
+        () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD", canonicalAuth: APPLICATION_AUTH }),
+        () => client.verifyRamLfeReceipt({ receipt: RECEIPT, canonicalAuth: APPLICATION_AUTH }),
+      ][index];
+      if (rejectField) {
+        await assert.rejects(parse, new RegExp(`${rejectField} must be one of:`));
+      } else {
+        const result = await parse();
+        const metadata = index === 0 ? result.items[0] : result;
+        assert.equal(metadata.backend, overrides.backend);
+        assert.equal(metadata.verification_mode, overrides.verification_mode);
+      }
+    }
+  }
+  for (const backend of ["hkdf-sha3-512-prf-v1", "bfv-affine-v1", "bfv-programmed-v1"]) {
+    for (const verification_mode of ["signed", "proof"]) {
+      await parseAll({ backend, verification_mode });
+    }
+  }
+  for (const [field, value] of [
+    ["backend", "bfv-affine-sha3-256-v1"],
+    ["backend", "bfv-programmed-sha3-256-v1"],
+    ["backend", "unknown"],
+    ["verification_mode", "signed-v1"],
+    ["verification_mode", "unknown"],
+  ]) {
+    await parseAll({ [field]: value }, field);
+    const client = new ToriiClient("https://example.test", {
+      localSigningContext: APPLICATION_SIGNING_CONTEXT,
+      fetchImpl: async () => jsonResponse(200, ramLfeExecuteResponse({
+        receipt: { ...RECEIPT, payload: { ...RECEIPT.payload, [field]: value } },
+      })),
+    });
+    await assert.rejects(
+      () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD", canonicalAuth: APPLICATION_AUTH }),
+      new RegExp(`receipt\\.payload\\.${field} must be one of:`),
+    );
+  }
+});
+
 test("listRamLfeProgramPolicies rejects non-exact proof-verifier metadata", async () => {
   const cases = [
     ["proof_backend", { proof_backend: " halo2-ipa" }],
@@ -225,7 +280,7 @@ test("listRamLfeProgramPolicies rejects non-exact proof-verifier metadata", asyn
   }
 });
 
-test("executeRamLfeProgram preserves the receipt and normalizes the output opening", async () => {
+test("executeRamLfeProgram returns ciphertext and receipt without a plaintext opening", async () => {
   const client = new ToriiClient("https://example.test", {
     localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (input, init) => {
@@ -251,7 +306,7 @@ test("executeRamLfeProgram preserves the receipt and normalizes the output openi
   assert.equal(result.output_hash, OUTPUT_HASH);
   assert.equal(result.verification_mode, "signed");
   assert.deepEqual(result.receipt, RECEIPT);
-  assert.deepEqual(result.output_opening, ramLfeOutputOpening());
+  assert.equal(Object.hasOwn(result, "output_opening"), false);
 });
 
 test("executeRamLfeProgram rejects non-exact response fields", async () => {
@@ -267,7 +322,7 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
     ],
     ["backend", ramLfeExecuteResponse({ backend: "BFV-programmed-sha3-256-v1" })],
     ["verification_mode", ramLfeExecuteResponse({ verification_mode: " signed" })],
-    ["output_opening", ramLfeExecuteResponse({ output_opening: null })],
+    ["output_opening", ramLfeExecuteResponse({ output_opening: null }), /unsupported fields: output_opening/],
     ["executed_at_ms", ramLfeExecuteResponse({ executed_at_ms: "42" })],
     [
       "receipt.payload.input_ciphertext_hash",
@@ -276,9 +331,15 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
           ...RECEIPT,
           payload: {
             ...RECEIPT.payload,
-            input_ciphertext_hash: "cc".repeat(32),
+            input_ciphertext_hash: `${INPUT_CIPHERTEXT_HASH} `,
           },
         },
+      }),
+    ],
+    [
+      "output_hash",
+      ramLfeExecuteResponse({
+        receipt: { ...RECEIPT, payload: { ...RECEIPT.payload, output_hash: "dd".repeat(32) } },
       }),
     ],
     [
@@ -286,12 +347,13 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
       ramLfeExecuteResponse({ receipt: { ...RECEIPT, ignored: true } }),
     ],
     [
-      "output_opening.payload",
+      "output_opening",
       ramLfeExecuteResponse({
         output_opening: ramLfeOutputOpening({
           payload: { output_ciphertext_hash: "dd".repeat(32) },
         }),
       }),
+      /unsupported fields: output_opening/,
     ],
     [
       "ignored",
@@ -371,7 +433,7 @@ test("verifyRamLfeReceipt posts raw receipt payloads", async () => {
 test("verifyRamLfeReceipt rejects non-exact response fields", async () => {
   const cases = [
     ["program_id", ramLfeReceiptVerifyResponse({ program_id: `${PROGRAM_ID} ` })],
-    ["backend", ramLfeReceiptVerifyResponse({ backend: " bfv-programmed-sha3-256-v1" })],
+    ["backend", ramLfeReceiptVerifyResponse({ backend: " bfv-programmed-v1" })],
     ["verification_mode", ramLfeReceiptVerifyResponse({ verification_mode: "Signed" })],
     ["output_hash", ramLfeReceiptVerifyResponse({ output_hash: ` ${OUTPUT_HASH}` })],
     [

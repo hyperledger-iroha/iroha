@@ -56,6 +56,27 @@ Why this shape:
 - `A` — freshness bound: the policy's `anchor_freshness` (default 16), **pinned into each
   incarnation** at creation, so a policy change never alters an existing lane's rules.
 
+An additive native dataspace catalog transition also registers its fixed Sumeragi lane in
+the same transaction. The admitted manifest's exact live committee and proofs of possession
+are pinned at the lane's activation height; existing policy bounds, routes and autoscale
+settings are preserved. For a chain's first lane, the model-owned `for_chain` constructor
+sets freshness to 16 blocks, maximum merged blocks per lane to 16 and the stall window to
+64 blocks, and copies the chain's governed consensus parameters. This is on-chain policy,
+not node-local configuration. Aborting the transition discards both catalog and lane policy.
+
+Concrete native instruction or contract-address dataspace targets take precedence over
+account and instruction-type routing rules. A non-universal target selects its first
+admitted fixed lane, in lane-ID order, with matching pinned dataspace and committee. A
+missing, unresolved, closing or not-yet-active private route is rejected; it is never
+executed as universal work. Transactions without a concrete dataspace target keep the
+explicit/default routing rules below. Concrete universal application targets may use only
+lanes pinned to universal. Sharing an owner does not merge dataspace routes. Complete
+control-plane batches (`SetParameter`, universal alias-registry and SCCP instructions)
+route to lane `0` before logical lane rules. In particular, catalog registration at `h`,
+bootstrap at `h + 1` and `EnsureAlias` at `h + 2` can complete without an unrelated
+transaction to advance the activation boundary. Application work enters the native lane
+only after the global chain has applied `active_from`.
+
 ## 2. Lane lifecycle in `G`'s state
 
 ### 2.1 Lifecycle record

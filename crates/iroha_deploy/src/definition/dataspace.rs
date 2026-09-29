@@ -1,5 +1,7 @@
 //! The dataspace definition, `dataspaces/<name>.toml` (spec §3.3).
 //!
+//! A dataspace is restricted by default and uses the parent network's committee
+//! unless `[committee] source = "owner"` explicitly selects owner-run nodes.
 //! Inrou is not accepted here in the first release: Soracloud placement targets
 //! global validators only, so an `[inrou]` table is an unknown key.
 
@@ -77,7 +79,7 @@ pub struct CommitteeNode {
 /// `[committee]`: who signs the dataspace lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Committee {
-    /// Where the committee comes from.
+    /// Where the committee comes from; the parent network by default.
     pub source: CommitteeSource,
     /// Owner-run nodes; non-empty iff `source = "owner"`.
     pub nodes: Vec<CommitteeNode>,
@@ -85,6 +87,7 @@ pub struct Committee {
 
 #[derive(ReadConfig)]
 struct RawCommittee {
+    #[config(default)]
     source: CommitteeSource,
     #[config(default)]
     node: Entries<CommitteeNode>,
@@ -245,6 +248,9 @@ impl DataspaceDefinition {
 
     fn check_network_committee(&self, issues: &mut Issues) {
         const OWNER_ONLY: &str = "only allowed when committee.source = \"owner\"";
+        if !self.dataspace.operators.is_empty() {
+            issues.push("dataspace.operators", OWNER_ONLY);
+        }
         if !self.committee.nodes.is_empty() {
             issues.push("committee.node", OWNER_ONLY);
         }

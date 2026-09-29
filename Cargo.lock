@@ -4771,6 +4771,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_deploy",
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",
@@ -4926,6 +4927,7 @@ dependencies = [
  "iroha_macro",
  "iroha_model_base",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_schema",
@@ -5307,6 +5309,7 @@ dependencies = [
  "rustix 1.1.4",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "tracing-subscriber",
  "zeroize",
 ]
 
@@ -5425,6 +5428,13 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+]
+
+[[package]]
+name = "iroha_panic_hook"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -5764,6 +5774,7 @@ dependencies = [
  "iroha_logger",
  "iroha_model_base",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_schema",
  "iroha_schema_gen",
@@ -5898,8 +5909,11 @@ name = "iroha_zkp_poseidon"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "halo2curves",
+ "halo2curves-axiom",
  "once_cell",
  "poseidon-primitives",
+ "sha2",
+ "zeroize",
 ]
 
 [[package]]
@@ -5931,6 +5945,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_p2p",
+ "iroha_panic_hook",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_sccp_rpc",

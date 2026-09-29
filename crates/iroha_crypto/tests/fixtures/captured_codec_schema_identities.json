@@ -386,10 +386,10 @@
     "serialize_hash": "c7e51b0cb930541ea435b078381438b0"
   },
   {
-    "nominal": "iroha_crypto::fhe_bfv::BfvProductionQualificationBlockerV1",
-    "root": "iroha_crypto::fhe_bfv::BfvProductionQualificationBlockerV1",
-    "deserialize_hash": "9de723c1ab3e833d97bf12f9828ac394",
-    "serialize_hash": "9de723c1ab3e833d97bf12f9828ac394"
+    "nominal": "iroha_crypto::fhe_bfv::BfvProductionSupportBlockerV1",
+    "root": "iroha_crypto::fhe_bfv::BfvProductionSupportBlockerV1",
+    "deserialize_hash": "062ac90b1bf1a793353c52dd1fc4715a",
+    "serialize_hash": "062ac90b1bf1a793353c52dd1fc4715a"
   },
   {
     "nominal": "iroha_crypto::fhe_bfv::BfvPublicKey",
@@ -502,10 +502,9 @@
     "serialize_hash": "923accb23a9a6e8c28fb1bd3adbf42d2"
   },
   {
-    "nominal": "iroha_crypto::ram_lfe::HiddenRamFheProgram",
-    "root": "iroha_crypto::ram_lfe::HiddenRamFheProgram",
-    "deserialize_hash": "276fb88d007b816435975306e3453152",
-    "serialize_hash": "276fb88d007b816435975306e3453152"
+    "nominal": "iroha_crypto::ram_lfe::HiddenRamFheProgramV1",
+    "root": "iroha_crypto::ram_lfe::HiddenRamFheProgramV1",
+    "serialize_hash": "4ee23d06145bb2aa2d4ceee4793a0bd4"
   },
   {
     "nominal": "iroha_crypto::ram_lfe::PolicyCommitment",

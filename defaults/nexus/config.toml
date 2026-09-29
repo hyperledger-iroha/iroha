@@ -1,4 +1,5 @@
 # Sora Nexus profile example.
+# Network and deployment overrides; omitted values use iroha_config defaults.
 # Run the daemon with `iroha3d --sora --config defaults/nexus/config.toml`.
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -14,10 +15,6 @@ trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" },
   { public_key = "ea0130A7E9D016D723F72942FCF4B988FB599EA0E092F73C8B68E69F4E8B3FE542A3F7E48AD6CD15F3EB484E45F79399071F77", pop_hex = "a14eb180f0d78c55d2c034e91ccf691378e9c3ceed8e0b81d3e4b7c215c0dbb633bb9f1c5063911c31af4610016c164015f0f93db3c7df6a2ad0c39338fe7695b976a59fd13797615f229fbd77276a8bb2842e4e44fadcafdb7b37f4a143b913" }
 ]
-
-[ivm.banner]
-show = true
-beep = true
 
 [network]
 address = "addr:0.0.0.0:1337#BF18"
@@ -39,19 +36,6 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 [sorafs.discovery.admission]
 enabled = true
 
-[sorafs.repair]
-enabled = false
-claim_ttl_secs = 900
-heartbeat_interval_secs = 60
-max_attempts = 3
-worker_concurrency = 4
-
-[sorafs.gc]
-enabled = false
-interval_secs = 900
-max_deletions_per_run = 500
-retention_grace_secs = 86400
-
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 expected_hash_file = "/run/iroha/genesis.expected_hash"
@@ -67,10 +51,6 @@ lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
-base_fee = "0"
-per_byte_fee = "0"
-per_instruction_fee = "0.001"
-per_gas_unit_fee = "0.00005"
 sponsor_vault_custody_account_id = "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
 
 [nexus.staking]
@@ -78,13 +58,6 @@ stake_asset_id = "xor#universal"
 
 [nexus.storage]
 local_budget_bytes = 274877906944
-budget_enforce_interval_blocks = 10
-max_wsv_memory_bytes = 8589934592
-
-[nexus.storage.disk_budget_weights]
-kura_blocks_bps = 3500
-wsv_snapshots_bps = 2000
-sorafs_bps = 4500
 
 # Lanes are logical workload streams. Their `dataspace` binding names the
 # physical validator/storage boundary that owns the lane.
@@ -93,21 +66,18 @@ index = 0
 alias = "core"
 description = "Primary execution lane"
 dataspace = "universal"
-metadata = {}
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
 dataspace = "universal"
-metadata = {}
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
 dataspace = "universal"
-metadata = {}
 
 # Physical data spaces only. Namespace, governance-module, and workload names
 # must not be promoted into this catalog.
@@ -124,44 +94,11 @@ default_dataspace = "universal"
 [[nexus.routing_policy.rules]]
 lane = 1
 dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "governance"
-description = "Route governance instructions to the governance lane in the universal data space"
+matcher.instruction = "governance"
+matcher.description = "Route governance instructions to the governance lane in the universal data space"
 
 [[nexus.routing_policy.rules]]
 lane = 2
 dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "smartcontract::deploy"
-description = "Route contract deployments to the zk lane in the universal data space"
-
-[nexus.fusion]
-floor_teu = 4000
-exit_teu = 6000
-observation_slots = 2
-max_window_slots = 16
-
-[nexus.commit]
-window_slots = 2
-
-[nexus.da]
-q_in_slot_total = 2048
-q_in_slot_per_ds_min = 8
-sample_size_base = 64
-sample_size_max = 96
-threshold_base = 43
-per_attester_shards = 25
-
-[nexus.da.audit]
-sample_size = 32
-window_count = 20
-interval_ms = 600000
-
-[nexus.da.recovery]
-request_timeout_ms = 86400000
-
-[nexus.da.rotation]
-max_hits_per_window = 4
-window_slots = 64
-seed_tag = "iroha:da:rotate:v1\u0000"
-latency_decay = 0.25
+matcher.instruction = "smartcontract::deploy"
+matcher.description = "Route contract deployments to the zk lane in the universal data space"

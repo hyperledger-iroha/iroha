@@ -285,7 +285,7 @@ fn assert_local_package_cannot_qualify(
     let (release_audit_package, release_audit_package_digest) =
         local_signed_test_package_and_digest(params, material, artifacts, &reviewer_key_pair);
     let missing_qualification = BfvError::ProductionQualificationUnavailable(
-        BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+        BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
     );
     assert_eq!(
         full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
@@ -436,7 +436,7 @@ fn local_signed_package_cannot_qualify_arithmetic_conformance_material() {
     assert_eq!(
         require_ram_lfe_bfv_production_qualification_v1(),
         Err(BfvError::ProductionQualificationUnavailable(
-            BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+            BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
         )),
     );
 }

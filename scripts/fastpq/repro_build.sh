@@ -4,6 +4,9 @@
 # Build FASTPQ-enabled binaries inside a pinned container for reproducibility.
 # The script prepares the toolchain image, runs the build, and emits a manifest
 # capturing hashes and compiler versions.
+# Requires a container runtime and Python 3.10+ with scripts/requirements.txt
+# installed (Python 3.11+ includes the TOML reader). Base images are explicit
+# digest-pinned inputs; the Rust channel comes from rust-toolchain.toml.
 
 set -euo pipefail
 
@@ -34,7 +37,7 @@ Options:
 Environment overrides:
   FASTPQ_RUST_IMAGE       Digest-pinned Rust base image.
   FASTPQ_CUDA_IMAGE       Digest-pinned CUDA base image for GPU builds.
-  FASTPQ_RUST_TOOLCHAIN   Rust toolchain version (default: 1.88.0).
+  FASTPQ_RUST_TOOLCHAIN   Optional assertion; must equal rust-toolchain.toml.
   FASTPQ_CONTAINER_RUNTIME Container runtime to use (default: auto detect).
   FASTPQ_CONTAINER_RUNTIME_FALLBACKS
                           Preferred runtimes when auto-detecting (default:
@@ -169,7 +172,31 @@ select_container_runtime() {
 
 rust_image="${rust_image_cli:-${FASTPQ_RUST_IMAGE:-}}"
 cuda_image="${cuda_image_cli:-${FASTPQ_CUDA_IMAGE:-}}"
-rust_toolchain="${FASTPQ_RUST_TOOLCHAIN:-1.88.0}"
+rust_toolchain="$(python3 - "${workspace_root}/rust-toolchain.toml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 10):
+    raise SystemExit("error: FASTPQ reproducible builds require Python 3.10+")
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        raise SystemExit("error: install scripts/requirements.txt for the TOML reader") from None
+
+channel = tomllib.loads(Path(sys.argv[1]).read_text())["toolchain"]["channel"]
+if not isinstance(channel, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", channel) is None:
+    raise SystemExit("error: rust-toolchain.toml must pin an exact stable Rust version")
+print(channel)
+PY
+)"
+if [[ -n "${FASTPQ_RUST_TOOLCHAIN:-}" && "${FASTPQ_RUST_TOOLCHAIN}" != "${rust_toolchain}" ]]; then
+  printf 'error: FASTPQ_RUST_TOOLCHAIN must match rust-toolchain.toml (%s)\n' "${rust_toolchain}" >&2
+  exit 1
+fi
 
 validate_digest_image() {
   local label="$1"

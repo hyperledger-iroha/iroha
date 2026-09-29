@@ -118,16 +118,16 @@ pub(super) fn check(
     assert!(
         matches!(
             validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1(
-        &signed.artifact_fixture.params,
-        &signed.artifact_fixture.material,
-        &signed.artifact_fixture.artifacts,
-        &generated_inventory.package,
-        package_digest,
-        "sora-zk-audit-wg-2026",
-        signed.review_fixture.reviewer_key_pair.public_key(),
-    ),
+                &signed.artifact_fixture.params,
+                &signed.artifact_fixture.material,
+                &signed.artifact_fixture.artifacts,
+                &generated_inventory.package,
+                package_digest,
+                "sora-zk-audit-wg-2026",
+                signed.review_fixture.reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "a structurally valid signed package cannot supply missing registered BFV production evidence",

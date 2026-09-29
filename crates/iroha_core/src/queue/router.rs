@@ -2621,6 +2621,62 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     }
     Ok(target)
 }
+
+/// Native scope carried by a transaction before logical lane sharding.
+pub(crate) struct NativeExecutionTarget {
+    /// Concrete application scope, when the executable supplies one.
+    pub dataspace: Option<DataSpaceId>,
+    /// Registry/control-plane instructions and cross-dataspace coordinators use lane zero.
+    pub global: bool,
+}
+
+/// Resolve the native instruction/address scope without treating the authority's aliases as
+/// ownership of all of its transactions. Control-plane batches stay on the global chain so a
+/// new dataspace can register its bootstrap grant and name before its lane is active.
+pub(crate) fn native_execution_target<W: WorldReadOnly>(
+    tx: &dyn TransactionRoutingView,
+    dataspaces: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<NativeExecutionTarget, RoutingResolveError> {
+    if let Some(Executable::ContractCall(call)) = transaction_executable(tx) {
+        return Ok(NativeExecutionTarget {
+            dataspace: contract_address_dataspace_target(&call.contract_address),
+            global: false,
+        });
+    }
+    let mut target = transaction_dataspace_routing_target_info_with_world(
+        tx,
+        Some(dataspaces),
+        world,
+        Some(ledger_time_ms),
+    )?;
+    apply_settlement_routing_target(
+        &mut target,
+        settlement_transaction_dataspace_target_with_world(
+            tx,
+            Some(dataspaces),
+            world,
+            Some(ledger_time_ms),
+        )?,
+    );
+    let control_plane = match transaction_executable(tx) {
+        Some(Executable::Instructions(instructions)) => {
+            !instructions.is_empty()
+                && instructions.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .is::<iroha_data_model::isi::SetParameter>()
+                        || instruction_routes_to_universal_dataspace(&**instruction)
+                })
+        }
+        _ => false,
+    };
+    Ok(NativeExecutionTarget {
+        dataspace: target.dataspace_id,
+        global: control_plane || target.coordinator_route,
+    })
+}
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the

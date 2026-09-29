@@ -156,11 +156,10 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `FheJobSpecV1` captures deterministic ciphertext job admission/execution
   requests: operation class, ordered input commitments, output key, and bounded
   depth/rotation/bootstrap demand linked to a policy + parameter set.
-  Runtime execution loads the referenced ciphertext envelopes from
-  authoritative service state, verifies their commitments and parameter/key
-  identifiers, performs the requested FHE operation, then persists the encoded
-  output ciphertext envelope and its commitment. Output byte counts are derived
-  from the encoded ciphertext bytes, not from deterministic estimates.
+  Production FHE execution is unavailable. The exact BFV profile is known
+  insecure; the rounded construction is unqualified. Adding proof evidence
+  cannot make the exact profile secure. Structural validation of these records
+  supports diagnostic tests and does not authorize encrypted execution.
 - `DecryptionAuthorityPolicyV1` captures governance-managed disclosure policy:
   authority mode (client-held vs threshold service), approver quorum/members,
   break-glass allowance, jurisdiction tagging, consent-evidence requirement,
@@ -178,6 +177,16 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `SecretEnvelopeV1` captures encrypted payload material itself:
   encryption mode, key identifier/version, nonce, ciphertext bytes, and
   integrity commitments.
+
+Production admission accepts plaintext and client ciphertext storage. It rejects
+FHE state bindings, policy registration/rotation, state upserts, jobs, and FHE
+secret labels, including secrets without a policy. Deployment, upgrade, rollback
+and snapshot restore enforce this boundary. Restore also rejects retained FHE
+policy history and FHE state rows. Authenticated deletion and policy revocation
+remain available for diagnostic records already present in memory; no fallback
+decoder admits them during restore. `SoracloudManifestError::FheUnavailable` is a
+typed local error, mapped to the existing instruction invalid-parameter and
+snapshot error families with the fixed `soracloud_fhe_unavailable` reason.
 - `CiphertextStateRecordV1` captures ciphertext-native state entries that
   combine public metadata (content type, policy tags, commitment, payload size)
   with a `SecretEnvelopeV1`.

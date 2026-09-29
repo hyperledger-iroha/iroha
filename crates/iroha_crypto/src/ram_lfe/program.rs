@@ -5,7 +5,7 @@ use super::{
     BFV_PROGRAM_STATE_WIDTH_U16, Hash, HiddenRamFheInstruction, RamLfeError, invalid_program_error,
     policy_secret, validate_hidden_program,
 };
-use norito::core::{DecodeFromSlice, DeserializePayload, SerializePayload};
+use norito::core::{DecodeFromSlice, SerializePayload};
 use std::{fmt, str::FromStr, sync::Arc};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -57,10 +57,31 @@ struct Program {
 ///
 /// Use [`Self::builder`] for typed instructions or [`Self::from_bytes`] for a
 /// canonical private frame. Clones share the allocation; Debug never prints the
-/// tape. Borrowed instructions and explicitly serialized bytes remain private
-/// material. Caller-created and compiler-created copies require separate care.
+/// tape. Instructions read from the tape and explicitly serialized bytes remain
+/// private material. Clearing covers the owned tape and byte buffers; typed
+/// instruction values and compiler-created copies require separate care.
+/// Generic archive decoders are deliberately unavailable because their scratch
+/// ownership cannot provide this type's private-frame clearing guarantee.
+///
+/// ```
+/// use iroha_crypto::{HiddenRamFheInstruction, HiddenRamFheProgram};
+/// let mut tape = HiddenRamFheProgram::builder()?;
+/// tape.push(HiddenRamFheInstruction::LoadInput(0, 0))?;
+/// tape.push(HiddenRamFheInstruction::Output(0))?;
+/// let program = tape.finish()?;
+/// let private_frame = program.to_bytes()?;
+/// assert_eq!(HiddenRamFheProgram::from_bytes(&private_frame)?, program);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// ```compile_fail
+/// let _: iroha_crypto::HiddenRamFheProgram = norito::decode_from_bytes(&[]).unwrap();
+/// ```
 #[derive(Clone, PartialEq, Eq, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_crypto::ram_lfe::HiddenRamFheProgramV1")]
+#[norito_schema(
+    name = "iroha_crypto::ram_lfe::HiddenRamFheProgramV1",
+    frame = "iroha_crypto::ram_lfe::HiddenRamFheProgramV1"
+)]
 pub struct HiddenRamFheProgram(Arc<Program>);
 
 impl HiddenRamFheProgram {
@@ -143,11 +164,21 @@ impl HiddenRamFheProgram {
             ));
         }
         let view = norito::core::from_bytes_view(bytes).map_err(codec_error)?;
+        if view.schema() != norito::schema::identity::frame_hash::<Self>() {
+            return Err(codec_error(norito::core::Error::SchemaMismatch));
+        }
+        // This owner's canonical frame is byte-aligned after the 40-byte header.
+        // Reject surplus leading padding before the private allocation is made.
+        if bytes.len() != norito::core::Header::SIZE + view.as_bytes().len() {
+            return Err(codec_error(norito::core::Error::LengthMismatch));
+        }
         if view.flags() != norito::core::default_encode_flags() {
             return Err(codec_error(norito::core::Error::NonCanonicalEncoding));
         }
-        let program = view
-            .decode_exact_with::<Self, _, _>(decode_payload)
+        // `decode_unchecked` omits only schema checking, performed above. Norito
+        // still scopes decode limits/flags and enforces full payload consumption.
+        let DecodedOwner(program) = view
+            .decode_unchecked::<DecodedOwner>()
             .map_err(codec_error)?;
         norito::verify_exact_canonical_frame(&program, bytes).map_err(codec_error)?;
         Ok(program)
@@ -255,21 +286,10 @@ impl SerializePayload for HiddenRamFheProgram {
     }
 }
 
-impl<'a> DeserializePayload<'a> for HiddenRamFheProgram {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("validated hidden program")
-    }
-    fn try_deserialize(
-        archived: &'a norito::core::Archived<Self>,
-    ) -> Result<Self, norito::core::Error> {
-        let bytes = norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
-        decode_payload(bytes).map(|(value, _)| value)
-    }
-}
-
-impl<'a> DecodeFromSlice<'a> for HiddenRamFheProgram {
+struct DecodedOwner(HiddenRamFheProgram);
+impl<'a> DecodeFromSlice<'a> for DecodedOwner {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_payload(bytes)
+        decode_payload(bytes).map(|(value, used)| (Self(value), used))
     }
 }
 
@@ -319,6 +339,14 @@ fn decode_payload(bytes: &[u8]) -> Result<(HiddenRamFheProgram, usize), norito::
     for slot in private.chunks_exact(BYTES_PER_INSTRUCTION) {
         decode_instruction(slot)?;
     }
+    // Account for the fixed tape, shared owner and semantic-validation scratch
+    // in every active Norito budget before the private copy is allocated.
+    let allocation = MAX_TAPE_BYTES
+        + std::mem::size_of::<Program>()
+        + 2 * std::mem::size_of::<usize>()
+        + usize::from(BFV_PROGRAM_REGISTER_COUNT_U16 + BFV_PROGRAM_STATE_WIDTH_U16)
+            * std::mem::size_of::<u16>();
+    norito::core::reserve_decode_allocation(allocation)?;
     let mut builder = HiddenRamFheProgram::builder().map_err(program_codec_error)?;
     builder.tape.bytes[..length].copy_from_slice(private);
     builder.tape.count = length / BYTES_PER_INSTRUCTION;
@@ -402,6 +430,7 @@ impl FromStr for HiddenRamFheProgram {
                 "hidden program requires bounded non-empty lowercase hex",
             ));
         }
+        norito::core::reserve_decode_allocation(literal.len() / 2).map_err(codec_error)?;
         let mut bytes = Zeroizing::new(Vec::new());
         bytes
             .try_reserve_exact(literal.len() / 2)
@@ -418,9 +447,15 @@ impl norito::json::JsonDeserialize for HiddenRamFheProgram {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        let text = Zeroizing::new(<String as norito::json::JsonDeserialize>::json_deserialize(
-            parser,
-        )?);
+        // Hex has no characters requiring JSON escapes. Borrow its one canonical
+        // spelling, avoiding a generic string decoder's private allocation.
+        let raw = parser.raw_value_slice()?;
+        let text = raw
+            .strip_prefix('"')
+            .and_then(|raw| raw.strip_suffix('"'))
+            .ok_or_else(|| {
+                norito::json::Error::Message("hidden program must be a lowercase hex string".into())
+            })?;
         text.parse()
             .map_err(|error: RamLfeError| norito::json::Error::Message(error.to_string()))
     }

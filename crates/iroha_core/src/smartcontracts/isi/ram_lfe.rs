@@ -162,9 +162,13 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
     if policy.verification_mode == RamLfeVerificationMode::Proof {
         return Err(Error::InvariantViolation(PROOF_RELATION_UNAVAILABLE.into()));
     }
+    policy
+        .backend
+        .require_production_support()
+        .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
     match policy.backend {
         RamLfeBackend::HkdfSha3_512PrfV1 => {}
-        RamLfeBackend::BfvAffineSha3_256V1 => {
+        RamLfeBackend::BfvAffineV1 => {
             if policy.commitment.public_parameters.is_empty() {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -194,7 +198,7 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
                 )
             })?;
         }
-        RamLfeBackend::BfvProgrammedSha3_256V1 => {
+        RamLfeBackend::BfvProgrammedV1 => {
             decode_bfv_programmed_public_parameters(&policy.commitment.public_parameters).map_err(
                 |err| {
                     Error::InvariantViolation(
@@ -245,6 +249,10 @@ pub fn validate_execution_receipt_at(
     if program_policy.verification_mode == RamLfeVerificationMode::Proof {
         return Err(PROOF_RELATION_UNAVAILABLE.to_owned());
     }
+    program_policy
+        .backend
+        .require_production_support()
+        .map_err(|error| error.to_string())?;
     if program_policy.commitment.backend != program_policy.backend {
         return Err(format!(
             "RAM-LFE program policy {} backend does not match its commitment backend",
@@ -272,7 +280,7 @@ pub fn validate_execution_receipt_at(
         ));
     }
     let public_parameters = match program_policy.backend {
-        RamLfeBackend::BfvProgrammedSha3_256V1 => {
+        RamLfeBackend::BfvProgrammedV1 => {
             decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
                 .map_err(|err| {
                     format!(
@@ -425,8 +433,8 @@ mod tests {
     fn unavailable_proof_policy_and_receipt_reject_before_parameter_or_proof_work() {
         for backend in [
             RamLfeBackend::HkdfSha3_512PrfV1,
-            RamLfeBackend::BfvAffineSha3_256V1,
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::BfvAffineV1,
+            RamLfeBackend::BfvProgrammedV1,
         ] {
             let mut policy = sample_policy();
             policy.backend = backend;
@@ -447,15 +455,31 @@ mod tests {
         validate_program_policy(&signed).expect("signed policy remains supported");
     }
     #[test]
+    fn signed_diagnostic_bfv_policies_and_receipts_are_unavailable() {
+        for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
+            let mut policy = sample_policy();
+            policy.backend = backend;
+            policy.commitment.backend = backend;
+            policy.commitment.public_parameters = vec![0xff];
+            let error = validate_program_policy(&policy).unwrap_err();
+            assert!(error.to_string().contains("noiseless public-key equation"));
+            let receipt = sample_receipt(&policy, 100, None);
+            assert_eq!(
+                validate_execution_receipt_at(&receipt, &policy, 100, test_guardrails()),
+                Err(iroha_crypto::RamLfeError::InsecureBfvProfile.to_string())
+            );
+        }
+    }
+    #[test]
     fn malformed_bfv_parameters_are_rejected_without_panicking() {
         let resolver = checked_keypair();
         let mut policy = RamLfeProgramPolicy::new(
             RamLfeProgramId::from_str("malformed_bfv").expect("program id"),
             checked_account_id(),
-            RamLfeBackend::BfvAffineSha3_256V1,
+            RamLfeBackend::BfvAffineV1,
             RamLfeVerificationMode::Signed,
             PolicyCommitment {
-                backend: RamLfeBackend::BfvAffineSha3_256V1,
+                backend: RamLfeBackend::BfvAffineV1,
                 policy_hash: Hash::new(b"malformed-bfv-policy"),
                 public_parameters: vec![0xFF, 0x00, 0x7F],
             },
@@ -465,7 +489,7 @@ mod tests {
         let error = validate_program_policy(&policy)
             .expect_err("malformed BFV parameters must fail policy admission");
         assert!(
-            error.to_string().contains("invalid BFV public parameters"),
+            error.to_string().contains("noiseless public-key equation"),
             "unexpected error: {error}"
         );
     }
@@ -475,10 +499,10 @@ mod tests {
         RamLfeProgramPolicy::new(
             RamLfeProgramId::from_str("test_program").expect("program id"),
             owner,
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::HkdfSha3_512PrfV1,
             RamLfeVerificationMode::Signed,
             PolicyCommitment {
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: RamLfeBackend::HkdfSha3_512PrfV1,
                 policy_hash: Hash::new(b"policy"),
                 public_parameters: Vec::new(),
             },
@@ -539,7 +563,7 @@ mod tests {
         RamLfeExecutionReceiptPayload {
             program_id: RamLfeProgramId::from_str("proof_program").expect("program id"),
             program_digest: Hash::new(b"program"),
-            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            backend: RamLfeBackend::BfvProgrammedV1,
             verification_mode: RamLfeVerificationMode::Proof,
             input_ciphertext_hash: Hash::new(b"input-ciphertext"),
             output_ciphertext_hash: Hash::new(b"output-ciphertext"),

@@ -1673,13 +1673,24 @@ pub(super) fn prepare_configured_genesis(
                     drop((valid, overlay));
                     Ok(None)
                 }
-                Err((_, error)) => match *error {
+                Err((rejected, error)) => match *error {
                     crate::block::BlockValidationError::GenesisPolicyMismatch {
                         actual_execution,
                         actual_nexus,
                         ..
                     } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
-                    error => Err(format!("original native genesis execution: {error}")),
+                    error => {
+                        let failures = rejected
+                            .execution_outputs()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, output)| output.result().is_err())
+                            .map(|(index, output)| (index, output.result()))
+                            .collect::<Vec<_>>();
+                        Err(format!(
+                            "original native genesis execution: {error}; failed outputs: {failures:?}"
+                        ))
+                    }
                 },
             }
         };

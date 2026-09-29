@@ -19,6 +19,7 @@ export {
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
+  RamLfeEncryptionUnavailableError,
   extractPipelineStatusKind,
   getIdentifierBfvPublicParameters,
   hashIdentifierEncryptedInput,

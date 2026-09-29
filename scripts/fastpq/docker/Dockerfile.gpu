@@ -6,11 +6,11 @@
 
 ARG CUDA_IMAGE
 ARG RUST_IMAGE
-ARG RUST_TOOLCHAIN=1.88.0
-
 FROM ${RUST_IMAGE} AS rust_toolchain
 
 FROM ${CUDA_IMAGE} AS fastpq_gpu
+
+ARG RUST_TOOLCHAIN
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -41,7 +41,8 @@ RUN <<'EOF'
   rm -rf /var/lib/apt/lists/*
 EOF
 
-RUN rustup default "${FASTPQ_RUST_TOOLCHAIN}" && \
+RUN test -n "${FASTPQ_RUST_TOOLCHAIN}" && \
+    rustup default "${FASTPQ_RUST_TOOLCHAIN}" && \
     rustup component add --toolchain "${FASTPQ_RUST_TOOLCHAIN}" \
       rustfmt \
       clippy \

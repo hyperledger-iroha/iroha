@@ -11,8 +11,8 @@ import org.bouncycastle.crypto.params.ParametersWithIV
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
-/** Builds framed Norito BFV identifier ciphertext envelopes from client-side input. */
-internal object IdentifierBfvEnvelopeBuilder {
+/** Insecure exact-lift arithmetic retained only for historical fixture diagnostics. */
+internal object DiagnosticIdentifierBfvEnvelopeBuilder {
     private const val SCHEMA_NAME = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext"
     private val RUST_ENCRYPT_DOMAIN = "iroha.crypto.fhe.bfv.encrypt.v1".toByteArray(StandardCharsets.UTF_8)
     private val RUST_SLOT_DOMAIN = "iroha.crypto.fhe.bfv.identifier.slot.v1".toByteArray(StandardCharsets.UTF_8)

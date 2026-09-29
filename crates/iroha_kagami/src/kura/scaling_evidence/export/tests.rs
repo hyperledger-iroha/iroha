@@ -21,6 +21,17 @@ mod unix {
     }
     impl Disk {
         fn new(lanes: usize) -> Self {
+            // Retain the production rejection reason when an original signed
+            // fixture fails before export, instead of reporting only `Invalid`.
+            static LOGGER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            LOGGER.get_or_init(|| {
+                // Fixture construction is synchronous. A formatting subscriber
+                // exposes production warnings without a Tokio logging actor.
+                tracing_subscriber::fmt()
+                    .with_env_filter("warn")
+                    .try_init()
+                    .expect("initialize signed-fixture diagnostics");
+            });
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path().canonicalize().unwrap();
             let signed = fixture::Fixture::new(lanes);

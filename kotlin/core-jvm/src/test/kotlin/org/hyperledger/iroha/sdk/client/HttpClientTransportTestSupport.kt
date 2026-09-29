@@ -39,30 +39,17 @@ internal fun ramLfeExecuteResponseJson(): String =
           "associated_data_hash": "${"55".repeat(32)}",
           "executed_at_ms": 42,
           "expires_at_ms": 142,
-          "backend": "bfv-programmed-sha3-256-v1",
+          "backend": "bfv-programmed-v1",
           "verification_mode": "signed",
           "receipt": {
             "payload": {
               "program_id": {"name": "identifier_lookup_retail"},
               "program_digest": "hash:${"11".repeat(32).uppercase()}#ABCD",
-              "backend": "bfv-programmed-sha3-256-v1",
+              "backend": "bfv-programmed-v1",
               "verification_mode": {"mode": "Signed", "value": null},
               "output_hash": "hash:${"22".repeat(32).uppercase()}#BCDE",
               "associated_data_hash": "hash:${"33".repeat(32).uppercase()}#CDEF",
               "executed_at_ms": 42,
-              "expires_at_ms": 142
-            },
-            "signature": "${"aa".repeat(64)}"
-          },
-          "output_opening": {
-            "payload": {
-              "program_id": "identifier_lookup_retail",
-              "input_ciphertext_hash": "${"11".repeat(32)}",
-              "output_ciphertext_hash": "${"22".repeat(32)}",
-              "parameter_digest": "${"33".repeat(32)}",
-              "evaluation_key_digest": "${"44".repeat(32)}",
-              "opened_output_hash": "${"44".repeat(32)}",
-              "opened_at_ms": 42,
               "expires_at_ms": 142
             },
             "signature": "${"aa".repeat(64)}"
@@ -75,7 +62,7 @@ internal fun ramLfeReceiptVerifyResponseJson(): String =
         {
           "valid": true,
           "program_id": "identifier_lookup_retail",
-          "backend": "bfv-programmed-sha3-256-v1",
+          "backend": "bfv-programmed-v1",
           "verification_mode": "signed",
           "output_hash": "${"44".repeat(32)}",
           "associated_data_hash": "${"55".repeat(32)}",

@@ -82,8 +82,18 @@ pub(super) fn confidential_attachment(
                     None,
                 )
                 .expect("genuine complete confidential relation");
+            assert_eq!(result.relation, zk::ProofRelation::ConfidentialFullUnshield);
+            assert_eq!(result.root, paths[0].root);
+            assert_eq!(result.nullifiers.len(), 1);
+            assert!(result.output_commitments.is_empty());
             let record = confidential_unshield_v2_vk_record("integration", 1)
                 .expect("canonical confidential registry key");
+            let envelope: OpenVerifyEnvelope =
+                norito::decode_canonical(&result.proof.bytes).expect("canonical wallet envelope");
+            let schema_hash: [u8; 32] = Hash::new(&envelope.public_inputs).into();
+            assert_eq!(schema_hash, record.public_inputs_schema_hash);
+            assert_eq!(envelope.vk_hash, record.commitment);
+            assert_eq!(envelope.circuit_id, record.circuit_id);
             assert!(zk::verify_backend(
                 zk::ZK_BACKEND_HALO2_IPA,
                 &result.proof,

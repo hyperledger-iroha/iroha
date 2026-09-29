@@ -271,7 +271,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
             }
         }
 
-        for (backend in listOf(" bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
+        for (backend in listOf(" bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
             assertFailsWith<IllegalArgumentException>("backend $backend") {
                 IdentifierReceiptCanonicalEncoder.encodePayload(samplePayload(backend = backend))
             }
@@ -376,7 +376,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         programId: String = "identifier_lookup_retail",
         openingProgramId: String = "identifier_lookup_retail",
         accountId: String? = null,
-        backend: String = "bfv-affine-sha3-256-v1",
+        backend: String = "bfv-affine-v1",
         verificationMode: String = "signed",
         openingSignature: String = "a1b2c3d4",
         opaqueId: String = "opaque:" + "44".repeat(32),

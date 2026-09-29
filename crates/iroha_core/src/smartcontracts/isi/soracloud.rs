@@ -5996,6 +5996,11 @@ pub(crate) fn apply_soracloud_state_mutation(
     linkage_hash: Hash,
     sequence: u64,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
+    if operation == SoraStateMutationOperationV1::Upsert {
+        encryption
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+    }
     if state_key.trim().is_empty() {
         return Err(invalid_parameter("state_key must not be empty"));
     }
@@ -6452,6 +6457,10 @@ fn apply_service_secret_mutation(
         next_service_material_generation(service_name, "secret", deployment.secret_generation)?;
     match secret {
         Some(secret) => {
+            secret
+                .encryption
+                .require_production_support()
+                .map_err(|error| invalid_parameter(error.to_string()))?;
             deployment.service_secrets.insert(
                 secret_name.to_owned(),
                 SoraServiceSecretEntryV1 {
@@ -6485,6 +6494,10 @@ fn record_service_state_entry(
     state_transaction: &mut StateTransaction<'_, '_>,
     entry: SoraServiceStateEntryV1,
 ) -> Result<(), InstructionExecutionError> {
+    entry
+        .encryption
+        .require_production_support()
+        .map_err(|error| invalid_parameter(error.to_string()))?;
     entry
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -9683,6 +9696,15 @@ fn admit_bundle(
         &provenance,
     )?;
     bundle
+        .require_production_support()
+        .map_err(|error| invalid_parameter(error.to_string()))?;
+    for secret in initial_service_secrets.values() {
+        secret
+            .encryption
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+    }
+    bundle
         .validate_for_admission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
     let service_name = bundle.service.service_name.clone();
@@ -10277,6 +10299,9 @@ impl Execute for isi::RollbackSoracloudService {
             &existing.current_service_version,
         )?;
         let bundle = load_admitted_bundle(state_transaction, &self.service_name, &target_version)?;
+        bundle
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         crate::soracloud_runtime::validate_soracloud_service_revision_identity(
             &current_bundle,
             &bundle,
@@ -10523,6 +10548,10 @@ impl Execute for isi::SetSoracloudServiceSecret {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
+        self.secret
+            .encryption
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         verify_service_secret_set_provenance(
             authority,
             &self.service_name,
@@ -10679,6 +10708,11 @@ impl Execute for isi::MutateSoracloudState {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
+        if operation == SoraStateMutationOperationV1::Upsert {
+            encryption
+                .require_production_support()
+                .map_err(|error| invalid_parameter(error.to_string()))?;
+        }
         let (signed_value_size_bytes, signed_payload_commitment) = match operation {
             SoraStateMutationOperationV1::Upsert => {
                 let payload = value_payload.as_ref().ok_or_else(|| {
@@ -10819,6 +10853,11 @@ impl Execute for isi::RegisterSoracloudFhePolicy {
             &self.provenance,
         )?;
         self.material
+            .governance_bundle
+            .execution_policy
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+        self.material
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
         registered_soracloud_bfv_parameters(&self.material.governance_bundle.param_set)?;
@@ -10942,6 +10981,11 @@ impl Execute for isi::RotateSoracloudFhePolicy {
             &self.material,
             &self.provenance,
         )?;
+        self.material
+            .governance_bundle
+            .execution_policy
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         self.material
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -11139,6 +11183,9 @@ impl Execute for isi::RunSoracloudFheJob {
             self.full_bootstrap_execution_proofs.clone(),
             &self.provenance,
         )?;
+        SoraStateEncryptionV1::FheCiphertext
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         // Resolve the exact authenticated version before deriving any proof
         // statement or beginning deterministic execution. A transaction signed
         // against a superseded or revoked version must never fall through to a
@@ -11471,6 +11518,10 @@ impl Execute for isi::RecordSoracloudDecryptionRequest {
                     .into(),
                 )
             })?;
+        binding
+            .encryption
+            .require_production_support()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
         if binding.encryption == SoraStateEncryptionV1::Plaintext {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(

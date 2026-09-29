@@ -5,6 +5,7 @@ mod capability_test_support;
 pub mod configuration;
 #[cfg(test)]
 mod configuration_http_tests;
+mod consensus_keys;
 pub mod data_availability;
 #[cfg(test)]
 mod data_availability_http_tests;
@@ -12338,6 +12339,7 @@ mod evidence_http_tests {
     }
     include!("client/activation_evidence_tests.rs");
     include!("client/validator_committee_tests.rs");
+    include!("client/consensus_keys_tests.rs");
     include!("client/activation_attestation_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))

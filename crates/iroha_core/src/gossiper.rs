@@ -3513,20 +3513,13 @@ mod tests {
         },
     };
     use iroha_config_base::WithOrigin;
-    use iroha_crypto::{
-        Algorithm, BfvEvaluationKeyBundle, BfvParameters, KeyPair, RamLfeBackend,
-        RamLfeVerificationMode, bfv_programmed_policy_commitment_with_program,
-        default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-        ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
-    };
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Level,
         account::{AccountDetails, AccountId, AccountValue},
         domain::Domain,
-        identifier::IdentifierPolicyId,
-        isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
+        isi::{InstructionBox, Log, Register},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
-        ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::{
             TransactionBuilder,
             signed::{
@@ -3699,62 +3692,35 @@ mod tests {
             ALICE_KEYPAIR.private_key(),
         ))
     }
-    fn identifier_bfv_parameters() -> BfvParameters {
-        ram_lfe_bfv_parameters_v1()
-    }
+
     fn checked_ram_lfe_policy_signer() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked RAM-LFE policy signer")
     }
-    fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
+
+    fn register_large_hkdf_program_policy_tx() -> SignedTransaction {
+        use iroha_crypto::ram_lfe::{RamLfeBackend, RamLfeVerificationMode, policy_commitment};
+        use iroha_data_model::{
+            isi::{Instruction as _, ram_lfe::RegisterRamLfeProgramPolicy},
+            ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
+        };
+
         let owner = (*ALICE_ID).clone();
         let signer = checked_ram_lfe_policy_signer();
-        let policy_id = "email#retail"
-            .parse::<IdentifierPolicyId>()
-            .expect("valid policy id");
-        let program_id = policy_id
-            .to_string()
-            .replace('#', "_")
-            .parse::<RamLfeProgramId>()
-            .expect("valid program id");
-        let hidden_program = default_bfv_programmed_hidden_program();
-        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
-            &identifier_bfv_parameters(),
-            63,
-            b"email-secret",
-            &norito::to_bytes(&program_id).expect("encode program id"),
-        )
-        .expect("derive key material");
-        let evaluation_keys = BfvEvaluationKeyBundle {
-            relinearization_key,
-            rotation_keys: Vec::new(),
-            galois_keys: Vec::new(),
-            bootstrap_key: None,
-        };
-        let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
-            public_parameters,
-            evaluation_keys,
-            &hidden_program,
-            RamLfeVerificationMode::Signed,
-            None,
-        )
-        .expect("build programmed BFV public parameters");
-        let encoded_public_parameters =
-            norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
-        let commitment = bfv_programmed_policy_commitment_with_program(
-            b"email-secret",
-            &encoded_public_parameters,
-            &hidden_program,
-        )
-        .expect("policy commitment");
+        let commitment = policy_commitment(b"gossip-policy-fixture", vec![0x5a; 64 * 1024])
+            .expect("large supported HKDF policy commitment");
         let policy = RamLfeProgramPolicy::new(
-            program_id,
+            "gossip_large_hkdf"
+                .parse::<RamLfeProgramId>()
+                .expect("program id"),
             owner.clone(),
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::HkdfSha3_512PrfV1,
             RamLfeVerificationMode::Signed,
             commitment,
             signer.public_key().clone(),
         );
+        crate::smartcontracts::isi::ram_lfe::validate_program_policy(&policy)
+            .expect("gossip fixture uses a supported policy");
         let instructions: [InstructionBox; 1] =
             [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
         TransactionBuilder::new(

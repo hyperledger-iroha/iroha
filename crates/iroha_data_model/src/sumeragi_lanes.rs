@@ -495,6 +495,24 @@ pub enum SumeragiLanePolicyError {
 }
 
 impl SumeragiLanePolicy {
+    /// Initial governed lane policy for a chain adding its first physical dataspace.
+    ///
+    /// Existing policies retain their reviewed bounds. A chain without one starts with a
+    /// 16-block anchor window, at most 16 merged blocks per lane, and a 64-block stall
+    /// window. New lane instances inherit the chain's committed consensus parameters.
+    #[must_use]
+    pub fn for_chain(lane_params: SumeragiParameters) -> Self {
+        Self {
+            anchor_freshness: 16,
+            max_merge_blocks: 16,
+            stall_window: 64,
+            lane_params,
+            fixed: Vec::new(),
+            routes: Vec::new(),
+            autoscale: None,
+        }
+    }
+
     /// Identifier of the custom parameter holding the policy.
     pub const PARAMETER_ID_STR: &'static str = "sumeragi_lane_policy";
 
@@ -617,6 +635,32 @@ impl SumeragiLanePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_dataspace_policy_inherits_chain_parameters_and_roundtrips() {
+        let params = SumeragiParameters::default();
+        let policy = SumeragiLanePolicy::for_chain(params.clone());
+        assert_eq!(policy.lane_params, params);
+        assert_eq!(
+            (
+                policy.anchor_freshness,
+                policy.max_merge_blocks,
+                policy.stall_window
+            ),
+            (16, 16, 64)
+        );
+        assert!(policy.fixed.is_empty() && policy.routes.is_empty() && policy.autoscale.is_none());
+        policy.validate().unwrap();
+        let encoded = norito::encode_canonical(&policy).unwrap();
+        let decoded: SumeragiLanePolicy = norito::decode_canonical(&encoded).unwrap();
+        assert_eq!(decoded, policy);
+        assert_eq!(
+            SumeragiLanePolicy::from_custom_parameter(&policy.clone().into_custom_parameter())
+                .unwrap()
+                .unwrap(),
+            policy
+        );
+    }
 
     fn record(closing: Option<u64>) -> SumeragiLaneRecord {
         SumeragiLaneRecord {

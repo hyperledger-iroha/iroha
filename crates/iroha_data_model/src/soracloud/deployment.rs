@@ -392,6 +392,21 @@ pub struct SoraServiceDeploymentStateV1 {
     pub lease_volume_states: Vec<SoraServiceLeaseVolumeStateV1>,
 }
 impl SoraServiceDeploymentStateV1 {
+    /// Require supported encryption declarations in persisted deployment state.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::FheUnavailable`] for retained FHE policies
+    /// or secret declarations, including inactive policy history.
+    pub fn require_production_support(&self) -> Result<(), SoracloudManifestError> {
+        if !self.fhe_policy_records.is_empty() {
+            return Err(SoracloudManifestError::FheUnavailable);
+        }
+        for secret in self.service_secrets.values() {
+            secret.envelope.encryption.require_production_support()?;
+        }
+        Ok(())
+    }
+
     /// Validate active deployment state.
     ///
     /// # Errors

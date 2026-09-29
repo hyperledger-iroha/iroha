@@ -1904,7 +1904,7 @@ state_test! { sync deserialize_rejects_invalid_ram_lfe_program_policy_storage
         "expected field path in error, got {message}"
     );
     assert!(
-        message.contains("cannot use proof verification"),
+        message.contains("RAM-LFE proof mode is unavailable"),
         "expected policy validation message, got {message}"
     );
 }
@@ -20899,13 +20899,21 @@ fn sample_snapshot_training_job_audit_event(
     }
 }
 fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
-    let bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
+    let mut bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
         "../../../../fixtures/soracloud/sora_deployment_bundle_v1.json"
     ))
     .expect("decode canonical deployment-bundle fixture");
+    // Snapshot invariants use supported storage. FHE refusal has a separate
+    // restore control below; this fixture conversion is not a runtime decoder.
+    for binding in &mut bundle.service.state_bindings {
+        binding.encryption = iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext;
+    }
     bundle
         .validate_for_admission()
         .expect("deployment-bundle fixture remains canonical");
+    bundle
+        .require_production_support()
+        .expect("snapshot fixture uses supported storage");
     bundle
 }
 fn sample_snapshot_mailbox_message(bundle: &SoraDeploymentBundleV1) -> SoraServiceMailboxMessageV1 {
@@ -21608,6 +21616,68 @@ state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_
                 .contains("soracloud_inrou_replica_runtime"),
             "unexpected replica-slot error for `{slot_key}`: {error}"
         );
+    }
+}
+state_test! { sync service_restore_rejects_fhe_bindings_secrets_and_rows
+    use iroha_data_model::soracloud::{
+        SECRET_ENVELOPE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SecretEnvelopeEncryptionV1,
+        SecretEnvelopeV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
+        SoraStateEncryptionV1,
+    };
+    for variant in 0..4 {
+        let mut bundle = sample_snapshot_service_bundle();
+        if variant == 1 {
+            bundle.service.state_bindings[0].encryption = SoraStateEncryptionV1::FheCiphertext;
+        }
+        let mut deployment = sample_snapshot_service_deployment(&bundle);
+        if variant == 2 {
+            deployment.secret_generation = 1;
+            deployment.service_secrets.insert("retired_secret".to_owned(), SoraServiceSecretEntryV1 {
+                schema_version: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                secret_name: "retired_secret".to_owned(),
+                envelope: SecretEnvelopeV1 {
+                    schema_version: SECRET_ENVELOPE_VERSION_V1,
+                    encryption: SecretEnvelopeEncryptionV1::FheCiphertext,
+                    key_id: "diagnostic-key".to_owned(),
+                    key_version: NonZeroU32::new(1).unwrap(),
+                    nonce: vec![1], ciphertext: vec![2], commitment: Hash::new([2]),
+                    aad_digest: None,
+                },
+                last_update_sequence: 1,
+            });
+        }
+        let mut world = World::default();
+        world.soracloud_service_revisions.insert(
+            (bundle.service.service_name.as_ref().to_owned(), bundle.service.service_version.clone()),
+            bundle.clone(),
+        );
+        world.soracloud_service_deployments.insert(deployment.service_name.clone(), deployment);
+        world.soracloud_service_audit_events.insert(1, sample_snapshot_service_audit_event(&bundle, 1));
+        if variant == 3 {
+            let binding = &bundle.service.state_bindings[0];
+            let entry = SoraServiceStateEntryV1 {
+                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                service_name: bundle.service.service_name.clone(),
+                service_version: bundle.service.service_version.clone(),
+                binding_name: binding.binding_name.clone(),
+                state_key: format!("{}/diagnostic", binding.key_prefix),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload_bytes: NonZeroU64::new(1).unwrap(), payload: vec![1],
+                payload_commitment: Hash::new([1]), fhe_public_key_digest: None,
+                fhe_residual_multiple_bound: None, fhe_bound_mode: None,
+                last_update_sequence: 1, governance_tx_hash: Hash::new(b"diagnostic"),
+                source_action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+            };
+            world.soracloud_service_state_entries.insert((entry.service_name.as_ref().to_owned(), entry.binding_name.as_ref().to_owned(), entry.state_key.clone()), entry);
+        }
+        let value = norito::json::to_value(&snapshot_state_from_world(world)).expect("encode restore fixture");
+        if variant == 0 {
+            deserialize_state_snapshot_value(value).expect("supported storage restores");
+        } else {
+            let error = deserialize_state_snapshot_value(value).err().expect("FHE restore must fail closed");
+            assert!(error.to_string().contains("soracloud_fhe_unavailable"), "variant {variant}: {error}");
+        }
     }
 }
 state_test! { sync service_deployment_restore_requires_exact_admitted_revision_binding

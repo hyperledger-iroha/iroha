@@ -424,21 +424,21 @@ public final class IdentifierReceiptCanonicalEncoder {
     return programId;
   }
 
-  private static int backendTag(final String raw) {
+  static int backendTag(final String raw) {
     final String backend = requireExactNonBlank(raw, "payload.execution.backend");
     switch (backend) {
       case "hkdf-sha3-512-prf-v1":
         return 0;
-      case "bfv-affine-sha3-256-v1":
+      case "bfv-affine-v1":
         return 1;
-      case "bfv-programmed-sha3-256-v1":
+      case "bfv-programmed-v1":
         return 2;
       default:
         throw new IllegalArgumentException("unsupported RAM-LFE backend: " + raw);
     }
   }
 
-  private static int verificationModeTag(final String raw) {
+  static int verificationModeTag(final String raw) {
     final String mode = requireExactNonBlank(raw, "payload.execution.verification_mode");
     switch (mode) {
       case "signed":
@@ -455,9 +455,9 @@ public final class IdentifierReceiptCanonicalEncoder {
       case 0:
         return "hkdf-sha3-512-prf-v1";
       case 1:
-        return "bfv-affine-sha3-256-v1";
+        return "bfv-affine-v1";
       case 2:
-        return "bfv-programmed-sha3-256-v1";
+        return "bfv-programmed-v1";
       default:
         throw new IllegalArgumentException("unsupported RAM-LFE backend tag: " + tag);
     }

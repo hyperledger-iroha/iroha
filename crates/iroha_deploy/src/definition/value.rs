@@ -168,8 +168,10 @@ keyword_enum! {
 
 keyword_enum! {
     /// Where a dataspace committee comes from.
+    #[derive(Default)]
     CommitteeSource {
-        /// The parent network's validators.
+        /// The parent network's validators (the default).
+        #[default]
         Network => "network",
         /// Validators the owner brings, listed in `[[committee.node]]`.
         Owner => "owner",
@@ -761,6 +763,7 @@ mod tests {
         assert_eq!("sudo".parse::<Become>(), Ok(Become::Sudo));
         assert_eq!(Upstream::default(), Upstream::Mtls);
         assert_eq!(Visibility::default(), Visibility::Restricted);
+        assert_eq!(CommitteeSource::default(), CommitteeSource::Network);
         assert_eq!(
             "owner".parse::<CommitteeSource>(),
             Ok(CommitteeSource::Owner)

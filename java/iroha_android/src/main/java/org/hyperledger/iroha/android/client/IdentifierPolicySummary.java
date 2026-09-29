@@ -20,61 +20,6 @@ public final class IdentifierPolicySummary {
 
   public IdentifierPolicySummary(
       final String policyId,
-      final String owner,
-      final boolean active,
-      final IdentifierNormalization normalization,
-      final String resolverPublicKey,
-      final String backend,
-      final String inputEncryption,
-      final String inputEncryptionPublicParameters,
-      final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded,
-      final String note) {
-    this(
-        policyId,
-        programIdFromPolicyId(policyId),
-        owner,
-        active,
-        normalization,
-        resolverPublicKey,
-        resolverPublicKey,
-        backend,
-        inputEncryption,
-        inputEncryptionPublicParameters,
-        inputEncryptionPublicParametersDecoded,
-        note,
-        null);
-  }
-
-  public IdentifierPolicySummary(
-      final String policyId,
-      final String owner,
-      final boolean active,
-      final IdentifierNormalization normalization,
-      final String resolverPublicKey,
-      final String backend,
-      final String inputEncryption,
-      final String inputEncryptionPublicParameters,
-      final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded,
-      final String note,
-      final RamLfeProofVerifierMetadata proofVerifier) {
-    this(
-        policyId,
-        programIdFromPolicyId(policyId),
-        owner,
-        active,
-        normalization,
-        resolverPublicKey,
-        resolverPublicKey,
-        backend,
-        inputEncryption,
-        inputEncryptionPublicParameters,
-        inputEncryptionPublicParametersDecoded,
-        note,
-        proofVerifier);
-  }
-
-  public IdentifierPolicySummary(
-      final String policyId,
       final String programId,
       final String owner,
       final boolean active,
@@ -162,25 +107,14 @@ public final class IdentifierPolicySummary {
     return IdentifierResolveRequest.encrypted(this, encryptedInputHex, outputOpening);
   }
 
+  /** Refuses encryption until a secure replacement profile is qualified. */
   public String encryptInput(final String input) {
-    return IdentifierBfvEnvelopeBuilder.encrypt(this, input, null);
+    throw new UnsupportedOperationException("ram_lfe_encryption_unavailable: RAM-LFE encryption is unavailable: the insecure exact-lift BFV profile must be replaced");
   }
 
-  public String encryptInput(final String input, final byte[] seed) {
-    return IdentifierBfvEnvelopeBuilder.encrypt(this, input, seed);
-  }
-
+  /** Refuses encryption until a secure replacement profile is qualified. */
   public IdentifierResolveRequest encryptedRequestFromInput(
       final String input, final RamLfeOutputOpening outputOpening) {
-    return IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening);
-  }
-
-  public IdentifierResolveRequest encryptedRequestFromInput(
-      final String input, final RamLfeOutputOpening outputOpening, final byte[] seed) {
-    return IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening, seed);
-  }
-
-  private static String programIdFromPolicyId(final String policyId) {
-    return Objects.requireNonNull(policyId, "policyId").trim().replace('#', '_');
+    throw new UnsupportedOperationException("ram_lfe_encryption_unavailable: RAM-LFE encryption is unavailable: the insecure exact-lift BFV profile must be replaced");
   }
 }

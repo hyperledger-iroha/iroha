@@ -134,6 +134,7 @@ enum InvalidMember {
     Disabled,
     NotYetActive,
     Expired,
+    ExpiresAtNativeActivation,
 }
 
 fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>) {
@@ -243,7 +244,15 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
             } else {
                 0
             },
-            expiry_height: (index == 0 && matches!(invalid, InvalidMember::Expired)).then_some(3),
+            expiry_height: if index == 0 {
+                match invalid {
+                    InvalidMember::Expired => Some(3),
+                    InvalidMember::ExpiresAtNativeActivation => Some(4),
+                    _ => None,
+                }
+            } else {
+                None
+            },
             replaces: None,
             status: if index == 0 && matches!(invalid, InvalidMember::Disabled) {
                 ConsensusKeyStatus::Disabled
@@ -483,6 +492,15 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             DataSpaceId::new(12)
         );
         assert!(transaction.lane_manifests.has_manifest(LaneId::new(5)));
+        let native = crate::sumeragi::lanes::lane_policy(&transaction.world)
+            .expect("physical registration also stages its native lane policy");
+        let fixed = native.fixed_lane(LaneId::new(5)).unwrap();
+        assert_eq!(
+            fixed.dataspace,
+            payload.dataspace_additions[0].descriptor.id
+        );
+        assert_eq!(fixed.committee.len(), 4);
+        crate::sumeragi::lanes::step::validate_policy(&native).unwrap();
         assert!(
             transaction
                 .lane_manifests
@@ -513,6 +531,233 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             "aborted transaction cannot publish topology"
         );
         assert!(runtime_catalog_from_world(&block.world).unwrap().is_none());
+        assert!(
+            crate::sumeragi::lanes::lane_policy(&block.world).is_none(),
+            "aborting the catalog transaction must also discard native lane activation"
+        );
+    });
+}
+
+#[test]
+fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
+    run_catalog_test(|| {
+        use crate::sumeragi::lanes::{
+            lane_policy, merge::LaneStepInput, routing::RoutingInputs, step,
+        };
+        use iroha_data_model::{
+            nexus::LaneVisibility,
+            smart_contract::ContractAddress,
+            transaction::{Executable, TransactionBuilder, executable::ContractInvocation},
+        };
+        let (state, keys) = catalog_fixture(InvalidMember::None);
+        let mut payload = catalog_payload(&state, &keys);
+        payload.lane_additions[0].visibility = LaneVisibility::Restricted;
+        let lane = payload.lane_additions[0].id;
+        let dataspace = payload.lane_additions[0].dataspace_id;
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let params = block.world.parameters().sumeragi.clone();
+        let mut transaction = block.transaction();
+        transaction
+            .stage_consensus_catalog_transition(&payload)
+            .unwrap();
+        transaction.apply();
+        step::advance(&mut block, &LaneStepInput::default()).unwrap();
+        let mut policy = lane_policy(&block.world).unwrap();
+        assert_eq!(policy.lane_params, params);
+        let record = block
+            .world
+            .sumeragi_lanes()
+            .lane(lane)
+            .expect("ordinary lane step creates instance");
+        assert_eq!((record.created_at, record.active_from), (2, 4));
+        assert_eq!(record.dataspace, dataspace);
+        assert_eq!(record.committee, policy.fixed_lane(lane).unwrap().committee);
+        assert!(record.closing.is_none());
+        crate::sumeragi::lanes::lane_height_config(record).unwrap();
+        assert_eq!(
+            block
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == lane)
+                .unwrap()
+                .visibility,
+            LaneVisibility::Restricted
+        );
+        let authority = AccountId::new(keys[0].public_key().clone());
+        let make_tx = |target| {
+            let call = ContractInvocation {
+                contract_address: ContractAddress::derive(&state.network_id, &authority, 0, target)
+                    .unwrap(),
+                expected_code_hash: Hash::new(b"catalog-routing-contract"),
+                entrypoint: "call".to_owned(),
+                arguments: None,
+            };
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+                TransactionBuilder::new(
+                    state.network_id,
+                    authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_executable(Executable::ContractCall(call))
+                .sign(keys[0].private_key()),
+            ))
+        };
+        // Even an explicit owner-wide route cannot capture registry/control-plane work
+        // or change a concrete universal application target into private execution.
+        policy
+            .routes
+            .push(iroha_data_model::sumeragi_lanes::SumeragiLaneRoute {
+                lane,
+                account: Some(authority.to_string()),
+                instruction: None,
+            });
+        let inputs = RoutingInputs {
+            policy: Some(&policy),
+            lanes: block.world.sumeragi_lanes(),
+            dataspaces: &block.nexus.dataspace_catalog,
+            world: &block.world,
+            ledger_time_ms: 0,
+        };
+        let private = make_tx(dataspace);
+        assert_eq!(
+            inputs.execution_route(&private, 4),
+            None,
+            "private work cannot escape to universal before activation is applied"
+        );
+        assert_eq!(
+            inputs.execution_route(&private, 5),
+            Some(crate::queue::RoutingDecision::new(lane, dataspace))
+        );
+        assert_eq!(
+            inputs.execution_route(&make_tx(DataSpaceId::new(777)), 5),
+            None
+        );
+        assert_eq!(
+            inputs.execution_route(&make_tx(DataSpaceId::UNIVERSAL), 5),
+            Some(crate::queue::RoutingDecision::new(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL
+            )),
+            "the same owner still routes its universal work to universal"
+        );
+        use iroha_data_model::{
+            alias_setup::{
+                AliasDataSpaceIntentV1, AliasDataspaceBootstrapGrantV1, AliasIntentV1,
+                AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedDataSpaceV1,
+            },
+            isi::{InstructionBox, SetParameter, alias_setup::EnsureAlias},
+            parameter::Parameter,
+        };
+        let bootstrap =
+            AliasDataspaceBootstrapGrantV1::try_new("new-catalog-ds", authority.clone()).unwrap();
+        let controls: [InstructionBox; 3] = [
+            SetParameter::new(Parameter::Custom(
+                payload.clone().into_custom_parameter().unwrap(),
+            ))
+            .into(),
+            SetParameter::new(Parameter::Custom(
+                bootstrap.into_custom_parameter().unwrap(),
+            ))
+            .into(),
+            EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace: ResolvedDataSpaceV1::new(
+                        "new-catalog-ds".parse().unwrap(),
+                        dataspace,
+                    ),
+                    owner: authority.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset:
+                        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                            .parse()
+                            .unwrap(),
+                    max_amount: 1_u32.into(),
+                    valid_until_ms: u64::MAX,
+                },
+            )
+            .into(),
+        ];
+        for instruction in controls {
+            let control = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+                TransactionBuilder::new(
+                    state.network_id,
+                    authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([instruction])
+                .sign(keys[0].private_key()),
+            ));
+            for height in 2..=5 {
+                assert_eq!(
+                    inputs.execution_route(&control, height),
+                    Some(crate::queue::RoutingDecision::new(
+                        LaneId::SINGLE,
+                        DataSpaceId::UNIVERSAL,
+                    )),
+                    "all deployment phases stay global before and after native activation"
+                );
+            }
+        }
+        assert!(
+            state.view().world().sumeragi_lanes().lane(lane).is_none(),
+            "uncommitted block must not publish its native lane"
+        );
+    });
+}
+
+#[test]
+fn runtime_catalog_rejects_native_lane_conflict_without_partial_state() {
+    run_catalog_test(|| {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
+        };
+        let (state, keys) = catalog_fixture(InvalidMember::None);
+        let payload = catalog_payload(&state, &keys);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut policy = SumeragiLanePolicy::for_chain(block.world.parameters().sumeragi.clone());
+        policy.fixed.push(SumeragiFixedLane {
+            lane: LaneId::new(5),
+            dataspace: DataSpaceId::new(99),
+            committee: keys
+                .iter()
+                .map(|key| SumeragiLaneMember {
+                    peer: PeerId::new(key.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                })
+                .collect(),
+        });
+        block.world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(policy.clone().into_custom_parameter()),
+        );
+        let before = block.world.parameters().clone();
+        let mut transaction = block.transaction();
+        transaction
+            .stage_consensus_catalog_transition(&payload)
+            .expect_err("conflicting native policy cannot be overwritten");
+        assert_eq!(transaction.world.parameters(), &before);
+        assert!(transaction.pending_lane_lifecycle.is_none());
+        assert!(
+            runtime_catalog_from_world(&transaction.world)
+                .unwrap()
+                .is_none()
+        );
     });
 }
 
@@ -529,6 +774,7 @@ fn runtime_catalog_rejects_ineligible_committee_without_partial_state() {
             InvalidMember::Disabled,
             InvalidMember::NotYetActive,
             InvalidMember::Expired,
+            InvalidMember::ExpiresAtNativeActivation,
         ] {
             let (state, keys) = catalog_fixture(invalid);
             let before = state.nexus_snapshot();

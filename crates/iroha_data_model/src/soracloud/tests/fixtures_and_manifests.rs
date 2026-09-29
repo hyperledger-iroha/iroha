@@ -1,4 +1,7 @@
 use super::*;
+use iroha_crypto::bfv_test_fixtures::{
+    bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1, keygen_from_seed,
+};
 use iroha_crypto::{
     Algorithm, KeyPair,
     fhe_bfv::{
@@ -12,7 +15,6 @@ use iroha_crypto::{
         bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1,
         bfv_full_bootstrap_proof_key_pair_from_key_material_v1,
         bfv_full_bootstrap_proof_public_input_schema_v1,
-        bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1,
         encode_bfv_full_bootstrap_accumulator_artifact_v1,
         encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1,
         encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
@@ -22,7 +24,7 @@ use iroha_crypto::{
         encode_bfv_full_bootstrap_proof_key_artifact_v1,
         encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
         encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1,
-        encode_packed_plaintext_slots, keygen_from_seed, ram_lfe_bfv_parameters_v1,
+        encode_packed_plaintext_slots, ram_lfe_bfv_parameters_v1,
     },
 };
 use norito::codec::DecodeAll as _;

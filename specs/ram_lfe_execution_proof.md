@@ -2,24 +2,35 @@
 
 Status: unimplemented. This is an implementation contract for the remaining
 [ZK03 work](zk_first_release_goals.md), not a new proof format or an activation
-decision. Proof-mode policy registration, activation, restored-state validation
-and stateless receipts reject until a complete relation is compiled and qualified.
+decision. Encrypted policy registration, activation, restored-state validation
+and receipts reject in both signed and proof modes. A secure encryption
+replacement and complete, qualified relation are required before activation.
 
 ## Current implementation and trust boundary
 
-The [crypto interpreter](../crates/iroha_crypto/src/ram_lfe.rs) validates the
+The retained diagnostic [crypto interpreter](../crates/iroha_crypto/src/ram_lfe.rs) validates the
 secret-bound policy, hidden program, registered parameters and encrypted input,
 then executes the branchless tape. The closed
 [BFV profile](../crates/iroha_crypto/src/fhe_bfv.rs) bounds it to 64 encrypted input
 slots, four registers, 32 state lanes, 256 instructions, 64 outputs and
 multiplicative depth 16. Its ring degree is 64, plaintext modulus is 257 and
 ciphertext modulus is `257 * 2^48`.
+The public backend tags are `bfv-affine-v1` and `bfv-programmed-v1`; they identify
+the evaluator's semantics. Retired `sha3-256` tags are rejected. Exact hash and
+initializer choices are specified by the compiled protocol and profile descriptor.
 
-The [Torii runtime](../crates/iroha_torii/src/identifier_resolution.rs) evaluates
-this interpreter and issues **signed** receipts. These attestations trust the
-configured resolver. The separate signed output opening trusts its configured
-opening authority. Neither signature establishes a zero-knowledge execution
-relation, and signed mode is not a fallback for proof mode.
+The exact-lift profile is insecure: reducing its public-key equation modulo 257
+removes its plaintext-multiple noise. Signatures and execution proofs cannot
+repair this encryption defect. Public evaluators and Core/Torii boundaries now
+reject both BFV tags before private work; the HKDF PRF remains available.
+Arithmetic regression tests use private diagnostic dispatch. Remaining exported
+low-level BFV utilities still require retirement or a secure replacement.
+
+Execution produces ciphertext. The former execute response incorrectly signed a
+ciphertext hash as an opened-plaintext hash; that issuer and response field are
+removed. An identifier's independent plaintext opening must come from its pinned
+opening authority and bind the exact execution. This remains a trusted attestation,
+not a decryption proof. See the [boundary repair](../docs/history/2026-09-29/ram-lfe-production-boundary.md).
 
 The [Core receipt helper](../crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs)
 refuses the unavailable relation before parsing any proof or key. The former
@@ -30,14 +41,50 @@ An otherwise valid replay-binding proof cannot establish program execution.
 Policy validation also applies during
 [state restoration](../crates/iroha_core/src/state/deserialize_core.rs).
 
-No existing compiled relation supplies the missing semantics. IVM replay binding
-requires deterministic replay of public code; the hidden program and secret
-cannot be disclosed to substitute that path. The BFV full-bootstrap verifier
+No existing compiled relation supplies the missing semantics. Retired IVM
+binding-only relations did not establish execution and provide no substitute for
+the hidden-program relation. The BFV full-bootstrap verifier
 requires full execution material, while its public-padding-only verifier rejects.
 The existing Halo2 IPA engine, canonical key/envelope owners and bounded verifier
 can be reused; a new semantic circuit still needs independent review. Proving the
 current arithmetic does not qualify the separate BFV encryption or bootstrap
 security claims documented in the crypto module.
+
+## Encryption replacement requirements
+
+The [implementation plan](ram_lfe_encryption_replacement.md) records the current
+rounded-path noise limit, genuine RNS ownership gap, packing constraints and
+ordered implementation gates. Existing arithmetic is not a selected replacement.
+
+The replacement must protect both encrypted inputs and the hidden function.
+Ordinary HE input confidentiality does not by itself establish circuit privacy
+against a key owner inspecting evaluated ciphertexts. This distinction is explicit
+in [Hwang, Min and Song's BFV analysis](https://eprint.iacr.org/2025/203).
+Choosing a library is also not sufficient to justify malicious-input security:
+[OpenFHE's security notes](https://openfhe-development.readthedocs.io/en/latest/sphinx_rsts/intro/security.html)
+state the semi-honest scope of its ordinary HE APIs. These are requirements for
+the new protocol, not endorsements of an unreviewed construction.
+
+Specify the evaluator, key owner, opening authority and verifier separately.
+Bind admitted keys and ciphertexts to the precise well-formedness relation;
+account for malicious parameters, inputs, repeated queries and visible failures.
+Select circuit privacy or an appropriate sanitization construction with explicit
+assumptions and quantified leakage. Do not claim that ZK about evaluation hides
+information already present in its public ciphertext output.
+
+Parameter selection must jointly cover security, correctness and maximum
+program work, as described by the
+[HE implementation guidelines](https://eprint.iacr.org/2024/463). Pin the complete
+RNS chain, distributions, failure probability, operation/noise bounds and query
+budget to the reviewed profile. Existing degree-64 and single-modulus arithmetic
+limits are diagnostic implementation facts, not security targets for a replacement.
+
+The developer facade must choose the qualified profile from the compiled program,
+own private keys and secure randomness, and preflight bounded resources before
+private work. Developers supply their program and data; they do not select ring
+dimensions, noise distributions, transcript layouts or deterministic encryption
+seeds. Keep key generation, input encryption, evaluation, plaintext opening and
+proof verification as distinct typed operations with explicit authorities.
 
 ## Required relation
 
@@ -54,7 +101,16 @@ transition, output ordering, and exact BFV modular arithmetic and relinearizatio
 All coefficient, index, quotient, remainder and depth bounds belong in the
 relation. Host-side interpreter checks alone cannot establish these facts.
 
-The current first-release initializer uses a fixed BLAKE3 derive-key XOF schedule.
+The canonical hidden program is a validated immutable shared owner. Its sole
+`HiddenRamFheProgramV1` frame contains fixed profile metadata followed by 1..256
+48-byte instruction slots: six little-endian u64 words per instruction, with
+all unused words zero. The typed builder writes into one bounded clearing tape;
+the explicit byte/config readers enforce the same format and reject retired
+enum-sequence frames. The relation must constrain every tag, operand, reserved
+word and bound in this exact encoding. Generic archive decoding is deliberately
+unavailable for this secret owner.
+
+The retained diagnostic initializer uses a fixed BLAKE3 derive-key XOF schedule.
 A borrowed canonical Norito frame binds the initializer descriptor, policy hash,
 secret and associated data. Exactly 1,024 bytes become 32 consecutive big-endian
 256-bit values, each reduced modulo 257 by 32 fixed byte folds. No library range
@@ -68,6 +124,15 @@ Secret commitment and private tape hashing now use separate BLAKE3 contexts and
 clearing owned hash/XOF state. The outer policy and tape digests remain properly
 typed Iroha Blake2b hashes of public commitments. Policy, program and dependent
 output vectors change explicitly; parameter and evaluation-key algorithms do not.
+The outer policy commits the canonical `PolicyCommitmentInputV1` frame, in field
+order: backend, normalized public-parameter bytes and secret commitment. The PRF
+uses the canonical `HkdfRequestInputV1` frame: policy hash, public parameters,
+associated data and normalized input. These explicit first-release identities
+replace ambient-layout tuples. Borrowed interpreter fields and owned reference
+fixtures must produce identical frames; no reference-schema alias is introduced.
+Torii hashes the canonical ciphertext frame independently of ambient decoder
+flags. See the [canonical-transcript repair](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md)
+for the exact changes and pending validation.
 The execution trace comes from the sole interpreter and owns clearing snapshots
 of its registers and memory. It is private prover input, not execution evidence.
 The future circuit must constrain these exact hash/Norito/fold semantics and all
@@ -75,8 +140,9 @@ machine transitions; arbitrary initialized-state witnesses remain unacceptable.
 
 ## Implementation and acceptance criteria
 
-1. Define the exact statement, witness and bounded derivation; retain canonical
-   Norito encoding and no legacy decoder or alternative relation selection.
+1. Replace the insecure exact-lift encryption profile and independently qualify
+   its security. Define the replacement statement, witness and bounded derivation;
+   retain canonical Norito encoding without a legacy decoder or alternate relation.
 2. Emit an owned, clearing execution trace from the existing interpreter. Cover
    all eleven instructions and maximum shapes with independent reference vectors
    before circuit synthesis. Trace generation alone is not proof completion.

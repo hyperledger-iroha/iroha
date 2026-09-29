@@ -134,6 +134,7 @@ public final class HttpClientTransportTests {
     uaidManifestsRequestSupportsQuery();
     identifierPoliciesRequestParsesResponse();
     identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields();
+    identifierPolicyParserRequiresExplicitBindings();
     ramLfeProgramPoliciesRequestParsesResponse();
     ramLfeProgramPolicyParserRejectsNonExactFields();
     identifierResolveRequestParsesResponse();
@@ -1304,8 +1305,8 @@ public final class HttpClientTransportTests {
       {
         "identifier policy list.items[0].backend",
         canonical.replace(
-            "\"backend\":\"bfv-affine-sha3-256-v1\"",
-            "\"backend\":\"bfv-affine-sha3-256-v1 \"")
+            "\"backend\":\"bfv-affine-v1\"",
+            "\"backend\":\"bfv-affine-v1 \"")
       },
       {
         "identifier policy list.items[0].input_encryption",
@@ -1357,6 +1358,40 @@ public final class HttpClientTransportTests {
           testCase[0],
           () -> IdentifierJsonParser.parsePolicyList(testCase[1].getBytes(StandardCharsets.UTF_8)));
     }
+    for (final String backend : new String[] {
+        "bfv-affine-sha3-256-v1", "bfv-programmed-sha3-256-v1", "unknown"}) {
+      final String changed = canonical.replace("\"backend\":\"bfv-affine-v1\"",
+          "\"backend\":\"" + backend + "\"");
+      assert !changed.equals(canonical);
+      assertRamLfeParseFails("identifier policy list.items[0].backend",
+          () -> IdentifierJsonParser.parsePolicyList(changed.getBytes(StandardCharsets.UTF_8)));
+    }
+    final String withoutOpeningKey = canonical.replace(
+        "\"output_opening_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\",", "");
+    assert !withoutOpeningKey.equals(canonical);
+    assertRamLfeParseFails("identifier policy list.items[0].output_opening_public_key",
+        () -> IdentifierJsonParser.parsePolicyList(withoutOpeningKey.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static void identifierPolicyParserRequiresExplicitBindings() {
+    final String canonical = identifierPoliciesJson();
+    final IdentifierPolicySummary policy = IdentifierJsonParser.parsePolicyList(
+        canonical.getBytes(StandardCharsets.UTF_8)).items().get(0);
+    assert "identifier_lookup_retail".equals(policy.programId());
+    for (final String field : new String[] {"program_id", "output_opening_public_key"}) {
+      final String value = field.equals("program_id") ? policy.programId() : policy.outputOpeningPublicKey();
+      final String member = "\"" + field + "\":\"" + value + "\",";
+      final String missing = canonical.replace(member, "");
+      assert !missing.equals(canonical);
+      assertRamLfeParseFails("identifier policy list.items[0]." + field,
+          () -> IdentifierJsonParser.parsePolicyList(missing.getBytes(StandardCharsets.UTF_8)));
+      for (final String invalid : new String[] {"null", "7", "\"\"", "\" padded\"", "\"padded \"", "\"embedded space\""}) {
+        final String malformed = canonical.replace(member, "\"" + field + "\":" + invalid + ",");
+        assert !malformed.equals(canonical);
+        assertRamLfeParseFails("identifier policy list.items[0]." + field,
+            () -> IdentifierJsonParser.parsePolicyList(malformed.getBytes(StandardCharsets.UTF_8)));
+      }
+    }
   }
 
   private static String identifierPoliciesJson() {
@@ -1364,11 +1399,13 @@ public final class HttpClientTransportTests {
         + "\"total\":1,"
         + "\"items\":[{"
         + "\"policy_id\":\"phone#retail\","
+        + "\"program_id\":\"identifier_lookup_retail\","
         + "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"active\":true,"
         + "\"normalization\":\"phone_e164\","
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
-        + "\"backend\":\"bfv-affine-sha3-256-v1\","
+        + "\"output_opening_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
+        + "\"backend\":\"bfv-affine-v1\","
         + "\"input_encryption\":\"bfv-v1\","
         + "\"input_encryption_public_parameters\":\"ABCD\","
         + "\"input_encryption_public_parameters_decoded\":{"
@@ -1449,7 +1486,7 @@ public final class HttpClientTransportTests {
       {
         "ram-lfe program policy list.items[0].backend",
         canonical.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"bfv-programmed-v1\"",
             "\"backend\":\"BFV-programmed-sha3-256-v1\"")
       },
       {
@@ -1492,6 +1529,19 @@ public final class HttpClientTransportTests {
           testCase[0],
           () -> RamLfeJsonParser.parsePolicyList(testCase[1].getBytes(StandardCharsets.UTF_8)));
     }
+    for (final String backend : new String[] {
+        "bfv-affine-sha3-256-v1", "bfv-programmed-sha3-256-v1", "unknown"}) {
+      final String changed = canonical.replace("\"backend\":\"bfv-programmed-v1\"",
+          "\"backend\":\"" + backend + "\"");
+      assert !changed.equals(canonical);
+      assertRamLfeParseFails("ram-lfe program policy list.items[0].backend",
+          () -> RamLfeJsonParser.parsePolicyList(changed.getBytes(StandardCharsets.UTF_8)));
+    }
+    final String withoutOpeningKey = canonical.replace(
+        "\"output_opening_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\",", "");
+    assert !withoutOpeningKey.equals(canonical);
+    assertRamLfeParseFails("ram-lfe program policy list.items[0].output_opening_public_key",
+        () -> RamLfeJsonParser.parsePolicyList(withoutOpeningKey.getBytes(StandardCharsets.UTF_8)));
   }
 
   private static String ramLfeProgramPoliciesJson() {
@@ -1502,7 +1552,8 @@ public final class HttpClientTransportTests {
         + "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"active\":true,"
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"output_opening_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"input_encryption\":\"bfv-v1\","
         + "\"input_encryption_public_parameters\":\"ABCD\","
@@ -1697,7 +1748,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -1740,12 +1791,15 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "phone#retail",
+            "identifier_lookup_retail",
             accountId,
             true,
             IdentifierNormalization.PHONE_E164,
             signed.resolverPublicKey(),
-            "bfv-affine-sha3-256-v1",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "bfv-affine-v1",
             "bfv-v1",
+            null,
             null,
             null,
             null);
@@ -1781,7 +1835,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "email_retail",
                 "44".repeat(32),
-                "bfv-programmed-sha3-256-v1",
+                "bfv-programmed-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -1828,12 +1882,15 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "email#retail",
+            "identifier_lookup_retail",
             accountId,
             true,
             IdentifierNormalization.EMAIL_ADDRESS,
             signed.resolverPublicKey(),
-            "bfv-programmed-sha3-256-v1",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "bfv-programmed-v1",
             "bfv-v1",
+            null,
             null,
             null,
             null);
@@ -2016,7 +2073,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "44".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -2111,8 +2168,6 @@ public final class HttpClientTransportTests {
     assert "abcd".equals(execute.outputCiphertext()) : "Output ciphertext mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
-    assert "identifier_lookup_retail".equals(execute.outputOpening().payload().programId())
-        : "Output opening must be parsed";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "RAM-LFE execute request must be captured";
@@ -2159,7 +2214,7 @@ public final class HttpClientTransportTests {
     verificationMode.put("value", null);
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("program_id", Map.of("name", "identifier_lookup_retail"));
-    payload.put("backend", "bfv-programmed-sha3-256-v1");
+    payload.put("backend", "bfv-programmed-v1");
     payload.put("verification_mode", verificationMode);
     payload.put("program_digest", "hash:" + "11".repeat(32).toUpperCase() + "#ABCD");
     payload.put("output_hash", "hash:" + "22".repeat(32).toUpperCase() + "#BCDE");
@@ -2197,6 +2252,10 @@ public final class HttpClientTransportTests {
   private static void ramLfeResponseParsersRejectNonExactFields() {
     final String canonicalExecute = ramLfeExecuteResponseJson();
     final String[][] executeCases = {
+      {
+        "output_opening",
+        canonicalExecute.replaceFirst("\\{", "{\"output_opening\":{},")
+      },
       {
         "program_id",
         canonicalExecute.replace(
@@ -2236,8 +2295,8 @@ public final class HttpClientTransportTests {
       {
         "backend",
         canonicalExecute.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\",\"verification_mode\"",
-            "\"backend\":\" bfv-programmed-sha3-256-v1\",\"verification_mode\"")
+            "\"backend\":\"bfv-programmed-v1\",\"verification_mode\"",
+            "\"backend\":\" bfv-programmed-v1\",\"verification_mode\"")
       },
       {
         "verification_mode",
@@ -2263,7 +2322,7 @@ public final class HttpClientTransportTests {
       {
         "backend",
         canonicalVerify.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"bfv-programmed-v1\"",
             "\"backend\":\"BFV-programmed-sha3-256-v1\"")
       },
       {
@@ -5831,11 +5890,13 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "string#retail",
+            "identifier_lookup_retail",
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            "bfv-affine-sha3-256-v1",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "bfv-affine-v1",
             "bfv-v1",
             null,
             new IdentifierBfvPublicParameters(
@@ -5844,19 +5905,32 @@ public final class HttpClientTransportTests {
                     List.of(11_472_226L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
                     List.of(3_503_246L, 2_379_264L, 12_091_019L, 30_169L, 15_804_162L, 8_155_629L, 2_418_997L, 3_003_107L)),
                 3),
+            null,
             null);
     final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
     final String expected =
         "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000";
 
-    assert expected.equals(policy.encryptInput("ab", seed))
+    assert expected.equals(DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy,"ab", seed))
         : "Deterministic BFV ciphertext mismatch";
     final RamLfeOutputOpening opening = sampleOpening("identifier_lookup_retail");
-    final IdentifierResolveRequest request = policy.encryptedRequestFromInput("ab", opening, seed);
+    final IdentifierResolveRequest request = policy.encryptedRequest(DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy, "ab", seed), opening);
     assert "string#retail".equals(request.policyId()) : "Encrypted request policy id mismatch";
     assert expected.equals(request.encryptedInputHex())
         : "Encrypted request ciphertext mismatch";
     assert request.outputOpening() == opening : "Encrypted request must keep output opening";
+    for (final Runnable encrypt : List.<Runnable>of(
+        () -> policy.encryptInput("private@example.org"),
+        () -> policy.encryptedRequestFromInput("private@example.org", opening),
+        () -> IdentifierResolveRequest.encryptedFromInput(policy, "private@example.org", opening))) {
+      try {
+        encrypt.run();
+        throw new AssertionError("insecure production encryption must be unavailable");
+      } catch (UnsupportedOperationException error) {
+        assert error.getMessage().startsWith("ram_lfe_encryption_unavailable:");
+        assert !error.getMessage().contains("private@example.org");
+      }
+    }
   }
 
   private static void identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors()
@@ -5871,7 +5945,7 @@ public final class HttpClientTransportTests {
 
     for (final Map<String, Object> vector : vectors) {
       final String ciphertextHex =
-          policy.encryptInput(
+          DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy,
               string(vector, "input_utf8"),
               hexToBytes(string(vector, "seed_hex")));
       assert number(vector, "expected_ciphertext_bytes").intValue() == ciphertextHex.length() / 2
@@ -5899,15 +5973,18 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "soracloud-operation#fixture",
+            "identifier_lookup_retail",
             "owner",
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            "bfv-programmed-sha3-256-v1",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "bfv-programmed-v1",
             "bfv-v1",
             null,
             identifierBfvParametersFromFixture(
                 object(operationVectors, "public_parameters_decoded")),
+            null,
             null);
     final List<String> observedDigests = new ArrayList<>();
     int checkedInputs = 0;
@@ -5920,7 +5997,7 @@ public final class HttpClientTransportTests {
         final String seedUtf8 = string(input, "seed_utf8");
         final byte[] inputBytes = hexToBytes(string(input, "input_hex"));
         final String ciphertextHex =
-            policy.encryptInput(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy,
                 new String(inputBytes, StandardCharsets.UTF_8),
                 seedUtf8.getBytes(StandardCharsets.UTF_8));
         assert number(input, "expected_ciphertext_bytes").intValue() == ciphertextHex.length() / 2
@@ -6045,91 +6122,83 @@ public final class HttpClientTransportTests {
     final IdentifierBfvPublicParameters base = sampleIdentifierBfvPublicParameters();
 
     expectIllegalArgument(
-        () -> sampleIdentifierPolicy(base).encryptInput("abcd", seed),
+        () -> DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(base), "abcd", seed),
         "input longer than max input byte count must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         new IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_753L, 12),
                         base.publicKey(),
-                        3))
-                .encryptInput("ab", seed),
+                        3)), "ab", seed),
         "non-divisible ciphertext modulus must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         new IdentifierBfvPublicParameters.Parameters(7L, 257L, 16_842_752L, 12),
                         base.publicKey(),
-                        3))
-                .encryptInput("ab", seed),
+                        3)), "ab", seed),
         "non-power-of-two polynomial degree must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         new IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 17),
                         base.publicKey(),
-                        3))
-                .encryptInput("ab", seed),
+                        3)), "ab", seed),
         "decomposition base outside the supported range must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
                         new IdentifierBfvPublicParameters.PublicKey(
                             withoutFirst(base.publicKey().b()),
                             base.publicKey().a()),
-                        3))
-                .encryptInput("ab", seed),
+                        3)), "ab", seed),
         "public-key polynomial length mismatch must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
                         base.publicKey(),
-                        0))
-                .encryptInput("ab", seed),
+                        0)), "ab", seed),
         "zero max input byte count must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
                         base.publicKey(),
-                        64))
-                .encryptInput("ab", seed),
+                        64)), "ab", seed),
         "max input byte count above registered RAM-LFE profile must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
                         new IdentifierBfvPublicParameters.PublicKey(
                             List.of(16_842_752L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
                             base.publicKey().a()),
-                        3))
-                .encryptInput("ab", seed),
+                        3)), "ab", seed),
         "public-key coefficients outside the modulus must be rejected");
 
     expectIllegalArgument(
         () ->
-            sampleIdentifierPolicy(
+            DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(sampleIdentifierPolicy(
                     new IdentifierBfvPublicParameters(
                         base.parameters(),
                         base.publicKey(),
-                        257))
-                .encryptInput("ab", seed),
+                        257)), "ab", seed),
         "max input byte count outside one plaintext slot must be rejected");
   }
 
@@ -6137,25 +6206,31 @@ public final class HttpClientTransportTests {
       final IdentifierBfvPublicParameters parameters) {
     return new IdentifierPolicySummary(
         "string#retail",
+        "identifier_lookup_retail",
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         true,
         IdentifierNormalization.EXACT,
         "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-        "bfv-affine-sha3-256-v1",
+        "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+        "bfv-affine-v1",
         "bfv-v1",
         null,
         parameters,
+        null,
         null);
   }
 
   private static IdentifierPolicySummary samplePlaintextOnlyIdentifierPolicy() {
     return new IdentifierPolicySummary(
         "string#retail",
+        "identifier_lookup_retail",
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         true,
         IdentifierNormalization.EXACT,
         "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+        "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
         "hkdf-sha3-512-prf-v1",
+        null,
         null,
         null,
         null,
@@ -6204,12 +6279,15 @@ public final class HttpClientTransportTests {
       final String resolverPublicKeyOverride) {
     return new IdentifierPolicySummary(
         policyIdOverride != null ? policyIdOverride : string(policy, "policy_id"),
+        "identifier_lookup_retail",
         string(policy, "owner"),
         Boolean.TRUE.equals(policy.get("active")),
         IdentifierNormalization.PHONE_E164,
         resolverPublicKeyOverride != null ? resolverPublicKeyOverride : string(policy, "resolver_public_key"),
+        "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
         string(policy, "backend"),
         policy.get("input_encryption") instanceof String ? (String) policy.get("input_encryption") : null,
+        null,
         null,
         null,
         null);
@@ -6391,15 +6469,18 @@ public final class HttpClientTransportTests {
       final Map<String, Object> policy) {
     return new IdentifierPolicySummary(
         string(policy, "policy_id"),
+        "identifier_lookup_retail",
         string(policy, "owner"),
         Boolean.TRUE.equals(policy.get("active")),
         IdentifierNormalization.EXACT,
         string(policy, "resolver_public_key"),
+        "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
         string(policy, "backend"),
         string(policy, "input_encryption"),
         null,
         identifierBfvParametersFromFixture(
             object(policy, "input_encryption_public_parameters_decoded")),
+        null,
         null);
   }
 
@@ -7179,7 +7260,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -7202,12 +7283,15 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "phone#retail",
+            "identifier_lookup_retail",
             accountId,
             true,
             IdentifierNormalization.PHONE_E164,
             signed.resolverPublicKey(),
-            "bfv-affine-sha3-256-v1",
+            "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            "bfv-affine-v1",
             "bfv-v1",
+            null,
             null,
             null,
             null);
@@ -7278,7 +7362,7 @@ public final class HttpClientTransportTests {
 
     for (final String backend :
         new String[] {
-          " bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1"
+          " bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1"
         }) {
       expectRuntimeException(
           () ->
@@ -7624,7 +7708,7 @@ public final class HttpClientTransportTests {
         new IdentifierResolutionExecutionPayload(
             "identifier_lookup_retail",
             "44".repeat(32),
-            "bfv-programmed-sha3-256-v1",
+            "bfv-programmed-v1",
             "signed",
             "55".repeat(32),
             outputCiphertextByte.repeat(32),
@@ -7645,12 +7729,15 @@ public final class HttpClientTransportTests {
       final String accountId, final String resolverPublicKey, final String policyId) {
     return new IdentifierPolicySummary(
         policyId,
+        "identifier_lookup_retail",
         accountId,
         true,
         IdentifierNormalization.PHONE_E164,
         resolverPublicKey,
-        "bfv-programmed-sha3-256-v1",
+        "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+        "bfv-programmed-v1",
         "bfv-v1",
+        null,
         null,
         null,
         null);

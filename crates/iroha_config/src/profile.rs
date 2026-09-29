@@ -137,7 +137,6 @@ pub fn keyless_role_account(
 /// below it. The profile's `node_tunable` keys are admitted in addition.
 pub const PROFILE_NODE_KEYS: &[&str] = &[
     "chain",
-    "chain_discriminant",
     "data_dir",
     "public_key",
     "trusted_peers",
@@ -151,7 +150,6 @@ pub const PROFILE_NODE_KEYS: &[&str] = &[
     "torii.account_onboarding.credentials",
     "torii.faucet.authority",
     "torii.kagemusha_v1_commands.redemption_authority",
-    "sumeragi.role",
     "genesis",
     "soracloud_runtime.submission.signer",
     "soracloud_runtime.inrou.enabled",
@@ -704,6 +702,7 @@ impl Profile {
             });
         }
         consensus_keys.extend(derived_keys);
+        consensus_keys.push("chain_discriminant".to_owned());
         let mut mutable_layers = vec![("policy".to_owned(), leaf_keys(&self.policy))];
         for (role, table) in &self.roles {
             mutable_layers.push((format!("role.{role}"), leaf_keys(table)));
@@ -961,7 +960,8 @@ impl Profile {
     }
 
     /// Profile layers for one node, lowest precedence first: `static`, `derive(n)`, `policy`,
-    /// and the role overlay.
+    /// and the role overlay. The static source also supplies the profile's account
+    /// address discriminant, so node files never repeat network-owned identity.
     #[must_use]
     pub fn layers(&self, geometry: &DerivedGeometryV1, role: ProfileRole) -> Vec<TomlSource> {
         let source = |layer: String, table: toml::Table| {
@@ -970,8 +970,13 @@ impl Profile {
                 table,
             )
         };
+        let mut static_config = self.static_config.clone();
+        static_config.insert(
+            "chain_discriminant".to_owned(),
+            toml::Value::Integer(i64::from(self.chain_discriminant)),
+        );
         vec![
-            source("static".to_owned(), self.static_config.clone()),
+            source("static".to_owned(), static_config),
             source(
                 format!("derive({})", geometry.validators),
                 self.derived_config(geometry),

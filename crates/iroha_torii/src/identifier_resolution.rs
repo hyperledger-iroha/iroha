@@ -16,8 +16,8 @@ use iroha_data_model::{
     nexus::UniversalAccountId,
     prelude::*,
     ram_lfe::{
-        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
-        RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
+        RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId, RamLfeProgramPolicy,
+        RamLfeReceiptAttestation,
     },
 };
 use std::{
@@ -160,19 +160,24 @@ impl IdentifierResolutionService {
             );
     }
     /// Execute one RAM-LFE program from a BFV ciphertext envelope.
+    ///
+    /// The current BFV profiles are insecure and fail closed before decoding or
+    /// accessing runtime material. A supported encrypted profile is required
+    /// before this route can execute private inputs.
     pub fn execute_encrypted(
         &self,
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
     ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
-        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+        require_supported_program_policy(program_policy)?;
+        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedV1 {
             return Err(IdentifierResolutionError::UnsupportedBackend(
                 program_policy.commitment.backend,
             ));
         }
         self.execute_request_payload(
             program_policy,
-            norito::to_bytes(ciphertext)
+            norito::encode_canonical(ciphertext)
                 .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
         )
     }
@@ -181,6 +186,7 @@ impl IdentifierResolutionService {
         program_policy: &RamLfeProgramPolicy,
         request_payload: Vec<u8>,
     ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
+        require_supported_program_policy(program_policy)?;
         let runtime = self.runtime(program_policy)?;
         let associated_data = program_id_bytes(&program_policy.program_id);
         let request = ClientRequest {
@@ -274,7 +280,7 @@ impl IdentifierResolutionService {
             || policy.program_id.to_string() != "phone_retail"
             || policy.program_id != program_policy.program_id
             || policy.owner != program_policy.owner
-            || program_policy.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program_policy.backend != RamLfeBackend::BfvProgrammedV1
             || program_policy.commitment.backend != program_policy.backend
             || program_policy.verification_mode != RamLfeVerificationMode::Signed
         {
@@ -366,6 +372,8 @@ impl IdentifierResolutionService {
         program_policy: &RamLfeProgramPolicy,
         draft: &RamLfeExecutionDraft,
     ) -> Result<iroha_data_model::ram_lfe::RamLfeExecutionReceipt, IdentifierResolutionError> {
+        require_supported_program_policy(program_policy)?;
+        draft.backend.require_production_support()?;
         let runtime = self.runtime(program_policy)?;
         if runtime.signer.public_key() != &program_policy.resolver_public_key {
             return Err(IdentifierResolutionError::SignerMismatch);
@@ -393,29 +401,6 @@ impl IdentifierResolutionService {
             attestation: RamLfeReceiptAttestation::Signed(signature),
         })
     }
-    /// Sign the externally verifiable opening for an executed RAM-LFE output.
-    pub fn issue_output_opening(
-        &self,
-        program_policy: &RamLfeProgramPolicy,
-        draft: &RamLfeExecutionDraft,
-    ) -> Result<RamLfeOutputOpening, IdentifierResolutionError> {
-        let runtime = self.runtime(program_policy)?;
-        if runtime.signer.public_key() != &program_policy.output_opening_public_key {
-            return Err(IdentifierResolutionError::SignerMismatch);
-        }
-        let payload = RamLfeOutputOpeningPayload {
-            program_id: program_policy.program_id.clone(),
-            input_ciphertext_hash: draft.input_ciphertext_hash,
-            output_ciphertext_hash: draft.output_ciphertext_hash,
-            parameter_digest: draft.parameter_digest,
-            evaluation_key_digest: draft.evaluation_key_digest,
-            opened_output_hash: ram_lfe_output_hash(&draft.output),
-            opened_at_ms: draft.executed_at_ms,
-            expires_at_ms: draft.expires_at_ms,
-        };
-        let signature = sign_attestation_payload(runtime.signer.private_key(), &payload)?;
-        Ok(RamLfeOutputOpening { payload, signature })
-    }
     fn issue_receipt(
         &self,
         policy: &IdentifierPolicy,
@@ -424,6 +409,8 @@ impl IdentifierResolutionService {
         uaid: UniversalAccountId,
         account_id: AccountId,
     ) -> Result<IdentifierResolutionReceipt, IdentifierResolutionError> {
+        require_supported_program_policy(program_policy)?;
+        draft.backend.require_production_support()?;
         if policy.id.is_phone_retail() {
             let statement = &draft
                 .phone_retail_canonicality
@@ -495,6 +482,17 @@ impl IdentifierResolutionService {
             })
     }
 }
+/// Reject unsupported encryption before decoding requests, looking up private material, or signing.
+pub(crate) fn require_supported_program_policy(
+    program_policy: &RamLfeProgramPolicy,
+) -> Result<(), IdentifierResolutionError> {
+    program_policy.backend.require_production_support()?;
+    program_policy
+        .commitment
+        .backend
+        .require_production_support()?;
+    Ok(())
+}
 fn validate_output_opening(
     opening: &RamLfeOutputOpening,
     execution: &RamLfeExecutionDraft,
@@ -557,12 +555,12 @@ pub(crate) fn decode_bfv_public_parameters(
         return Err(IdentifierResolutionError::MissingFheParameters);
     }
     match program_policy.commitment.backend {
-        RamLfeBackend::BfvProgrammedSha3_256V1 => Ok(decode_bfv_programmed_public_parameters(
+        RamLfeBackend::BfvProgrammedV1 => Ok(decode_bfv_programmed_public_parameters(
             &program_policy.commitment.public_parameters,
         )
         .map_err(|err| IdentifierResolutionError::InvalidFheParameters(err.to_string()))?
         .encryption),
-        RamLfeBackend::BfvAffineSha3_256V1 => {
+        RamLfeBackend::BfvAffineV1 => {
             let public_parameters: BfvIdentifierPublicParameters =
                 norito::decode_from_bytes(&program_policy.commitment.public_parameters)
                     .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?;
@@ -579,7 +577,7 @@ pub(crate) fn decode_bfv_public_parameters(
 pub(crate) fn decode_programmed_public_parameters(
     program_policy: &RamLfeProgramPolicy,
 ) -> Result<Option<BfvProgrammedPublicParameters>, IdentifierResolutionError> {
-    if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+    if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedV1 {
         return Ok(None);
     }
     if program_policy.commitment.public_parameters.is_empty() {
@@ -604,12 +602,8 @@ pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
 mod tests {
     use super::*;
     use iroha_crypto::{
-        Algorithm, BfvEvaluationKeyBundle, Hash, PolicyCommitment, RamLfeBackend,
-        RamLfeVerificationMode, Signature, SignatureOf,
-        bfv_programmed_policy_commitment_with_program, default_bfv_programmed_hidden_program,
-        derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
-        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
-        try_bfv_programmed_public_parameters_with_program,
+        Algorithm, Hash, PolicyCommitment, RamLfeBackend, RamLfeVerificationMode, Signature,
+        SignatureOf, default_bfv_programmed_hidden_program,
     };
     use iroha_data_model::ram_lfe::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
@@ -656,70 +650,84 @@ mod tests {
         signer: &KeyPair,
         secret: &[u8],
     ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-        let backend = RamLfeBackend::BfvProgrammedSha3_256V1;
-        let params = sample_identifier_bfv_parameters();
+        // Typed public fixture for signing/validation; this does not perform encryption.
+        let backend = RamLfeBackend::HkdfSha3_512PrfV1;
         let program_id = sample_program_id(&policy_id);
-        let hidden_program = default_bfv_programmed_hidden_program();
-        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
-            &params,
-            63,
-            secret,
-            &program_id_bytes(&program_id),
-        )
-        .expect("identifier BFV parameters");
-        let evaluation_keys = BfvEvaluationKeyBundle {
-            relinearization_key,
-            rotation_keys: Vec::new(),
-            galois_keys: Vec::new(),
-            bootstrap_key: None,
-        };
-        let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
-            public_parameters,
-            evaluation_keys,
-            &hidden_program,
-            RamLfeVerificationMode::Signed,
-            None,
-        )
-        .expect("build programmed BFV public parameters");
-        let encoded_public_parameters =
-            norito::to_bytes(&programmed_public_parameters).expect("encode BFV parameters");
         let program_policy = RamLfeProgramPolicy::new(
             program_id.clone(),
             owner.clone(),
             backend,
             RamLfeVerificationMode::Signed,
-            bfv_programmed_policy_commitment_with_program(
-                secret,
-                &encoded_public_parameters,
-                &hidden_program,
-            )
-            .expect("policy commitment"),
+            PolicyCommitment {
+                backend,
+                policy_hash: Hash::new(secret),
+                public_parameters: Vec::new(),
+            },
             signer.public_key().clone(),
         );
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner,
-            IdentifierNormalization::PhoneE164,
+            if policy_id.is_phone_retail() {
+                IdentifierNormalization::PhoneE164
+            } else {
+                IdentifierNormalization::EmailAddress
+            },
             program_id,
         );
         (policy, program_policy)
-    }
-    fn sample_identifier_bfv_parameters() -> iroha_crypto::BfvParameters {
-        ram_lfe_bfv_parameters_v1()
     }
     fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
         format!("{}_{}", policy_id.kind, policy_id.business_rule)
             .parse()
             .expect("program id")
     }
-    fn encrypted_identifier(
+    fn execution_fixture(program_policy: &RamLfeProgramPolicy) -> RamLfeExecutionDraft {
+        let output = b"typed execution output".to_vec();
+        let output_hash = ram_lfe_output_hash(&output);
+        RamLfeExecutionDraft {
+            output,
+            output_hash,
+            output_ciphertext_hash: output_hash,
+            opaque_hash: Hash::new(b"opaque fixture"),
+            receipt_hash: Hash::new(b"receipt fixture"),
+            input_ciphertext_hash: Hash::new(b"input ciphertext fixture"),
+            associated_data_hash: Hash::new(program_id_bytes(&program_policy.program_id)),
+            program_digest: Hash::new(b"program fixture"),
+            parameter_digest: Hash::new(b"parameter fixture"),
+            evaluation_key_digest: Hash::new(b"evaluation-key fixture"),
+            backend: program_policy.backend,
+            verification_mode: RamLfeVerificationMode::Signed,
+            executed_at_ms: crate::utils::unix_now_ms(),
+            expires_at_ms: None,
+        }
+    }
+    fn resolution_fixture(
         program_policy: &RamLfeProgramPolicy,
-        input: &[u8],
-        seed: &[u8],
-    ) -> BfvIdentifierCiphertext {
-        let public_parameters =
-            decode_bfv_public_parameters(program_policy).expect("decode BFV params");
-        encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt input")
+        signer: &KeyPair,
+    ) -> IdentifierResolutionDraft {
+        let execution = execution_fixture(program_policy);
+        let opening = opening_for_execution(program_policy, signer, &execution);
+        let (opaque_id, receipt_hash) = identifier_hashes_from_output_hash(
+            &program_id_bytes(&program_policy.program_id),
+            &opening.payload.opened_output_hash,
+        );
+        IdentifierResolutionDraft {
+            opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            receipt_hash,
+            resolved_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+            backend: execution.backend,
+            output_hash: execution.output_hash,
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
+            program_digest: execution.program_digest,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
+            verification_mode: execution.verification_mode,
+            opening,
+            phone_retail_canonicality: None,
+        }
     }
     fn opening_for_execution(
         program_policy: &RamLfeProgramPolicy,
@@ -732,28 +740,9 @@ mod tests {
             output_ciphertext_hash: execution.output_ciphertext_hash,
             parameter_digest: execution.parameter_digest,
             evaluation_key_digest: execution.evaluation_key_digest,
-            opened_output_hash: ram_lfe_output_hash(&execution.output),
+            opened_output_hash: Hash::new(b"independently authenticated plaintext fixture"),
             opened_at_ms: execution.executed_at_ms,
             expires_at_ms: execution.expires_at_ms,
-        };
-        RamLfeOutputOpening {
-            signature: checked_output_opening_signature(signer, &payload),
-            payload,
-        }
-    }
-    fn bogus_opening(
-        program_policy: &RamLfeProgramPolicy,
-        signer: &KeyPair,
-    ) -> RamLfeOutputOpening {
-        let payload = RamLfeOutputOpeningPayload {
-            program_id: program_policy.program_id.clone(),
-            input_ciphertext_hash: Hash::new(b"input"),
-            output_ciphertext_hash: Hash::new(b"output"),
-            parameter_digest: Hash::new(b"parameters"),
-            evaluation_key_digest: Hash::new(b"evaluation-keys"),
-            opened_output_hash: Hash::new(b"opened-output"),
-            opened_at_ms: crate::utils::unix_now_ms(),
-            expires_at_ms: None,
         };
         RamLfeOutputOpening {
             signature: checked_output_opening_signature(signer, &payload),
@@ -895,8 +884,8 @@ mod tests {
     fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
         match raw {
             "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
-            "bfv-affine-sha3-256-v1" => RamLfeBackend::BfvAffineSha3_256V1,
-            "bfv-programmed-sha3-256-v1" => RamLfeBackend::BfvProgrammedSha3_256V1,
+            "bfv-affine-v1" => RamLfeBackend::BfvAffineV1,
+            "bfv-programmed-v1" => RamLfeBackend::BfvProgrammedV1,
             other => panic!("unsupported RAM-LFE backend `{other}`"),
         }
     }
@@ -1017,36 +1006,39 @@ mod tests {
         assert!(!service_debug.contains("hidden-phone-policy"));
     }
     #[test]
-    fn derive_and_sign_receipt_roundtrip() {
+    fn receipt_signing_preserves_independently_authenticated_opening() {
         let service = IdentifierResolutionService::new();
         let owner = checked_fixture_account(0x51);
         let signer = checked_fixture_ed25519_keypair(0x52);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner.clone(), &signer, &secret);
+        let (policy, program_policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            owner.clone(),
+            &signer,
+            b"fixture secret",
+        );
         service.register_program_runtime(
             program_policy.program_id.clone(),
-            secret,
+            RamLfeSecret::try_from(b"fixture secret".to_vec()).expect("secret"),
             default_bfv_programmed_hidden_program(),
             signer.clone(),
-            Some(30_000),
+            None,
         );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"derive-and-sign-ciphertext",
+        let execution = execution_fixture(&program_policy);
+        let draft = resolution_fixture(&program_policy, &signer);
+        assert_ne!(
+            draft.opening.payload.opened_output_hash,
+            draft.output_ciphertext_hash
         );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let opening = opening_for_execution(&program_policy, &signer, &execution);
-        let draft = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect("derive opaque identifier");
+        validate_output_opening(&draft.opening, &execution, &program_policy)
+            .expect("authenticated opening");
+        let execution_receipt = service
+            .issue_execution_receipt(&program_policy, &execution)
+            .expect("sign execution");
+        execution_receipt
+            .verify_signature(signer.public_key())
+            .expect("execution signature");
         let claim = IdentifierClaimRecord {
-            policy_id: policy_id.clone(),
+            policy_id: policy.id.clone(),
             opaque_id: draft.opaque_id,
             receipt_hash: draft.receipt_hash,
             phone_retail_nullifier: None,
@@ -1058,152 +1050,220 @@ mod tests {
         let receipt = service
             .sign_receipt(&policy, &program_policy, &draft, &claim)
             .expect("sign receipt");
-        let RamLfeReceiptAttestation::Signed(signature) = &receipt.attestation else {
-            panic!("receipt attestation must be signed");
-        };
-        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(signature.clone())
-            .verify(&program_policy.resolver_public_key, &receipt.payload)
-            .expect("receipt signature should verify");
-        assert_eq!(receipt.payload.policy_id, policy_id);
+        receipt
+            .verify(signer.public_key())
+            .expect("identifier signature");
+        assert_eq!(receipt.payload.policy_id, policy.id);
         assert_eq!(receipt.payload.opaque_id, draft.opaque_id);
         assert_eq!(receipt.payload.receipt_hash, draft.receipt_hash);
         assert_eq!(receipt.payload.uaid, claim.uaid);
         assert_eq!(receipt.payload.account_id, owner);
+        assert_eq!(receipt.payload.opening, draft.opening);
     }
+
     #[test]
-    fn derive_rejects_unregistered_policy() {
+    fn receipt_signing_rejects_wrong_signer_and_proof_mode() {
         let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x53);
-        let signer = checked_fixture_ed25519_keypair(0x54);
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner, &signer, b"hidden-email-policy");
-        let ciphertext =
-            encrypted_identifier(&program_policy, b"alice@example.com", b"missing-runtime");
-        let opening = bogus_opening(&program_policy, &signer);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("missing runtime must fail");
+        let owner = checked_fixture_account(0x61);
+        let signer = checked_fixture_ed25519_keypair(0x62);
+        let (policy, mut program_policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            owner.clone(),
+            &signer,
+            b"fixture secret",
+        );
+        let mut execution = execution_fixture(&program_policy);
         assert!(matches!(
-            err,
-            IdentifierResolutionError::UnknownProgram(found)
-                if found == program_policy.program_id
+            service.issue_execution_receipt(&program_policy, &execution),
+            Err(IdentifierResolutionError::UnknownProgram(_))
         ));
-    }
-    #[test]
-    fn programmed_backend_rejects_mismatched_runtime_hidden_program() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x55);
-        let signer = checked_fixture_ed25519_keypair(0x56);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        let default_program = default_bfv_programmed_hidden_program();
-        let mut builder = HiddenRamFheProgram::builder().expect("bounded tape allocation");
-        for instruction in default_program
-            .instructions()
-            .take(default_program.instruction_count() - 1)
-        {
-            builder.push(instruction).expect("bounded modified tape");
-        }
-        let mismatched_program = builder
-            .finish()
-            .expect("modified tape remains a valid program");
         service.register_program_runtime(
             program_policy.program_id.clone(),
-            secret,
-            mismatched_program,
-            signer,
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"mismatched-hidden-program-ciphertext",
-        );
-        let err = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect_err("runtime hidden program digest mismatch must fail");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::Evaluation(RamLfeError::CommitmentMismatch)
-        ));
-    }
-    #[test]
-    fn derive_rejects_replayed_output_opening_for_different_ciphertext() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x57);
-        let signer = checked_fixture_ed25519_keypair(0x58);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
+            RamLfeSecret::try_from(b"fixture secret".to_vec()).expect("secret"),
             default_bfv_programmed_hidden_program(),
             signer.clone(),
-            Some(30_000),
+            None,
         );
-        let first_ciphertext =
-            encrypted_identifier(&program_policy, b"+15551234567", b"opening-replay-first");
-        let first_execution = service
-            .execute_encrypted(&program_policy, &first_ciphertext)
-            .expect("execute first encrypted input");
-        let replayed_opening = opening_for_execution(&program_policy, &signer, &first_execution);
-        let second_ciphertext =
-            encrypted_identifier(&program_policy, b"+15557654321", b"opening-replay-second");
-        let err = service
-            .derive_encrypted(
+        program_policy.resolver_public_key =
+            checked_fixture_ed25519_keypair(0x63).public_key().clone();
+        assert!(matches!(
+            service.issue_execution_receipt(&program_policy, &execution),
+            Err(IdentifierResolutionError::SignerMismatch)
+        ));
+        program_policy.resolver_public_key = signer.public_key().clone();
+        execution.verification_mode = RamLfeVerificationMode::Proof;
+        assert!(matches!(
+            service.issue_execution_receipt(&program_policy, &execution),
+            Err(IdentifierResolutionError::ProofModeUnsupported)
+        ));
+        let mut draft = resolution_fixture(&program_policy, &signer);
+        draft.verification_mode = RamLfeVerificationMode::Proof;
+        assert!(matches!(
+            service.issue_claim_receipt(
                 &policy,
                 &program_policy,
-                &second_ciphertext,
-                replayed_opening,
-            )
-            .expect_err("opening bound to one ciphertext must not verify for another");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(message)
-                if message.contains("input ciphertext hash mismatch")
+                &draft,
+                UniversalAccountId::from_hash(Hash::new(b"uaid")),
+                owner
+            ),
+            Err(IdentifierResolutionError::ProofModeUnsupported)
         ));
     }
+
     #[test]
-    fn derive_rejects_tampered_output_opening_signature() {
+    fn bfv_backends_are_rejected_before_runtime_lookup_decoding_and_signing() {
         let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x59);
-        let signer = checked_fixture_ed25519_keypair(0x5A);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
+        let owner = checked_fixture_account(0x71);
+        let signer = checked_fixture_ed25519_keypair(0x72);
+        let (policy, supported_policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            owner.clone(),
+            &signer,
+            b"fixture secret",
         );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"tampered-opening-signature",
+        let ciphertext = BfvIdentifierCiphertext { slots: Vec::new() };
+        for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
+            for position in 0..2 {
+                let mut program_policy = supported_policy.clone();
+                if position == 0 {
+                    program_policy.backend = backend;
+                } else {
+                    program_policy.commitment.backend = backend;
+                }
+                let execution = execution_fixture(&program_policy);
+                let draft = resolution_fixture(&program_policy, &signer);
+                let claim = IdentifierClaimRecord {
+                    policy_id: policy.id.clone(),
+                    opaque_id: draft.opaque_id,
+                    receipt_hash: draft.receipt_hash,
+                    phone_retail_nullifier: None,
+                    uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
+                    account_id: owner.clone(),
+                    verified_at_ms: draft.resolved_at_ms,
+                    expires_at_ms: None,
+                };
+                assert_insecure(service.execute_encrypted(&program_policy, &ciphertext));
+                assert_insecure(service.execute_request_payload(&program_policy, vec![0xff]));
+                assert_insecure(service.derive_encrypted(
+                    &policy,
+                    &program_policy,
+                    &ciphertext,
+                    draft.opening.clone(),
+                ));
+                assert_insecure(service.issue_execution_receipt(&program_policy, &execution));
+                assert_insecure(service.sign_receipt(&policy, &program_policy, &draft, &claim));
+                assert_insecure(service.issue_claim_receipt(
+                    &policy,
+                    &program_policy,
+                    &draft,
+                    claim.uaid,
+                    owner.clone(),
+                ));
+            }
+            let mut execution = execution_fixture(&supported_policy);
+            execution.backend = backend;
+            assert_insecure(service.issue_execution_receipt(&supported_policy, &execution));
+            let mut draft = resolution_fixture(&supported_policy, &signer);
+            draft.backend = backend;
+            assert_insecure(service.issue_claim_receipt(
+                &policy,
+                &supported_policy,
+                &draft,
+                UniversalAccountId::from_hash(Hash::new(b"uaid")),
+                owner.clone(),
+            ));
+        }
+    }
+
+    fn assert_insecure<T: std::fmt::Debug>(result: Result<T, IdentifierResolutionError>) {
+        assert!(
+            matches!(
+                result,
+                Err(IdentifierResolutionError::Evaluation(
+                    RamLfeError::InsecureBfvProfile
+                ))
+            ),
+            "expected explicit insecure-profile refusal, got {result:?}"
         );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("payload mutation must invalidate output-opening signature");
+    }
+
+    #[test]
+    fn hkdf_metadata_is_never_decoded_or_executed_as_bfv() {
+        let signer = checked_fixture_ed25519_keypair(0x81);
+        let (_, mut policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            checked_fixture_account(0x82),
+            &signer,
+            b"fixture",
+        );
+        policy.commitment.public_parameters = vec![0xff, 0, 0x7f];
         assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(_)
+            decode_bfv_public_parameters(&policy),
+            Err(IdentifierResolutionError::UnsupportedBackend(
+                RamLfeBackend::HkdfSha3_512PrfV1
+            ))
+        ));
+        assert!(matches!(
+            IdentifierResolutionService::new()
+                .execute_encrypted(&policy, &BfvIdentifierCiphertext { slots: Vec::new() }),
+            Err(IdentifierResolutionError::UnsupportedBackend(
+                RamLfeBackend::HkdfSha3_512PrfV1
+            ))
         ));
     }
+
     #[test]
-    fn derive_rejects_malformed_output_opening_signature_r() {
+    fn authenticated_opening_rejects_every_mismatched_context() {
+        let signer = checked_fixture_ed25519_keypair(0x91);
+        let (_, policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            checked_fixture_account(0x92),
+            &signer,
+            b"fixture",
+        );
+        let execution = execution_fixture(&policy);
+        let valid = opening_for_execution(&policy, &signer, &execution);
+        validate_output_opening(&valid, &execution, &policy).expect("valid independent opening");
+        for field in [
+            "program",
+            "input",
+            "output",
+            "parameters",
+            "evaluation key",
+            "zero",
+            "future",
+            "expiry",
+        ] {
+            let mut opening = valid.clone();
+            match field {
+                "program" => opening.payload.program_id = "other_program".parse().expect("program"),
+                "input" => opening.payload.input_ciphertext_hash = Hash::new(b"replayed input"),
+                "output" => opening.payload.output_ciphertext_hash = Hash::new(b"other ciphertext"),
+                "parameters" => opening.payload.parameter_digest = Hash::new(b"other parameters"),
+                "evaluation key" => {
+                    opening.payload.evaluation_key_digest = Hash::new(b"other evaluation key")
+                }
+                "zero" => opening.payload.opened_output_hash = Hash::prehashed([0; Hash::LENGTH]),
+                "future" => {
+                    opening.payload.opened_at_ms =
+                        crate::utils::unix_now_ms().saturating_add(60_000)
+                }
+                "expiry" => opening.payload.expires_at_ms = Some(opening.payload.opened_at_ms),
+                _ => unreachable!(),
+            }
+            opening.signature = checked_output_opening_signature(&signer, &opening.payload);
+            assert!(
+                matches!(
+                    validate_output_opening(&opening, &execution, &policy),
+                    Err(IdentifierResolutionError::InvalidOutputOpening(_))
+                ),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_opening_rejects_payload_mutation_wrong_key_and_malformed_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0,
@@ -1213,447 +1273,42 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
+        let signer = checked_fixture_ed25519_keypair(0xa1);
+        let (_, mut policy) = sample_policy_bundle(
+            "email#retail".parse().expect("policy"),
+            checked_fixture_account(0xa2),
+            &signer,
+            b"fixture",
+        );
+        let execution = execution_fixture(&policy);
+        let valid = opening_for_execution(&policy, &signer, &execution);
+        let mut tampered = valid.clone();
+        tampered.payload.opened_output_hash = Hash::new(b"mutated plaintext hash");
+        assert!(matches!(
+            validate_output_opening(&tampered, &execution, &policy),
+            Err(IdentifierResolutionError::InvalidOutputOpening(_))
+        ));
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
         ] {
-            let service = IdentifierResolutionService::new();
-            let owner = checked_fixture_account(0x5D);
-            let signer = checked_fixture_ed25519_keypair(0x5E);
-            let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-            let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-                .expect("valid RAM-LFE test secret");
-            let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-            service.register_program_runtime(
-                program_policy.program_id.clone(),
-                secret,
-                default_bfv_programmed_hidden_program(),
-                signer.clone(),
-                Some(30_000),
-            );
-            let ciphertext = encrypted_identifier(
-                &program_policy,
-                b"+15551234567",
-                b"malformed-opening-signature-r",
-            );
-            let execution = service
-                .execute_encrypted(&program_policy, &ciphertext)
-                .expect("execute encrypted input");
-            let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-            let mut signature = opening.signature.payload().to_vec();
-            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
-            opening.signature = Signature::from_bytes(&signature);
-            let err = service
-                .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-                .expect_err("malformed output-opening signature R must fail admission");
+            let mut malformed = valid.clone();
+            let mut bytes = malformed.signature.payload().to_vec();
+            bytes[..32].copy_from_slice(&replacement_r);
+            malformed.signature = Signature::from_bytes(&bytes);
             assert!(
-                matches!(err, IdentifierResolutionError::InvalidOutputOpening(_)),
-                "{label} R produced unexpected error: {err:?}"
+                matches!(
+                    validate_output_opening(&malformed, &execution, &policy),
+                    Err(IdentifierResolutionError::InvalidOutputOpening(_))
+                ),
+                "{label}"
             );
         }
-    }
-    #[test]
-    fn derive_rejects_signed_zero_output_opening_hash() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x5B);
-        let signer = checked_fixture_ed25519_keypair(0x5C);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext =
-            encrypted_identifier(&program_policy, b"+15551234567", b"zero-opening-hash");
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.opened_output_hash = Hash::prehashed([0; Hash::LENGTH]);
-        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("zero opened-output hash must be rejected even when signed");
+        policy.output_opening_public_key =
+            checked_fixture_ed25519_keypair(0xa3).public_key().clone();
         assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(message)
-                if message.contains("opened output hash")
+            validate_output_opening(&valid, &execution, &policy),
+            Err(IdentifierResolutionError::InvalidOutputOpening(_))
         ));
-    }
-    #[test]
-    fn derive_rejects_future_output_opening_timestamp() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x5D);
-        let signer = checked_fixture_ed25519_keypair(0x5E);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(&program_policy, b"+15551234567", b"future-opening");
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.opened_at_ms = crate::utils::unix_now_ms().saturating_add(60_000);
-        opening.payload.expires_at_ms = opening.payload.opened_at_ms.checked_add(60_000);
-        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("future-dated output opening must be rejected");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(message)
-                if message.contains("future")
-        ));
-    }
-    #[test]
-    fn derive_rejects_output_opening_signed_by_wrong_verifier_key() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x5F);
-        let signer = checked_fixture_ed25519_keypair(0x60);
-        let wrong_opening_verifier = checked_fixture_ed25519_keypair(0x61);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        program_policy.output_opening_public_key = wrong_opening_verifier.public_key().clone();
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"wrong-opening-verifier-key",
-        );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let opening = opening_for_execution(&program_policy, &signer, &execution);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("opening signed by a non-authorized key must be rejected");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(_)
-        ));
-    }
-    #[test]
-    fn derive_rejects_expired_output_opening() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x62);
-        let signer = checked_fixture_ed25519_keypair(0x63);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(&program_policy, b"+15551234567", b"expired-opening");
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.expires_at_ms = Some(opening.payload.opened_at_ms);
-        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("expired output opening must be rejected");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(message)
-                if message.contains("expired") || message.contains("invalid expiry")
-        ));
-    }
-    #[test]
-    fn derive_rejects_output_opening_program_id_mismatch() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x64);
-        let signer = checked_fixture_ed25519_keypair(0x65);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"mismatched-opening-program",
-        );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let mut opening = opening_for_execution(&program_policy, &signer, &execution);
-        opening.payload.program_id = "other_phone_program".parse().expect("program id");
-        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
-        let err = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect_err("opening for another program must be rejected");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::InvalidOutputOpening(message)
-                if message.contains("opening program")
-        ));
-    }
-    #[test]
-    fn execute_rejects_non_programmed_commitment_backend() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x66);
-        let signer = checked_fixture_ed25519_keypair(0x67);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer,
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"non-programmed-backend-ciphertext",
-        );
-        program_policy.commitment.backend = RamLfeBackend::BfvAffineSha3_256V1;
-        let err = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect_err("Torii execution must reject non-programmed commitment backends");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::BfvAffineSha3_256V1)
-        ));
-    }
-    #[test]
-    fn hkdf_metadata_is_never_decoded_as_bfv_parameters() {
-        let resolver = checked_fixture_ed25519_keypair(0xA1);
-        let policy = RamLfeProgramPolicy::new(
-            "hkdf_metadata".parse().expect("program id"),
-            checked_fixture_account(0xA0),
-            RamLfeBackend::HkdfSha3_512PrfV1,
-            RamLfeVerificationMode::Signed,
-            PolicyCommitment {
-                backend: RamLfeBackend::HkdfSha3_512PrfV1,
-                policy_hash: Hash::new(b"hkdf-metadata-policy"),
-                public_parameters: vec![0xFF, 0x00, 0x7F],
-            },
-            resolver.public_key().clone(),
-        );
-        let error = decode_bfv_public_parameters(&policy)
-            .expect_err("HKDF metadata is opaque and must not enter the BFV decoder");
-        assert!(matches!(
-            error,
-            IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::HkdfSha3_512PrfV1)
-        ));
-    }
-    #[test]
-    fn issue_execution_receipt_and_output_opening_signatures_verify() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x68);
-        let signer = checked_fixture_ed25519_keypair(0x69);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer,
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"signed-execution-receipt-ciphertext",
-        );
-        let draft = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let receipt = service
-            .issue_execution_receipt(&program_policy, &draft)
-            .expect("issue execution receipt");
-        receipt
-            .verify_signature(&program_policy.resolver_public_key)
-            .expect("execution receipt signature verifies");
-        let opening = service
-            .issue_output_opening(&program_policy, &draft)
-            .expect("issue output opening");
-        opening
-            .verify_signature(&program_policy.output_opening_public_key)
-            .expect("output opening signature verifies");
-        assert_eq!(
-            opening.payload.opened_output_hash,
-            ram_lfe_output_hash(&draft.output)
-        );
-    }
-    #[test]
-    fn issue_execution_receipt_rejects_resolver_signer_mismatch() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x6A);
-        let signer = checked_fixture_ed25519_keypair(0x6B);
-        let wrong_signer = checked_fixture_ed25519_keypair(0x6C);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer,
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"signer-mismatch-execution-ciphertext",
-        );
-        let draft = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        program_policy.resolver_public_key = wrong_signer.public_key().clone();
-        let err = service
-            .issue_execution_receipt(&program_policy, &draft)
-            .expect_err("receipt signing must fail when runtime key differs from policy key");
-        assert!(matches!(err, IdentifierResolutionError::SignerMismatch));
-    }
-    #[test]
-    fn issue_claim_receipt_rejects_proof_mode_draft_without_prover_runtime() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x6D);
-        let signer = checked_fixture_ed25519_keypair(0x6E);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id, owner.clone(), &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"proof-mode-claim-receipt-ciphertext",
-        );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let opening = opening_for_execution(&program_policy, &signer, &execution);
-        let mut draft = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect("derive encrypted identifier");
-        draft.verification_mode = RamLfeVerificationMode::Proof;
-        let err = service
-            .issue_claim_receipt(
-                &policy,
-                &program_policy,
-                &draft,
-                UniversalAccountId::from_hash(Hash::new(b"uaid")),
-                owner,
-            )
-            .expect_err("Torii must not issue signed claim receipts for proof-mode drafts");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::ProofModeUnsupported
-        ));
-    }
-    #[test]
-    fn programmed_backend_derives_deterministic_receipts() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x6F);
-        let signer = checked_fixture_ed25519_keypair(0x70);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"deterministic-programmed-ciphertext",
-        );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let opening = opening_for_execution(&program_policy, &signer, &execution);
-        let first = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening.clone())
-            .expect("first derive");
-        let second = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect("second derive");
-        assert_eq!(first.opaque_id, second.opaque_id);
-        assert_eq!(first.receipt_hash, second.receipt_hash);
-        assert_eq!(first.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
-    }
-    #[test]
-    fn programmed_backend_resolves_encrypted_input() {
-        let service = IdentifierResolutionService::new();
-        let owner = checked_fixture_account(0x71);
-        let signer = checked_fixture_ed25519_keypair(0x72);
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
-            .expect("valid RAM-LFE test secret");
-        let (policy, program_policy) =
-            sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            secret,
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            Some(30_000),
-        );
-        let ciphertext = encrypted_identifier(
-            &program_policy,
-            b"+15551234567",
-            b"programmed-bfv-ciphertext",
-        );
-        let execution = service
-            .execute_encrypted(&program_policy, &ciphertext)
-            .expect("execute encrypted input");
-        let opening = opening_for_execution(&program_policy, &signer, &execution);
-        let encrypted = service
-            .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
-            .expect("encrypted derive");
-        assert_eq!(encrypted.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
     }
 }

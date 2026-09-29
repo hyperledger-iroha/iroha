@@ -33,47 +33,57 @@ use reqwest::StatusCode;
 use std::time::{Duration, Instant};
 use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
-    let meta = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 0,
+    ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
         max_cycles: 1_000,
-        abi_version: 1,
-    };
-    let interface = ivm::EmbeddedContractInterfaceV1 {
-        callables: Vec::new(),
-        seiyaku_name: "TestContract".to_owned(),
-        compiler_fingerprint: "integration-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        features_bitmap: 0,
-        access_set_hints: None,
-        kotoba: Vec::new(),
-        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-            name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
-            params: Vec::new(),
-            argument_schema: None,
-            return_type: Some("()".to_owned()),
-            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
-            }),
-            permission: None,
-            read_keys: Vec::new(),
-            write_keys: Vec::new(),
-            access_hints_complete: Some(true),
-            access_hints_skipped: Vec::new(),
-            triggers: Vec::new(),
-            entry_pc: 0,
-        }],
-        error_types: Vec::new(),
-        states: Vec::new(),
-    };
-    let mut out = meta.encode();
-    out.extend_from_slice(&interface.encode_section());
-    out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    out
+        ..Default::default()
+    })
+    .compile_source("seiyaku TestContract { view fn main() { () } }")
+    .expect("compile the minimal contract with its canonical callable table")
 }
+
+#[test]
+fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
+    let artifact = minimal_contract_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact).expect("admit minimal contract");
+    assert_eq!(verified.metadata.abi_version, 1);
+    assert_eq!(verified.metadata.max_cycles, 1_000);
+    let mut interface = verified.contract_interface;
+    assert_eq!(interface.seiyaku_name, "TestContract");
+    assert_eq!(interface.entrypoints.len(), 1);
+    let entrypoint = &interface.entrypoints[0];
+    assert_eq!(entrypoint.name, "main");
+    assert_eq!(
+        entrypoint.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::View
+    );
+    assert!(entrypoint.params.is_empty());
+    assert_eq!(entrypoint.return_type.as_deref(), Some("()"));
+    assert!(entrypoint.permission.is_none());
+    assert_eq!(interface.callables.len(), 1);
+    let callable = &interface.callables[0];
+    assert_eq!(callable.entry_pc, entrypoint.entry_pc);
+    assert_ne!(callable.entry_pc, 0, "raw entry must not dispatch main");
+    assert!(callable.validate());
+    assert!(callable.argument_words.is_empty());
+    assert_eq!(callable.result_words, vec![ivm::call::CallWordV1::Unit]);
+
+    // Preserve all remaining compiler sections while removing only the
+    // authenticated callable descriptor; admission must reject that omission.
+    let section_end = verified.header_len + interface.encode_section().len();
+    interface.callables.clear();
+    let mut missing_callable = artifact[..verified.header_len].to_vec();
+    missing_callable.extend_from_slice(&interface.encode_section());
+    missing_callable.extend_from_slice(&artifact[section_end..]);
+    let error = ivm::verify_contract_artifact(&missing_callable)
+        .expect_err("public entrypoints require their canonical callable descriptors");
+    assert!(
+        error.to_string().contains(
+            "CNTR callable descriptors must cover exactly every entrypoint and direct-call root"
+        ),
+        "unexpected admission error: {error}"
+    );
+}
+
 // The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
 // instance-scoped state paths and bounded scan precharges on real validators.
 const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;

@@ -16,8 +16,8 @@ import org.bouncycastle.crypto.params.ParametersWithIV;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Builds framed Norito BFV identifier ciphertext envelopes from client-side input. */
-final class IdentifierBfvEnvelopeBuilder {
+/** Insecure exact-lift arithmetic retained only for historical fixture diagnostics. */
+final class DiagnosticIdentifierBfvEnvelopeBuilder {
   private static final String SCHEMA_NAME =
       "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
   private static final byte[] RUST_ENCRYPT_DOMAIN =
@@ -41,7 +41,7 @@ final class IdentifierBfvEnvelopeBuilder {
   private static final long[] CRC64_TABLE = buildCrc64Table();
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
-  private IdentifierBfvEnvelopeBuilder() {}
+  private DiagnosticIdentifierBfvEnvelopeBuilder() {}
 
   static String encrypt(
       final IdentifierPolicySummary policy, final String input, final byte[] seedOverride) {

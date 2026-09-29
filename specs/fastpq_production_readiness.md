@@ -146,9 +146,17 @@ repeated ALICE/BOB keys do not cover every distinct-key/touched-tree shape.
 The proof-run source check records only `Cargo.lock` drift after capture; it
 cannot attest the subsequently changed checkout or complete dependency closure.
 The [September 29 record](../docs/history/2026-09-29/fastpq-two-child-memory-repair.md)
-retains artifact identities and exact scope. Four-distinct-key and maximum AXT
-context tests are implemented but await a fresh build and complete proofs.
-Maximum application shapes and broader deployment resource behavior remain open.
+retains artifact identities and exact scope. The fresh optimized four-distinct-key
+ordinary proof and independent replay now pass: 973,336 bytes, 3,668.791 seconds
+construction plus self-check, and 1,856,045,056 bytes maximum process RSS. The
+maximum AXT-context proof and independent replay also pass from the same retained
+executable: 1,010,229 bytes, 4,233.689 seconds construction plus self-check,
+1,875,656,704 bytes peak RSS; separate replay takes 26.87 seconds and 34,488,320
+bytes peak RSS. The unchanged 1 MiB outer cap has 38,347 bytes remaining for this
+maximum AXT fixture. The
+[maximum-occupancy record](../docs/history/2026-09-29/fastpq-maximum-occupancy-proof.md)
+records the exact source archive, zero-drift frozen checkout and terminal evidence.
+Broader application shapes and deployment resource behavior remain open.
 All quoted timings are from a contended host and describe the stated fixtures.
 They do not establish a controlled speed ratio or release-fleet throughput.
 
@@ -166,7 +174,7 @@ uses the same immutable executable, seed, statement, caps and golden assertions;
 its content-addressed writer compares the actual bytes with the retained Metal
 artifact before accepting the existing file. Separate artifact verification and
 mutation controls also pass. The September 26 CPU proof remains separately
-scoped to a different fixture/candidate. Maximum-shape facade measurements, corrected whole-process memory behavior,
+scoped to a different fixture/candidate. Broader whole-process memory behavior,
 CUDA hardware and release-fleet qualification remain open.
 
 ## Completion goals
@@ -174,7 +182,7 @@ CUDA hardware and release-fleet qualification remain open.
 | Owner | Required outcome | Remaining evidence |
 | --- | --- | --- |
 | API | One canonical normal proving/verification workflow | Direct AXT producer and diagnostic-only replay cut applied; normal API 15, AXT 53, dev-tools integration 28, transcript 1 and Rustdoc 6 controls pass in their stated selections. Optimized ordinary and AXT two-child generation/replay pass; frozen network consumer checks remain pending. |
-| Relation and resource owners | Complete supported application shapes within unchanged limits | Two-child ordinary/AXT proofs and independent replays pass; maximum application shapes, corrected whole-process memory under the unchanged cap, cumulative decode/preparation bounds and fleet time/RSS remain open. |
+| Relation and resource owners | Complete supported application shapes within unchanged limits | Two-child ordinary/AXT and maximum four-key ordinary/AXT-context proofs and independent replays pass; broader application shapes, cumulative decode/preparation bounds and fleet time/RSS remain open. |
 | Hardware owners | Deterministic complete proofs and bounded failures | Preserve complete same-fixture parity while measuring optimized public facades; qualify actual device cleanup/quarantine and supported hardware. No missing-device skip counts as a pass. |
 | Cryptographic reviewers | Independently qualified masked protocol | Artifact-bound soundness, hiding, Fiat–Shamir/qROM, concrete six-lane digest/multi-target and arithmetic/side-channel analysis. |
 | Core/Nexus | Authorized source-state and business effects | Exact finalized roots, intent, proof-bound hidden amounts, durable atomic spend nonces, budget/custody checks, restart/recovery and four-validator adversarial admission on one candidate. |

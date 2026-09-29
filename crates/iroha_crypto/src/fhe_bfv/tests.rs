@@ -1,4 +1,15 @@
 use super::*;
+use crate::bfv_test_fixtures::{
+    bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1,
+    bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1,
+    bootstrap_key_bounded_noise_from_seed,
+    bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed, bootstrap_key_from_seed,
+    bootstrap_key_with_max_refresh_rounds_from_seed, derive_identifier_key_material_from_seed,
+    encrypt_bounded_noise_from_seed, encrypt_from_seed, encrypt_identifier_from_seed,
+    galois_key_bounded_noise_from_seed, galois_key_from_seed, keygen_bounded_noise_from_seed,
+    keygen_bounded_noise_with_relinearization_from_seed, keygen_from_seed,
+    rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
+};
 use crate::sha256;
 
 mod registered_full_shape_source_bounds;
@@ -2007,16 +2018,16 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
     assert!(
         matches!(
             validate_release_package_for_artifacts_trusted_reviewer_and_digest_v1(
-        &params,
-        &material,
-        &artifacts,
-        &package,
-        package_digest,
-        reviewer_id,
-        reviewer_key_pair.public_key(),
-    ),
+                &params,
+                &material,
+                &artifacts,
+                &package,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
@@ -2070,18 +2081,33 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
     assert_row! { (external_all_digest_record_from_record_manifest_bytes_full) == (package.record) && (external_all_digest_manifest_from_record_manifest_bytes_full) == (package.manifest) && (external_all_digest_package_from_record_manifest_bytes_full) == (package) && (external_record_digest_from_record_manifest_bytes_full) == (package.record_digest) && (external_evidence_digest_from_record_manifest_bytes) == (record_evidence_digest_from_bytes) && (external_signoff_digest_from_record_manifest_bytes) == (record_signoff_digest_from_bytes) && (external_manifest_digest_from_record_manifest_bytes_full) == (package.manifest_digest) && (external_package_digest_from_record_manifest_bytes_full) == (package_digest), "{}", diagnostics.group_context(73, 8), };
     assert!(
         matches!(
-            validate_release_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1( &params, &material, &artifacts, &package_bytes, package_digest, reviewer_id, reviewer_key_pair.public_key(), ),
+            validate_release_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &package_bytes,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
     );
     assert!(
         matches!(
-            validate_release_package_bytes_for_artifacts_trusted_reviewer_v1( &params, &material, &artifacts, &package_bytes, reviewer_id, reviewer_key_pair.public_key(), ),
+            validate_release_package_bytes_for_artifacts_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifacts,
+                &package_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
@@ -2178,18 +2204,33 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
     assert_row! { (trusted_all_digests_signoff_artifacts) == (artifacts) && (trusted_all_digests_signoff_evidence) == (package.record.evidence) && (trusted_all_digests_signoff_from_artifact_bundle_bytes) == (package.record.signoff) && (trusted_artifact_bundle_digest_from_artifact_bundle_bytes) == (artifact_bundle_digest_from_bytes) && (trusted_evidence_digest_from_artifact_bundle_bytes_all) == (package_evidence_digest) && (trusted_signoff_digest_from_artifact_bundle_bytes_all) == (package_signoff_digest), "{}", diagnostics.group_context(244, 6), };
     assert!(
         matches!(
-            validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1( &params, &material, &artifact_bundle_bytes, &package_bytes, package_digest, reviewer_id, reviewer_key_pair.public_key(), ),
+            validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifact_bundle_bytes,
+                &package_bytes,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
     );
     assert!(
         matches!(
-            validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1( &params, &material, &artifact_bundle_bytes, &package_bytes, reviewer_id, reviewer_key_pair.public_key(), ),
+            validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifact_bundle_bytes,
+                &package_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
@@ -2198,7 +2239,7 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
         matches!(
             validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1( &params, &material, &artifact_bundle_bytes, &package_bytes, reviewer_id, reviewer_key_pair.public_key(), ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
@@ -2207,7 +2248,7 @@ fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
         matches!(
             validate_release_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1( &params, &material, &artifact_bundle_bytes, &package_bytes, reviewer_id, reviewer_key_pair.public_key(), ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "signed fixture package must not qualify production without registered evidence",
@@ -7951,7 +7992,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
                 reviewer_key_pair.public_key(),
             ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "a signed fixture audit cannot qualify exact execution without registered evidence",
@@ -7970,7 +8011,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
                 reviewer_key_pair.public_key(),
             ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "a signed fixture audit cannot qualify exact bounds without registered evidence",
@@ -8104,7 +8145,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
                 reviewer_key_pair.public_key(),
             ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "a signed fixture audit cannot qualify bounded-noise execution without registered evidence",
@@ -8123,7 +8164,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
                 reviewer_key_pair.public_key(),
             ),
             Err(BfvError::ProductionQualificationUnavailable(
-                BfvProductionQualificationBlockerV1::MissingRegisteredHeOrgLatticeNoiseAndQromEvidence,
+                BfvProductionSupportBlockerV1::KnownInsecureExactProfile,
             )),
         ),
         "a signed fixture audit cannot qualify bounded-noise bounds without registered evidence",

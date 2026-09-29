@@ -1599,14 +1599,18 @@ export interface RamLfeProofVerifierMetadata {
   verifying_key_bytes_b64: string;
 }
 
+/** Current RAM-LFE wire tags; a recognized tag does not imply production encryption support. */
+export type RamLfeBackend = "hkdf-sha3-512-prf-v1" | "bfv-affine-v1" | "bfv-programmed-v1";
+export type RamLfeVerificationMode = "signed" | "proof";
+
 export interface RamLfeProgramPolicySummary {
   program_id: string;
   owner: string;
   active: boolean;
   resolver_public_key: string;
   output_opening_public_key: string;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
   input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
@@ -1629,7 +1633,7 @@ export interface IdentifierPolicySummary {
   resolver_public_key: string;
   output_opening_public_key: string;
   phone_retail_attestor_public_key?: string;
-  backend: string;
+  backend: RamLfeBackend;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
   input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
@@ -1670,8 +1674,8 @@ export interface RamLfeOutputOpening {
 export interface RamLfeExecutionReceiptPayload {
   program_id: string;
   program_digest: string;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   input_ciphertext_hash: string;
   output_ciphertext_hash: string;
   parameter_digest: string;
@@ -1706,10 +1710,9 @@ export interface RamLfeExecuteResponse {
   associated_data_hash: string;
   executed_at_ms: number;
   expires_at_ms: number | null;
-  backend: string;
-  verification_mode: string;
+  backend: RamLfeBackend;
+  verification_mode: RamLfeVerificationMode;
   receipt: RamLfeExecutionReceipt;
-  output_opening: RamLfeOutputOpening;
 }
 
 export interface IdentifierResolutionRequestOptions {
@@ -3367,11 +3370,7 @@ export class ToriiDataModelMismatchError extends Error {
 }
 
 export interface IdentifierRequestForPolicyOptions {
-  input?: unknown;
-  encryptedInput?: string;
-  encrypt?: boolean;
-  seed?: BinaryLike;
-  seedHex?: string;
+  encryptedInput: string;
   outputOpening: RamLfeOutputOpening;
 }
 
@@ -3388,11 +3387,16 @@ export function encodeIdentifierResolutionReceiptAttestation(
 export function getIdentifierBfvPublicParameters(
   policySummary: IdentifierPolicyClientSummary,
 ): Readonly<IdentifierBfvPublicParameters> | null;
+/** No secure RAM-LFE input-encryption profile is currently available. */
+export class RamLfeEncryptionUnavailableError extends Error {
+  readonly code: "ram_lfe_encryption_unavailable";
+  constructor();
+}
+/** Always throws RamLfeEncryptionUnavailableError before inspecting the input. */
 export function encryptIdentifierInputForPolicy(
   policySummary: IdentifierPolicyClientSummary,
   input: unknown,
-  options?: { seed?: BinaryLike; seedHex?: string },
-): string;
+): never;
 export function hashIdentifierEncryptedInput(encryptedInput: string): string;
 export function buildIdentifierRequestForPolicy(
   policySummary: IdentifierPolicyClientSummary,
@@ -3426,6 +3430,7 @@ type ToriiRuntimeNamespaceExport =
   | "encodeIdentifierResolutionReceiptAttestation"
   | "encodeIdentifierResolutionReceiptPayload"
   | "encryptIdentifierInputForPolicy"
+  | "RamLfeEncryptionUnavailableError"
   | "hashIdentifierEncryptedInput"
   | "extractPipelineStatusKind"
   | "getIdentifierBfvPublicParameters"

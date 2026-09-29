@@ -126,7 +126,7 @@ class RamFheProfileTest {
         val optional = if (profile == null) "" else ",\"ram_fhe_profile\":$profile"
         val payload = """{"items":[{"policy_id":"retail","program_id":"lookup","owner":"owner",
             "active":true,"normalization":"exact","resolver_public_key":"$KEY",
-            "output_opening_public_key":"$KEY","backend":"bfv-programmed-sha3-256-v1",
+            "output_opening_public_key":"$KEY","backend":"bfv-programmed-v1",
             "verification_mode":"signed"$optional}]}""".toByteArray(Charsets.UTF_8)
         return if (identifier) IdentifierJsonParser.parsePolicyList(payload).items.single().ramFheProfile
         else RamLfeJsonParser.parsePolicyList(payload).items.single().ramFheProfile

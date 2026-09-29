@@ -1,6 +1,6 @@
 //! Four-validator qualification for bounded progress, clean idle, and proposal work.
 use super::*;
-use iroha::data_model::block::execution_output::ExecutionOutputV1;
+use iroha::data_model::{block::execution_output::ExecutionOutputV1, prelude::FindAccountById};
 #[allow(clippy::too_many_lines)]
 pub(super) async fn run_permissioned_progress() -> Result<()> {
     init_instruction_registry();

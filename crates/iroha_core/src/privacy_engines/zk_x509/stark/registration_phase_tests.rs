@@ -10,6 +10,86 @@ fn mutate_stark_digest_v1(digest: &mut PrivacyOuterDigestV1) {
 }
 
 #[test]
+fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
+        .expect("maximum signed credential");
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .expect("actual maximum MAIN assembly");
+    let mut obsolete_profile = assembly.verifier_profile;
+    obsolete_profile.compiled_profile_digest =
+        hex::decode("7cf3286b4560be90d2305b33c9aaea30a39e6841f4045cf68bca68895d1b6063")
+            .unwrap()
+            .try_into()
+            .unwrap();
+    assert_eq!(
+        validate_zk_x509_main_verifier_profile_v1(obsolete_profile),
+        Err(ZkX509StarkErrorV1::ProfileMismatch),
+        "the broken RFC/SHA channel profile has no compatibility path",
+    );
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+        [0x81; 32],
+        assembly.verifier_profile.compiled_profile_digest,
+        core::array::from_fn(|index| test_stark_digest_v1(index as u8 + 1)),
+    );
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        pre_aux,
+        test_stark_digest_v1(0x91),
+        test_stark_digest_v1(0xA1),
+        test_stark_digest_v1(0xB1),
+    )
+    .unwrap();
+    let sha = core::array::from_fn(|segment| {
+        ZkX509ShaBatchSegmentBaseSourceV1::new_v1(
+            &assembly.sha_schedule,
+            &assembly.sha_witnesses,
+            segment,
+        )
+        .unwrap()
+    });
+    let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
+    let source = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        &layout, &assembly, sha, p256, binding,
+    )
+    .expect("actual maximum BoundSources phase without mask/commitment work");
+    assert_eq!(source.post_base, binding.main_post_base());
+    assert_eq!(
+        source.p256.post_base_v1().unwrap(),
+        binding.main_post_base()
+    );
+    validate_zk_x509_der_rfc_terminal_equalities_v1(source.claims.der, source.claims.rfc5280)
+        .expect("DER/RFC source handoff");
+    assert!(zk_x509_main_rfc_sha_terminal_products_match_v1(
+        source.claims.rfc5280,
+        source.claims.sha
+    ));
+    let mut changed = source.claims.sha;
+    changed.segments[0].rfc_stream_products[0][0] =
+        changed.segments[0].rfc_stream_products[0][0].add(F::ONE);
+    assert!(!zk_x509_main_rfc_sha_terminal_products_match_v1(
+        source.claims.rfc5280,
+        changed
+    ));
+}
+
+#[test]
 fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let (statement, _, proof) = projection_fixture();
     verify_zk_x509_projection_segmented_stark_v1(statement, proof).expect("valid projection proof");
@@ -40,7 +120,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "cf4bb80ada63ffaae2415d9c76ed45c26dbc6c8a461ffc81fec5674928f78a85",
+        "76ddd975964d782a842d9b488246634a5ae89c27b943c81e9e5dc133aaf87b39",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -98,7 +178,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "720f3863faf66ced3968bb561f2cd68b9f7b83ea27b5e3afb022db99ea277a21",
+        "72f054cad978ea9d15e6561a56fb081df01cd930b1dd81afadf29a477374c480",
         "update only when the canonical proof protocol intentionally changes"
     );
 }

@@ -60,6 +60,11 @@ fn http_service_quota_class_policy(quota_class: &str) -> Option<SoraHttpServiceQ
 /// Validation errors returned by `Soracloud` manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoracloudManifestError {
+    /// FHE admission is unavailable: the exact BFV profile is insecure and no replacement is qualified.
+    #[error(
+        "soracloud_fhe_unavailable: the exact BFV profile is insecure and no replacement FHE profile is qualified"
+    )]
+    FheUnavailable,
     /// The payload references an unsupported schema version.
     #[error("{manifest} schema version {found} is not supported (expected version {expected})")]
     UnsupportedVersion {
@@ -2534,6 +2539,20 @@ pub enum SoraStateEncryptionV1 {
     ClientCiphertext,
     /// Values are FHE ciphertexts.
     FheCiphertext,
+}
+impl SoraStateEncryptionV1 {
+    /// Require an encryption class supported by production service state.
+    ///
+    /// Structural decoding does not qualify an encryption scheme.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::FheUnavailable`] for FHE state.
+    pub fn require_production_support(self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::Plaintext | Self::ClientCiphertext => Ok(()),
+            Self::FheCiphertext => Err(SoracloudManifestError::FheUnavailable),
+        }
+    }
 }
 /// Deterministic state binding contract for an SCR service.
 #[derive(

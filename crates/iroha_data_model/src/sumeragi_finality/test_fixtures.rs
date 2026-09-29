@@ -243,10 +243,14 @@ impl NativeFinalityFixture {
 
     /// Build nonempty, originally signed work for structural proof/custody tests.
     ///
-    /// The transaction uses this fixture's network and the supplied original header time.
+    /// The transaction uses this fixture's network and is signed one millisecond before
+    /// the supplied original proposal time, preserving the reviewed height-two fixture.
     /// Its success row is explicitly synthetic: this helper executes no World transition
     /// and grants no monetary or business-execution qualification. Certify the returned
     /// block only after its intended witness is selected, using the original fixture quorum.
+    ///
+    /// # Panics
+    /// Panics if the proposal time is zero and cannot follow the submitted work.
     #[must_use]
     pub fn block_with_submitted_work(&self, header: BlockHeader) -> SignedBlock {
         let signer = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
@@ -255,7 +259,12 @@ impl NativeFinalityFixture {
             AccountId::new(signer.public_key().clone()),
             FeePaymentIntent::authority(vec![], None),
         );
-        tx.set_creation_time(Duration::from_millis(header.creation_time_ms));
+        tx.set_creation_time(Duration::from_millis(
+            header
+                .creation_time_ms
+                .checked_sub(1)
+                .expect("proposal follows submitted work"),
+        ));
         let tx = tx
             .with_instructions([Log::new(Level::INFO, "fixture submitted work".into())])
             .sign(signer.private_key());
@@ -461,14 +470,16 @@ mod tests {
         let mut header = fixture.next_header();
         header.creation_time_ms += 17;
         let block = fixture.block_with_submitted_work(header);
-        assert_eq!(block.header(), header);
         assert_eq!(block.external_transactions().len(), 1);
         assert_eq!(block.execution_outputs().len(), 1);
         let transaction = block.external_transactions().next().unwrap();
+        header.merkle_root =
+            iroha_crypto::MerkleTree::from_iter([transaction.hash_as_entrypoint()]).root();
+        assert_eq!(block.header(), header);
         assert_eq!(transaction.network_id(), Some(&fixture.network_id()));
         assert_eq!(
             transaction.creation_time(),
-            Duration::from_millis(header.creation_time_ms)
+            Duration::from_millis(header.creation_time_ms - 1)
         );
         transaction.verify_signature().unwrap();
         let original_wire = block.canonical_resultless_proposal().encode_wire().unwrap();

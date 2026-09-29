@@ -1,4 +1,16 @@
 //! Panic hook suppression helpers.
+//!
+//! This crate owns the process-wide suppression state that Iroha Core, its ZK
+//! verifiers, Torii and `irohad` share. A recovery boundary that deliberately
+//! turns a third-party or provider panic into a typed error enters a
+//! suppression scope, and `irohad`'s process panic hook reads [`is_suppressed`]
+//! so that the recovered panic does not signal node shutdown.
+//!
+//! Suppression is only sound when every participant observes the same state:
+//! the process has exactly one thread-local depth and one task-local depth,
+//! both defined here. Depend on this crate instead of copying the module; a
+//! copy would create a second, invisible suppression state that the panic hook
+//! never reads.
 use std::{
     cell::Cell,
     future::Future,
@@ -14,6 +26,7 @@ tokio::task_local! {
 pub struct ScopedSuppressor;
 impl ScopedSuppressor {
     /// Create a new scoped suppressor.
+    #[inline]
     #[must_use]
     pub fn new() -> Self {
         SUPPRESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
@@ -21,11 +34,13 @@ impl ScopedSuppressor {
     }
 }
 impl Default for ScopedSuppressor {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 impl Drop for ScopedSuppressor {
+    #[inline]
     fn drop(&mut self) {
         SUPPRESSION_DEPTH.with(|depth| {
             let current = depth.get();
@@ -35,6 +50,7 @@ impl Drop for ScopedSuppressor {
     }
 }
 /// Returns true if the panic hook should suspend shutdown signalling in this scope.
+#[inline]
 #[must_use]
 pub fn is_suppressed() -> bool {
     SUPPRESSION_DEPTH.with(|depth| depth.get() > 0)
