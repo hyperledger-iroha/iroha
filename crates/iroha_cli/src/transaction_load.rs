@@ -1583,6 +1583,7 @@ impl Run for Args {
             expected_budget,
         ))?;
         resource_session.check_admission_deadline()?;
+        let allocations = writers.value();
         let journal = Journal::start(&self.diagnostic_out, self.journal_capacity, writers.journal)?;
         let backend = Arc::new(SdkBackend {
             clients,
@@ -1595,6 +1596,7 @@ impl Run for Args {
         });
         journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi.scaling.collector_journal.v1",
             "pair_index": (self.pair_index), "variant": (self.variant.text()), "seed": (self.seed),
+            "allocations": allocations,
             "accounts": public_accounts, "account_selection": (workload::ACCOUNT_SELECTION),
             "local_applied_required": true,
             "workload": (workload::WORKLOAD_ID), "max_effects_per_account": (workload::MAX_EFFECTS_PER_ACCOUNT),

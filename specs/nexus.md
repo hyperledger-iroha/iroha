@@ -346,14 +346,16 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Consensus lifecycle transaction:** add, replace, or retire manual lanes by
+- **Consensus lifecycle transaction:** add lanes to the physical lane catalog by
   submitting a signed transaction containing `SetParameter` with the custom
   parameter id `nexus_lane_lifecycle_v1`. Construct the versioned payload with
   `LaneLifecycleParameterV1::new(&current_catalog, &active_incarnations, plan)`;
   it commits to the exact catalog and active lane incarnations reviewed by the
-  signer and is rejected if topology changed or an identically configured lane
-  was replaced before execution. The transaction authority must hold
-  `CanSetParameters`.
+  signer and is rejected if topology changed before execution. The transaction
+  authority must hold `CanSetParameters`. The physical catalog only grows:
+  plans that retire a lane and configuration swaps that drop one are rejected,
+  because a lane's storage and history outlive its closure. Opening and closing
+  consensus lanes is native lane state (`sumeragi_lanes.md` §2).
   Lifecycle effects publish only with the committed block, replay identically
   on every peer, reconcile lane storage before state publication, and refresh
   queue routing after publication. A block accepts at most one lifecycle
@@ -366,9 +368,8 @@ Configuration and Determinism
   `catalog_hash`, plus the exact active lane-incarnation entries
   and their `incarnation_root`. Clients validate both commitments before signing,
   so a delayed request cannot replay after a lane is retired and recreated with
-  identical metadata. The Rust client exposes `get_lane_lifecycle_status` and
-  `submit_lane_lifecycle_blocking`; Python and Mochi follow the same fetch-once,
-  sign, submit, and wait sequence. They intentionally surface stale concurrent
+  identical metadata. The Rust client exposes `get_lane_lifecycle_status`;
+  Python and Mochi follow the same fetch-once, sign, submit, and wait sequence. They intentionally surface stale concurrent
   updates instead of silently refetching and signing a topology the operator did
   not review.
 - **Behaviour:** Normal transaction validation rejects malformed or unsupported
@@ -377,14 +378,12 @@ Configuration and Determinism
   without `CanSetParameters`. A rejected transaction leaves both the block
   overlay and committed topology unchanged.
 - **Safety:** Commit revalidates the signed plan against committed state under
-  the lifecycle lock before publishing storage or topology. Retirement and
-  replacement fail closed while a lane has unmerged relay progress or an
-  unapplied certified lane block.
+  the lifecycle lock before publishing storage or topology.
 - **Propagation:** Queue routing, per-lane limits, and manifests are rebuilt
-  from the committed catalog. Consensus, DA, and RBC workers consume the same
+  from the committed catalog. Consensus and DA workers consume the same
   refreshed state snapshot, while snapshots and startup replay restore the
   effective catalog and lane storage geometry after restart.
-- **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
+- **Storage:** Kura and tiered WSV geometry are provisioned for added lanes, and DA shard cursor mappings are synced and persisted.
 
 Implementation Path
 1) Introduce data‑space‑qualified IDs and Nexus block/global state composition in the data model.

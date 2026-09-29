@@ -27,6 +27,11 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanManageSorafsReputationJournalPolicy;
 
 fn chain() -> CertifiedTestChain {
+    CertifiedTestChain::start(config()).unwrap()
+}
+
+/// The same deterministic configuration on every call: a restart rebuilds its pristine State.
+fn config() -> TestChainConfig {
     use iroha_data_model::{
         account::Account,
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
@@ -113,7 +118,7 @@ fn chain() -> CertifiedTestChain {
         })
         .into(),
     ]);
-    CertifiedTestChain::start(config).unwrap()
+    config
 }
 
 fn provider_bounds() -> ProviderIngestFinalizedArchiveBoundsV1 {

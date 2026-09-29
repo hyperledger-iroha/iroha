@@ -4839,6 +4839,7 @@ done
 
 const ORDINARY_MINT_FINALITY_LAUNCH_PY: &str = r#"
 import errno
+import os
 import stat
 import subprocess
 import time
