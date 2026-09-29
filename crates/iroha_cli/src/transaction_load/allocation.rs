@@ -6,7 +6,7 @@
 
 use super::*;
 
-const ADMISSION_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.admission.v1";
+const ADMISSION_SCHEMA: &str = "iroha.sumeragi.resource_probe.admission.v1";
 
 pub(super) struct JournalAllocation {
     pub(super) _label: String,

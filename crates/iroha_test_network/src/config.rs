@@ -19,7 +19,7 @@ use iroha_data_model::{
     Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
-    block::consensus_v2::{ConsensusMode as WireConsensusMode, SumeragiV2GenesisContextParameters},
+    block::consensus::{ConsensusMode as WireConsensusMode, SumeragiGenesisContextParameters},
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::commitment::DaProofPolicyBundle,
     domain::Domain,
@@ -713,19 +713,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    let (block_cadence_ms, sumeragi_v2, kagemusha_mint_finality) = consensus_handshake_metadata
+    let (block_cadence_ms, sumeragi_context, kagemusha_mint_finality) = consensus_handshake_metadata
         .map_or_else(
             || {
                 (
                     None,
-                    SumeragiV2GenesisContextParameters::recommended(),
+                    SumeragiGenesisContextParameters::recommended(),
                     test_kagemusha_mint_finality_genesis_parameters(&topology),
                 )
             },
             |metadata| {
                 (
                     Some(metadata.block_cadence_ms),
-                    metadata.sumeragi_v2,
+                    metadata.sumeragi_context,
                     metadata.kagemusha_mint_finality,
                 )
             },
@@ -735,7 +735,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .validate()
         .expect("override must be a canonical generation-zero mint-finality authority");
     builder = builder
-        .with_sumeragi_v2_context_parameters(sumeragi_v2)
+        .with_sumeragi_context_parameters(sumeragi_context)
         .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(block_cadence_ms);

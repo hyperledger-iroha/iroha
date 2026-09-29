@@ -952,8 +952,8 @@ fn parse_allows_null_executor_in_canonical_manifest() {
         Value::String("Permissioned".to_string()),
     );
     manifest_fields.insert(
-        "sumeragi_v2".to_string(),
-        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+        "sumeragi_context".to_string(),
+        norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
             .expect("serialize v2 genesis context"),
     );
     manifest_fields.insert(
@@ -1024,7 +1024,7 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
 fn generated_genesis_group_shapes_have_finite_source_capacity() {
     super::super::init_instruction_registry();
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         parameter::{
             ExecutionOutputPolicyV1, FastpqSourcePolicyV1, custom::CustomParameter,
             system::confidential_metadata,
@@ -1059,7 +1059,7 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
             super::super::GenesisBuilder::new_without_executor(chain, root.join("defaults"))
         };
         let mut builder = builder
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             );

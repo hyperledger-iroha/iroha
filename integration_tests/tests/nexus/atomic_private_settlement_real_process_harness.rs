@@ -7,7 +7,7 @@ use matched_benchmark_workload::*;
 
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use iroha::data_model::block::consensus_v2::HeightContextId;
+use iroha::data_model::block::consensus::HeightContextId;
 use iroha::data_model::events::{
     EventBox,
     pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},

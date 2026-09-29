@@ -20,7 +20,7 @@
 
 use iroha_config_base::{ReadConfig, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::Hash;
-use iroha_data_model::block::consensus_v2::ConsensusMode;
+use iroha_data_model::block::consensus::ConsensusMode;
 use norito::codec::{Decode, Encode};
 use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
@@ -816,7 +816,7 @@ impl Profile {
             validators,
             reason,
         };
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(validators) {
+        if !iroha_data_model::block::consensus::is_valid_committee_size(validators) {
             return Err(reject(
                 "the global committee must have exactly 3f + 1 validators with 1 <= f <= 10",
             ));

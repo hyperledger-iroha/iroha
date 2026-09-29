@@ -296,7 +296,7 @@ impl PeerSettings {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     }
     fn validate_committee_size(count: u16) -> Result<(), Error> {
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(usize::from(count)) {
+        if !iroha_data_model::block::consensus::is_valid_committee_size(usize::from(count)) {
             return Err(Error::InvalidPeerCount { actual: count });
         }
         Ok(())

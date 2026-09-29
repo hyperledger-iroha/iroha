@@ -12,7 +12,7 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     block::{
         SignedBlock,
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+        consensus::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
     },
     isi::SetParameter,
     parameter::{
@@ -1103,9 +1103,9 @@ fn validate_runtime_projection_policy(
         "container runtime projection changed deterministic execution policy"
     );
     let source_nexus =
-        actual::sumeragi_v2_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
+        actual::sumeragi_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
     let projected_nexus =
-        actual::sumeragi_v2_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
+        actual::sumeragi_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
     ensure!(
         source_nexus == projected_nexus,
         "container runtime projection changed Nexus/AMX consensus policy"
@@ -2619,7 +2619,7 @@ fn load_prepared_bundle(
         } else {
             shared_execution_projection = Some(execution_projection);
         }
-        let nexus_projection = actual::sumeragi_v2_nexus_amx_context_hash(
+        let nexus_projection = actual::sumeragi_nexus_amx_context_hash(
             &effective_config.nexus,
             &effective_config.pipeline,
             &[],
@@ -2648,7 +2648,7 @@ fn load_prepared_bundle(
         let (nexus_amx, execution_policy) = if let Some(context) = staged_context {
             context
         } else {
-            let context = crate::genesis::staged_signed_sumeragi_v2_context_hashes(
+            let context = crate::genesis::staged_signed_sumeragi_context_hashes(
                 manifest,
                 validated.block(),
                 &effective_config,
@@ -2662,13 +2662,13 @@ fn load_prepared_bundle(
         ensure!(
             nexus_amx
                 == iroha_crypto::Hash::prehashed(
-                    signed_metadata.sumeragi_v2.nexus_amx_context_hash
+                    signed_metadata.sumeragi_context.nexus_amx_context_hash
                 ),
             "prepared validator {index} effective Nexus/AMX context differs from signed genesis"
         );
         ensure!(
             execution_policy
-                == iroha_crypto::Hash::prehashed(signed_metadata.sumeragi_v2.execution_policy_hash),
+                == iroha_crypto::Hash::prehashed(signed_metadata.sumeragi_context.execution_policy_hash),
             "prepared validator {index} effective execution policy differs from signed genesis"
         );
         let peer = &runtime_peers[index];
@@ -3820,7 +3820,7 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
-        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_context(
             manifest,
             &genesis_key,
             None,

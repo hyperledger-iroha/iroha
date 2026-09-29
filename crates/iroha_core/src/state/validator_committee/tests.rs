@@ -25,7 +25,7 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
-    block::consensus_v2::ValidatorPower,
+    block::consensus::ValidatorPower,
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
     nexus::{

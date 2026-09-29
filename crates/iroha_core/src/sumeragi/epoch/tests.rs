@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::{SignedBlock, consensus_v2::ValidatorPower},
+    block::{SignedBlock, consensus::ValidatorPower},
     isi::{InstructionBox, RegisterPeerWithPop, SetParameter},
     parameter::{
         CustomParameter, Parameter,
@@ -43,7 +43,7 @@ pub(crate) fn genesis_fixture(
         consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
         kagemusha_mint_finality:
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
-        sumeragi_v2: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+        sumeragi_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
     };
     let mut instructions = voters
         .iter()

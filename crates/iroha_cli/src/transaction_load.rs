@@ -46,7 +46,7 @@ const MAX_ROWS: usize = 1_000_000;
 const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 16 * 1024;
 const MAX_ACCOUNTS: usize = 64;
-const TRACE_SCHEMA: &str = "iroha.sumeragi_v2.multilane_scaling.trace.v1";
+const TRACE_SCHEMA: &str = "iroha.sumeragi.multilane_scaling.trace.v1";
 const LOGICAL_DERIVATION: &str = "sha256(seed + ':' + cohort + ':' + decimal_sequence)";
 
 type TransactionHash = HashOf<SignedTransaction>;
@@ -1592,7 +1592,7 @@ impl Run for Args {
             journal: journal.sender.clone(),
             warmup_count,
         });
-        journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi_v2.multilane_scaling.collector_journal.v1",
+        journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi.multilane_scaling.collector_journal.v1",
             "pair_index": (self.pair_index), "variant": (self.variant.text()), "seed": (self.seed),
             "accounts": public_accounts, "account_selection": (workload::ACCOUNT_SELECTION),
             "local_applied_required": true,

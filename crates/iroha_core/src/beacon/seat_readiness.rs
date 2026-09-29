@@ -160,7 +160,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        block::consensus_v2::ValidatorPower,
+        block::consensus::ValidatorPower,
         isi::kagemusha_v1::{InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1},
     };
     use iroha_model_base::peer::PeerId;

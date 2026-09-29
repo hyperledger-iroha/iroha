@@ -15,7 +15,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::SumeragiDiagnosticsStatus,
-        consensus_v2::SumeragiV2GenesisContextParameters,
+        consensus::SumeragiGenesisContextParameters,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
@@ -672,8 +672,8 @@ pub fn kagami_default_manifest_json(
             .expect("serialize wire protocol version"),
     );
     manifest.insert(
-        "sumeragi_v2".to_string(),
-        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+        "sumeragi_context".to_string(),
+        norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
             .expect("serialize Sumeragi v2 genesis context"),
     );
     manifest.insert(
@@ -791,7 +791,7 @@ mod tests {
         );
         assert_eq!(
             value
-                .get("sumeragi_v2")
+                .get("sumeragi_context")
                 .and_then(Value::as_object)
                 .and_then(|context| context.get("da_layout"))
                 .and_then(Value::as_object)

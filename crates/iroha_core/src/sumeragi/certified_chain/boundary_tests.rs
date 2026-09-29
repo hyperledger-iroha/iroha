@@ -13,7 +13,7 @@ use iroha_data_model::{
     NetworkId,
     block::{
         consensus::ExecWitness,
-        consensus_v2::ValidatorPower,
+        consensus::ValidatorPower,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
     },
     consensus::{GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconPulseContextV1},

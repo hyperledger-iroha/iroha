@@ -27,7 +27,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     NetworkId,
-    block::{BlockHeader, consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
+    block::{BlockHeader, consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use norito::derive::{JsonDeserialize, JsonSerialize};

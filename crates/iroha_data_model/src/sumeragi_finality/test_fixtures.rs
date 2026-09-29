@@ -139,8 +139,8 @@ impl NativeFinalityFixture {
                         .collect(),
                 },
             },
-            sumeragi_v2:
-                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_context:
+                crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions: Vec<InstructionBox> = validators
             .iter()

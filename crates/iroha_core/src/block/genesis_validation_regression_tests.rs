@@ -58,7 +58,7 @@ fn block_authenticated_genesis_rejects_invalid_per_transaction_bls_proof() {
         &genesis_account,
         &TimeSource::new_system(),
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned,
     )
     .unpack(|_| {});
     let Err(error) = result else {
@@ -178,7 +178,7 @@ fn signed_genesis_validation_rejects_a_non_genesis_header() {
         &ALICE_ID,
         &TimeSource::new_system(),
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned,
     )
     .unpack(|_| {});
     assert!(matches!(

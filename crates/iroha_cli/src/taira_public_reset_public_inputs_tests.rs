@@ -3,7 +3,7 @@
 use super::*;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
-    block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
+    block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
@@ -106,7 +106,7 @@ impl Fixture {
         npos.slashing_delay_blocks = 1;
         npos.validate().unwrap();
         let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(CHAIN_ID.into(), ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
             .append_parameter(Parameter::Sumeragi(
@@ -132,11 +132,11 @@ impl Fixture {
             .with_consensus_meta();
         let (_, nexus_hash, execution_hash) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
-        let mut context = manifest.sumeragi_v2_context_parameters();
+        let mut context = manifest.sumeragi_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
         context.execution_policy_hash = execution_hash.into();
         let manifest = manifest
-            .with_sumeragi_v2_context_parameters(context)
+            .with_sumeragi_context_parameters(context)
             .with_consensus_meta();
         let (mut block, final_nexus_hash, final_execution_hash) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref());
@@ -397,7 +397,7 @@ fn execute_fixture_genesis(
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        iroha_data_model::block::consensus::ConsensusMode::Npos,
     )
     .unpack(|_| {})
     .unwrap_or_else(|(block, error)| {

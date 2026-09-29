@@ -35,7 +35,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     AccountId, NetworkId,
     block::{
-        BlockHeader, SignedBlock, consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+        BlockHeader, SignedBlock, consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES,
         decode_framed_signed_block,
     },
     isi::kagemusha_v1::{

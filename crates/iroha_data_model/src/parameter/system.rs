@@ -181,7 +181,7 @@ pub struct ConsensusHandshakeMetadata {
     /// templates before constructing the first height context.
     pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     /// Signed inputs for the first Sumeragi v2 height context.
-    pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    pub sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters,
 }
 impl ConsensusHandshakeMetadata {
     /// Validate the first-release signed handshake envelope.
@@ -198,7 +198,7 @@ impl ConsensusHandshakeMetadata {
                 "wire_protocol_version must equal the first-release protocol version".to_owned(),
             );
         }
-        self.sumeragi_v2
+        self.sumeragi_context
             .validate()
             .map_err(|error| error.to_string())?;
         self.kagemusha_mint_finality
@@ -551,7 +551,7 @@ mod model {
             }
             if usize::try_from(self.max_validators)
                 .ok()
-                .is_none_or(|count| !crate::block::consensus_v2::is_valid_committee_size(count))
+                .is_none_or(|count| !crate::block::consensus::is_valid_committee_size(count))
             {
                 return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
             }
@@ -2957,7 +2957,7 @@ mod tests {
         assert!(ConsensusMode::Permissioned.is_permissioned());
         assert!(!ConsensusMode::Npos.is_permissioned());
         // The v2 path keeps resolving to the same type until WP9.
-        let v2: crate::block::consensus_v2::ConsensusMode = ConsensusMode::Npos;
+        let v2: crate::block::consensus::ConsensusMode = ConsensusMode::Npos;
         assert_eq!(v2, ConsensusMode::Npos);
     }
 
@@ -3199,9 +3199,9 @@ mod tests {
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
             kagemusha_mint_finality:
-                crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
-            sumeragi_v2:
-                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                crate::block::consensus::test_kagemusha_mint_finality_genesis_parameters(),
+            sumeragi_context:
+                crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
         }
     }
 
@@ -3242,7 +3242,7 @@ mod tests {
             );
         }
         let mut bad_context = baseline;
-        bad_context.sumeragi_v2.da_layout.parity_shards = 0;
+        bad_context.sumeragi_context.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
 
         let mut bad_kagemusha = handshake_metadata_fixture();

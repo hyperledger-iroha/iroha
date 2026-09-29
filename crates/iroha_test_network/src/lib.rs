@@ -31,7 +31,7 @@ pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
-use iroha::data_model::block::consensus_v2::{
+use iroha::data_model::block::consensus::{
     MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
 };
 use iroha::data_model::sumeragi::SumeragiStatus;
@@ -128,7 +128,7 @@ use std::{
 // no external dependency needed: versioned encoding is a single leading byte (1)
 use crate::config::ensure_genesis_results_with_runtime_config;
 /// Consensus mode frozen into the test network's signed genesis profile.
-pub use iroha_data_model::block::consensus_v2::ConsensusMode;
+pub use iroha_data_model::block::consensus::ConsensusMode;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -1166,13 +1166,13 @@ const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
 const IROHA_RELEASE_ARTIFACT_ROOT_ENV: &str = "IROHA_RELEASE_ARTIFACT_ROOT";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
-const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";
-const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
-const SUMERAGI_V2_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
-const SUMERAGI_V2_PREBUILT_MANIFEST: &str = ".sumeragi-v2-prebuilt-binaries.tsv";
-const SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
-const MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
-const MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SUMERAGI_RELEASE_TARGET_SUBDIR: &str = "sumeragi-release";
+const SUMERAGI_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
+const SUMERAGI_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
+const SUMERAGI_PREBUILT_MANIFEST: &str = ".sumeragi-prebuilt-binaries.tsv";
+const SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
+const MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
+const MAX_SUMERAGI_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_WORKSPACE_CARGO_LOCK_BYTES: u64 = 16 * 1024 * 1024;
 const RELEASE_BINARY_MODE_OCTAL: &str = "0500";
 const RELEASE_BINARY_MODE: u32 = 0o500;
@@ -1426,10 +1426,10 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     let before =
         published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
-    if before.len() > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+    if before.len() > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
         return Err(eyre!(
             "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
         ));
     }
     let mut file = fs::File::open(path).wrap_err_with(|| {
@@ -1448,16 +1448,16 @@ fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     }
     let capacity = usize::try_from(before.len())
         .unwrap_or(usize::MAX)
-        .min(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES as usize);
+        .min(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES as usize);
     let mut bytes = Vec::with_capacity(capacity);
     Read::by_ref(&mut file)
-        .take(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES + 1)
+        .take(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES + 1)
         .read_to_end(&mut bytes)
         .wrap_err("failed to read release prebuilt manifest")?;
-    if bytes.len() as u64 > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+    if bytes.len() as u64 > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
         return Err(eyre!(
             "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
         ));
     }
     let after =
@@ -1578,7 +1578,7 @@ fn parse_release_prebuilt_manifest(
         }
         values.push(value);
     }
-    if values[0] != SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION {
+    if values[0] != SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION {
         return Err(eyre!(
             "unsupported release prebuilt manifest schema version {}",
             values[0]
@@ -1659,11 +1659,11 @@ fn parse_release_prebuilt_manifest(
                 kind.manifest_prefix()
             ),
         )?;
-        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES {
+        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_PREBUILT_BINARY_BYTES {
             return Err(eyre!(
                 "release prebuilt manifest `{}` size must be within 1..={}",
                 kind.manifest_prefix(),
-                MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES
+                MAX_SUMERAGI_PREBUILT_BINARY_BYTES
             ));
         }
         if values[base + 3] != RELEASE_BINARY_MODE_OCTAL {
@@ -1733,9 +1733,9 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
     })?;
     let artifact_root = authenticate_release_artifact_root(repo, &artifact_root_raw)?;
     let expected_programs_root = artifact_root
-        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
+        .join(SUMERAGI_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
-        .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR);
+        .join(SUMERAGI_RELEASE_PROGRAMS_SUBDIR);
     if configured_target.parent() != Some(expected_programs_root.as_path()) {
         return Err(eyre!(
             "{IROHA_TEST_TARGET_DIR_ENV} must be an immediate private invocation bundle under {}; \
@@ -1747,7 +1747,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
     let _invocation_suffix = configured_target
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(SUMERAGI_V2_RELEASE_INVOCATION_PREFIX))
+        .and_then(|name| name.strip_prefix(SUMERAGI_RELEASE_INVOCATION_PREFIX))
         .filter(|suffix| {
             !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
@@ -1755,7 +1755,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             eyre!(
                 "{IROHA_TEST_TARGET_DIR_ENV} private bundle name must be `{}` followed by a \
                  non-empty ASCII alphanumeric token",
-                SUMERAGI_V2_RELEASE_INVOCATION_PREFIX
+                SUMERAGI_RELEASE_INVOCATION_PREFIX
             )
         })?;
     published_directory_metadata(
@@ -1787,7 +1787,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
         ));
     }
-    let manifest_path = configured_target.join(SUMERAGI_V2_PREBUILT_MANIFEST);
+    let manifest_path = configured_target.join(SUMERAGI_PREBUILT_MANIFEST);
     let manifest_bytes = read_release_manifest(&manifest_path)?;
     let observed_manifest_sha256 = lowercase_hex(&sha256(&manifest_bytes));
     if observed_manifest_sha256 != prebuilt_manifest_sha256 {
@@ -1886,7 +1886,7 @@ fn validate_release_program_candidate(
             kind.manifest_prefix()
         ));
     }
-    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES)
+    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_PREBUILT_BINARY_BYTES)
         .wrap_err_with(|| {
             eyre!(
                 "failed to hash bounded release `{}` binary",
@@ -3369,12 +3369,12 @@ impl ValidatedNetworkGenesis {
         );
         assert_eq!(
             self.staged_hashes.nexus_amx,
-            CryptoHash::prehashed(profile.params.v2_context.nexus_amx_context_hash),
+            CryptoHash::prehashed(profile.params.sumeragi_context.nexus_amx_context_hash),
             "signed test-network Nexus/AMX context must match exact genesis pre-execution"
         );
         assert_eq!(
             self.staged_hashes.execution_policy,
-            CryptoHash::prehashed(profile.params.v2_context.execution_policy_hash),
+            CryptoHash::prehashed(profile.params.sumeragi_context.execution_policy_hash),
             "signed test-network execution policy must match exact genesis pre-execution"
         );
     }
@@ -4031,7 +4031,7 @@ impl Network {
                 }
                 _ = watchdog.tick() => {
                     elapsed += GENESIS_BLOCK_LOG_INTERVAL;
-                    let sumeragi_v2 = match tokio::time::timeout(
+                    let sumeragi = match tokio::time::timeout(
                         status_timeout,
                         peer.sumeragi_startup_snapshot(),
                     )
@@ -4061,7 +4061,7 @@ impl Network {
                             status_blocks_non_empty = status.blocks_non_empty,
                             status_queue = status.queue_size,
                             status_view_changes = status.view_changes,
-                            sumeragi_v2 = %sumeragi_v2,
+                            sumeragi = %sumeragi,
                             "still waiting for block 1 after genesis submission"
                         );
                     } else {
@@ -4070,7 +4070,7 @@ impl Network {
                             %mnemonic,
                             role,
                             waited = ?elapsed,
-                            sumeragi_v2 = %sumeragi_v2,
+                            sumeragi = %sumeragi,
                             "still waiting for block 1; no status snapshot available"
                         );
                     }
@@ -6758,7 +6758,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_v2: consensus_profile.params.v2_context.clone(),
+        sumeragi_context: consensus_profile.params.sumeragi_context.clone(),
         kagemusha_mint_finality: consensus_profile.kagemusha_mint_finality.clone(),
     };
     metadata
@@ -8273,14 +8273,14 @@ impl NetworkBuilder {
             .expect(
                 "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
             );
-        let provisional_v2_context = provisional_metadata.sumeragi_v2;
+        let provisional_sumeragi_context = provisional_metadata.sumeragi_context;
         let provisional_kagemusha_mint_finality = disposable_mint_finality_genesis
             .unwrap_or(provisional_metadata.kagemusha_mint_finality);
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_v2_context.clone(),
+                provisional_sumeragi_context.clone(),
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
@@ -8318,14 +8318,14 @@ impl NetworkBuilder {
             None => preview_staged_policy_hashes
                 .expect("normal genesis preview must provide staged execution-policy hashes"),
         };
-        let mut signed_v2_context = provisional_v2_context;
-        signed_v2_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
-        signed_v2_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
+        let mut signed_sumeragi_context = provisional_sumeragi_context;
+        signed_sumeragi_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
+        signed_sumeragi_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                signed_v2_context,
+                signed_sumeragi_context,
             )
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
@@ -12579,7 +12579,7 @@ mod tests {
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &state,
-            metadata.sumeragi_v2,
+            metadata.sumeragi_context,
         )
         .expect("genesis must reconstruct one canonical consensus carrier")
     }
@@ -12619,12 +12619,12 @@ mod tests {
             .expect("genesis must contain canonical consensus metadata");
         assert_eq!(
             staged.nexus_amx,
-            CryptoHash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+            CryptoHash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash),
             "signed Nexus/AMX commitment must equal the independently staged projection"
         );
         assert_eq!(
             staged.execution_policy,
-            CryptoHash::prehashed(metadata.sumeragi_v2.execution_policy_hash),
+            CryptoHash::prehashed(metadata.sumeragi_context.execution_policy_hash),
             "signed execution-policy commitment must equal the independently staged projection"
         );
     }
@@ -12690,7 +12690,7 @@ mod tests {
             "handshake metadata should advertise NPoS mode"
         );
         assert_eq!(
-            metadata.sumeragi_v2, profile.params.v2_context,
+            metadata.sumeragi_context, profile.params.sumeragi_context,
             "handshake metadata should carry the exact signed v2 context"
         );
         let actual = consensus_fingerprint_from_block(&genesis)
@@ -12753,7 +12753,7 @@ mod tests {
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 ConsensusMode::Npos,
                 &parameter_state,
-                metadata.sumeragi_v2,
+                metadata.sumeragi_context,
             )
             .expect("shared runtime derivation must accept the canonical carrier");
         assert_eq!(
@@ -16469,7 +16469,7 @@ mod tests {
         let baseline_context_hash = baseline
             .consensus_bootstrap_profile()
             .params
-            .v2_context
+            .sumeragi_context
             .nexus_amx_context_hash;
         drop(baseline);
         let network = build_with_isolated_permit(
@@ -16554,12 +16554,12 @@ mod tests {
         let metadata = consensus_handshake_metadata(&genesis)
             .expect("custom genesis must contain canonical consensus metadata");
         assert_eq!(
-            metadata.sumeragi_v2,
-            network.consensus_bootstrap_profile().params.v2_context,
+            metadata.sumeragi_context,
+            network.consensus_bootstrap_profile().params.sumeragi_context,
             "cached custom genesis must carry the final runtime profile"
         );
         assert_ne!(
-            metadata.sumeragi_v2.nexus_amx_context_hash, baseline_context_hash,
+            metadata.sumeragi_context.nexus_amx_context_hash, baseline_context_hash,
             "custom active-validator state must replace the normal preview projection"
         );
         assert!(

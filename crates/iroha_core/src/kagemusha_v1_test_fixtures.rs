@@ -6,7 +6,7 @@ use iroha_data_model::isi::kagemusha_v1::{
 };
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::ValidatorPower,
+    block::consensus::ValidatorPower,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityEpochAuthorizationV1,
@@ -14,7 +14,7 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use iroha_data_model::{
-    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    block::consensus::SumeragiGenesisContextParameters,
     isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
 };
 
@@ -153,8 +153,8 @@ pub(crate) fn mint_finality_genesis_parameters(
 
 /// Build a closed four-validator signed-genesis parameter fixture.
 #[cfg(test)]
-pub(crate) fn genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
-    SumeragiV2GenesisContextParameters::recommended()
+pub(crate) fn genesis_context_parameters() -> SumeragiGenesisContextParameters {
+    SumeragiGenesisContextParameters::recommended()
 }
 
 /// Build a scheduling-epoch fixture while retaining generation-zero keys throughout.

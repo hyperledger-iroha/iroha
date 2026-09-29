@@ -1628,16 +1628,16 @@ pub enum BlockValidationError {
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
     /// Sumeragi v2 block creation time is not the canonical logical time. Expected: {expected_ms} ms, actual: {actual_ms} ms
-    NonCanonicalV2BlockTime {
+    NonCanonicalBlockTime {
         /// Deterministic timestamp derived from the parent, cadence, and transactions.
         expected_ms: u64,
         /// Timestamp committed by the proposed block.
         actual_ms: u64,
     },
     /// Sumeragi v2 logical block time exceeded the canonical u64-millisecond range
-    V2BlockTimeOverflow,
+    BlockTimeOverflow,
     /// Sumeragi v2 finality authority does not bind this block and execution: {0}
-    V2FinalityAuthorityInvalid(String),
+    FinalityAuthorityInvalid(String),
     /// Some transaction in the block is created after the block itself
     TransactionInTheFuture,
     /// Block confidential feature digest mismatch. Expected: {expected:?}, actual: {actual:?}
@@ -4777,12 +4777,12 @@ pub(crate) mod valid {
         }
 
         /// All static checks that require a state snapshot.
-        fn canonical_v2_block_time(
+        fn canonical_block_time(
             block: &SignedBlock,
             prev_block: &SignedBlock,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            Self::canonical_v2_block_time_from_parent_time(
+            Self::canonical_block_time_from_parent_time(
                 block,
                 prev_block.header().creation_time(),
                 block_cadence,
@@ -4799,20 +4799,20 @@ pub(crate) mod valid {
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            Self::canonical_v2_block_time_from_parent_time(
+            Self::canonical_block_time_from_parent_time(
                 block,
                 parent_creation_time,
                 block_cadence,
             )
         }
-        fn canonical_v2_block_time_from_parent_time(
+        fn canonical_block_time_from_parent_time(
             block: &SignedBlock,
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
             let minimum = parent_creation_time
                 .checked_add(block_cadence)
-                .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
+                .ok_or(BlockValidationError::BlockTimeOverflow)?;
             // Merged lane transactions do not set the time: the merge section's floor does
             // (`specs/sumeragi_lanes.md` §4.2), so the proposal alone fixes its time.
             let floor = Duration::from_millis(
@@ -4824,7 +4824,7 @@ pub(crate) mod valid {
             let own = &external[..external.len() - block.merged_entrypoint_count()];
             let natives = block.network_entrypoints().skip(external.len());
             creation_time_after_inputs(minimum.max(floor), own.iter().chain(natives))
-                .ok_or(BlockValidationError::V2BlockTimeOverflow)
+                .ok_or(BlockValidationError::BlockTimeOverflow)
         }
         #[allow(
             clippy::too_many_arguments,
@@ -4956,14 +4956,14 @@ pub(crate) mod valid {
                     let prev_block_time = prev_block.header().creation_time();
                     if let Some(block_cadence) = validation_profile.block_cadence() {
                         let expected =
-                            Self::canonical_v2_block_time(block, &prev_block, block_cadence)?;
+                            Self::canonical_block_time(block, &prev_block, block_cadence)?;
                         let actual = block.header().creation_time();
                         if actual != expected {
-                            return Err(BlockValidationError::NonCanonicalV2BlockTime {
+                            return Err(BlockValidationError::NonCanonicalBlockTime {
                                 expected_ms: u64::try_from(expected.as_millis())
-                                    .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                                    .map_err(|_| BlockValidationError::BlockTimeOverflow)?,
                                 actual_ms: u64::try_from(actual.as_millis())
-                                    .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                                    .map_err(|_| BlockValidationError::BlockTimeOverflow)?,
                             });
                         }
                     }
@@ -7587,7 +7587,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validation_profiles_always_carry_an_explicit_consensus_mode() {
-            use iroha_data_model::block::consensus_v2::ConsensusMode;
+            use iroha_data_model::block::consensus::ConsensusMode;
             // World/Parameters defaults do not authenticate a consensus mode.
             assert!(World::new().view().sumeragi_npos_parameters().is_none());
             assert_eq!(
@@ -7888,7 +7888,7 @@ pub(crate) mod valid {
                 Some(Reason::DaProofPolicyMismatch)
             );
             assert_eq!(
-                map_block_err_to_reason(&BlockValidationError::V2FinalityAuthorityInvalid(
+                map_block_err_to_reason(&BlockValidationError::FinalityAuthorityInvalid(
                     "certificate does not bind the canonical execution".to_owned(),
                 )),
                 Some(Reason::ConsensusBlockRejection)
@@ -8063,8 +8063,8 @@ pub(crate) mod valid {
                 kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             };
             use iroha_data_model::{
-                block::consensus_v2::{
-                    ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+                block::consensus::{
+                    ConsensusMode, SumeragiGenesisContextParameters, ValidatorPower,
                 },
                 parameter::{Parameter, system::SumeragiParameter},
                 prelude::*,
@@ -8096,8 +8096,8 @@ pub(crate) mod valid {
             let mint_finality =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster);
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .with_sumeragi_v2_context_parameters(
-                    SumeragiV2GenesisContextParameters::recommended(),
+                .with_sumeragi_context_parameters(
+                    SumeragiGenesisContextParameters::recommended(),
                 )
                 .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
@@ -8434,9 +8434,9 @@ mod event {
             | BlockValidationError::GenesisPolicyMismatch { .. } => Reason::InvalidGenesis,
             BlockValidationError::BlockInThePast => Reason::BlockInThePast,
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
-            BlockValidationError::NonCanonicalV2BlockTime { .. }
-            | BlockValidationError::V2BlockTimeOverflow => Reason::BlockInTheFuture,
-            BlockValidationError::V2FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
+            BlockValidationError::NonCanonicalBlockTime { .. }
+            | BlockValidationError::BlockTimeOverflow => Reason::BlockInTheFuture,
+            BlockValidationError::FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
             BlockValidationError::TransactionInTheFuture => Reason::TransactionInTheFuture,
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
                 Reason::ConfidentialFeatureDigestMismatch

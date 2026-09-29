@@ -26,7 +26,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     asset::prelude::AssetDefinitionId,
-    block::{BlockHeader, consensus_v2::GenesisActiveNexusLaneRecord},
+    block::{BlockHeader, consensus::GenesisActiveNexusLaneRecord},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
         ComputePriceDeltaBounds, ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget,
@@ -5461,9 +5461,9 @@ impl_default!(Pipeline => {
 /// observed by the state. Retired entries remain consensus-relevant because a
 /// later recreation derives its next incarnation from this retained generation.
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry")]
+#[norito_schema(name = "iroha_config::parameters::actual::SumeragiLaneLifecycleEntry")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
-pub struct SumeragiV2LaneLifecycleEntry {
+pub struct SumeragiLaneLifecycleEntry {
     /// Canonical lane identifier.
     pub lane_id: LaneId,
     /// Monotonic incarnation generation retained for this lane identifier.
@@ -5486,13 +5486,13 @@ pub struct SumeragiV2LaneLifecycleEntry {
 /// later derive the same recreated lane differently. Active validator records
 /// and retained lineage entries are sorted canonically before encoding.
 #[must_use]
-pub fn sumeragi_v2_nexus_amx_context_hash(
+pub fn sumeragi_nexus_amx_context_hash(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Hash {
-    sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+    sumeragi_nexus_amx_context_hash_with_catalog_policy(
         nexus,
         pipeline,
         active_validators,
@@ -5506,11 +5506,11 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
 /// derive it from validated committed state, never from a local configuration overlay. Before
 /// any catalog-policy transaction exists, `None` retains the original projection byte for byte.
 #[must_use]
-pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
     committed_catalog_policy_root: Option<Hash>,
 ) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
@@ -5523,7 +5523,7 @@ pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
         out.extend_from_slice(&bytes_len.to_le_bytes());
         out.extend_from_slice(&bytes);
     }
-    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
+    let mut preimage = b"sumeragi:nexus-amx-context\0v1".to_vec();
     append(
         &mut preimage,
         "nexus.lane_catalog.lane_count",

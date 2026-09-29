@@ -16,7 +16,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::nexus::LaneCatalog;
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus_v2::{
+    block::consensus::{
         MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
     },
     nexus::DataSpaceCatalog,
@@ -1452,7 +1452,7 @@ mod tests {
         );
     }
     #[test]
-    fn nexus_profile_emits_only_node_local_sumeragi_v2_configuration() {
+    fn nexus_profile_emits_only_node_local_sumeragi_configuration() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
         assert!(
             !profile.config_layer.contains_key("genesis"),

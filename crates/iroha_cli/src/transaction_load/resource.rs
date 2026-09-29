@@ -12,9 +12,9 @@ mod ipc;
 #[cfg(test)]
 mod tests;
 
-const REQUEST_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.request.v1";
-pub(super) const RESPONSE_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.response.v1";
-const CAPTURE_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.capture.v1";
+const REQUEST_SCHEMA: &str = "iroha.sumeragi.resource_probe.request.v1";
+pub(super) const RESPONSE_SCHEMA: &str = "iroha.sumeragi.resource_probe.response.v1";
+const CAPTURE_SCHEMA: &str = "iroha.sumeragi.resource_probe.capture.v1";
 pub(super) const MAX_IPC_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SAMPLES: u64 = 100_000;

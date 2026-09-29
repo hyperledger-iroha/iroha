@@ -14,9 +14,9 @@ impl ValidBlock {
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
         let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);
         Self::require_native_genesis_policy(
-            Hash::prehashed(metadata.sumeragi_v2.execution_policy_hash),
+            Hash::prehashed(metadata.sumeragi_context.execution_policy_hash),
             actual_execution,
-            Hash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+            Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash),
             actual_nexus,
         )
     }

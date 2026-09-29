@@ -8,7 +8,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size, isi::Register,
+    Level, asset::AssetDefinition, block::consensus::is_valid_committee_size, isi::Register,
     parameter::BlockParameter, prelude::*,
 };
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;

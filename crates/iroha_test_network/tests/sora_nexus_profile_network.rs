@@ -1193,7 +1193,7 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         let (roster, genesis_hashes) = {
             let _discriminant = ChainDiscriminantGuard::enter(369);
             let manifest = RawGenesisTransaction::from_path(genesis_dir.join("genesis.bound.json"))?;
-            let context = manifest.sumeragi_v2_context_parameters();
+            let context = manifest.sumeragi_context_parameters();
             let genesis_hashes = (
                 hex_lower(&context.execution_policy_hash),
                 hex_lower(&context.nexus_amx_context_hash),

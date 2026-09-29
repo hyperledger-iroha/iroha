@@ -499,7 +499,7 @@ soracloud_runtime.production_mode = false
 soracloud_runtime.production_mode = false
 ```
 
-`derive(n)` reuses the existing geometry functions, moved out of `kagami localnet.rs:495-526`: `sumeragi_v2_lifecycle_capacity_geometry`, `sumeragi_v2_body_ingress_required_byte_capacity` and `validate_sumeragi_v2_exact_output_geometry`. It also pins genesis `npos.max_validators = n`, as `localnet.rs:3759` does today. It has to, because irohad validates ingress against the signed NPoS `max_validators`, not the live roster (`irohad/src/main.rs:15084-15125`).
+`derive(n)` reuses the existing localnet geometry derivation, moved out of `kagami localnet.rs`. It also pins genesis `npos.max_validators = n`, as `localnet.rs:3759` does today. It has to, because irohad validates ingress against the signed NPoS `max_validators`, not the live roster (`irohad/src/main.rs:15084-15125`).
 
 `body_bytes = (n + committee_sources + authenticated) × body_source_bytes`, which for n = 4 is (4 + 16 + 4) × 34 MiB ≈ 816 MiB worst case.
 
@@ -681,7 +681,7 @@ Re-running makes a fresh genesis.
 $ iroha network apply networks/taira.toml --release 2026.10.1
 ```
 
-**Compatibility probe.** `CheckConfig --json` runs with the new binary against the real rendered config on one host and returns `{config_fingerprint, protocol_version, wire_schema_hash, nexus_policy_digest, gas_schedule_hash, execution_policy_hash, nexus_amx_context_hash}`. The tool compares these against the live network, meaning the attested `SumeragiV2Status` values and the genesis commitments:
+**Compatibility probe.** `CheckConfig --json` runs with the new binary against the real rendered config on one host and returns `{config_fingerprint, protocol_version, wire_schema_hash, nexus_policy_digest, gas_schedule_hash, execution_policy_hash, nexus_amx_context_hash}`. The tool compares these against the live network, meaning the attested `SumeragiStatus` values and the genesis commitments:
 
 - `execution_policy_hash` or `nexus_amx_context_hash` differs from genesis: `requires reset`. Nodes would refuse to start (`v2_context.rs:533-571`).
 - Handshake-bound values differ (v2 config fingerprint, protocol, wire schema, nexus policy digest, gas schedule; `peer.rs:11929-11965`): **coordinated**. A mixed cohort cannot form quorum.
@@ -1155,7 +1155,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
 | **G1 Identity** | Fresh challenge-bound `GET /v1/bridge/finality/attestation/latest` from every node: signed by the expected peer key, carrying the expected NetworkId and genesis hash, with a build fingerprint equal to `H(version‖commit)` from the manifest. `/status.build` features and target must match the manifest. Config fingerprints must be equal across validators. |
 | **G2 Readiness and mesh** | `/readyz` (`text/plain`) returns 200. This already includes beacon readiness (`iroha_torii/src/lib.rs:14080-14085`). Only `MissingSession` is tolerated, and only before the beacon install in a fresh generation. Peers ≥ n−1. |
 | **G3 Liveness** | Two samples at least 2× cadence apart. Lag ≤ 2. A node that does not advance while others do is named. `restart_required = false`. `no_progress_age` is bounded while queues are non-empty. Equal heights on an idle chain count as healthy. |
-| **G4 Beacon horizon** | Taken from the signed `SumeragiV2Status.beacon_horizon`: `session_covers_next_pulse` and `local_provider_ready`. Before any restart, `blocks_to_pulse ≥ margin`; otherwise a supervised crossing runs first. BLOCKED when there is no session and the bootstrap window has closed. |
+| **G4 Beacon horizon** | Taken from the signed `SumeragiStatus.beacon_horizon`: `session_covers_next_pulse` and `local_provider_ready`. Before any restart, `blocks_to_pulse ≥ margin`; otherwise a supervised crossing runs first. BLOCKED when there is no session and the bootstrap window has closed. |
 | **G5 Finality** | Verify every contiguous native successor from an independently selected complete `SumeragiFinalityCheckpoint` in `checkpoint.norito`, with exact 2f+1 CommitQC signers from each authenticated scheduling epoch. Require a fresh challenge-bound quorum of the final committee. Proof count, canonical block bytes and peer reads are bounded per observation; failed observations do not publish a checkpoint. |
 | **G6 Applied write** | Ephemeral key, PoW faucet claim, `Log` transaction, all exact-wire journaled through the now-public `iroha_wallet::operation_journal`. Applied on every validator with committed wire equal to prepared wire. One work-scaled deadline, honouring `Retry-After`. Onboarding is exercised when a credential exists. |
 | **G7 Restart proof** | Wait for a snapshot newer than each node's start, then restart the nodes one at a time. Each must restore from the snapshot and pass G2, G3 and G6. |
@@ -1216,7 +1216,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
    - The report also carries `snapshot_height` and `snapshot_restore_error`; hashes are lowercase hex; an absent store reports height 0; an absent or disabled snapshot is `ok` with `snapshot_height = null`. The exit status is nonzero when the store cannot be read (no JSON) or the dry run fails (JSON first).
    - TODO: Fast mode refuses imported hash-only history, so a store bootstrapped from a signed snapshot lineage cannot be checked yet; the scratch restore skips the Kura WSV-checkpoint comparison.
    - `--check-config --json` adds `status` (`ready`/`pending`). The genesis-bound values (`config_fingerprint`, `execution_policy_hash`, `nexus_amx_context_hash`) are `null` without a local signed genesis. `nexus_policy_digest` is computed from the rendered configuration's Nexus section with its frozen lane-manifest and compliance digests.
-6. **Signed beacon horizon.** `SumeragiV2Status` gains `beacon_horizon: Option<BeaconHorizonStatusV1 {epoch_length_blocks, next_required_pulse_height, active_session_id, session_covers_next_pulse, local_provider_ready}>` (explicit `null` until serialized activation of that exact height has published it; G4 treats `null` as not yet observable; the epoch length and the next pulse both come from the same frozen `HeightContext`, the epoch length being the span of its KAGEMUSHA mint-finality scheduling authorization, so an `NPoS` horizon is published from the genesis height on; validation rejects a zero `NPoS` epoch length and a non-zero permissioned one), filled from `iroha_core/src/beacon/readiness.rs` `HeightBinding`. It is embedded in the signed `BridgeFinalityAttestationBodyV1` (`bridge.rs:746-768`), so G4 works over public routes. Norito roundtrip tests are added.
+6. **Signed beacon horizon.** `SumeragiStatus` gains `beacon_horizon: Option<BeaconHorizonStatusV1 {epoch_length_blocks, next_required_pulse_height, active_session_id, session_covers_next_pulse, local_provider_ready}>` (explicit `null` until serialized activation of that exact height has published it; G4 treats `null` as not yet observable; the epoch length and the next pulse both come from the same frozen `HeightContext`, the epoch length being the span of its KAGEMUSHA mint-finality scheduling authorization, so an `NPoS` horizon is published from the genesis height on; validation rejects a zero `NPoS` epoch length and a non-zero permissioned one), filled from `iroha_core/src/beacon/readiness.rs` `HeightBinding`. It is embedded in the signed `BridgeFinalityAttestationBodyV1` (`bridge.rs:746-768`), so G4 works over public routes. Norito roundtrip tests are added.
 7. **Torii.**
    - A `latest` selector for `/v1/bridge/finality/attestation/{height|latest}` (`routing.rs:6377-6420`; descriptor `route_catalog.rs:2677-2682`).
    - `/status.build.wire_schema_hash`.
@@ -1325,7 +1325,7 @@ It also has:
 ### 11.3 Deferred TODOs, in priority order
 
 - **T1 (P7, consensus-affecting): `SetDataspaceCommitteeV1 {dataspace, members}`.** Authorized by `CanManageDataspace{ds}`, with the same f and lane. It needs the add-only rule (`runtime_catalog.rs:180-184, 213-222`) relaxed for binding-only revisions, and the frozen-successor handoff (`docs/history/2026-09-22/epoch-authority-cutover.md:17-22`) so that in-flight sessions finish under the old committee.
-- **T2:** restricted gossip targets `commit_topology ∪ resolved lane committee`. The commit topology must be kept, because lane work travels in the global body (`specs/sumeragi_v2.md:678-690`; `gossiper.rs:797-815, 893-903, 1107-1172`).
+- **T2:** restricted gossip targets `commit_topology ∪ resolved lane committee`. The commit topology must be kept, because every node follows every public lane and the global chain merges the certified lane blocks by reference (`specs/sumeragi_lanes.md` §4.1; `gossiper.rs`).
 - **T3:** a manifest `p2p_address` dial hint for owner nodes behind strict inbound firewalls.
 - **T4:** a dynamic external-peer budget. The first release uses the static genesis parameter.
 - **T5:** scheduled lane activation when `key_activation_lead_blocks > 1`. Until then the tool fails closed.
@@ -1410,12 +1410,11 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 - `pr.yml:287,318` and `scripts/check_nexus_provisioning_templates.py:18-31`: drop the Taira and `defaults/kagami` templates, check the explicit nexus files and the profile files instead.
 - `pr_docker_compose.yml:50-85`, `publish.yml:72`.
 - `integration_tests/tests/sumeragi_kagami_localnet.rs:192-202`: move to `iroha network up` with `--seed-file`.
-- `scripts/nexus/scaling_generator.py:381-383`: move to `iroha network up --no-start --seed-fd N` with a generated definition carrying `[scaling]`, `[local]` bind and public host, and base ports. `validate_multilane_scaling_evidence.py:55-59` is ported with it.
 - `run_10k_localnet.sh`, `run_100tps_profile_localnet.sh`: move to `networks/perf-*.toml`.
 - `javascript/iroha_js/scripts/run_integration.mjs:18`, `python/iroha_python/scripts/run_integration.py:25`, `crates/iroha_swarm/tests/default_compose_soranet.rs:155-156`, `scripts/tests/consistency.sh:138-139`, `hooks/pre-commit.sample:44-48`: move to the generated `defaults/docker-compose.yml`.
 - `crates/iroha_config/tests/taira_config_contracts.rs`, `iroha_config/tests/fixtures.rs`, `crates/iroha_genesis/src/lib.rs:3333-3475`, `crates/iroha_kagami/src/{wizard.rs:1883-1900, genesis/sign.rs:1785,2363}`: move to profile fixtures.
 - `scripts/docker_entrypoint.sh` and `scripts/tests/docker_entrypoint_test.py` (P8).
-- Sumeragi v2 release-gate scripts that list `iroha3d_taira`: `run_sumeragi_v2_release_gates.sh`, `sumeragi_v2_prebuilt_bundle.{py,sh}`, `write_sumeragi_v2_release_receipt*.py`, `bootstrap_sumeragi_v2_release_receipt_replay.py`, `run_sumeragi_v2_seed_matrix.sh`, `panic_recovery_boundaries.inventory` and their pytests. They move to `iroha3d` (P8).
+- Release scripts that list `iroha3d_taira`: `sumeragi_prebuilt_bundle.{py,sh}`, `panic_recovery_boundaries.inventory` and their pytests. They move to `iroha3d` (P8).
 - `mobile_sdk_artifacts.yml:48-49`, `sorafs-orchestrator-sdk.yml:14-15` path filters, `scripts/check_workspace_target_inventory.py` and its test, and SoraFS users of `taira_constants` (P8).
 - `status.md:59` link (P0).
 - `AGENTS.md` Taira bullets and `skills/sora-taira-testnet/SKILL.md` (P8, text proposed in §13).
@@ -1480,7 +1479,7 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
   - It deals in process with `iroha_core::beacon::ceremony` against the genesis session's nominal windows 1–4 before the first start (each seat runs Core's signed all-edge DKG with its own validator key), and each validator reads its `beacon.cred` from `data_dir` at that start.
   - Before the install, `/readyz` is 503 and the signed horizon names no session. `Log` transactions drive the tip to `finalized_at_height`. Three validators pre-sign 16 heights each, and the certificate for the next height installs.
   - At the install height, with no further block, every validator reports `local_provider_ready` and `/readyz` is 200. The pulse at the first mandatory height (63) verifies against the session in all four Kura stores.
-  - From height 1 on, every validator's signed horizon reports the frozen context's epoch length (64) beside the scheduled pulse; every validator's `--check-config --json` values equal its live `SumeragiV2Status` and the signed genesis context.
+  - From height 1 on, every validator's signed horizon reports the frozen context's epoch length (64) beside the scheduled pulse; every validator's `--check-config --json` values equal its live `SumeragiStatus` and the signed genesis context.
   - After the stop, `--check-storage` on every validator restores its newest signed snapshot (written by the qualification cadence) and reconciles every retained block hash with Kura; the report is `ok` with a non-null `snapshot_height`.
   - Its genesis is kagami's Taira output re-targeted to the profile (Taira-only catalog content removed, custody account replaced, qual epoch), signed against the flattened profile render. TODO(P2): use the engine's genesis builder.
 - Unprivileged start is verified on macOS arm64 and on Linux x86_64 and aarch64, including `production_mode` on macOS.
@@ -1595,7 +1594,7 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
    - rotation arrives only in P7;
    - "restricted" is not confidential;
    - at most three owner committees fit the `sora-nexus-v1` budget;
-   - the multi-lane runtime has open qualification gates (`specs/sumeragi_v2.md:1412-1423`), so S2b will surface node bugs.
+   - the multi-lane runtime has open qualification gates (roadmap N12, `specs/sumeragi_lanes.md`), so S2b will surface node bugs.
 4. Owner nodes follow Taira's release in lock-step. A coordinated Taira upgrade stalls owner lanes until each owner runs `dataspace apply`.
 5. The SSH deploy key, held in an agent, is the only mutation authority. Two-person approval (a signed plan) would be a follow-up.
 6. Inrou validators run as root.

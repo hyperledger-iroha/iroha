@@ -367,7 +367,7 @@ async fn genesis_public_key_is_checked() {
         &genesis_correct_account_id,
         &time_source,
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
     .err()

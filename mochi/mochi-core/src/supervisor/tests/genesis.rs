@@ -118,7 +118,7 @@ const KAGAMI_STUB_EPOCH_SEED: [u8; 32] = [
 
 fn kagami_stub_manifest_template(consensus_mode: SumeragiConsensusMode) -> String {
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         parameter::{Parameter, system::SumeragiNposParameters},
     };
     let authority = kagami_stub_authority();
@@ -128,7 +128,7 @@ fn kagami_stub_manifest_template(consensus_mode: SumeragiConsensusMode) -> Strin
     let chain_json =
         norito::json::to_json(&chain_placeholder).expect("serialize stub chain placeholder");
     let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(chain_placeholder, ".")
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(authority.clone());
     if consensus_mode == SumeragiConsensusMode::Npos {
         let parameters = SumeragiNposParameters {
@@ -508,7 +508,7 @@ esac
 #[test]
 fn kagami_stubs_materialize_complete_manifests_with_exact_supplied_authority() {
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         parameter::system::SumeragiNposParameters,
     };
 
@@ -565,8 +565,8 @@ fn kagami_stubs_materialize_complete_manifests_with_exact_supplied_authority() {
                 iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION
             );
             assert_eq!(
-                manifest.sumeragi_v2_context_parameters(),
-                SumeragiV2GenesisContextParameters::recommended()
+                manifest.sumeragi_context_parameters(),
+                SumeragiGenesisContextParameters::recommended()
             );
             assert_eq!(
                 manifest.kagemusha_mint_finality_genesis_parameters(),

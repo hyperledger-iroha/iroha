@@ -1997,7 +1997,7 @@ fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
     clippy::too_many_lines,
     reason = "the test audits the complete generated Sumeragi v2 schema and its prohibited legacy fields"
 )]
-fn generated_configs_use_strict_sumeragi_v2_schema() {
+fn generated_configs_use_strict_sumeragi_schema() {
     let temp = tempfile::tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
@@ -2753,7 +2753,7 @@ fn localnet_npos_election_ceiling_matches_generated_committee() {
             parameters.sumeragi().epoch_length_blocks
         );
         assert!(
-            iroha_data_model::block::consensus_v2::is_valid_committee_size(
+            iroha_data_model::block::consensus::is_valid_committee_size(
                 usize::try_from(npos.max_validators()).expect("bounded committee")
             )
         );

@@ -65,7 +65,7 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
     mut validators: Vec<iroha_model_base::peer::PeerId>,
 ) -> iroha_genesis::GenesisBuilder {
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
@@ -86,7 +86,7 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
         })
         .collect();
     builder
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(KagemushaMintFinalityGenesisParametersV1 {
             authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
@@ -288,7 +288,7 @@ pub(crate) use sign::prepared_native_test_chain;
 #[cfg(test)]
 pub(crate) use sign::tests::native_genesis_fixture_with_instructions;
 pub use sign::{
-    bind_and_sign_staged_sumeragi_v2_context, staged_signed_sumeragi_v2_context_hashes,
+    bind_and_sign_staged_sumeragi_context, staged_signed_sumeragi_context_hashes,
 };
 pub(crate) use sign::{staged_signed_native_genesis, staged_signed_native_genesis_with_projection};
 mod validate;

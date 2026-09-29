@@ -341,3 +341,34 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
         assert_eq!(opened.root, root);
     }
 }
+
+#[test]
+fn in_memory_parent_coordinates_match_u32_hashing_and_never_truncate() {
+    let binding = Context::new(b"in-memory parent coordinates").unwrap();
+    let levels = tree(&binding);
+    for (level, pair) in levels.windows(2).enumerate() {
+        for (index, (children, &expected)) in pair[0].chunks_exact(2).zip(&pair[1]).enumerate() {
+            assert_eq!(
+                binding
+                    .hash_parent_at(Oracle::Fri(4), level + 1, index, children[0], children[1])
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+    // A coordinate beyond `u32` is rejected, never truncated onto a valid node
+    // such as level 1, index 0 (`1 << 32` on 64-bit targets).
+    let (left, right) = (levels[0][0], levels[0][1]);
+    let mut beyond_u32 = vec![usize::MAX];
+    if let Ok(truncating) = usize::try_from(u64::from(u32::MAX) + 1) {
+        beyond_u32.push(truncating);
+    }
+    for coordinate in beyond_u32 {
+        for (level, index) in [(coordinate, 0), (1, coordinate)] {
+            assert!(matches!(
+                binding.hash_parent_at(Oracle::Fri(4), level, index, left, right),
+                Err(crate::backend::deep_binding::BindingError::Shape)
+            ));
+        }
+    }
+}

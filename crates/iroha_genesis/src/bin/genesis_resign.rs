@@ -208,7 +208,7 @@ mod tests {
         account::AccountId,
         block::{
             SignedBlock,
-            consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES,
             execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
             output_budget::ExecutionOutputLimits,
         },

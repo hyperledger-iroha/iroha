@@ -12,7 +12,7 @@ use crate::{
     state::{State, World},
     sumeragi::test_chain::CertifiedTestChain,
 };
-use iroha_data_model::{block::consensus_v2::HeightContextId, transaction::SignedTransaction};
+use iroha_data_model::{block::consensus::HeightContextId, transaction::SignedTransaction};
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
 

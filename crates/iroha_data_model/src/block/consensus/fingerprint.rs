@@ -1,6 +1,8 @@
 //! Canonical Sumeragi consensus-parameters fingerprint projection.
-use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
-use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
+use super::{
+    ConsensusGenesisModeParams, ConsensusGenesisParams, ConsensusMode,
+    SumeragiGenesisContextParameters,
+};
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
@@ -9,7 +11,7 @@ const DOMAIN: &[u8] = b"iroha:sumeragi:v1:consensus-parameters-fingerprint:v1\0"
 pub const FORMAT_VERSION: u16 = 1;
 #[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(
-    name = "iroha_data_model::block::consensus_v2::fingerprint::ConsensusParametersFingerprintInput"
+    name = "iroha_data_model::block::consensus::fingerprint::ConsensusParametersFingerprintInput"
 )]
 struct ConsensusParametersFingerprintInput {
     format_version: u16,
@@ -17,12 +19,12 @@ struct ConsensusParametersFingerprintInput {
     mode: ConsensusMode,
     block_cadence_ms: core::num::NonZeroU64,
     block_max_transactions: core::num::NonZeroU64,
-    context: SumeragiV2GenesisContextParameters,
+    context: SumeragiGenesisContextParameters,
     npos: Option<NposGenesisFingerprintInput>,
 }
 #[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(
-    name = "iroha_data_model::block::consensus_v2::fingerprint::NposGenesisFingerprintInput"
+    name = "iroha_data_model::block::consensus::fingerprint::NposGenesisFingerprintInput"
 )]
 struct NposGenesisFingerprintInput {
     epoch_length_blocks: core::num::NonZeroU64,
@@ -77,7 +79,7 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
         mode,
         block_cadence_ms: params.block_cadence_ms,
         block_max_transactions: params.block_max_transactions,
-        context: params.v2_context,
+        context: params.sumeragi_context,
         npos,
     };
     let mut hasher = Blake2b512::new();
@@ -97,13 +99,13 @@ mod tests {
             block_max_transactions: core::num::NonZeroU64::new(512).unwrap(),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
-            v2_context: super::super::test_genesis_context_parameters(),
+            sumeragi_context: super::super::test_genesis_context_parameters(),
         }
     }
     fn npos_params() -> ConsensusGenesisParams {
         let mut params = permissioned_params();
         params.mode =
-            ConsensusGenesisModeParams::Npos(crate::block::consensus::NposGenesisParams {
+            ConsensusGenesisModeParams::Npos(super::super::NposGenesisParams {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600).unwrap(),
                 epoch_seed: [7; 32],
                 max_validators: 31,
@@ -127,14 +129,14 @@ mod tests {
     fn signed_context_mismatch_changes_live_fingerprint() {
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
-        changed.v2_context.nexus_amx_context_hash[0] ^= 1;
+        changed.sumeragi_context.nexus_amx_context_hash[0] ^= 1;
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
     #[test]
     fn signed_execution_policy_mismatch_changes_live_fingerprint() {
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
-        changed.v2_context.execution_policy_hash[0] ^= 1;
+        changed.sumeragi_context.execution_policy_hash[0] ^= 1;
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
     #[test]
@@ -166,14 +168,14 @@ mod tests {
     #[test]
     fn invalid_data_availability_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
-        params.v2_context.da_layout.chunk_size_bytes = 0;
+        params.sumeragi_context.da_layout.chunk_size_bytes = 0;
         let error = compute(&params).expect_err("zero DA chunk size must fail closed");
         assert!(error.contains("invalid Sumeragi genesis context"));
     }
     #[test]
     fn zero_execution_policy_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
-        params.v2_context.execution_policy_hash = [0; 32];
+        params.sumeragi_context.execution_policy_hash = [0; 32];
         let error = compute(&params).expect_err("zero execution-policy hash must fail closed");
         assert!(error.contains("invalid Sumeragi genesis context"));
     }

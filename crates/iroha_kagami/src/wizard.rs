@@ -379,7 +379,7 @@ fn resolve_trusted_peers_pop(
             "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
         ));
     }
-    if !iroha_data_model::block::consensus_v2::is_valid_committee_size(pops.len()) {
+    if !iroha_data_model::block::consensus::is_valid_committee_size(pops.len()) {
         return Err(eyre!(
             "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
             pops.len()

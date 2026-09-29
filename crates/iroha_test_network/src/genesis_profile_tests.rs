@@ -41,14 +41,14 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         network
             .consensus_profile
             .params
-            .v2_context
+            .sumeragi_context
             .nexus_amx_context_hash,
     );
     let expected_execution = CryptoHash::prehashed(
         network
             .consensus_profile
             .params
-            .v2_context
+            .sumeragi_context
             .execution_policy_hash,
     );
 

@@ -363,7 +363,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
-        block::{BlockHeader, consensus::ExecKv, consensus_v2::ValidatorPower},
+        block::{BlockHeader, consensus::ExecKv, consensus::ValidatorPower},
         isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
         sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochContextV1},
     };

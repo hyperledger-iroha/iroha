@@ -394,7 +394,7 @@ fn complete_test_genesis_builder_for_topology(
 ) -> iroha_genesis::GenesisBuilder {
     topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     assert!(
-        iroha_data_model::block::consensus_v2::is_valid_committee_size(topology.len()),
+        iroha_data_model::block::consensus::is_valid_committee_size(topology.len()),
         "irohad genesis fixtures require an exact supported 3f + 1 topology"
     );
     assert!(
@@ -439,8 +439,8 @@ fn complete_test_genesis_builder_for_topology(
         .expect("test genesis topology must form a canonical mint-finality roster");
     builder
         .set_topology(topology)
-        .with_sumeragi_v2_context_parameters(
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+        .with_sumeragi_context_parameters(
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(
             ),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)
@@ -2597,7 +2597,7 @@ impl Iroha {
         })?;
         startup_trust_root.verify(genesis_to_verify)?;
         let signed_genesis_context = Some(
-            signed_v2_genesis_context_metadata(genesis_to_verify)
+            signed_genesis_context_metadata(genesis_to_verify)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?,
         );
         let effective_genesis_public_key = config.genesis.public_key.clone();
@@ -2810,7 +2810,7 @@ impl Iroha {
             }
         };
         if config.nexus.uses_multilane_catalogs()
-            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            && signed_consensus_mode != iroha_data_model::block::consensus::ConsensusMode::Npos
         {
             return Err(Report::new(StartError::InitKura).attach(
                 "custom Nexus lane topology requires the authenticated consensus mode to be NPoS",
@@ -8743,7 +8743,7 @@ fn validate_available_genesis_for_check(
     iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
-    let (signed_mode, signed_parameters) = signed_v2_genesis_context_metadata(genesis)
+    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(genesis)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
@@ -8856,8 +8856,8 @@ fn validate_genesis_execution_offline(
     config: &Config,
     genesis: &GenesisBlock,
     genesis_authority: &AccountId,
-    signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    _signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    signed_mode: iroha_data_model::block::consensus::ConsensusMode,
+    _signed_parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
     expected_block_cadence_ms: u64,
     required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<crate::authenticated_genesis::AuthenticatedGenesis, MainError> {
@@ -8947,8 +8947,8 @@ fn validate_genesis_execution_offline(
             .map_err(|error| Report::new(MainError::Config).attach(error))?;
     // The native genesis path checked the exact signed epoch and both policy commitments
     // against original execution before publishing this disposable State.
-    let execution_policy_hash = Hash::prehashed(metadata.sumeragi_v2.execution_policy_hash);
-    let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash);
+    let execution_policy_hash = Hash::prehashed(metadata.sumeragi_context.execution_policy_hash);
+    let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash);
     Ok(crate::authenticated_genesis::AuthenticatedGenesis {
         network_id: epoch.network_id,
         execution_policy_hash,
@@ -9045,12 +9045,12 @@ fn consensus_caps_from_genesis(
     }
     let (expected_mode, expected_domain) = match entry.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN,
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::PERMISSIONED_BLS_DOMAIN,
         ),
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN,
+            iroha_data_model::block::consensus::ConsensusMode::Npos,
+            iroha_data_model::block::consensus::NPOS_BLS_DOMAIN,
         ),
     };
     params.sumeragi.block_cadence_ms = entry.block_cadence_ms;
@@ -9062,7 +9062,7 @@ fn consensus_caps_from_genesis(
     let (permissioned_roster_len, npos_max_validators) = match &consensus_params.mode {
         iroha_data_model::block::consensus::ConsensusGenesisModeParams::Permissioned
             if expected_mode
-                == iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned =>
+                == iroha_data_model::block::consensus::ConsensusMode::Permissioned =>
         {
             (
                 iroha_core::sumeragi::schedule::genesis_validators(genesis)
@@ -9072,7 +9072,7 @@ fn consensus_caps_from_genesis(
             )
         }
         iroha_data_model::block::consensus::ConsensusGenesisModeParams::Npos(npos)
-            if expected_mode == iroha_data_model::block::consensus_v2::ConsensusMode::Npos =>
+            if expected_mode == iroha_data_model::block::consensus::ConsensusMode::Npos =>
         {
             (0, Some(npos.max_validators))
         }
@@ -9085,7 +9085,7 @@ fn consensus_caps_from_genesis(
     )
     .ok()?;
     let mut config_caps = *config_caps;
-    config_caps.execution_policy_hash = entry.sumeragi_v2.execution_policy_hash;
+    config_caps.execution_policy_hash = entry.sumeragi_context.execution_policy_hash;
     config_caps.native_config_fingerprint =
         iroha_core::sumeragi::node::consensus_configuration_fingerprint(&genesis.0)
             .ok()?
@@ -9104,12 +9104,12 @@ fn consensus_caps_from_genesis(
     ))
 }
 
-fn signed_v2_genesis_context_metadata(
+fn signed_genesis_context_metadata(
     genesis: &GenesisBlock,
 ) -> core::result::Result<
     (
-        iroha_data_model::block::consensus_v2::ConsensusMode,
-        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+        iroha_data_model::block::consensus::ConsensusMode,
+        iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
     ),
     String,
 > {
@@ -9151,13 +9151,13 @@ fn signed_v2_genesis_context_metadata(
     metadata.validate()?;
     let mode = match metadata.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned
         }
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            iroha_data_model::block::consensus::ConsensusMode::Npos
         }
     };
-    Ok((mode, metadata.sumeragi_v2))
+    Ok((mode, metadata.sumeragi_context))
 }
 fn consensus_entry_caps(
     entry: &ConsensusHandshakeMeta,
@@ -9169,11 +9169,11 @@ fn consensus_entry_caps(
 )> {
     let (mode, mode_tag) = match entry.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+            iroha_data_model::block::consensus::ConsensusMode::Npos,
             iroha_core::sumeragi::consensus::NPOS_TAG,
         ),
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned,
             iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
         ),
     };
@@ -9183,7 +9183,7 @@ fn consensus_entry_caps(
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &params,
-            entry.sumeragi_v2,
+            entry.sumeragi_context,
         )
         .map_err(|error| eyre::eyre!(error))?;
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
@@ -9324,15 +9324,15 @@ fn verify_genesis_metadata(
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
     let mode = if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        iroha_data_model::block::consensus::ConsensusMode::Npos
     } else {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned
     };
     let consensus_params =
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &params,
-            matched_meta.sumeragi_v2,
+            matched_meta.sumeragi_context,
         )
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
@@ -11369,7 +11369,7 @@ mod tests {
                 .expect("signed genesis voters");
             let topology = Topology::new(voters.into_keys());
             let (mode, _) =
-                signed_v2_genesis_context_metadata(&provisional).expect("signed genesis mode");
+                signed_genesis_context_metadata(&provisional).expect("signed genesis mode");
             match ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
@@ -11502,11 +11502,11 @@ mod tests {
                 .expect("handshake meta should be present in genesis");
             let (mode, mode_tag) = match handshake_meta.mode {
                 iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                    iroha_data_model::block::consensus::ConsensusMode::Permissioned,
                     iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
                 ),
                 iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                    iroha_data_model::block::consensus::ConsensusMode::Npos,
                     iroha_core::sumeragi::consensus::NPOS_TAG.to_string(),
                 ),
             };
@@ -11559,8 +11559,8 @@ mod tests {
             config: Config,
             genesis: GenesisBlock,
             authority: AccountId,
-            mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-            parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+            mode: iroha_data_model::block::consensus::ConsensusMode,
+            parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
         }
         fn offline_semantic_genesis_fixture(
@@ -11615,12 +11615,12 @@ mod tests {
                 .expect("build complete offline semantic genesis manifest");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
-            let mut parameters = base_raw.sumeragi_v2_context_parameters();
+            let mut parameters = base_raw.sumeragi_context_parameters();
             parameters.nexus_amx_context_hash = context_hash.into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
-                .with_sumeragi_v2_context_parameters(parameters);
+                .with_sumeragi_context_parameters(parameters);
             // These fixtures add ordinary world-state instructions only; they
             // deliberately do not alter the signed Nexus/AMX projection.
             for instruction in extra_instructions {
@@ -11633,7 +11633,7 @@ mod tests {
             );
             config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
-                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
+                signed_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)
@@ -12564,13 +12564,13 @@ fn preflight_empty_state_snapshot_fallback(
 }
 
 fn authenticated_maximum_validator_roster_len(
-    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    mode: iroha_data_model::block::consensus::ConsensusMode,
     permissioned_roster_len: usize,
     npos_max_validators: Option<u32>,
 ) -> Result<usize, String> {
     match mode {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
+            if !iroha_data_model::block::consensus::is_valid_committee_size(
                 permissioned_roster_len,
             ) {
                 return Err(
@@ -12580,14 +12580,14 @@ fn authenticated_maximum_validator_roster_len(
             }
             Ok(permissioned_roster_len)
         }
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
+        iroha_data_model::block::consensus::ConsensusMode::Npos => {
             let maximum = npos_max_validators.ok_or_else(|| {
                 "authenticated NPoS state is missing signed election parameters".to_owned()
             })?;
             let maximum = usize::try_from(maximum).map_err(|_| {
                 "authenticated NPoS maximum validator roster does not fit this platform".to_owned()
             })?;
-            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(maximum) {
+            if !iroha_data_model::block::consensus::is_valid_committee_size(maximum) {
                 return Err(
                     "authenticated NPoS maximum validator roster is not a bounded 3f + 1 committee"
                         .to_owned(),
@@ -12601,7 +12601,7 @@ fn authenticated_maximum_validator_roster_len(
 #[cfg(test)]
 mod authenticated_roster_capacity_tests {
     use super::authenticated_maximum_validator_roster_len;
-    use iroha_data_model::block::consensus_v2::ConsensusMode;
+    use iroha_data_model::block::consensus::ConsensusMode;
 
     #[test]
     fn native_roster_capacity_requires_the_bounded_signed_committee() {

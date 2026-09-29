@@ -107,7 +107,7 @@ fn native_finality_schemas_are_exact_closed_and_bounded() {
     assert_exact_closed_required_schema_fields(&schemas, "BlockHeader", &contract_strings("block.header.required"));
     for field in contract_strings("block.header.nullable") { let _ = nullable_property_ref(&schemas, "BlockHeader", field); }
     let committee = contract_property(&schemas, "SumeragiFinalityProof", "committee");
-    assert_array_bounds(committee, 4, iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64, Some(true));
+    assert_array_bounds(committee, 4, iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT as u64, Some(true));
     assert_item_ref(committee, "#/components/schemas/FinalityValidator");
     let wire = contract_property(&schemas, "SumeragiFinalityProof", "block_wire");
     assert_array_bounds(wire, 1, iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64, None);
@@ -309,7 +309,7 @@ fn current_finality_schemas_match_portable_wire_bounds() {
     scalar_contracts! { proof.get("additionalProperties") => Flag(false); }
     assert_eq!(schema_string_field_set(proof, "required", "proof"), contract_words("block_header block_wire committee").into_iter().collect());
     scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "block_wire").get("maxItems") => Unsigned(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64); }
-    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64); }
+    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT as u64); }
     let body = contract_schema(&schemas, "SumeragiFinalityAttestationBody");
     assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
     property_refs!(&schemas;

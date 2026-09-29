@@ -7,7 +7,7 @@ use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetId},
-    block::{BlockHeader, consensus_v2::ValidatorPower},
+    block::{BlockHeader, consensus::ValidatorPower},
     consensus::{ConsensusKeyId, ConsensusKeyStatus},
     isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     nexus::{PublicLaneStakeShare, PublicLaneValidatorStatus},

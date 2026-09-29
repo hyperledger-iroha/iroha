@@ -22,6 +22,10 @@
 //! parameters, every frame is decoded within it, and a committed configuration that outgrows it
 //! is reported, [`FrameLimitExceeded`]).
 //!
+//! Audit lines: the persistence worker logs every durable safety record (DEBUG) and the
+//! executor worker every applied block (INFO) in the stable format that the multi-process soak
+//! of §13.5 parses (module `audit`, `scripts/sumeragi_soak.py`).
+//!
 //! Every backend call on a worker thread is guarded. Publication unwind requires recovery;
 //! ordinary execution, idempotent writes and missing reads retain their retry semantics
 //! (§12.5). A thread that stops anyway, or a
@@ -33,6 +37,7 @@
 //! (`sumeragi::crypto`). TODO(WP5): the Kura block store, the State executor and builder,
 //! `Init` from replay, and the node wiring.
 
+mod audit;
 pub mod barrier;
 pub mod exec;
 pub mod ingress;
@@ -1371,12 +1376,16 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
                 }
             })
         }
-        ExecOp::Commit(commit) => ExecDone::Committed(
-            catch_unwind(AssertUnwindSafe(|| {
+        ExecOp::Commit(commit) => {
+            let committed = catch_unwind(AssertUnwindSafe(|| {
                 executor.commit(&commit.block, &commit.qc).map(Box::new)
             }))
-            .unwrap_or_else(|_| Err(PublicationError::RecoveryRequired(failed("commit")))),
-        ),
+            .unwrap_or_else(|_| Err(PublicationError::RecoveryRequired(failed("commit"))));
+            if committed.is_ok() {
+                audit::block_applied(&commit.block, &commit.qc);
+            }
+            ExecDone::Committed(committed)
+        }
         ExecOp::BuildControlWitness { context, .. } => ExecDone::ControlWitnessBuilt(
             catch_unwind(AssertUnwindSafe(|| {
                 executor.build_control_witness(&context)

@@ -1153,7 +1153,7 @@ mod tests {
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
-        block::consensus_v2::{SumeragiV2GenesisContextParameters, ValidatorPower},
+        block::consensus::{SumeragiGenesisContextParameters, ValidatorPower},
         parameter::{Parameter, system::SumeragiParameter},
         prelude::*,
     };
@@ -1267,7 +1267,7 @@ mod tests {
         let manifest = builder
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
             )

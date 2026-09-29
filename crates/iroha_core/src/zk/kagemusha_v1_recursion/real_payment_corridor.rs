@@ -71,7 +71,7 @@ use halo2_proofs::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::ValidatorPower,
+    block::consensus::ValidatorPower,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,

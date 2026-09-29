@@ -7181,7 +7181,7 @@ mod run {
             assert_eq!(source_credits.available_permits(), 1);
         }
         #[tokio::test(flavor = "current_thread")]
-        async fn consensus_lane_and_v2_topics_share_authenticated_high_source_credit() {
+        async fn consensus_and_consensus_lane_topics_share_authenticated_high_source_credit() {
             let (safety, _safety_rx) = mpsc::channel(1);
             let (high, _high_rx) = mpsc::channel(1);
             let (low, _low_rx) = mpsc::channel(1);

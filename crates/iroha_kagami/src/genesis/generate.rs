@@ -14,7 +14,7 @@ use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
-    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    block::consensus::SumeragiGenesisContextParameters,
     hijiri::HijiriParametersV1,
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::{
@@ -671,7 +671,7 @@ impl<T: Write> RunArgs<T> for Args {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
         }
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
         .with_crypto(crypto);
         let mut genesis = build_genesis_for_mode(

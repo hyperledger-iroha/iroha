@@ -767,7 +767,7 @@ struct ProofCrypto {
 impl ProofCrypto {
     fn new(validators: &[FinalityValidator]) -> Result<(Self, Committee), FinalityError> {
         need(
-            crate::block::consensus_v2::is_valid_committee_size(validators.len()),
+            crate::block::consensus::is_valid_committee_size(validators.len()),
             "committee must have exact first-release global voting geometry",
         )?;
         let mut keys = BTreeMap::new();

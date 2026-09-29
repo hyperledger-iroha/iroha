@@ -1,6 +1,6 @@
 //! Pure canonical epoch schedule types and validation shared by node and proof readers.
 use crate::{
-    block::{SignedBlock, consensus_v2::is_valid_committee_size},
+    block::{SignedBlock, consensus::is_valid_committee_size},
     isi::RegisterBox,
     transaction::Executable,
 };

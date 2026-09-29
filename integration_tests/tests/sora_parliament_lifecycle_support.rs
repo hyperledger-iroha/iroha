@@ -26,7 +26,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{SignedBlock, consensus_v2::recommended_data_availability_layout},
+        block::{SignedBlock, consensus::recommended_data_availability_layout},
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,

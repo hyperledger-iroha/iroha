@@ -7,7 +7,7 @@ use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
-    block::consensus_v2::recommended_data_availability_layout,
+    block::consensus::recommended_data_availability_layout,
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
         OfferContractOwnership, SetContractParliamentDelegation,
@@ -1753,7 +1753,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
     assert_eq!(handshake.mode, SumeragiConsensusMode::Npos);
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "contract lifecycle gate requires the signed mandatory DA layout"
     );
@@ -2465,7 +2465,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         "typed-query pagination gate requires the Sora NPoS profile"
     );
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
@@ -3006,7 +3006,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
         "contract V1 restart gate requires the Sora NPoS profile"
     );
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "contract V1 restart gate requires the signed mandatory DA layout"
     );

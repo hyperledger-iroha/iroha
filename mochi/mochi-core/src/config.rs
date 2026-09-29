@@ -1,6 +1,6 @@
 //! Network configuration presets, topology metadata, and filesystem helpers.
 use iroha_data_model::{
-    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
+    block::consensus::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
 };
 use std::{
     fmt, fs, io,

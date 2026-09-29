@@ -315,7 +315,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
-        block::consensus_v2::{SumeragiV2GenesisContextParameters, is_valid_committee_size},
+        block::consensus::{SumeragiGenesisContextParameters, is_valid_committee_size},
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
@@ -377,7 +377,7 @@ mod tests {
             .expect("genesis-support test authority must be canonical");
         builder
             .set_topology(topology)
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(parameters)
     }
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {

@@ -26,7 +26,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{SignedBlock, consensus_v2::recommended_data_availability_layout},
+        block::{SignedBlock, consensus::recommended_data_availability_layout},
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
@@ -189,7 +189,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         "the signed genesis handshake must select consensus revision 4",
     );
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "the corridor must retain the signed revision-4 RS16 DA layout",
     );
@@ -1306,7 +1306,7 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         "signer_modes(FAIL_CLOSED_BEACON_SIGNER_MODES)"
     )));
     assert!(source.contains(concat!(
-        "SumeragiV2GenesisContextParameters::recommended()",
+        "SumeragiGenesisContextParameters::recommended()",
         ".da_layout"
     )));
     let boundary_helper = concat!("assert_transition_rejected_without_state_", "change(");

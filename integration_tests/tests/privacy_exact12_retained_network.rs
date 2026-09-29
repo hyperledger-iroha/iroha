@@ -10,7 +10,7 @@ use iroha::{
     data_model::{
         account::Account,
         asset::AssetDefinition,
-        block::consensus_v2::BlockSubject,
+        block::consensus::BlockSubject,
         domain::Domain,
         isi::{
             Grant, InstructionBox, Mint, Register, SetParameter,
@@ -624,7 +624,7 @@ fn independently_resign_wrong_statement_digest(
         .wrap_err("wrong statement digest must preserve the generic envelope contract")?;
     resign_replaced_envelope(client, valid, envelope, "wrong statement-digest binding")
 }
-async fn wait_for_exact_v2_commit_subject(
+async fn wait_for_exact_commit_subject(
     clients: &[Client],
     expected_height: u64,
     expected_subject: BlockSubject,
@@ -1530,7 +1530,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "exact {label} replay changed height from {canonical_height} to {observed_height}"
             );
         }
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &healthy_clients,
             canonical_height,
             canonical_subject,
@@ -1557,7 +1557,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let restarted_client = bounded_client(restart_peer.client());
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &recovered_clients,
             canonical_height,
             canonical_subject,
@@ -1710,7 +1710,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             final_height > canonical_height,
             "fresh state/policy rejections did not reach canonical finality"
         );
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &recovered_clients,
             final_height,
             final_subject,

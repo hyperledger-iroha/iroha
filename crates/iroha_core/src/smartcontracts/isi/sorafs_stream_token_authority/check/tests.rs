@@ -10,7 +10,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
-    block::{BlockHeader, consensus_v2::HeightContextId},
+    block::{BlockHeader, consensus::HeightContextId},
     permission::Permissions,
     sorafs::{
         stream_token_authority::{StreamTokenAuthorityRequestV1, StreamTokenOperationV1},

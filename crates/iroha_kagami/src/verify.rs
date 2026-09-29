@@ -12,7 +12,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus_v2::is_valid_committee_size,
+    block::consensus::is_valid_committee_size,
     isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,

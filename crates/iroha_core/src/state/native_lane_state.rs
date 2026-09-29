@@ -123,7 +123,7 @@ pub(crate) fn validate_sumeragi_lane_state(
         {
             return Err("invalid lane incarnation or lifecycle bounds".into());
         }
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(lane.committee.len())
+        if !iroha_data_model::block::consensus::is_valid_committee_size(lane.committee.len())
             || lane
                 .committee
                 .windows(2)

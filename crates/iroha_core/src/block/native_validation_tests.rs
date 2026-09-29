@@ -275,7 +275,7 @@ fn native_validation_enforces_original_signed_cadence() {
         let (_, error) = fixture.validate(proposal).unpack(|_| {}).err().unwrap();
         assert!(matches!(
             *error,
-            BlockValidationError::NonCanonicalV2BlockTime { .. }
+            BlockValidationError::NonCanonicalBlockTime { .. }
         ));
     }
     assert_eq!(fixture.chain.state().view().height(), 2);

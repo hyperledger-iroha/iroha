@@ -18,8 +18,8 @@ use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::{
     IntoKeyValue, NetworkId, Registrable,
     account::{Account, AccountId},
-    block::consensus_v2::ValidatorPower,
-    block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
+    block::consensus::ValidatorPower,
+    block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
     parameter::{
@@ -1678,11 +1678,11 @@ pub(super) fn prepare_configured_genesis(
         let Some((execution, nexus)) = policies else {
             return Ok((genesis, manifest, Arc::new(state), kura));
         };
-        let mut parameters = manifest.sumeragi_v2_context_parameters();
+        let mut parameters = manifest.sumeragi_context_parameters();
         parameters.execution_policy_hash = execution.into();
         parameters.nexus_amx_context_hash = nexus.into();
         manifest = manifest
-            .with_sumeragi_v2_context_parameters(parameters)
+            .with_sumeragi_context_parameters(parameters)
             .with_consensus_meta();
         genesis = match manifest
             .clone()
@@ -1769,7 +1769,7 @@ fn build_genesis(
     let builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
         .with_block_cadence_ms(NonZeroU64::new(1).expect("non-zero"))
         .set_topology(entries)
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
         );

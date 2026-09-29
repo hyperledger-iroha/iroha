@@ -250,7 +250,7 @@ fn tiered_state_parse_accepts_da_store_root() {
     );
 }
 #[test]
-fn sumeragi_v2_rejects_retired_v1_tables() {
+fn sumeragi_rejects_retired_v1_tables() {
     for retired_table in [
         "collectors",
         "advanced",

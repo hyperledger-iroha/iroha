@@ -269,7 +269,7 @@ pub struct PeersGossiper {
     /// Peers provided at startup
     initial_peers: BTreeMap<PeerId, SocketAddr>,
     /// Consensus mode to decide observer admission policy.
-    consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    consensus_mode: iroha_data_model::block::consensus::ConsensusMode,
     /// Trusted peers configured locally
     trusted_peers: BTreeSet<PeerId>,
     /// Configured peers that stay trusted even if topology excludes them (e.g., observers).
@@ -382,7 +382,7 @@ impl PeersGossiper {
         key_pair: KeyPair,
         gossip_period: Duration,
         gossip_max_period: Duration,
-        consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+        consensus_mode: iroha_data_model::block::consensus::ConsensusMode,
         trust_decay_half_life: Duration,
         trust_penalty_bad_gossip: i32,
         trust_penalty_unknown_peer: i32,
@@ -905,7 +905,7 @@ impl PeersGossiper {
         }
         let allow_public = matches!(
             self.consensus_mode,
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            iroha_data_model::block::consensus::ConsensusMode::Npos
         );
         if !self.trusted_peers.contains(from_peer.id())
             && !allow_public
@@ -1233,7 +1233,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::block::{BlockHeader, consensus_v2::ConsensusMode};
+    use iroha_data_model::block::{BlockHeader, consensus::ConsensusMode};
     use std::{
         collections::{BTreeMap, BTreeSet, HashSet},
         time::Instant,

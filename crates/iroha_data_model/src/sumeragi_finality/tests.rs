@@ -100,7 +100,7 @@ impl Fixture {
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let account = AccountId::new(authority.public_key().clone());
         use crate::{
-            block::consensus_v2::SumeragiV2GenesisContextParameters,
+            block::consensus::SumeragiGenesisContextParameters,
             isi::{
                 InstructionBox, RegisterPeerWithPop, SetParameter,
                 kagemusha_v1::{
@@ -129,7 +129,7 @@ impl Fixture {
                     validators: epoch_fixture.authority.validators,
                 },
             },
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions = validators
             .iter()

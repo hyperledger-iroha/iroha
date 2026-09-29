@@ -54,7 +54,7 @@ use iroha_crypto::{Hash, HashOf, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
     block::{
         BlockHeader as IrohaHeader, CommitCertificate, SignedBlock,
-        consensus_v2::HeightContextId,
+        consensus::HeightContextId,
         proofs::{
             TrustedBlockProofAnchor, TrustedBlockProofAnchorError, TrustedExecutionOutputAnchor,
         },

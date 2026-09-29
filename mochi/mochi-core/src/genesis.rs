@@ -247,7 +247,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
     };
     use iroha_genesis::GenesisBuilder;
@@ -314,7 +314,7 @@ mod tests {
         )
         .expect("derive test mint-finality parameters");
         let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .build_raw()
             .expect("build complete test genesis");

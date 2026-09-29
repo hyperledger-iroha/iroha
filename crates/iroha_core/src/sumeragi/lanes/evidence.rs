@@ -58,7 +58,7 @@ pub fn verify_lane_certificate(
 ) -> Result<HeightConfig, LaneEntryError> {
     if record.lane.as_u32() == 0
         || record.incarnation == [0; 32]
-        || !iroha_data_model::block::consensus_v2::is_valid_committee_size(record.committee.len())
+        || !iroha_data_model::block::consensus::is_valid_committee_size(record.committee.len())
         || record
             .committee
             .windows(2)

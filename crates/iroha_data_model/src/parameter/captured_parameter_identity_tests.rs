@@ -170,7 +170,7 @@ fn captured_parameter_deserialize_hashes() {
 
 #[test]
 fn consensus_mode_keeps_its_captured_codec_row_after_the_move() {
-    // `ConsensusMode` moved out of `block::consensus_v2`; the compiler-captured codec row moved
+    // `ConsensusMode` moved out of `block::consensus`; the compiler-captured codec row moved
     // with it (same codec, new nominal identity).
     for case in CASES {
         case.check();

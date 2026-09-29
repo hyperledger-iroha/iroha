@@ -30,7 +30,7 @@ pub(super) async fn certified_block(
     )?;
     if iroha_data_model::NetworkId::from_genesis_hash(genesis.expected_hash())
         != network.network_id()
-        || genesis.consensus_metadata().sumeragi_v2.da_layout
+        || genesis.consensus_metadata().sumeragi_context.da_layout
             != recommended_data_availability_layout()
     {
         return Err(eyre!(

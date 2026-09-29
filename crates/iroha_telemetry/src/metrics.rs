@@ -6,7 +6,7 @@ use crate::privacy::PrivacyDrainSnapshot;
 use core::convert::{TryFrom, TryInto};
 use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as ActualConfidentialGas};
 #[cfg(test)]
-use iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
+use iroha_data_model::block::consensus::PERMISSIONED_TAG;
 use iroha_data_model::{
     da::types::DaRentQuote,
     nexus::MAX_ACTIVE_EXECUTION_LANES,

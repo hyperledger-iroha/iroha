@@ -591,6 +591,8 @@ impl Chain {
 }
 struct Source<'a> {
     chain: &'a Chain,
+    /// Highest height the source serves; above it every request fails.
+    served: u64,
     proofs: RefCell<BTreeMap<u64, SumeragiFinalityProof>>,
     tips: BTreeMap<PeerId, u64>,
     faults: BTreeSet<PeerId>,
@@ -603,6 +605,7 @@ impl<'a> Source<'a> {
     fn new(chain: &'a Chain) -> Self {
         Self {
             chain,
+            served: chain.proofs.len() as u64,
             proofs: RefCell::new(BTreeMap::new()),
             tips: BTreeMap::new(),
             faults: BTreeSet::new(),
@@ -617,12 +620,13 @@ impl FinalitySource for Source<'_> {
     type Error = std::io::Error;
     fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error> {
         self.proof_calls.borrow_mut().push(height.get());
-        Ok(self
-            .proofs
-            .borrow()
-            .get(&height.get())
-            .unwrap_or_else(|| self.chain.proof(height.get()))
-            .clone())
+        if let Some(proof) = self.proofs.borrow().get(&height.get()) {
+            return Ok(proof.clone());
+        }
+        if height.get() > self.served {
+            return Err(std::io::Error::other("height not served"));
+        }
+        Ok(self.chain.proof(height.get()).clone())
     }
     fn latest_attestation(
         &self,
@@ -729,6 +733,20 @@ fn recertify(
     replace_certificate(&mut p, &h, &qc, &r);
     p.committee = validators(keys);
     p
+}
+/// `member`'s genuinely signed statement of a tip at `height` whose certificate is internally
+/// consistent, but signed by a foreign committee that the certificate itself names.
+fn fake_claim(chain: &Chain, member: &KeyPair, height: u64) -> SumeragiFinalityAttestation {
+    let context = &chain.epoch(height).context;
+    let foreign = ordered_keys(200..200 + context.committee.len());
+    let mut attestation = chain.attest(member, height);
+    attestation.body.finality_proof = recertify(
+        chain.proof(height),
+        &with_committee(context, &foreign),
+        &foreign,
+    );
+    resign(&mut attestation, member);
+    attestation
 }
 
 #[test]
@@ -1173,18 +1191,49 @@ fn observe_rejects_zero_challenge_and_substituted_nodes_without_advancing() {
 }
 #[test]
 fn invalid_higher_tip_does_not_block_a_valid_lower_quorum() {
-    let c = Chain::constant(4, 5);
-    let mut s = Source::new(&c);
-    for k in &c.epoch(4).keys {
-        s.tips.insert(peer(k), 4);
+    let chain = Chain::constant(4, 5);
+    let keys = &chain.epoch(4).keys;
+    // One member claims H5 while the source answers H4 with a reordered proof. The other
+    // members' own H4 proofs bridge that gap; the source is asked for each height once.
+    for fake in [true, false] {
+        let mut source = Source::new(&chain);
+        for k in keys {
+            source.tips.insert(peer(k), 4);
+        }
+        source.tips.insert(peer(&keys[0]), 5);
+        if fake {
+            source
+                .attestation_overrides
+                .insert(peer(&keys[0]), fake_claim(&chain, &keys[0], 5));
+        }
+        source
+            .proofs
+            .borrow_mut()
+            .insert(4, chain.proof(3).clone());
+        let mut verifier = chain.verifier();
+        let report = verifier.observe(&source, &CHALLENGE).unwrap();
+        let (_, outcome) = report
+            .peers
+            .iter()
+            .find(|(member, _)| *member == peer(&keys[0]))
+            .unwrap();
+        if fake {
+            // The invalid H5 claim is rejected for its member alone.
+            assert_eq!((report.verified(), verifier.checkpoint().height()), (3, 4));
+            assert!(matches!(
+                outcome,
+                AttestationOutcome::Rejected(FinalityError::Native(_))
+            ));
+        } else {
+            // A genuine H5 extends the prefix that the other members' H4 proofs reached.
+            assert_eq!((report.verified(), verifier.checkpoint().height()), (4, 5));
+            assert!(matches!(
+                outcome,
+                AttestationOutcome::Verified(tip) if tip.height.get() == 5
+            ));
+        }
+        assert_eq!(*source.proof_calls.borrow(), [2, 3, 4]);
     }
-    s.tips.insert(peer(&c.epoch(4).keys[0]), 5);
-    // H5 is supplied by one peer but its intermediate H4 source response is reordered.
-    // The remaining peers' direct H4 tips still extend H1 via genuine H2/H3.
-    s.proofs.borrow_mut().insert(4, c.proof(3).clone());
-    let mut v = c.verifier();
-    assert_eq!(v.observe(&s, &CHALLENGE).unwrap().verified(), 3);
-    assert_eq!(v.checkpoint().height(), 4);
 }
 
 #[test]
@@ -1553,7 +1602,7 @@ fn foreign_network_genesis_or_chain_label_is_refused() {
 }
 
 #[test]
-fn lagging_checkpoint_catches_up_in_bounded_pages_then_observes() {
+fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
     let chain = Chain::constant(4, 8);
     let source = Source::new(&chain);
     let page = || Budget {
@@ -1562,13 +1611,46 @@ fn lagging_checkpoint_catches_up_in_bounded_pages_then_observes() {
     };
     let mut verifier = chain.verifier();
     let checkpoint = verifier.checkpoint().clone();
-    // Every member's tip lies beyond one three-proof observation budget: nothing is published.
-    assert!(matches!(
-        verifier.observe_with_budget(&source, &CHALLENGE, &mut page()),
-        Err(FinalityError::InsufficientAttestations(_))
-    ));
-    assert_eq!(*verifier.checkpoint(), checkpoint);
-    assert!(source.proof_calls.borrow().is_empty());
+    let member = &chain.epoch(8).keys[0];
+    // Every member's tip lies beyond one three-proof observation budget. Each observation keeps
+    // what its budget verified for the next one, and none publishes it without a fresh quorum.
+    for reached in [4, 7] {
+        let result = verifier.observe_with_budget(&source, &CHALLENGE, &mut page());
+        assert!(
+            matches!(
+                result,
+                Err(FinalityError::CatchingUp { verified, claimed: 8 }) if verified == reached
+            ),
+            "{result:?}"
+        );
+        assert_eq!(*verifier.checkpoint(), checkpoint);
+        assert_eq!(
+            verifier.pending.as_ref().map(SumeragiFinalityCheckpoint::height),
+            Some(reached)
+        );
+        assert!(matches!(
+            verifier.verify_attestation(&CHALLENGE, &chain.attest(member, 8)),
+            Err(FinalityError::AheadOfCheckpoint { checkpoint: 1, .. })
+        ));
+    }
+    let report = verifier
+        .observe_with_budget(&source, &CHALLENGE, &mut page())
+        .unwrap();
+    assert_eq!((report.verified(), verifier.checkpoint().height()), (4, 8));
+    assert!(verifier.pending.is_none());
+    // Each successor was fetched once across the observations; H8 came from the members.
+    assert_eq!(*source.proof_calls.borrow(), [2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn catch_up_publishes_bounded_verified_pages_explicitly() {
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let page = || Budget {
+        proofs: 3,
+        bytes: MAX_ADVANCE_BYTES,
+    };
+    let mut verifier = chain.verifier();
     for (height, fetched) in [(4, vec![2, 3, 4]), (7, vec![5, 6, 7]), (8, vec![8])] {
         source.proof_calls.borrow_mut().clear();
         assert_eq!(

@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""NX-7 validator smoke tests for newly provisioned Nexus lanes."""
+"""NX-7 validator smoke tests for newly provisioned Nexus lanes.
+
+The lane catalog input is a recorded `LaneLifecycleStatusV1` JSON document
+(`--lifecycle-file`). The node no longer serves a lane lifecycle route: Sumeragi
+lane state is the operator route `GET /v1/sumeragi/lanes`
+(`specs/sumeragi_lanes.md`), whose records are keyed by lane id and carry no
+catalog aliases.
+
+TODO(N12): bind the lane source to `GET /v1/sumeragi/lanes` with a fixture
+captured from a real node once the lane DTOs are projected to the SDKs.
+"""
 
 import argparse
 import json
@@ -28,12 +38,8 @@ class LaneCheck:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     try:
         args = parse_args(argv)
-        lifecycle, lifecycle_source = load_lifecycle_source(
-            args.lifecycle_url,
-            args.lifecycle_file,
-            timeout=args.timeout,
-            insecure=args.insecure,
-        )
+        lifecycle = read_json_file(args.lifecycle_file, label="lane lifecycle")
+        lifecycle_source = args.lifecycle_file
         active_lanes = validate_lane_lifecycle(lifecycle)
         lane_results = [verify_lane_active(active_lanes, alias) for alias in args.lane_alias]
 
@@ -72,7 +78,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if args.require_alias_migration:
                 verify_alias_migrations(args.require_alias_migration, telemetry_events)
 
-        print(f"[ok] Canonical lane lifecycle reachable: {lifecycle_source}")
+        print(f"[ok] Canonical lane lifecycle validated: {lifecycle_source}")
         for lane in lane_results:
             print(
                 f"[ok] lane `{lane.alias}` active "
@@ -172,16 +178,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    lifecycle_group = parser.add_mutually_exclusive_group(required=True)
-    lifecycle_group.add_argument(
-        "--lifecycle-url",
-        dest="lifecycle_url",
-        help="Canonical lane lifecycle endpoint (https://host/v1/nexus/lifecycle)",
-    )
-    lifecycle_group.add_argument(
+    parser.add_argument(
         "--lifecycle-file",
         dest="lifecycle_file",
-        help="Path to a recorded /v1/nexus/lifecycle JSON payload",
+        required=True,
+        help="Path to a recorded `LaneLifecycleStatusV1` JSON document",
     )
     metrics_group = parser.add_mutually_exclusive_group()
     metrics_group.add_argument(
@@ -404,32 +405,6 @@ def _unique_json_object(pairs: List[Tuple[str, object]]) -> Dict:
             raise SmokeError(f"JSON payload contains duplicate key `{key}`")
         result[key] = value
     return result
-
-
-def fetch_json(url: str, timeout: int, insecure: bool) -> Dict:
-    text = fetch_text(url, timeout=timeout, insecure=insecure)
-    try:
-        return json.loads(text, object_pairs_hook=_unique_json_object)
-    except json.JSONDecodeError as exc:
-        raise SmokeError(f"JSON endpoint returned invalid payload: {exc}") from exc
-
-
-def load_lifecycle_source(
-    lifecycle_url: Optional[str],
-    lifecycle_file: Optional[str],
-    timeout: int,
-    insecure: bool,
-) -> Tuple[Dict, str]:
-    if lifecycle_file:
-        return read_json_file(lifecycle_file, label="lane lifecycle"), lifecycle_file
-    if not lifecycle_url:
-        raise SmokeError(
-            "missing lane lifecycle source (--lifecycle-url or --lifecycle-file)"
-        )
-    return (
-        fetch_json(lifecycle_url, timeout=timeout, insecure=insecure),
-        lifecycle_url,
-    )
 
 
 def load_metrics_source(

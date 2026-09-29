@@ -6,7 +6,7 @@ use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_core::kura::{BlockIndex, BlockStore};
 use iroha_data_model::block::{
-    consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block,
+    consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block,
 };
 use std::{
     fs,

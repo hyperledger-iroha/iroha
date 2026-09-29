@@ -539,7 +539,7 @@ mod tests {
                     max_output_bytes: 1024 * 1024,
                     max_total_output_bytes: 4 * 1024 * 1024,
                     max_executed_wire_bytes:
-                        iroha_data_model::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+                        iroha_data_model::block::consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES,
                 },
             )
             .expect("structurally coherent typed outputs");

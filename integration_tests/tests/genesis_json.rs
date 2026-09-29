@@ -75,8 +75,8 @@ fn complete_test_genesis_builder_for_topology(
         .expect("integration-test topology must form a canonical mint-finality roster");
     builder
         .set_topology(topology)
-        .with_sumeragi_v2_context_parameters(
-            iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+        .with_sumeragi_context_parameters(
+            iroha::data_model::block::consensus::SumeragiGenesisContextParameters::recommended(
             ),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)

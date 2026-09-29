@@ -16,7 +16,7 @@ use iroha_core::query::{
 };
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::HeightContextId,
+    block::consensus::HeightContextId,
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
     sorafs::final_promotion_authority::{
         FinalPromotionAuthorityActionV1, FinalPromotionCheckSubjectV1,

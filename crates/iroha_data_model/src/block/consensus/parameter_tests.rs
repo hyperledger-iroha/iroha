@@ -106,10 +106,10 @@ fn data_availability_layout_enforces_protocol_resource_caps() {
 }
 #[test]
 fn genesis_context_roundtrips_and_rejects_unbound_policy() {
-    let context = SumeragiV2GenesisContextParameters::recommended();
+    let context = SumeragiGenesisContextParameters::recommended();
     assert_eq!(context.validate(), Ok(()));
     assert_eq!(
-        SumeragiV2GenesisContextParameters::decode_all(&mut context.encode().as_slice()).unwrap(),
+        SumeragiGenesisContextParameters::decode_all(&mut context.encode().as_slice()).unwrap(),
         context
     );
     let mut invalid = context;

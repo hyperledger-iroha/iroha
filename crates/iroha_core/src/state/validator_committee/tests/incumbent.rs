@@ -34,7 +34,7 @@ fn handshake_metadata(roster: &[ValidatorPower]) -> Parameter {
         consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
         kagemusha_mint_finality:
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(roster),
-        sumeragi_v2: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+        sumeragi_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
     };
     metadata.validate().unwrap();
     let value = norito::json::value::to_value(&metadata).unwrap();

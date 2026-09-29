@@ -192,11 +192,11 @@ fn prepared_genesis_derives_then_enforces_both_signed_native_policies() {
         result.unwrap_or_else(|(_, error)| panic!("final signed policies must execute: {error}"));
     let metadata = prepared.genesis.consensus_metadata();
     assert_eq!(
-        iroha_crypto::Hash::prehashed(metadata.sumeragi_v2.execution_policy_hash),
+        iroha_crypto::Hash::prehashed(metadata.sumeragi_context.execution_policy_hash),
         super::super::super::staged_genesis_execution_policy_hash(&overlay).unwrap(),
     );
     assert_eq!(
-        iroha_crypto::Hash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+        iroha_crypto::Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash),
         super::super::super::staged_genesis_nexus_amx_context_hash(&overlay),
     );
     drop(overlay);

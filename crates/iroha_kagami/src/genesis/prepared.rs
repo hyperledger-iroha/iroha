@@ -588,7 +588,7 @@ impl<T: Write> RunArgs<T> for Args {
         )
         .wrap_err("reproduce the external signer's deterministic manifest preparation")?;
         let expected_bound = signer_prepared
-            .with_sumeragi_v2_context_parameters(manifest.sumeragi_v2_context_parameters())
+            .with_sumeragi_context_parameters(manifest.sumeragi_context_parameters())
             .with_consensus_meta();
         ensure!(
             expected_bound.encode() == manifest.encode(),
@@ -610,10 +610,10 @@ impl<T: Write> RunArgs<T> for Args {
         .map_err(|error| {
             color_eyre::eyre::eyre!("prepared genesis failed full core validation: {error}")
         })?;
-        let signed_context = manifest.sumeragi_v2_context_parameters();
+        let signed_context = manifest.sumeragi_context_parameters();
         for (config, binding) in configs.iter().zip(&validator_bindings) {
             let (nexus_amx_context_hash, execution_policy_hash) =
-                super::staged_signed_sumeragi_v2_context_hashes(
+                super::staged_signed_sumeragi_context_hashes(
                     &manifest,
                     validated.block(),
                     config,
@@ -924,7 +924,7 @@ mod tests {
         ));
         let confidential_policy_hash =
             iroha_core::state::compute_genesis_confidential_policy_hash(&configs[0].zk);
-        let (manifest, sealed_genesis) = super::super::bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, sealed_genesis) = super::super::bind_and_sign_staged_sumeragi_context(
             signer_prepared,
             &signer,
             Some(&configs[0]),

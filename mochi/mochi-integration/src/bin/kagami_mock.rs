@@ -821,10 +821,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .to_string()
                 .contains("consensus fingerprint")
         );
-        let mut mismatched_context = bound_manifest.sumeragi_v2_context_parameters();
+        let mut mismatched_context = bound_manifest.sumeragi_context_parameters();
         mismatched_context.nexus_amx_context_hash[0] ^= 2;
         let mismatched_manifest =
-            bound_manifest.with_sumeragi_v2_context_parameters(mismatched_context);
+            bound_manifest.with_sumeragi_context_parameters(mismatched_context);
         let mismatch = iroha_genesis::validate_prepared_genesis_bundle(
             &wire,
             &mismatched_manifest,

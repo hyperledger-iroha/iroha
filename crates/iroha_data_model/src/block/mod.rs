@@ -50,10 +50,8 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
 pub mod builder;
 /// Sumeragi finality proof stored with a committed block.
 pub mod commit_certificate;
-#[doc = "Consensus message types shared by Sumeragi implementations."]
+#[doc = "Consensus parameters, height context and diagnostics shared by Sumeragi components."]
 pub mod consensus;
-#[doc = "Canonical Sumeragi v2 consensus messages and height context."]
-pub mod consensus_v2;
 #[doc = "Durable execution context committed by block headers."]
 pub mod execution_context;
 /// Canonical network and invocation outputs; execution authority remains with finality.
@@ -329,7 +327,7 @@ impl SignedBlock {
             })?;
         let limit = limits
             .max_executed_wire_bytes
-            .min(consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES);
+            .min(consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES);
         if actual > limit {
             return Err(SetExecutionOutputsError::ExecutedWireTooLarge { actual, limit });
         }
@@ -363,7 +361,7 @@ impl SignedBlock {
             })?;
         let limit = limits
             .max_executed_wire_bytes
-            .min(consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES);
+            .min(consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES);
         if actual > limit {
             return Err(SetExecutionOutputsError::ExecutedWireTooLarge { actual, limit });
         }

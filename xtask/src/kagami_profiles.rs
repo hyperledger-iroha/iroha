@@ -6,7 +6,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus_v2::is_valid_committee_size,
+    block::consensus::is_valid_committee_size,
     isi::{SetParameter, kagemusha_v1::KagemushaMintFinalityGenesisParametersV1},
     parameter::{
         Parameter,
@@ -879,8 +879,8 @@ fn portable_bound_profile_manifest(
         return Err("generated profile manifest must use the portable `ivm_dir` value `.`".into());
     }
     let expected_fingerprint = generated_manifest
-        .with_sumeragi_v2_context_parameters(
-            resolved_bound_manifest.sumeragi_v2_context_parameters(),
+        .with_sumeragi_context_parameters(
+            resolved_bound_manifest.sumeragi_context_parameters(),
         )
         .with_consensus_meta()
         .consensus_fingerprint();
@@ -1597,8 +1597,8 @@ mod tests {
                     .expect("derive deterministic test mint-finality keys")
                 })
                 .collect();
-            self.with_sumeragi_v2_context_parameters(
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            self.with_sumeragi_context_parameters(
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
             )
             .with_kagemusha_mint_finality_genesis_parameters(
                 iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
@@ -2025,6 +2025,30 @@ mod tests {
         assert!(lanes.is_empty());
         assert!(dataspaces.is_empty());
         assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn checked_in_dev_profile_peer_configs_match_the_generator() {
+        let spec = &PROFILES[0];
+        assert_eq!(spec.slug, "iroha3-dev");
+        let peers = build_peers(spec).expect("build deterministic dev peers");
+        let genesis_key =
+            deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)
+                .expect("derive the dev profile genesis key");
+        for peer_index in 0..peers.len() {
+            let path = workspace_root()
+                .join("defaults/kagami")
+                .join(spec.slug)
+                .join(peer_config_file_name(peer_index));
+            let checked_in = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert_eq!(
+                checked_in,
+                render_peer_config(spec, &peers, peer_index, genesis_key.public_key()),
+                "{} must equal its `cargo xtask kagami-profiles` rendering",
+                path.display()
+            );
+        }
     }
 
     #[test]

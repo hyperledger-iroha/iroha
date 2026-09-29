@@ -46,7 +46,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::ConsensusMode,
+    block::consensus::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, ExecKv, ExecWitness},
@@ -14960,15 +14960,15 @@ fn bounded_global_committee_size(
     let configured = world
         .sumeragi_npos_parameters()
         .and_then(|params| usize::try_from(params.max_validators()).ok())
-        .unwrap_or(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+        .unwrap_or(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     let capped = available_candidates
         .min(configured)
-        .min(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
-    if capped < iroha_data_model::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT {
+        .min(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
+    if capped < iroha_data_model::block::consensus::MIN_VALIDATORS_PER_HEIGHT {
         return None;
     }
     let committee_size = capped - (capped - 1) % 3;
-    iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
+    iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
 #[cfg_attr(
@@ -14979,7 +14979,7 @@ fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Has
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
     Hash::new_from_chunks(&[
-        b"sumeragi-v2:npos-committee-seat:v1\0",
+        b"sumeragi:npos-committee-seat:v1\0",
         seed.as_slice(),
         epoch_bytes.as_slice(),
         peer_bytes.as_slice(),
@@ -16718,7 +16718,7 @@ mod sumeragi_timing_tests {
     use super::*;
     use std::{sync::Arc, time::Duration};
     #[test]
-    fn v2_block_cadence_reads_the_signed_genesis_value() {
+    fn block_cadence_reads_the_signed_genesis_value() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);

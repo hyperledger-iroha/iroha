@@ -32,8 +32,8 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::{
         BlockHeader,
-        consensus_v2::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
+        consensus::{
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, is_valid_committee_size,
         },
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
@@ -3461,7 +3461,7 @@ fn generate_raw_genesis(
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
     let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             localnet_kagemusha_mint_finality_genesis_parameters(peers)?,
         );
@@ -4666,7 +4666,7 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
         .wrap_err("failed to reload persisted genesis.json before signing")?;
     let genesis_key_pair =
         KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
-    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_context(
         persisted_genesis,
         &genesis_key_pair,
         Some(config),

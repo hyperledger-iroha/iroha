@@ -233,10 +233,18 @@ where
         Write::Prune(height) => bodies.prune_through(*height),
     }))
     .unwrap_or_else(|_| Err(std::io::Error::other("store panicked")));
-    result.map_err(|error| {
-        iroha_logger::warn!(%error, "sumeragi persistence failed; retrying");
-        write
-    })
+    match result {
+        Ok(()) => {
+            if let Write::Record(record) = &write {
+                super::audit::record_durable(record);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            iroha_logger::warn!(%error, "sumeragi persistence failed; retrying");
+            Err(write)
+        }
+    }
 }
 
 /// Append a log entry with a fresh store id: the id file first, then the entry (§7.4 rule 3).
