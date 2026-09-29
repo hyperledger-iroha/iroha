@@ -50,9 +50,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetContractAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<ContractAddress>(
             super::read_aos_field(bytes, &mut offset, flags)?,

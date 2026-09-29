@@ -631,6 +631,8 @@ fn validate_validator_config(config: &TonValidatorConfigV1) -> Option<()> {
     Some(())
 }
 
+/// TL serialization of a `tonNode.blockIdExt` (constructor, root hash and file hash) as signed
+/// by TON validators.
 pub fn ton_block_id_tl_bytes(block: TonBlockIdExtV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(68);
     push_u32_le(&mut out, TON_BLOCK_ID_TL_CONSTRUCTOR);
@@ -920,7 +922,7 @@ struct TonPrunedBranch {
 }
 
 /// Level mask, hashes and depths of a cell.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TonComputedCell {
     pub(crate) mask: u8,
     pub(crate) hashes: [H256; 4],
@@ -948,6 +950,8 @@ fn ton_read_sized_uint(bytes: &[u8], cursor: &mut usize, size: usize) -> Option<
     Some(value)
 }
 
+/// Bit length of a cell's data from its `d2` descriptor, or `None` when the data bytes or
+/// completion tag do not match the descriptor.
 pub fn ton_cell_serialized_bit_len(data_descriptor: u8, data: &[u8]) -> Option<usize> {
     if data_descriptor & 1 == 0 {
         let byte_len = usize::from(data_descriptor) / 2;
@@ -1168,6 +1172,7 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
     })
 }
 
+/// Parse a bounded `BoC` header and cell table, or `None` when it is malformed.
 #[expect(
     clippy::too_many_lines,
     reason = "one linear canonical BoC header and cell-table parser"
@@ -1357,6 +1362,7 @@ fn ton_reject_duplicate_subgraphs(boc: &TonBoc) -> Option<()> {
     Some(())
 }
 
+/// Encode the subgraph reachable from `root` as a canonical single-root `BoC`.
 pub fn encode_canonical_ton_boc(boc: &TonBoc, root: usize) -> Option<Vec<u8>> {
     let order = ton_canonical_cell_order(boc, root)?;
     ton_reject_duplicate_subgraphs(boc)?;
@@ -1515,6 +1521,7 @@ fn ton_boc_child_for_hash_level(
     ton_child_hash_depth(computed, child_level)
 }
 
+/// Compute every cell's level mask, per-level hashes and depths bottom-up.
 #[expect(
     clippy::too_many_lines,
     reason = "one bottom-up pass computing every level hash and depth per cell"

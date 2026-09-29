@@ -2733,7 +2733,6 @@ mod tests {
         );
     }
 }
-#[allow(dead_code)]
 mod bridge_filters_model {
     use crate::events::data::events::HasOrigin;
     use iroha_data_model_derive::model;

@@ -1,5 +1,5 @@
 #![allow(clippy::manual_div_ceil)]
-//! Ensure [u8; N] fields in packed-structs roundtrip and avoid per-element overhead.
+//! Ensure [u8; N] fields in derived structs roundtrip and avoid per-element overhead.
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, decode_from_reader, to_bytes};
 #[derive(
     Debug,

@@ -149,9 +149,11 @@ class CliCopyLifetimeTests(unittest.TestCase):
         original_node = self.artifact("iroha3d", b"shipping node retained")[0]
         order = []
         runs = []
+        inventory_cache = None
         real_run_stages = gate.run_stages
 
         def run_cli(harness, *args, **kwargs):
+            nonlocal inventory_cache
             self.assertEqual(harness, str(copy))
             self.assertTrue(copy.exists())
             if network:
@@ -162,7 +164,14 @@ class CliCopyLifetimeTests(unittest.TestCase):
             # Source Cargo outputs may already have changed; use only the copy.
             raw_cli.write_bytes(b"replacement from unrelated later Cargo graph")
             runs.append(harness)
-            self.assertEqual(kwargs, {"batch": True})
+            self.assertEqual(set(kwargs), {"batch", "inventories"})
+            self.assertIs(kwargs["batch"], True)
+            inventory_cache = kwargs["inventories"]
+            expected_inventory = {str(copy): "cli_fixture: test\n"}
+            if network:
+                expected_inventory[copies["network"]] = "".join(
+                    name + ": test\n" for _, names in gate.NETWORK_STAGES for name in names)
+            self.assertEqual(inventory_cache, expected_inventory)
             return real_run_stages(harness, *args, **kwargs)
 
         def build(*args, **kwargs):
@@ -172,7 +181,9 @@ class CliCopyLifetimeTests(unittest.TestCase):
             return copies
 
         def four_peer(*args, **kwargs):
-            self.assertEqual(kwargs, {"harness": copies["network"], "stages": gate.NETWORK_STAGES})
+            self.assertEqual(kwargs, {"harness": copies["network"], "stages": gate.NETWORK_STAGES,
+                                      "inventories": inventory_cache})
+            self.assertIs(kwargs["inventories"], inventory_cache)
             order.append("production-build-and-four-peer")
             self.assertFalse(copy.exists(), "release completed CLI copy before production graph")
             self.assertTrue(executed.exists())

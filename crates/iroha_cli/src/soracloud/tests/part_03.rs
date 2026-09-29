@@ -282,7 +282,7 @@ fn prepared_soracloud_draft_quotes_signed_queue_plan_admission() {
     let request = server
         .requests()
         .into_iter()
-        .find(|request| request.path == iroha_torii_shared::uri::FEES_QUOTE)
+        .find(|request| request.path == iroha_torii_shared::route_catalog::fees::QUOTE_PATH)
         .expect("exact mutation fee quote request");
     let quoted: FeeQuoteWireRequest =
         json::from_slice(&request.body).expect("decode mutation fee quote request");
@@ -359,7 +359,7 @@ fn prepared_inrou_pin_preserves_exact_sponsor_fee_identity() {
     let requests = server.requests();
     let quote_request = requests
         .iter()
-        .find(|request| request.path == iroha_torii_shared::uri::FEES_QUOTE)
+        .find(|request| request.path == iroha_torii_shared::route_catalog::fees::QUOTE_PATH)
         .expect("exact pin fee-quote request");
     let quoted: FeeQuoteWireRequest =
         json::from_slice(&quote_request.body).expect("decode pin fee-quote request");

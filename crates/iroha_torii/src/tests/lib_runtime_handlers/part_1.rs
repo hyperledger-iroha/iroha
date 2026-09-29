@@ -105,7 +105,7 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
     let app = mk_app_state_for_tests();
     let router = axum::Router::new()
         .route(
-            iroha_torii_shared::uri::API_VERSION,
+            route_catalog::core::API_VERSION.path(),
             axum::routing::get(handler_version),
         )
         .layer(axum::middleware::from_fn(capture_response_format))
@@ -115,7 +115,7 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
         .with_state(Arc::clone(&app));
     let request = |accept| {
         let mut request = axum::http::Request::builder()
-            .uri(iroha_torii_shared::uri::API_VERSION)
+            .uri(route_catalog::core::API_VERSION.path())
             .header(axum::http::header::ACCEPT, accept)
             .body(Body::empty())
             .expect("version request");
@@ -2788,8 +2788,7 @@ async fn debug_witness_requires_a_developer_telemetry_profile() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn debug_witness_operator_and_telemetry_profile_matrix() {
-    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
-        &[route_catalog::telemetry::DEBUG_WITNESS];
+    const ROUTES: &[route_catalog::RouteDescriptor] = &[route_catalog::telemetry::DEBUG_WITNESS];
     let descriptor = &ROUTES[0];
     let uri = descriptor
         .path()

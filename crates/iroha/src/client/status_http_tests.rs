@@ -8,7 +8,7 @@ use crate::{
     Error, StatusFailureReason, blocking,
     http::{Method, Response, TransportRequest},
 };
-use iroha_torii_shared::{status::Status as NodeStatus, uri};
+use iroha_torii_shared::{route_catalog, status::Status as NodeStatus};
 use std::{
     sync::{
         Arc, Mutex,
@@ -96,10 +96,7 @@ async fn status_uses_async_transport_and_one_catalog_route_with_exact_negotiatio
     );
     let request = &requests[0];
     assert_eq!(request.method, Method::GET);
-    assert_eq!(
-        request.url.path(),
-        iroha_torii_shared::route_catalog::diagnostic::STATUS.path()
-    );
+    assert_eq!(request.url.path(), route_catalog::diagnostic::STATUS.path());
     assert!(request.url.query().is_none());
     assert!(request.body.is_empty());
     assert_eq!(request.max_response_bytes, status::MAX_RESPONSE_BYTES);
@@ -450,7 +447,7 @@ async fn version_uses_the_canonical_text_contract_and_exact_size_limit() {
     );
     assert_eq!(client.status().version().await.unwrap().len(), 16 * 1024);
     let request = requests.lock().unwrap().pop().unwrap();
-    assert_eq!(request.url.path(), uri::API_VERSION);
+    assert_eq!(request.url.path(), route_catalog::core::API_VERSION.path());
     assert_eq!(request.max_response_bytes, 16 * 1024);
     assert_eq!(request.timeout, None);
     assert!(request.body.is_empty());
@@ -487,11 +484,13 @@ async fn version_uses_the_canonical_text_contract_and_exact_size_limit() {
 fn blocking_status_uses_the_shared_async_implementation_and_rejects_async_runtime() {
     let (client, requests, _) = attach(
         |request| {
-            Ok(if request.url.path() == uri::STATUS {
-                status_response()
-            } else {
-                response(b" 1\n".to_vec(), "text/plain")
-            })
+            Ok(
+                if request.url.path() == route_catalog::diagnostic::STATUS.path() {
+                    status_response()
+                } else {
+                    response(b" 1\n".to_vec(), "text/plain")
+                },
+            )
         },
         Duration::ZERO,
         Duration::ZERO,

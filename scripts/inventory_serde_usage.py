@@ -295,7 +295,7 @@ def summarize(matches: Sequence[Match]) -> dict:
 
 def write_json(path: Path, matches: Sequence[Match], allowlist: Sequence[str], command: str) -> None:
     payload = {
-        "generated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "command": command,
         "root": REPO_ROOT.name,
         "allowlist": list(allowlist) if allowlist else [],

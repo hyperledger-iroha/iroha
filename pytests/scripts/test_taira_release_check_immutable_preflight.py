@@ -39,19 +39,28 @@ class ImmutableOwnershipPreflightTests(unittest.TestCase):
                   for name in ("mv-map", "concread")}
         env = {"CARGO": "/unused/cargo", "CARGO_HOME": "/isolated",
                "CARGO_TARGET_DIR": "/warm"}
+        expected_inventories = {copies[name]: name + "_test: test\n" for name in scoped}
+
+        def listing(harness, fixture_root, runtime_env, lock_fds):
+            events.append("list:" + Path(harness).name)
+            self.assertEqual(fixture_root, Path("/warm"))
+            self.assertEqual(runtime_env["IROHA_GIT_COMMIT_HASH"], "a" * 40)
+            self.assertEqual(lock_fds, (77,))
+            return expected_inventories[harness]
 
         def compile_batch(_root, _env, *, harnesses, lock_fds):
             events.append("compile:" + ",".join(harnesses))
             self.assertEqual(lock_fds, (77,))
             return copies
 
-        def run(harness, fixture_root, runtime_env, stages, lock_fds):
+        def run(harness, fixture_root, runtime_env, stages, lock_fds, *, inventories):
             name = Path(harness).name
             events.append("run:" + name)
             self.assertEqual(fixture_root, Path("/warm"))
             self.assertEqual(runtime_env["IROHA_GIT_COMMIT_HASH"], "a" * 40)
             self.assertEqual(lock_fds, (77,))
             self.assertEqual(stages, scoped[name])
+            self.assertEqual(inventories, expected_inventories)
             if fail and name == "mv-map":
                 raise gate.SelectedRegressionFailures(["map ownership failed"])
 
@@ -69,6 +78,7 @@ class ImmutableOwnershipPreflightTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "check_test_harnesses",
                                       side_effect=lambda *_a, **_k: events.append("full-metadata")))
             stack.enter_context(patch.object(gate, "compile_test_harnesses", side_effect=compile_batch))
+            stack.enter_context(patch.object(gate, "native_test_listing", side_effect=listing))
             stack.enter_context(patch.object(gate, "run_stages", side_effect=run))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             if fail:
@@ -82,13 +92,15 @@ class ImmutableOwnershipPreflightTests(unittest.TestCase):
 
     def test_ownership_runs_once_in_the_complete_graph_before_later_work(self):
         self.assertEqual(self.run_fixture(), [
-            "full-metadata", "compile:mv-map,concread", "run:mv-map", "run:concread",
+            "full-metadata", "compile:mv-map,concread", "list:mv-map", "list:concread",
+            "run:mv-map", "run:concread",
             "release:mv-map", "release:concread", "close",
         ])
 
     def test_ownership_failure_stops_immediately_and_closes_the_complete_graph(self):
         self.assertEqual(self.run_fixture(fail=True), [
-            "full-metadata", "compile:mv-map,concread", "run:mv-map", "close",
+            "full-metadata", "compile:mv-map,concread", "list:mv-map", "list:concread",
+            "run:mv-map", "close",
         ])
 
     def test_both_scopes_select_all_five_portable_ownership_harnesses(self):

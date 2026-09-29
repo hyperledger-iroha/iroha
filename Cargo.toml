@@ -229,9 +229,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("compression"))',
     'cfg(feature, values("crc-key-hash"))',
     'cfg(feature, values("cuda-stage1"))',
-    'cfg(feature, values("derive"))',
     'cfg(feature, values("gpu-compression"))',
-    'cfg(feature, values("iroha_schema"))',
     'cfg(feature, values("iroha-core-tests"))',
     'cfg(feature, values("halo2-dev-tests"))',
     'cfg(feature, values("json"))',
@@ -246,7 +244,6 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("simd-accel"))',
     'cfg(feature, values("simdutf8-validate"))',
     'cfg(feature, values("stage1-validate"))',
-    'cfg(feature, values("std"))',
     'cfg(feature, values("transparent_api"))',
     'cfg(feature, values("trybuild-tests"))',
     # It is set by `cargo-llvm-cov`

@@ -5653,12 +5653,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn downgrade_remediator_switches_proxy_mode() {
         test_logger();
-        let proxy_cfg = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            telemetry_label: Some("remediation-test".into()),
-            proxy_mode: ProxyMode::Bridge,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut proxy_cfg = LocalQuicProxyConfig::default();
+        proxy_cfg.bind_addr = "127.0.0.1:0".into();
+        proxy_cfg.telemetry_label = Some("remediation-test".into());
+        proxy_cfg.proxy_mode = ProxyMode::Bridge;
         let initial_handle = match spawn_local_quic_proxy(proxy_cfg.clone()) {
             Ok(handle) => handle,
             Err(ProxyError::QuinnEndpoint(message)) if should_skip_socket_permission(&message) => {
@@ -9186,11 +9184,9 @@ mod tests {
             request_timeout: Duration::from_secs(2),
         };
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let proxy_cfg = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut proxy_cfg = LocalQuicProxyConfig::default();
+        proxy_cfg.bind_addr = "127.0.0.1:0".into();
+        proxy_cfg.proxy_mode = ProxyMode::Bridge;
         let initial_handle = match spawn_local_quic_proxy(proxy_cfg.clone()) {
             Ok(handle) => handle,
             Err(ProxyError::QuinnEndpoint(message)) if should_skip_socket_permission(&message) => {

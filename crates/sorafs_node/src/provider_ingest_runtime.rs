@@ -48,9 +48,9 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionPayload},
 };
 #[cfg(test)]
-use norito::decode_from_bytes_with_limits;
-#[cfg(test)]
 use norito::codec::Encode as _;
+#[cfg(test)]
+use norito::decode_from_bytes_with_limits;
 use norito::{
     core::DecodeLimits,
     decode_canonical_with_limits,
@@ -67,11 +67,11 @@ use sorafs_manifest::capacity::{
     MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
 };
 #[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
 use std::io;
 #[cfg(test)]
 use std::io::Read;
-#[cfg(test)]
-use std::cell::Cell;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,

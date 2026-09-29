@@ -977,16 +977,8 @@ mod model {
             )
         }
     }
-    pub(super) const QUERY_BOX_PACKED_STRUCT_ERROR: &str = "packed-struct QueryBox layout";
-    fn query_box_tuple_flags() -> Result<u8, norito::core::Error> {
-        let flags = norito::core::effective_decode_flags()
-            .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return Err(norito::core::Error::UnsupportedFeature(
-                QUERY_BOX_PACKED_STRUCT_ERROR,
-            ));
-        }
-        Ok(flags)
+    fn query_box_tuple_flags() -> u8 {
+        norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
     }
     fn query_box_encoded_len(name: &str, payload_len: usize, flags: u8) -> Option<usize> {
         let name_len = name
@@ -1011,7 +1003,7 @@ mod model {
                     query.type_name_key()
                 ))
             })?;
-            let flags = query_box_tuple_flags()?;
+            let flags = query_box_tuple_flags();
             let payload_len = if let Some(exact) = query.encoded_payload_len_exact() {
                 exact
             } else {
@@ -1062,7 +1054,7 @@ mod model {
         fn encoded_len_exact(&self) -> Option<usize> {
             let query = &**self;
             let name = query_wire_id(query.type_name_key())?;
-            let flags = query_box_tuple_flags().ok()?;
+            let flags = query_box_tuple_flags();
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
@@ -1078,7 +1070,6 @@ mod model {
         fn try_deserialize(
             archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
         ) -> Result<Self, norito::core::Error> {
-            query_box_tuple_flags()?;
             let (name, bytes): (String, Vec<u8>) =
                 norito::core::DeserializePayload::try_deserialize(archived.cast())?;
             decode_registered_query(&name, &bytes).ok_or_else(|| {
@@ -2587,9 +2578,6 @@ where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return norito::core::SerializePayload::serialize(self.0, writer);
-        }
         let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
@@ -2601,9 +2589,6 @@ where
         self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() {
-            return norito::core::SerializePayload::encoded_len_exact(self.0);
-        }
         let mut total = 0_usize;
         let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];

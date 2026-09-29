@@ -1104,10 +1104,6 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     /// The intervening q-mask, small-sign, range-carry, and comparator owners
     /// are consumed here only after their later descendants have verified.
     /// No alias/predecessor tuple or claimed-successor parts can escape.
-    #[allow(
-        dead_code,
-        reason = "the one-argument membership handoff consumes this exact transition"
-    )]
     pub(super) fn verify_claimed_direct_v2(
         self,
     ) -> Result<

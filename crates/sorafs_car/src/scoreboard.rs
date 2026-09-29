@@ -5,11 +5,11 @@
 //! instances that the orchestrator can schedule deterministically. Each run
 //! evaluates capability constraints, honouring range and stream budgets, and
 //! applies the weighting formula described in `specs/sorafs_orchestrator_plan.md`.
-use crate::set_no_follow_flag;
 use crate::{
     CarBuildPlan, ChunkFetchSpec,
     multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
 };
+use crate::{ensure_output_parent_dir, set_no_follow_flag, validate_output_path};
 use norito::json::{Map, Number, Value, to_string_pretty};
 use std::{
     collections::HashMap,
@@ -288,7 +288,7 @@ fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> 
 }
 fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
     validate_output_path(path)?;
-    ensure_parent_dir(path)?;
+    ensure_output_parent_dir(path)?;
     validate_output_path(path)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -315,82 +315,6 @@ fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
         )));
     }
     Ok(file)
-}
-fn ensure_parent_dir(path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "failed to create output parent `{}`: {err}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
-    Ok(())
-}
-fn validate_output_path(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::other(format!(
-                    "output `{}` must not be a symlink",
-                    path.display()
-                )));
-            }
-            if metadata.is_dir() {
-                return Err(io::Error::other(format!(
-                    "output `{}` must not be a directory",
-                    path.display()
-                )));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(io::Error::new(
-                err.kind(),
-                format!("failed to inspect output `{}`: {err}", path.display()),
-            ));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        )));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        )));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "failed to inspect output parent `{}`: {err}",
-                            ancestor.display()
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
 }
 /// Build a scoreboard for the supplied manifest and provider metadata.
 pub fn build_scoreboard(

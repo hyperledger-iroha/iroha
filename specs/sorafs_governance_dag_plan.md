@@ -170,7 +170,8 @@ receiver-policy, replay-namespace, and replica-set identities. The only V1
 postures are
 `GovernanceDagRequestIngressEnforcementV1::ExclusiveAuthenticatedReceiver` and
 `GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry`.
-`GovernanceDagHttpRequestReceiverV1` consumes one finalized typed HTTP request,
+`GovernanceDagHttpRequestReceiverV1` (compiled only for `sorafs_node` tests until a
+qualified ingress consumes it) consumes one finalized typed HTTP request,
 requires exactly one endpoint-matching `Host` for HTTP/1.x, validates any URI
 authority against the same qualified origin, and rejects ambiguous framing or
 unsigned semantic headers. It then verifies the exact eight authentication

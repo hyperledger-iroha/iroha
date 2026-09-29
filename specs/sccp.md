@@ -2380,9 +2380,8 @@ allows proposing. Its grant and revoke rule is `OnlyGenesis`, as for
 operator's proposing account), and after genesis nobody can grant or revoke
 it. `CanManageSccpGovernance`, which today is the only grantor, is deleted,
 and no other manager role replaces it. A holder can only put proposals before
-the Parliament and pay their fees; bonded citizens can always propose. The
-default executor gets allow-visitors for the SCCP instructions; core enforces
-every SCCP rule. Implicit account registrations (a bridge key's account,
+the Parliament and pay their fees; bonded citizens can always propose. Core
+enforces every SCCP rule. Implicit account registrations (a bridge key's account,
 §4.2.2; a recipient at settlement, refund or stranded release, §4.12.3) have
 the effect and validation-fee DS classification of `Register<Account>`.
 
@@ -3767,7 +3766,7 @@ sign|submit` and `bridge-key register` commands. None may be added.
   visitors. `CanProposeSccpRouteGovernance` is kept, and its grant and revoke
   rule, which today requires `CanManageSccpGovernance`, becomes genesis-only
   in Core (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
-  `crates/iroha_core/src/executor_initial_permission_authority.rs`). The executor-level
+  `crates/iroha_core/src/executor.rs`). The executor-level
   `SetParameter` deny for the old SCCP registry parameter is replaced by a
   core rule that no `SetParameter` touches SCCP state.
 - **`iroha` client and `iroha_cli`:** the proof-request and submit methods;

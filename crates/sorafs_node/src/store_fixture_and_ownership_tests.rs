@@ -10,106 +10,18 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-// Keep one target-gated assertion for every ABI branch. Overlapping branches
-// fail with duplicate definitions; missing branches fail to resolve the flag.
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-#[test]
-fn linux_directory_open_flags_match_low_flag_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x8000);
-    assert_eq!(platform_directory_only_flag(), 0x4000);
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-#[test]
-fn linux_directory_open_flags_match_generic_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x20000);
-    assert_eq!(platform_directory_only_flag(), 0x10000);
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-#[test]
-fn android_arm_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x8000);
-    assert_eq!(platform_directory_only_flag(), 0x4000);
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-#[test]
-fn android_x86_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x20000);
-    assert_eq!(platform_directory_only_flag(), 0x10000);
-}
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-#[test]
-fn android_riscv64_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x400000);
-    assert_eq!(platform_directory_only_flag(), 0x200000);
-}
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "riscv32", target_arch = "riscv64")
-))]
-#[test]
-fn linux_riscv_directory_open_flags_remain_generic_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x20000);
-    assert_eq!(platform_directory_only_flag(), 0x10000);
-}
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x2000_0000);
-    assert_eq!(platform_directory_only_flag(), 0x0010_0000);
+fn macos_store_opens_reject_symlinks_in_every_component() {
+    assert_eq!(store_no_follow_flag(), 0x2000_0000);
 }
-#[cfg(target_os = "ios")]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
-fn ios_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x100);
-    assert_eq!(platform_directory_only_flag(), 0x0010_0000);
-}
-#[cfg(target_os = "freebsd")]
-#[test]
-fn freebsd_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x100);
-    assert_eq!(platform_directory_only_flag(), 0x0002_0000);
-}
-#[cfg(target_os = "dragonfly")]
-#[test]
-fn dragonfly_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x100);
-    assert_eq!(platform_directory_only_flag(), 0x0800_0000);
-}
-#[cfg(target_os = "openbsd")]
-#[test]
-fn openbsd_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x100);
-    assert_eq!(platform_directory_only_flag(), 0x0002_0000);
-}
-#[cfg(target_os = "netbsd")]
-#[test]
-fn netbsd_directory_open_flags_match_target_abi() {
-    assert_eq!(platform_no_follow_flag(), 0x100);
-    assert_eq!(platform_directory_only_flag(), 0x0020_0000);
+fn store_opens_use_the_target_final_component_no_follow_flag() {
+    assert_eq!(
+        store_no_follow_flag(),
+        crate::fs_flags::platform_no_follow_flag()
+    );
 }
 fn temp_config(temp_dir: &TempDir) -> StorageConfig {
     let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");

@@ -865,7 +865,8 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
     "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
     "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
-    "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
+    "queue::tests::strict_queue_plan_journal_admission_replays_exact_transaction_after_restart",
+    "queue::tests::strict_queue_plan_journal_full_write_ambiguity_replays_exact_put",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
 )), ("fee sponsor activation and public fee admission", (
     "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
@@ -892,7 +893,7 @@ CORE_ADMISSION_STARTUP_STAGES += (("current Prepare recovery and durable validat
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared merge budget", (
     "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
-    "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
+    "queue::tests::current_payload_selects_full_block_gas_call_with_idle_catalog_route",
     "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
     "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
     "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
@@ -1766,6 +1767,9 @@ DAEMON_STAGES += (("current certificate beacon admission before custody", (
 
 # Production beacon setup must fail before unrelated tests and network fixtures.
 CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
+    'state::tests::component_commit_topology_preserves_scheduled_network_authority',
+    'state::tests::native_admission_fixture_binds_final_controls_results_signature_and_body',
+    'state::tests::native_economic_executor_transfers_once_across_shared_roles_and_drops_atomically',
     'state::tests::autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once',
     'state::tests::autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift',
     'sumeragi::v2_candidate::tests::proposal_work_gate_rejects_beacon_pulse_only',
@@ -2521,7 +2525,7 @@ CORE_QUEUE_PLAN_CONNECTION_STAGES = (('original global QueuePlan admission acros
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+    'queue::tests::current_ordinary_fifo_survives_committed_height_and_replay',
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
     'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',

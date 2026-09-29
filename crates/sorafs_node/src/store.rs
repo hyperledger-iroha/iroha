@@ -4,6 +4,8 @@
 //! layout, verified Proof-of-Retrievability (PoR) recovery, canonical Proof-of-Data-Possession
 //! (PDP) commitments, and quota enforcement derived from Torii storage configuration.
 #![allow(unexpected_cfgs)]
+#[cfg(unix)]
+use crate::fs_flags::platform_directory_only_flag;
 use crate::{config::StorageConfig, scheduler::StorageSchedulersRuntime};
 use blake3::Hash;
 use hex::ToHex;
@@ -5384,166 +5386,23 @@ fn validate_atomic_parent_ancestry(parent: &Path) -> io::Result<()> {
 }
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
+    options.custom_flags(store_no_follow_flag());
 }
 #[cfg(unix)]
 fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
+    options.custom_flags(store_no_follow_flag() | platform_directory_only_flag());
 }
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!("SoraFS filesystem flags are not qualified for this Android architecture");
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("SoraFS filesystem flags are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
+/// Store opens use `O_NOFOLLOW_ANY` on macOS: unlike `O_NOFOLLOW`, it rejects a symlink in every
+/// path component during the open syscall and closes the validation/open race.
 #[cfg(target_os = "macos")]
-fn platform_no_follow_flag() -> i32 {
-    // Unlike O_NOFOLLOW, O_NOFOLLOW_ANY rejects a symlink in every path
-    // component during the open syscall and closes the validation/open race.
+fn store_no_follow_flag() -> i32 {
     0x2000_0000
 }
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-fn platform_directory_only_flag() -> i32 {
-    0x200000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn platform_directory_only_flag() -> i32 {
-    0x0010_0000
-}
-#[cfg(target_os = "freebsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "dragonfly")]
-fn platform_directory_only_flag() -> i32 {
-    0x0800_0000
-}
-#[cfg(target_os = "openbsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "netbsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0020_0000
+#[cfg(all(unix, not(target_os = "macos")))]
+fn store_no_follow_flag() -> i32 {
+    crate::fs_flags::platform_no_follow_flag()
 }
 fn write_manifest_metadata(
     record: &StoredManifestRecord,

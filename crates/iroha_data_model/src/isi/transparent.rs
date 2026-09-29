@@ -512,9 +512,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Log {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let level = super::decode_aos_canonical_field::<Level>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -654,9 +651,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetParameter {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let parameter = super::decode_aos_canonical_field::<Parameter>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -678,9 +672,6 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O::Id>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -710,9 +701,6 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O::Id>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -733,9 +721,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetKeyValue {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let asset = super::decode_aos_canonical_field::<AssetId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -760,9 +745,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveAssetKeyValue {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let asset = super::decode_aos_canonical_field::<AssetId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -783,9 +765,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AddSignatory {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let account = super::decode_aos_canonical_field::<AccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -806,9 +785,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSignatory {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let account = super::decode_aos_canonical_field::<AccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -829,9 +805,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountQuorum {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let account = super::decode_aos_canonical_field::<AccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -852,9 +825,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::SetKeyValueBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -901,9 +871,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::RemoveKeyValueBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -956,9 +923,6 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -991,9 +955,6 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1020,9 +981,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::GrantBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -1060,9 +1018,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::RevokeBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes
@@ -1102,9 +1057,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExecuteTrigger {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let trigger = super::decode_aos_canonical_field::<TriggerId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1125,9 +1077,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Upgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let executor = super::decode_aos_canonical_field::<Executor>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1144,9 +1093,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CustomInstruction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let payload = super::decode_aos_canonical_field::<Json>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1163,9 +1109,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for InvalidInstruction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let wire_id = super::decode_aos_canonical_field::<String>(
             super::read_aos_field(bytes, &mut offset, flags)?,

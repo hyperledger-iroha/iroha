@@ -388,9 +388,6 @@ impl crate::seal::Instruction for SettleAtomic {}
 impl<'a> DecodeFromSlice<'a> for SettleAtomic {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let flags = settlement_decode_flags();
-        if flags & ncore::header_flags::PACKED_STRUCT != 0 {
-            return super::super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0;
         macro_rules! field {
             ($ty:ty) => {

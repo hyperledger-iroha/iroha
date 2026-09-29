@@ -647,7 +647,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             && !schemas.contains_key("GovernanceZkPublicInputsV1"),
         "legacy ZK ballot schemas must not enter the first-release OpenAPI"
     );
-    let capabilities_path = iroha_torii_shared::uri::GOV_CAPABILITIES;
+    let capabilities_path = route_catalog::runtime_governance::GOV_CAPABILITIES.path();
     let capabilities_operation = openapi_operation(&document, capabilities_path, "get");
     assert_eq!(
         operation_response_schema_ref(capabilities_operation, "200", capabilities_path),
@@ -1110,56 +1110,56 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
 
     let routes = [
         (
-            iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
+            route_catalog::runtime_governance::GOV_PROPOSE_DEPLOY.path(),
             "post",
             "DeployContractProposalDraftRequestV1",
             "DeployContractProposalDraftResponseV1",
             "write",
         ),
         (
-            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+            route_catalog::runtime_governance::GOV_PROPOSE_SCCP.path(),
             "post",
             "SccpRouteGovernanceProposalDraftRequestV1",
             "SccpRouteGovernanceProposalDraftResponseV1",
             "write",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_ATTEMPT_DRAFT,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path(),
             "post",
             "GovernanceParliamentAttemptDraftRequestV1",
             "GovernanceParliamentAttemptDraftResponseV1",
             "write",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_ATTEMPT_READ,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ.path(),
             "get",
             "",
             "GovernanceParliamentAttemptReadResponseV1",
             "read",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ.path(),
             "get",
             "",
             "GovernanceParliamentTimedOvnCastingContextResponseV1",
             "read",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ.path(),
             "get",
             "",
             "GovernanceParliamentTleReleaseContextResponseV1",
             "read",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE.path(),
             "post",
             "",
             "GovernanceParliamentTlePartialReleaseShareV1",
             "write",
         ),
         (
-            iroha_torii_shared::uri::GOV_PARLIAMENT_TRANSITION_DRAFT,
+            route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path(),
             "post",
             "GovernanceParliamentTransitionDraftRequestV1",
             "GovernanceParliamentTransitionDraftResponseV1",
@@ -1225,7 +1225,8 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         assert!(response_headers.contains_key("Vary"));
     }
 
-    let casting_proof_path = iroha_torii_shared::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF;
+    let casting_proof_path =
+        route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF.path();
     let casting_proof = openapi_operation(&document, casting_proof_path, "post");
     assert!(casting_proof.get("x-iroha-canonical-auth-v1").is_some());
     assert_eq!(

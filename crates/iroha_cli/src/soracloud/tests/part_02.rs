@@ -2593,7 +2593,9 @@ impl MockHttpServer {
     }
 }
 fn mock_fee_quote_response(request: &CapturedHttpRequest) -> Option<MockHttpResponse> {
-    if request.method != "POST" || request.path != iroha_torii_shared::uri::FEES_QUOTE {
+    if request.method != "POST"
+        || request.path != iroha_torii_shared::route_catalog::fees::QUOTE_PATH
+    {
         return None;
     }
     let request: FeeQuoteWireRequest = json::from_slice(&request.body).ok()?;
@@ -2763,7 +2765,8 @@ fn mock_http_server_quotes_the_exact_requested_fee_intent() {
         } if quoted_authority == &authority
     ));
     assert!(server.requests().iter().any(|request| {
-        request.method == "POST" && request.path == iroha_torii_shared::uri::FEES_QUOTE
+        request.method == "POST"
+            && request.path == iroha_torii_shared::route_catalog::fees::QUOTE_PATH
     }));
 }
 

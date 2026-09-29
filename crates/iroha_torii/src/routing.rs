@@ -9548,11 +9548,14 @@ mod lane_admission_latency_tests {
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         let before = histogram.get_sample_count();
         observe_lane_admission_latency(
             &gate,
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             LaneId::SINGLE,
             0.25,
         );
@@ -29734,7 +29737,7 @@ mod sorafs_capacity_tests {
             Arc::clone(&state),
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await;
         assert!(
@@ -45182,13 +45185,13 @@ mod validation_fee_torii_ingress_tests {
         let body = norito::to_bytes(&payloads).expect("encode transaction batch payloads");
         let router = axum::Router::new()
             .route(
-                iroha_torii_shared::uri::TRANSACTIONS_BATCH,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
                 axum::routing::post(crate::handler_post_transactions_batch),
             )
             .with_state(app);
         let request = axum::http::Request::builder()
             .method(axum::http::Method::POST)
-            .uri(iroha_torii_shared::uri::TRANSACTIONS_BATCH)
+            .uri(iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path())
             .header(
                 axum::http::header::CONTENT_TYPE,
                 crate::utils::NORITO_MIME_TYPE,
@@ -45821,14 +45824,17 @@ mod lane_admission_metrics_tests {
             state,
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await
         .expect("ingress succeeds");
         let metrics = telemetry.metrics().await;
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         assert!(
             histogram.get_sample_count() >= 1,
             "expected at least one latency observation"
@@ -46077,7 +46083,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("warmup transaction should be admitted");
@@ -46104,7 +46110,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("transaction should be admitted");

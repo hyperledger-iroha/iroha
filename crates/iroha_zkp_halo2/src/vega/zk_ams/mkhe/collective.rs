@@ -997,7 +997,6 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     ///
     /// This method cannot mint a persistent witness binding.  The complete
     /// CPK relation verifier remains the sole authority for that capability.
-    #[allow(dead_code)]
     pub(super) fn prove_state_owned_cpk_secret_membership_v1<R: ProofRandomSource>(
         &mut self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -1059,7 +1058,6 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         )
     }
     /// Admit the move-only party binding atomically emitted with the verified set.
-    #[allow(dead_code)]
     pub(super) fn admit_verified_cpk_binding(
         &mut self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -1134,7 +1132,6 @@ impl ZkAmsMkheCollectivePartyStateV1 {
     }
     /// Borrow the cached capability for a specific consumer.  Absence is a
     /// release blocker, never a request to accept a raw digest fallback.
-    #[allow(dead_code)]
     pub(super) fn persistent_secret_binding_for(
         &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2643,17 +2640,9 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
         }
         Ok(())
     }
-    #[allow(
-        dead_code,
-        reason = "used by the private fail-closed collective evaluated-key runtime"
-    )]
     pub(super) const fn constant(&self) -> &RnsPolynomial {
         &self.constant
     }
-    #[allow(
-        dead_code,
-        reason = "used by the private fail-closed collective evaluated-key runtime"
-    )]
     pub(super) const fn linear(&self) -> &RnsPolynomial {
         &self.linear
     }

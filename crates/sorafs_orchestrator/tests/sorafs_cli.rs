@@ -176,7 +176,6 @@ fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 torii_url = "{torii_url}"
 network_id = "{TEST_NETWORK_ID_LITERAL}"
-
 [account]
 public_key = "{public_key}"
 private_key = "{private_key}"
@@ -207,7 +206,6 @@ fn write_deploy_client_config_with_chain(
 chain = "{chain}"
 torii_url = "{torii_url}"
 network_id = "{TEST_NETWORK_ID_LITERAL}"
-
 [account]
 public_key = "{public_key}"
 private_key = "{private_key}"

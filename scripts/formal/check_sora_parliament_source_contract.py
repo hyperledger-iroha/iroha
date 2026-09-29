@@ -1215,10 +1215,6 @@ def main() -> int:
             "crates/iroha_core/src/queue.rs",
             ("Executable::IvmProved(proved)",),
         ),
-        (
-            "crates/iroha_data_model/src/visit/mod.rs",
-            ("Executable::IvmProved(proved)", "visitor.visit_ivm(&proved.bytecode)"),
-        ),
     ):
         require_all(ivm_path, read(ivm_path), bindings)
     torii_path = "crates/iroha_torii/src/lib.rs"

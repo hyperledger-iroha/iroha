@@ -18,7 +18,7 @@ use iroha_data_model::NetworkId;
 use iroha_torii::{OnlinePeersProvider, TestApiRouterRuntime, Torii};
 use iroha_torii_shared::{
     account_capabilities::{ACCOUNT_CAPABILITIES_MAX_BYTES_V1, AccountCapabilitiesV1},
-    uri,
+    route_catalog,
 };
 use norito::json::Value;
 use tower::ServiceExt as _;
@@ -81,7 +81,7 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
         .router()
         .oneshot(
             Request::builder()
-                .uri(uri::ACCOUNTS_CAPABILITIES)
+                .uri(route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path())
                 .body(Body::empty())
                 .expect("credential-free bootstrap GET"),
         )
@@ -129,19 +129,19 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
         ),
         (
             "GET",
-            uri::ACCOUNTS_CAPABILITIES,
+            route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path(),
             vec![b'x'],
             StatusCode::PAYLOAD_TOO_LARGE,
         ),
         (
             "GET",
-            uri::ACCOUNTS_CAPABILITIES,
+            route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path(),
             vec![b'x'; ACCOUNT_CAPABILITIES_MAX_BYTES_V1 + 1],
             StatusCode::PAYLOAD_TOO_LARGE,
         ),
         (
             "POST",
-            uri::ACCOUNTS_CAPABILITIES,
+            route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path(),
             Vec::new(),
             StatusCode::METHOD_NOT_ALLOWED,
         ),
@@ -176,7 +176,7 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
         .router()
         .oneshot(
             Request::builder()
-                .uri(uri::ACCOUNTS_CAPABILITIES)
+                .uri(route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path())
                 .body(Body::empty())
                 .expect("credential-free protected listener request"),
         )
@@ -190,7 +190,8 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
 #[test]
 fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contract() {
     let document = iroha_torii::openapi::generate_spec();
-    let operation = &document["paths"][uri::ACCOUNTS_CAPABILITIES]["get"];
+    let operation =
+        &document["paths"][route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path()]["get"];
     assert_eq!(
         operation["operationId"].as_str(),
         Some("getAccountCapabilities")

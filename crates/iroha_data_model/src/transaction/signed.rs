@@ -611,28 +611,7 @@ mod model {
     #[display("ExecutionStep")]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
-// Keep explicit slice decoders for hot ingress paths. The generic derived
-// decoders regressed on versioned payloads carrying adaptive Norito bodies.
-fn decode_signed_transaction_with_cursor(
-    bytes: &[u8],
-) -> Result<(model::SignedTransaction, usize), norito::core::Error> {
-    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = <model::SignedTransaction as norito::codec::Decode>::decode(&mut cursor)?;
-    let used =
-        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-    Ok((decoded, used))
-}
-fn decode_transaction_payload_with_cursor(
-    bytes: &[u8],
-) -> Result<(model::TransactionPayload, usize), norito::core::Error> {
-    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = <model::TransactionPayload as norito::codec::Decode>::decode(&mut cursor)?;
-    let used =
-        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-    Ok((decoded, used))
-}
+// Keep explicit slice decoders for hot ingress paths.
 fn read_aos_field<'a>(
     bytes: &'a [u8],
     offset: &mut usize,
@@ -687,9 +666,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return decode_transaction_payload_with_cursor(bytes);
-        }
         let mut offset = 0usize;
         let domain = decode_canonical_field::<TransactionDomain>(
             read_aos_field(bytes, &mut offset, flags)?,
@@ -748,9 +724,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return decode_signed_transaction_with_cursor(bytes);
-        }
         let mut offset = 0usize;
         let signature =
             decode_codec_field::<TransactionSignature>(read_aos_field(bytes, &mut offset, flags)?)?;

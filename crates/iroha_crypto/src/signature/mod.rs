@@ -527,7 +527,7 @@ fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::E
     Ok(unsafe { Box::from_raw(slice) })
 }
 
-/// Decode the advertised unpacked `ConstVec<u8>` layout: a sequence count
+/// Decode the canonical `ConstVec<u8>` layout: a sequence count
 /// followed by one exactly framed byte per element.
 fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
     let (count, raw_start) = ncore::read_seq_len_slice(bytes)?;
@@ -560,12 +560,7 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
 fn decode_signature_payload_from_slice(
     bytes: &[u8],
 ) -> Result<(ConstVec<u8>, usize), ncore::Error> {
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    if ncore::packed_seq_enabled_for_flags(flags) {
-        <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
-    } else {
-        decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len()))
-    }
+    decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len()))
 }
 fn validate_signature_payload_for_decode(payload: &[u8]) -> Result<(), ncore::Error> {
     validate_signature_payload_for_admission(payload)
@@ -683,16 +678,8 @@ impl<'de> ncore::DeserializePayload<'de> for Signature {
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
-        let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        let payload = if ncore::packed_seq_enabled_for_flags(flags) {
-            let (payload, used) = <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
-            ncore::note_payload_access(bytes, used);
-            payload
-        } else {
-            let payload = decode_signature_payload_unpacked(bytes)?;
-            ncore::note_payload_access(bytes, bytes.len());
-            payload
-        };
+        let payload = decode_signature_payload_unpacked(bytes)?;
+        ncore::note_payload_access(bytes, bytes.len());
         validate_signature_payload_for_decode(&payload)?;
         Ok(Signature { payload })
     }

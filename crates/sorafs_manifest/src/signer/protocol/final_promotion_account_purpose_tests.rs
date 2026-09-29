@@ -147,7 +147,7 @@ fn account_role_and_purpose_have_one_canonical_tag_and_require_deployment_payloa
     }
     #[derive(norito::SerializePayload)]
     enum UnknownRole {
-        #[codec(index = 17)]
+        #[codec(index = 18)]
         Unknown,
     }
     let purpose = SignerPurposeBindingV1::FinalPromotionAccountTransaction {

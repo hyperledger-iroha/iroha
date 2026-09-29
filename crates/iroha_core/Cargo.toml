@@ -100,7 +100,7 @@ sm-ffi-openssl = [
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []
 # Support lightweight telemetry, including diagnostics
-telemetry = ["ivm/telemetry"]
+telemetry = []
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable stable fixed-width Core kernels and primitives SIMD backends.

@@ -12,6 +12,7 @@ mod durable_transaction_forwarder;
 pub mod evidence_viewer;
 #[cfg(test)]
 mod frame_test_support;
+mod fs_flags;
 mod governance;
 mod governance_rooted_fs;
 pub mod governance_service;
@@ -1069,7 +1070,7 @@ fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
     let result: Result<(), LocalCheckpointWriteError> = (|| {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
-        set_local_no_follow_flag(&mut options);
+        fs_flags::set_no_follow_flag(&mut options);
         #[cfg(unix)]
         options.mode(0o600);
         let mut file = options.open(&tmp_path)?;
@@ -1218,7 +1219,7 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     }
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    set_local_no_follow_flag(&mut options);
+    fs_flags::set_no_follow_flag(&mut options);
     let file = options.open(path)?;
     let opened = file.metadata()?;
     reject_unsafe_checkpoint_ancestors(path)?;
@@ -1324,7 +1325,7 @@ fn read_trust_policy_file(
     }
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    set_local_no_follow_flag(&mut options);
+    fs_flags::set_no_follow_flag(&mut options);
     let file = options.open(path)?;
     let opened = file.metadata()?;
     validate_trust_policy_file_metadata(path, &opened, label)?;
@@ -1481,47 +1482,6 @@ fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> b
     expected.len() == opened.len()
         && expected.modified().ok() == opened.modified().ok()
         && expected.created().ok() == opened.created().ok()
-}
-#[cfg(unix)]
-fn set_local_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(local_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_local_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn local_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn local_no_follow_flag() -> i32 {
-    0x0000_0100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-const fn local_no_follow_flag() -> i32 {
-    0
 }
 #[cfg(unix)]
 fn set_local_private_file_permissions(path: &Path) -> io::Result<()> {

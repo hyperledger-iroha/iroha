@@ -22,7 +22,6 @@ fn dirty_memory_large() -> Memory {
     mem
 }
 fn bench_memory_commit(c: &mut Criterion) {
-    // `Memory` is deliberately not `Clone`; build a fresh dirty image per batch.
     c.bench_function("memory_commit", |b| {
         b.iter_batched(
             dirty_memory,
@@ -30,12 +29,11 @@ fn bench_memory_commit(c: &mut Criterion) {
                 mem.commit();
                 std::hint::black_box(mem)
             },
-            BatchSize::LargeInput,
+            BatchSize::SmallInput,
         )
     });
 }
 fn bench_memory_commit_large(c: &mut Criterion) {
-    // `Memory` is deliberately not `Clone`; build a fresh dirty image per batch.
     c.bench_function("memory_commit_large", |b| {
         b.iter_batched(
             dirty_memory_large,

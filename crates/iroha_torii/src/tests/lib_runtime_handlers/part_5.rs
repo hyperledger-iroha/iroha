@@ -2368,7 +2368,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
     let network_id = *app.state.network_id_ref();
     let router = Router::new()
         .route(
-            iroha_torii_shared::uri::TRANSACTION_DETAILS,
+            route_catalog::pipeline::TRANSACTION_DETAILS.path(),
             post(super::handler_pipeline_transaction_details),
         )
         .route(

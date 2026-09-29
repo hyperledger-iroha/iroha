@@ -1561,10 +1561,6 @@ pub(super) struct RnsNativeBoundCrossFieldGlobalLookupV1<'env> {
 impl<'env> RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
     /// Split the single parsed owner into the pending final-context binder and
     /// the sealed proof lease. Neither child grants proof authority.
-    #[allow(
-        dead_code,
-        reason = "the source-complete envelope split awaits its live claimed-qPCS carrier"
-    )]
     pub(super) fn split_pre_qpcs_v1(
         self,
     ) -> (
@@ -1615,10 +1611,6 @@ impl<'env> RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
 impl<'env> RnsNativeSealedCrossProofLeaseV1<'env> {
     /// Consume the sealed section identity into the one-pass inner inventory
     /// preflight. Raw proof bytes never leave this purpose-specific transition.
-    #[allow(
-        dead_code,
-        reason = "the source-complete sealed preflight awaits its live claimed-qPCS carrier"
-    )]
     pub(super) fn preflight_q_mask_inventory_v1(
         self,
     ) -> Result<RnsNativePreQpcsQMaskInventoryPreflightV1<'env>, RnsNativeCrossFieldInventoryErrorV1>

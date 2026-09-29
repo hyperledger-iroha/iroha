@@ -23,7 +23,7 @@ use norito::core::DecodeLimits;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::{
     fs::{self, File, Metadata},
     io::{self, Read},
@@ -585,7 +585,7 @@ fn validate_artifact_root(root: &Path) -> Result<ValidatedArtifactRoot, Moderati
     let identity = file_identity(&metadata);
     let mut options = OpenOptions::new();
     options.read(true);
-    set_no_follow_flag(&mut options);
+    sorafs_car::set_no_follow_flag(&mut options);
     let handle =
         options
             .open(root)
@@ -701,7 +701,7 @@ where
     let before_identity = file_identity(&before);
     let mut options = OpenOptions::new();
     options.read(true);
-    set_no_follow_flag(&mut options);
+    sorafs_car::set_no_follow_flag(&mut options);
     let file = options
         .open(&canonical)
         .map_err(|source| ModerationRunnerError::ArtifactIo {
@@ -983,45 +983,6 @@ fn file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
         metadata.mtime(),
         metadata.mtime_nsec(),
     )
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0
 }
 #[cfg(test)]
 mod tests {

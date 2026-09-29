@@ -12,9 +12,7 @@
         reason = "test-only derive expansion materializes the complete data-model type registry as one local array; production code does not allocate it"
     )
 )]
-#[allow(unused_extern_crates)]
-extern crate bech32;
-#[allow(unused_extern_crates)]
+#[cfg(test)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
@@ -205,8 +203,6 @@ pub mod validation_fee;
 pub mod validator;
 /// Verification helper traits and host bindings.
 pub mod verification;
-/// Visitor traits for traversing data-model structures.
-pub mod visit;
 /// Compiled consensus and block wire-schema identity.
 pub mod wire_schema;
 /// Zero-knowledge proof payload types.

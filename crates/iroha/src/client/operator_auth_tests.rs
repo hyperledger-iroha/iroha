@@ -67,7 +67,10 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
                 .with_test_http_transport(mock_transport.clone());
             client.operator_signed_request(
                 HttpMethod::GET,
-                super::join_torii_url(&client.torii_url, iroha_torii_shared::uri::CONFIGURATION),
+                super::join_torii_url(
+                    &client.torii_url,
+                    iroha_torii_shared::route_catalog::core::CONFIGURATION_GET.path(),
+                ),
                 Vec::new(),
             )
         },

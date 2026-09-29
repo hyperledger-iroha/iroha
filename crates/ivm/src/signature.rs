@@ -93,6 +93,7 @@ pub(crate) fn parse_ed25519_public_key_for_verification(
     Ed25519VerifyingKey::from_bytes(parsed.as_bytes()).ok()
 }
 /// Returns true when Ed25519 public-key bytes must not reach a verifier.
+#[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal"), test))]
 #[must_use]
 pub(crate) fn ed25519_public_key_bytes_are_invalid(public_key: &[u8; 32]) -> bool {
     parse_ed25519_public_key_for_verification(public_key).is_none()

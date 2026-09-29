@@ -1357,9 +1357,8 @@ impl IntoSchema for InstructionBox {
 }
 /// Function signature used to construct an [`crate::isi::Instruction`] from header-framed bytes.
 ///
-/// The `header_flags` argument propagates Norito metadata alongside the encoded payload. Existing
-/// constructors ignore the value, but keeping it in the signature allows future instructions to
-/// react to packed-layout flags without widening the registry interface again.
+/// The `header_flags` argument carries the frame's declared v1 layout (0 or `COMPACT_LEN`) to the
+/// constructor's decode guard.
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
 /// Registry mapping concrete Rust type names for encoding and stable wire identifiers for decoding.
 #[derive(Default, Clone)]
@@ -1620,21 +1619,6 @@ where
         return Err(norito::core::Error::LengthMismatch);
     }
     Ok(value)
-}
-pub(crate) fn decode_packed_instruction_payload<T>(
-    bytes: &[u8],
-) -> Result<(T, usize), norito::core::Error>
-where
-    T: norito::codec::Decode,
-{
-    // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
-    // instruction payloads must instead retain the flags advertised by their enclosing frame.
-    let (decoded, used) = norito::core::decode_field_canonical::<T>(bytes)?;
-    if used != bytes.len() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    norito::core::note_payload_access(bytes, used);
-    Ok((decoded, used))
 }
 /// Build an [`InstructionRegistry`] registering each type with its annotated stable
 /// wire identifier by reading its `WIRE_ID` associated constant.

@@ -17,7 +17,7 @@ fn conn_scheme_detects_norito_rpc() {
 fn conn_scheme_marks_transaction_path_as_norito_rpc() {
     let request = axum::http::Request::builder()
         .method(axum::http::Method::POST)
-        .uri(iroha_torii_shared::uri::TRANSACTION)
+        .uri(route_catalog::pipeline::TRANSACTION.path())
         .body(())
         .unwrap();
     assert!(matches!(

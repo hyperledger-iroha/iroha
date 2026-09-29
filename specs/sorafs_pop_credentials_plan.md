@@ -258,7 +258,7 @@ registry, juror client, or deployed verifier service.
   double revocations, unknown nonce bindings, stale roots, rollback,
   noncanonical Norito, and oversized batches fail before state mutation.
 - `CanManageSorafsPopRegistry` and `CanOperateSorafsPopIssuer` protect policy
-  and issuer transitions in both the default executor and native execution.
+  and issuer transitions in Core's initial executor and native execution.
   Typed `FindSorafsPop*` queries expose the policy, payload-free commitment and
   revocation records, signed publications, audit links, and registry status as
   public transparency state through the existing generic query API. The

@@ -2858,9 +2858,6 @@ macro_rules! impl_kagemusha_instruction_decode_from_slice {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = kagemusha_instruction_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0_usize;
                 let request = super::decode_aos_canonical_field::<$request>(
                     super::read_aos_field(bytes, &mut offset, flags)?,

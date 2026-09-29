@@ -29,7 +29,7 @@ class ProofGraphTests(unittest.TestCase):
             "proof-flows": [name for _, names in gate.PROOF_FLOW_STAGES for name in names],
             "network": ["network_fixture"],
         }
-        self.assertEqual([len(self.names[name]) for name in ("proof", "proof-flows")], [4, 2])
+        self.assertEqual([len(self.names[name]) for name in ("proof", "proof-flows")], [6, 2])
         for name, tests in self.names.items():
             payload = executable(tests, self.executed, failure_file=self.failures).encode()
             self.rows[name] = self.artifact(name, payload)[1]
@@ -63,7 +63,7 @@ class ProofGraphTests(unittest.TestCase):
         self.checkpoint = copy.deepcopy(value)
         self.updates.append(copy.deepcopy(value))
 
-    def network(self, root, fixture_root, env, lock_fds, *, harness, stages):
+    def network(self, root, fixture_root, env, lock_fds, *, harness, stages, inventories):
         self.network_calls += 1
         # The four-peer fixture runs before the deferred proof census, so a
         # shipping failure can surface without running the long proof checks.
@@ -71,7 +71,11 @@ class ProofGraphTests(unittest.TestCase):
         for row in self.copies[-1]:
             self.assertEqual(Path(row["path"]).exists(), row["selection"] != "cli")
         self.assertEqual(stages, gate.NETWORK_STAGES)
-        gate.run_stages(harness, fixture_root, env, stages, lock_fds)
+        self.assertEqual(inventories, {
+            row["path"]: "".join(name + ": test\n" for name in self.names[row["selection"]])
+            for row in self.copies[-1]
+        })
+        gate.run_stages(harness, fixture_root, env, stages, lock_fds, inventories=inventories)
         if self.network_failure:
             raise gate.CheckError("fixture network failure")
 
@@ -90,7 +94,7 @@ class ProofGraphTests(unittest.TestCase):
     def complete_order(self):
         return self.names["cli"] + self.names["network"] + self.names["proof"] + self.names["proof-flows"]
 
-    def test_all_six_proof_regressions_bind_complete_checkpoint(self):
+    def test_all_eight_proof_regressions_bind_complete_checkpoint(self):
         self.run_gate()
         self.assertEqual(self.ran(), self.complete_order())
         self.assertEqual(self.compile.call_count, 1)

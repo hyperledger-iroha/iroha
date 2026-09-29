@@ -183,13 +183,7 @@ struct RustdocCrate {
 }
 #[derive(JsonDeserialize)]
 struct RustdocPath {
-    #[allow(dead_code)]
-    #[norito(default)]
-    crate_id: u32,
     path: Vec<String>,
-    #[allow(dead_code)]
-    #[norito(default)]
-    kind: String,
 }
 #[derive(JsonDeserialize)]
 struct RustdocItem {

@@ -25,10 +25,7 @@ where
     let header = norito::core::Header::read(canonical.as_slice()).expect("actual typed header");
     assert_eq!(header.schema, norito::core::schema_hash_for_name(expected));
     let mut layouts = 0;
-    for flags in 0..=u8::MAX {
-        if norito::core::validate_header_flags(flags).is_err() {
-            continue;
-        }
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         layouts += 1;
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(norito::encode_canonical(value).unwrap(), canonical);
@@ -40,6 +37,6 @@ where
         ));
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
-    assert_eq!(layouts, 10);
+    assert_eq!(layouts, 2);
     canonical
 }

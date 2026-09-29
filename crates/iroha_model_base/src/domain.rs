@@ -242,43 +242,10 @@ impl DomainId {
             let len = field_length(bytes, offset)?;
             field(bytes, offset, len)
         }
-        if !ncore::use_packed_struct() {
-            let mut offset = 0;
-            let name = framed_field(bytes, &mut offset)?;
-            let dataspace = framed_field(bytes, &mut offset)?;
-            return Ok((name, dataspace, offset));
-        }
-        if ncore::use_field_bitset() {
-            // Both opaque Name fields have explicit sizes in the derived encoder.
-            // This fixed schema needs no heap-backed size table.
-            if bytes.first() != Some(&0b0000_0011) {
-                return Err(ncore::Error::NonCanonicalEncoding);
-            }
-            let mut offset = 1;
-            let name_len = field_length(bytes, &mut offset)?;
-            let dataspace_len = field_length(bytes, &mut offset)?;
-            let name = field(bytes, &mut offset, name_len)?;
-            let dataspace = field(bytes, &mut offset, dataspace_len)?;
-            return Ok((name, dataspace, offset));
-        }
-        let (offsets, header_len, data_len, tail_len) =
-            ncore::decode_packed_offsets_slice(bytes, 2)?;
-        let data_end = header_len
-            .checked_add(data_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let data = bytes
-            .get(header_len..data_end)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let [start, middle, end] = offsets.as_slice() else {
-            return Err(ncore::Error::LengthMismatch);
-        };
         let mut offset = 0;
-        let name = field(data, &mut offset, middle - start)?;
-        let dataspace = field(data, &mut offset, end - middle)?;
-        let used = data_end
-            .checked_add(tail_len)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        Ok((name, dataspace, used))
+        let name = framed_field(bytes, &mut offset)?;
+        let dataspace = framed_field(bytes, &mut offset)?;
+        Ok((name, dataspace, offset))
     }
 
     /// Parse one canonical JSON object-key spelling with bounded decode accounting.

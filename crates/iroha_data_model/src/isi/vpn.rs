@@ -67,9 +67,6 @@ fn vpn_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = vpn_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let quote = super::decode_aos_canonical_field::<crate::soranet::vpn::VpnSignedQuoteV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -85,9 +82,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenVpnLeaseEscrow {
 impl<'a> norito::core::DecodeFromSlice<'a> for SettleVpnLease {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = vpn_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -116,9 +110,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettleVpnLease {
 impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = vpn_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let lease_id = super::decode_aos_canonical_field::<[u8; 32]>(
             super::read_aos_field(bytes, &mut offset, flags)?,

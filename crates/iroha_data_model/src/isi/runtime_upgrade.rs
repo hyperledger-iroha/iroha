@@ -34,9 +34,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ProposeRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let manifest_bytes = super::decode_aos_slice_field::<Vec<u8>>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -53,9 +50,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let id = super::decode_aos_slice_field::<RuntimeUpgradeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -72,9 +66,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let id = super::decode_aos_slice_field::<RuntimeUpgradeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,

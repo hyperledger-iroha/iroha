@@ -232,7 +232,7 @@ async fn faucet_discovery_requires_pinned_network_and_valid_issuance() {
     assert!(transport.requests.lock().unwrap()[0].direct_loopback);
     assert_eq!(
         transport.requests.lock().unwrap()[0].url.path(),
-        uri::ACCOUNTS_FAUCET_POLICY
+        route_catalog::application_api::ACCOUNTS_FAUCET_POLICY_GET.path()
     );
     assert!(client.faucet_policy(network(), 753).await.is_err());
     let other = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
@@ -280,7 +280,10 @@ async fn faucet_discovery_requires_exact_canonical_v1_fields() {
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.method, Method::GET);
-        assert_eq!(request.url.path(), uri::ACCOUNTS_FAUCET_POLICY);
+        assert_eq!(
+            request.url.path(),
+            route_catalog::application_api::ACCOUNTS_FAUCET_POLICY_GET.path()
+        );
         assert!(request.body.is_empty());
         assert_eq!(request.max_response_bytes, ACCOUNT_FAUCET_POLICY_MAX_BYTES);
         assert_eq!(request.timeout, Some(Duration::from_secs(5)));

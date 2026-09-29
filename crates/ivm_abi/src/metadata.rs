@@ -570,8 +570,7 @@ fn decode_embedded_state_byte_vec_sequence(
 ) -> Result<(Vec<&[u8]>, usize), NoritoError> {
     let flags =
         norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags);
-    let layout = norito::core::BinarySequenceLayout::from_flags(flags);
-    let plan = norito::core::plan_binary_sequence(encoded, flags, layout)?;
+    let plan = norito::core::plan_binary_sequence(encoded, flags)?;
     let mut values = try_embedded_decode_vec(plan.spans.len())?;
     for span in &plan.spans {
         let field = span.get(encoded)?;
@@ -1404,7 +1403,6 @@ impl EmbeddedContractInterfaceV1 {
 /// Execution mode flags used in the metadata header.
 pub mod mode {
     /// Zero-knowledge proof mode enabled.
-    #[allow(dead_code)]
     pub const ZK: u8 = 0x01;
     /// Vector extension (SIMD/crypto ops) enabled.
     pub const VECTOR: u8 = 0x02;

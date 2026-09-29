@@ -69,7 +69,7 @@ async fn gov_proposal_get_router_mapping() {
     // Wire only the GET route under the shared URI constant
     let state = Arc::new(raw_state);
     let app = Router::new().route(
-        iroha_torii_shared::uri::GOV_PROPOSAL_GET,
+        iroha_torii_shared::route_catalog::runtime_governance::GOV_PROPOSAL_GET.path(),
         get({
             let state = state.clone();
             move |axum::extract::Path(id): axum::extract::Path<String>| async move {

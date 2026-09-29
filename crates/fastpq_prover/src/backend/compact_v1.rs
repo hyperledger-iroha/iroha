@@ -248,15 +248,12 @@ impl norito::core::SerializePayload for BodyFields<'_> {
         // Use Norito's existing sequence owner for counts, element lengths and
         // checked emission. Both variants are stack arrays of borrowed views.
         match self {
-            Self::One(field) => norito::core::write_element_sequence::<ByteField<'_>, _>(
-                writer,
-                [ByteField(field)],
-                norito::core::max_archive_len(),
-            ),
+            Self::One(field) => {
+                norito::core::write_element_sequence::<ByteField<'_>, _>(writer, [ByteField(field)])
+            }
             Self::Two(first, second) => norito::core::write_element_sequence::<ByteField<'_>, _>(
                 writer,
                 [ByteField(first), ByteField(second)],
-                norito::core::max_archive_len(),
             ),
         }
     }

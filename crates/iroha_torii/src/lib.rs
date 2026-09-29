@@ -45476,8 +45476,6 @@ use iroha_crypto::SignatureOf;
 use iroha_data_model::account::AccountAddress;
 #[cfg(test)]
 use iroha_data_model::nexus::FeeSponsorProgram;
-#[cfg(test)]
-use iroha_torii_shared::uri;
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {

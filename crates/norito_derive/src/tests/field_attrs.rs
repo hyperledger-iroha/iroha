@@ -1,13 +1,15 @@
 //! Field-attribute parser and validation tests.
 use super::*;
 #[test]
-fn needs_size_attribute_is_parsed() {
+fn retired_needs_size_attribute_is_rejected() {
     let field: syn::Field = syn::parse_quote! {
         #[norito(needs_size)]
         demo: u32
     };
-    let attrs = FieldAttr::parse(&field.attrs).expect("valid field attribute");
-    assert!(attrs.needs_size);
+    let Err(error) = FieldAttr::parse(&field.attrs) else {
+        panic!("the retired packed-layout size hint must reject");
+    };
+    assert_eq!(error.to_string(), "unknown `norito` field attribute");
 }
 #[test]
 fn bounded_with_attribute_is_parsed_and_duplicate_is_rejected() {

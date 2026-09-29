@@ -26,7 +26,9 @@ pub use asynchronous::{AsyncQueryBuilderExt, QueryStream};
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
-use iroha_torii_shared::{ErrorEnvelope, PipelineTransactionDetailsResponse, uri as torii_uri};
+use iroha_torii_shared::{
+    ErrorEnvelope, PipelineTransactionDetailsResponse, route_catalog as torii_routes,
+};
 use iroha_version::codec::EncodeVersioned;
 use norito::{codec::Encode as _, json};
 use std::{
@@ -137,7 +139,7 @@ impl ClientQueryRequestHead {
     fn assemble_body(&self, body: Vec<u8>) -> DefaultRequestBuilder {
         DefaultRequestBuilder::new(
             HttpMethod::POST,
-            join_torii_url(&self.torii_url, torii_uri::QUERY),
+            join_torii_url(&self.torii_url, torii_routes::pipeline::QUERY.path()),
         )
         .with_transport(self.transport.clone())
         .headers(self.headers.clone())
@@ -155,7 +157,7 @@ impl ClientQueryRequestHead {
     ) -> DefaultRequestBuilder {
         DefaultRequestBuilder::new(
             HttpMethod::POST,
-            join_torii_url(&self.torii_url, torii_uri::QUERY),
+            join_torii_url(&self.torii_url, torii_routes::pipeline::QUERY.path()),
         )
         .with_transport(self.transport.clone())
         .headers(self.headers.clone())
@@ -619,7 +621,10 @@ impl Client {
         let body = request_head.sign_and_encode(request)?;
         let make_request = || {
             Ok(request_head
-                .assemble_canonical_norito_body_at(body.clone(), torii_uri::TRANSACTION_DETAILS)
+                .assemble_canonical_norito_body_at(
+                    body.clone(),
+                    torii_routes::pipeline::TRANSACTION_DETAILS.path(),
+                )
                 .max_response_bytes(TRANSACTION_DETAILS_RESPONSE_MAX_BYTES))
         };
         let response = send_once(make_request)?;
@@ -699,7 +704,7 @@ impl Client {
         let make_request = || {
             Ok(DefaultRequestBuilder::new(
                 HttpMethod::POST,
-                join_torii_url(&self.torii_url, torii_uri::QUERY),
+                join_torii_url(&self.torii_url, torii_routes::pipeline::QUERY.path()),
             )
             .with_transport(self.http_transport.clone())
             .headers(self.headers.clone())
@@ -1414,7 +1419,7 @@ mod query_errors_handling {
                     .header("content-type", "application/json")
                     .body(capabilities_body.clone())
                     .expect("capabilities response")),
-                p if p == torii_uri::QUERY => {
+                p if p == torii_routes::pipeline::QUERY.path() => {
                     query_seen_clone.store(true, Ordering::Relaxed);
                     Ok(ok_empty_response())
                 }
@@ -1664,7 +1669,10 @@ mod query_errors_handling {
         let actual = with_mock_http(
             move |snapshot| {
                 assert_eq!(snapshot.method, HttpMethod::POST);
-                assert_eq!(snapshot.url.path(), torii_uri::TRANSACTION_DETAILS);
+                assert_eq!(
+                    snapshot.url.path(),
+                    torii_routes::pipeline::TRANSACTION_DETAILS.path()
+                );
                 assert!(snapshot.url.query().is_none());
                 assert_eq!(
                     snapshot.max_response_bytes,
@@ -1759,7 +1767,10 @@ mod query_errors_handling {
             move |snapshot| {
                 observed.fetch_add(1, Ordering::Relaxed);
                 assert_eq!(snapshot.method, HttpMethod::POST);
-                assert_eq!(snapshot.url.path(), torii_uri::TRANSACTION_DETAILS);
+                assert_eq!(
+                    snapshot.url.path(),
+                    torii_routes::pipeline::TRANSACTION_DETAILS.path()
+                );
                 assert_eq!(
                     snapshot.max_response_bytes,
                     TRANSACTION_DETAILS_RESPONSE_MAX_BYTES

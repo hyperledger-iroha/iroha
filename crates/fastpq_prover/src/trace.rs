@@ -1182,8 +1182,8 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     sponge.absorb_slice(values);
     sponge.squeeze()
 }
-#[cfg(feature = "fastpq-gpu")]
-/// Flattened Poseidon column payloads used by GPU hashing backends.
+#[cfg(all(test, feature = "fastpq-gpu"))]
+/// Flattened Poseidon column payloads used by GPU hashing parity tests.
 #[derive(Debug)]
 pub(crate) struct PoseidonColumnBatch {
     payloads: Vec<u64>,
@@ -1191,7 +1191,7 @@ pub(crate) struct PoseidonColumnBatch {
     block_count: usize,
     padded_len: usize,
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Offset metadata describing where a column resides inside the flattened payload buffer.
@@ -1199,7 +1199,7 @@ pub(crate) struct PoseidonColumnSlice {
     offset: u32,
     len: u32,
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 impl PoseidonColumnSlice {
     fn new(offset: usize, len: usize) -> Option<Self> {
         let offset = u32::try_from(offset).ok()?;
@@ -1228,7 +1228,7 @@ pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
         payload.checked_add(RATE - remainder)
     }
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 impl PoseidonColumnBatch {
     #[cfg(test)]
     fn empty() -> Self {

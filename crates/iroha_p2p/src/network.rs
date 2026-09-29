@@ -705,30 +705,10 @@ fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
 fn peer_id_wire_len_from_raw_key_bytes(raw_key_bytes: usize, flags: u8) -> Option<usize> {
     // PublicKey stores one compact algorithm tag before the algorithm-specific payload.
     let key_bytes = raw_key_bytes.checked_add(1)?;
-    let public_key_len = if ncore::packed_seq_enabled_for_flags(flags) {
-        ncore::seq_len_prefix_len(key_bytes)
-            .checked_add(
-                key_bytes
-                    .checked_add(1)?
-                    .checked_mul(core::mem::size_of::<u64>())?,
-            )?
-            .checked_add(key_bytes)?
-    } else {
-        let encoded_byte_len = checked_len_prefixed(core::mem::size_of::<u8>(), flags)?;
-        ncore::seq_len_prefix_len(key_bytes)
-            .checked_add(key_bytes.checked_mul(encoded_byte_len)?)?
-    };
-    if flags & ncore::header_flags::PACKED_STRUCT == 0 {
-        return checked_len_prefixed(public_key_len, flags);
-    }
-    if flags & ncore::header_flags::FIELD_BITSET != 0 {
-        return 1usize
-            .checked_add(ncore::len_prefix_len_with_flags(public_key_len, flags))?
-            .checked_add(public_key_len);
-    }
-    core::mem::size_of::<u64>()
-        .checked_mul(2)?
-        .checked_add(public_key_len)
+    let encoded_byte_len = checked_len_prefixed(core::mem::size_of::<u8>(), flags)?;
+    let public_key_len = ncore::seq_len_prefix_len(key_bytes)
+        .checked_add(key_bytes.checked_mul(encoded_byte_len)?)?;
+    checked_len_prefixed(public_key_len, flags)
 }
 fn byte_sequence_wire_len(bytes: usize) -> Option<usize> {
     // `Vec<u8>` always uses Norito's raw-byte sequence fast path: a fixed-width
@@ -757,30 +737,9 @@ fn relay_message_wire_payload_len(direct: bool, payload_len: usize, flags: u8) -
         origin_signature_len,
         payload_len,
     ];
-    if flags & ncore::header_flags::PACKED_STRUCT == 0 {
-        return field_lens.into_iter().try_fold(0usize, |total, field_len| {
-            total.checked_add(checked_len_prefixed(field_len, flags)?)
-        });
-    }
-    if flags & ncore::header_flags::FIELD_BITSET == 0 {
-        let offsets_len = field_lens
-            .len()
-            .checked_add(1)?
-            .checked_mul(core::mem::size_of::<u64>())?;
-        return field_lens
-            .into_iter()
-            .try_fold(offsets_len, usize::checked_add);
-    }
-    // Hybrid fields carry sizes only for origin, target and generic payload.
-    // TTL is fixed-width and the signature Vec<u8> carries its own sequence count.
-    let size_header_len = [origin_len, target_len, payload_len]
-        .into_iter()
-        .try_fold(0usize, |total, field_len| {
-            total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
-        })?;
-    field_lens
-        .into_iter()
-        .try_fold(1usize.checked_add(size_header_len)?, usize::checked_add)
+    field_lens.into_iter().try_fold(0usize, |total, field_len| {
+        total.checked_add(checked_len_prefixed(field_len, flags)?)
+    })
 }
 /// Return the plaintext wire length of a canonical direct P2P data frame from
 /// an application payload length.
@@ -839,107 +798,26 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
     ncore::validate_header_flags(flags)?;
     const FIELD_COUNT: usize = 5;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
-    // The canonical derive marks origin, target and generic payload only.
-    // TTL is fixed-width; origin_signature: Vec<u8> is self-delimiting.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0001_0011;
-    if flags & ncore::header_flags::PACKED_STRUCT == 0 {
-        let mut remaining = payload;
-        for index in 0..FIELD_COUNT {
-            let (field_len, prefix_len) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
-            let field_end = prefix_len
-                .checked_add(field_len)
-                .ok_or(ncore::Error::LengthMismatch)?;
-            let field = remaining
-                .get(prefix_len..field_end)
-                .ok_or(ncore::Error::LengthMismatch)?;
-            remaining = remaining
-                .get(field_end..)
-                .ok_or(ncore::Error::LengthMismatch)?;
-            if index == PAYLOAD_FIELD_INDEX {
-                if !remaining.is_empty() {
-                    return Err(ncore::Error::LengthMismatch);
-                }
-                return Ok(field);
-            }
-        }
-        return Err(ncore::Error::LengthMismatch);
-    }
-    if flags & ncore::header_flags::FIELD_BITSET == 0 {
-        let table_len = (FIELD_COUNT + 1)
-            .checked_mul(core::mem::size_of::<u64>())
+    let mut remaining = payload;
+    for index in 0..FIELD_COUNT {
+        let (field_len, prefix_len) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
+        let field_end = prefix_len
+            .checked_add(field_len)
             .ok_or(ncore::Error::LengthMismatch)?;
-        let (offsets, field_data) = payload
-            .split_at_checked(table_len)
+        let field = remaining
+            .get(prefix_len..field_end)
             .ok_or(ncore::Error::LengthMismatch)?;
-        let read_offset = |index: usize| -> Result<usize, ncore::Error> {
-            let start = index
-                .checked_mul(core::mem::size_of::<u64>())
-                .ok_or(ncore::Error::LengthMismatch)?;
-            let end = start
-                .checked_add(core::mem::size_of::<u64>())
-                .ok_or(ncore::Error::LengthMismatch)?;
-            let bytes: [u8; 8] = offsets
-                .get(start..end)
-                .ok_or(ncore::Error::LengthMismatch)?
-                .try_into()
-                .map_err(|_| ncore::Error::LengthMismatch)?;
-            usize::try_from(u64::from_le_bytes(bytes)).map_err(|_| ncore::Error::LengthMismatch)
-        };
-        let mut previous = read_offset(0)?;
-        if previous != 0 {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        for index in 1..=FIELD_COUNT {
-            let current = read_offset(index)?;
-            if current < previous || current > field_data.len() {
+        remaining = remaining
+            .get(field_end..)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        if index == PAYLOAD_FIELD_INDEX {
+            if !remaining.is_empty() {
                 return Err(ncore::Error::LengthMismatch);
             }
-            previous = current;
+            return Ok(field);
         }
-        if previous != field_data.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let start = read_offset(PAYLOAD_FIELD_INDEX)?;
-        let end = read_offset(PAYLOAD_FIELD_INDEX + 1)?;
-        return field_data
-            .get(start..end)
-            .ok_or(ncore::Error::LengthMismatch);
     }
-    let (&bitset, mut size_headers) = payload.split_first().ok_or(ncore::Error::LengthMismatch)?;
-    if bitset != EXPECTED_FIELD_BITSET {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    let mut field_sizes = [0_usize; 3];
-    for field_size in &mut field_sizes {
-        let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
-        *field_size = size;
-        size_headers = size_headers
-            .get(used..)
-            .ok_or(ncore::Error::LengthMismatch)?;
-    }
-    let signature_start = field_sizes[0]
-        .checked_add(field_sizes[1])
-        .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
-        .ok_or(ncore::Error::LengthMismatch)?;
-    let signature_and_payload = size_headers
-        .get(signature_start..)
-        .ok_or(ncore::Error::LengthMismatch)?;
-    // Borrow the already-bounded Vec<u8> encoding without decoding or allocating
-    // signature bytes. The canonical sequence count is fixed-u64 in every layout.
-    let (signature_len, signature_prefix) = ncore::inspect_seq_len_slice(signature_and_payload)?;
-    let payload_start = signature_start
-        .checked_add(signature_prefix)
-        .and_then(|offset| offset.checked_add(signature_len))
-        .ok_or(ncore::Error::LengthMismatch)?;
-    let payload_end = payload_start
-        .checked_add(field_sizes[2])
-        .ok_or(ncore::Error::LengthMismatch)?;
-    if payload_end != size_headers.len() {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    size_headers
-        .get(payload_start..payload_end)
-        .ok_or(ncore::Error::LengthMismatch)
+    Err(ncore::Error::LengthMismatch)
 }
 impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
@@ -8981,9 +8859,6 @@ mod accept_stream_tests {
     use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
-    #[cfg(feature = "quic")]
-    #[allow(unused_imports)]
-    use quinn::crypto::rustls::QuicClientConfig;
     use std::time::Duration;
     #[test]
     fn captured_original_test_payload_identities() {
@@ -11879,14 +11754,12 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// Interval between topology refresh ticks.
     topology_update_interval: Duration,
     /// Enable QUIC transport based on config at runtime.
-    #[allow(dead_code)]
     quic_enabled: bool,
     /// Enable QUIC DATAGRAM support for best-effort topics when using QUIC.
     quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.
     quic_datagram_max_payload_bytes: usize,
     /// Shared outbound QUIC dialer endpoint (feature-gated).
-    #[allow(dead_code)]
     quic_dialer: Option<crate::transport::QuicDialer>,
     /// Whether this node can advertise/use SCION-preferred transport.
     local_scion_supported: bool,

@@ -1171,7 +1171,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
                         Arc::clone(&tx_state),
                         tx,
                         telemetry.clone(),
-                        iroha_torii_shared::uri::TRANSACTION,
+                        iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
                     ))
                     .expect("transaction handle succeeds");
                 std::hint::black_box(decision);

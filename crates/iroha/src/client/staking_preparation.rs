@@ -31,7 +31,7 @@ impl Client {
                 HttpMethod::POST,
                 join_torii_url(
                     &self.torii_url,
-                    iroha_torii_shared::uri::NEXUS_STAKING_PREPARATION,
+                    iroha_torii_shared::route_catalog::core::NEXUS_STAKING_PREPARATION_POST.path(),
                 ),
             )
             .header("Content-Type", APPLICATION_NORITO)

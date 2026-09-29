@@ -618,7 +618,7 @@ mod tests {
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
-            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            "/v1/gov/proposals/sccp-route-governance"
         );
     }
     #[test]

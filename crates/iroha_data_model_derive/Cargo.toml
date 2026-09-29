@@ -12,9 +12,7 @@ license.workspace = true
 workspace = true
 
 [features]
-std = []
 trybuild-tests = ["dep:trybuild"]
-bench = []
 transparent_api = []
 
 [lib]

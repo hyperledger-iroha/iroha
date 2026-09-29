@@ -52,9 +52,6 @@ fn space_directory_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for PublishSpaceDirectoryManifest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = space_directory_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<AssetPermissionManifest>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -70,9 +67,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublishSpaceDirectoryManifest {
 impl<'a> norito::core::DecodeFromSlice<'a> for RevokeSpaceDirectoryManifest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = space_directory_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let uaid = super::decode_aos_canonical_field::<UniversalAccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -112,9 +106,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeSpaceDirectoryManifest {
 impl<'a> norito::core::DecodeFromSlice<'a> for ExpireSpaceDirectoryManifest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = space_directory_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let uaid = super::decode_aos_canonical_field::<UniversalAccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,

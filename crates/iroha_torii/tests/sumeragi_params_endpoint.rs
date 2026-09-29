@@ -12,7 +12,7 @@ use axum::{
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::{ConfidentialGas, Root, TelemetryProfile};
 #[cfg(feature = "telemetry")]
-use iroha_torii_shared::configuration::Configuration;
+use iroha_torii_shared::{configuration::Configuration, route_catalog};
 #[cfg(feature = "telemetry")]
 use tower::ServiceExt as _;
 #[cfg(feature = "telemetry")]
@@ -78,7 +78,7 @@ async fn signed_get_configuration(harness: &ToriiTestHarness) -> axum::response:
     let req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -178,7 +178,7 @@ fn signed_post_configuration(
         &harness.cfg.common.key_pair,
         Request::builder()
             .method("POST")
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .header(header::CONTENT_TYPE, content_type)
             .body(Body::from(body_bytes))
             .unwrap(),
@@ -346,7 +346,7 @@ async fn configuration_endpoint_rejects_unsigned_requests() {
         .router()
         .oneshot(
             Request::builder()
-                .uri(iroha_torii_shared::uri::CONFIGURATION)
+                .uri(route_catalog::core::CONFIGURATION_GET.path())
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -369,7 +369,7 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
     let signed = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -378,7 +378,7 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
     let first = harness.app.clone().oneshot(signed).await.unwrap();
     assert_eq!(first.status(), StatusCode::OK);
     let mut replay = Request::builder()
-        .uri(iroha_torii_shared::uri::CONFIGURATION)
+        .uri(route_catalog::core::CONFIGURATION_GET.path())
         .body(Body::empty())
         .unwrap();
     *replay.headers_mut() = replay_headers;
@@ -401,7 +401,7 @@ async fn configuration_endpoint_rejects_non_node_operator_key() {
     let req = fixtures::operator_signed_request(
         &outsider,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -424,7 +424,7 @@ async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
     let mut req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -471,7 +471,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
     let signed = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
@@ -499,14 +499,14 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
     let signed = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::empty())
             .unwrap(),
         &[],
     );
     let mut mismatched = Request::builder()
         .method("POST")
-        .uri(iroha_torii_shared::uri::CONFIGURATION)
+        .uri(route_catalog::core::CONFIGURATION_GET.path())
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::empty())
         .unwrap();
@@ -619,7 +619,7 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
         &harness.cfg.common.key_pair,
         Request::builder()
             .method("POST")
-            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .uri(route_catalog::core::CONFIGURATION_GET.path())
             .body(Body::from(body_bytes.clone()))
             .unwrap(),
         &body_bytes,

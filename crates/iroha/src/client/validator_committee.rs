@@ -22,7 +22,9 @@ impl Client {
         &self,
         target_epoch: Option<u64>,
     ) -> Result<ValidatorCommitteeStatusV1> {
-        let mut path = iroha_torii_shared::uri::NEXUS_VALIDATOR_COMMITTEE.to_owned();
+        let mut path = iroha_torii_shared::route_catalog::core::NEXUS_VALIDATOR_COMMITTEE_GET
+            .path()
+            .to_owned();
         if let Some(epoch) = target_epoch {
             path.push_str(&format!("?target_epoch={epoch}"));
         }

@@ -14,7 +14,7 @@ use crate::{
 use base64::Engine as _;
 use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::NetworkId;
-use iroha_torii_shared::{configuration::Configuration as NodeConfiguration, route_catalog, uri};
+use iroha_torii_shared::{configuration::Configuration as NodeConfiguration, route_catalog};
 use std::{
     sync::{
         Arc, Mutex,
@@ -162,7 +162,10 @@ async fn configuration_is_async_and_signed_by_the_bound_operator_for_exact_reque
         request.url.path(),
         route_catalog::core::CONFIGURATION_GET.path()
     );
-    assert_eq!(request.url.path(), uri::CONFIGURATION);
+    assert_eq!(
+        request.url.path(),
+        route_catalog::core::CONFIGURATION_GET.path()
+    );
     assert!(request.url.query().is_none());
     assert!(request.body.is_empty());
     assert_eq!(

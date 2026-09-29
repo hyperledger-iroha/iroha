@@ -2,7 +2,7 @@
 
 use super::{OperatorClient, dispatch, join_torii_url};
 use crate::{Error, Result, http::Method};
-use iroha_torii_shared::{configuration::Configuration as NodeConfiguration, uri};
+use iroha_torii_shared::{configuration::Configuration as NodeConfiguration, route_catalog};
 
 pub(super) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const GET: &str = "operator.configuration.read";
@@ -51,7 +51,10 @@ impl Configuration<'_> {
             .identity_signed_request(
                 &self.operator.operator_key_pair,
                 Method::GET,
-                join_torii_url(&client.torii_url, uri::CONFIGURATION),
+                join_torii_url(
+                    &client.torii_url,
+                    route_catalog::core::CONFIGURATION_GET.path(),
+                ),
                 Vec::new(),
             )
             .map_err(|error| Error::RequestSigning {

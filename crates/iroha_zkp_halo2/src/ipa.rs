@@ -354,6 +354,7 @@ pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
 /// # Errors
 ///
 /// Returns an error if the deterministic binding derived from `projection` differs from `binding`.
+#[cfg(test)]
 pub fn validate_ipa_verifier_transcript_binding<S: IpaScalar>(
     projection: &IpaVerifierTranscriptProjection<S>,
     binding: &IpaVerifierTranscriptBinding<S>,
@@ -447,6 +448,7 @@ pub fn derive_ipa_verifier_transcript_projection<B: IpaBackend>(
 ///
 /// Returns an error if `n` is not compatible with the proof shape or if any
 /// challenge is zero and cannot be inverted.
+#[cfg(test)]
 pub fn derive_ipa_verifier_round_challenges<B: IpaBackend>(
     n: usize,
     transcript: &mut Transcript,
@@ -464,6 +466,7 @@ pub fn derive_ipa_verifier_round_challenges<B: IpaBackend>(
 /// Returns an error when the proof shape is invalid or when any transcript
 /// state, round byte digest, challenge, inverse, or final state differs from
 /// the deterministic native verifier projection.
+#[cfg(test)]
 pub fn validate_ipa_verifier_transcript_projection<B: IpaBackend>(
     n: usize,
     transcript: &mut Transcript,
@@ -479,8 +482,8 @@ pub fn validate_ipa_verifier_transcript_projection<B: IpaBackend>(
 }
 /// Project the verifier-side IPA public `b`-vector reduction.
 ///
-/// `round_challenges` must come from [`derive_ipa_verifier_round_challenges`] for the same
-/// statement and proof. The returned `final_b` is the value that must match `proof.b_final` in the
+/// `round_challenges` must be the `rounds` of [`derive_ipa_verifier_transcript_projection`] for
+/// the same statement and proof. The returned `final_b` is the value that must match `proof.b_final` in the
 /// final IPA comparison.
 ///
 /// # Errors
@@ -546,8 +549,8 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
 }
 /// Project the verifier-side IPA scalar-multiplication accumulation.
 ///
-/// `round_challenges` must come from [`derive_ipa_verifier_round_challenges`] for the same
-/// statement and proof. The function does not mutate a transcript; it deterministically folds `Q`,
+/// `round_challenges` must be the `rounds` of [`derive_ipa_verifier_transcript_projection`] for
+/// the same statement and proof. The function does not mutate a transcript; it deterministically folds `Q`,
 /// `g`, and `h` exactly as the verifier does and returns the final comparison term.
 ///
 /// # Errors
@@ -712,6 +715,7 @@ pub fn derive_ipa_verifier_witness<B: IpaBackend>(
 ///
 /// Returns an error if the supplied witness differs from the native verifier's
 /// deterministic projection or if the projected final group comparison fails.
+#[cfg(test)]
 pub fn validate_ipa_verifier_witness<B: IpaBackend>(
     params: &Params<B>,
     transcript: &mut Transcript,

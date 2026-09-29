@@ -46,7 +46,10 @@ fn get_status_does_not_retry_as_json_after_decode_failure() {
     assert!(error.to_string().contains("failed to decode status Norito"));
     let snapshots = snapshots.lock().expect("snapshot lock");
     assert_eq!(snapshots.len(), 1);
-    assert_eq!(snapshots[0].url.path(), torii_uri::STATUS);
+    assert_eq!(
+        snapshots[0].url.path(),
+        iroha_torii_shared::route_catalog::diagnostic::STATUS.path()
+    );
     assert_eq!(snapshots[0].max_response_bytes, status::MAX_RESPONSE_BYTES);
     assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
 }
@@ -72,7 +75,10 @@ fn get_status_norito_only_rejects_json_without_retry() {
     assert!(error.to_string().contains("violates NoritoOnly"));
     let snapshots = snapshots.lock().expect("snapshot lock");
     assert_eq!(snapshots.len(), 1);
-    assert_eq!(snapshots[0].url.path(), torii_uri::STATUS);
+    assert_eq!(
+        snapshots[0].url.path(),
+        iroha_torii_shared::route_catalog::diagnostic::STATUS.path()
+    );
     assert_eq!(snapshots[0].max_response_bytes, status::MAX_RESPONSE_BYTES);
     assert_single_accept_header(&snapshots[0], APPLICATION_NORITO);
 }

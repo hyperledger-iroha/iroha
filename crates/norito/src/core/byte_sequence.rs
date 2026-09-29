@@ -27,30 +27,24 @@ pub fn decode_byte_element_sequence_into(
         return Err(Error::LengthMismatch);
     }
     let mut index = 0;
-    let used = visit_binary_sequence_with_count(
-        bytes,
-        flags,
-        BinarySequenceLayout::from_flags(flags),
-        count,
-        |span| {
-            let element = span.get(bytes)?;
-            record_slice_access(element, span.len());
-            // A byte has a total, fixed-width scalar decoder. Retain the same
-            // field/depth gates without installing the arbitrary-decoder panic
-            // hook (whose process-lived Box is outside this caller's custody).
-            check_decode_field_length(
-                u64::try_from(element.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            let _depth = DecodeDepthGuard::enter()?;
-            let value = read_byte_value(element)?;
-            if element.len() != 1 {
-                return Err(Error::LengthMismatch);
-            }
-            destination[index] = value;
-            index += 1;
-            Ok(())
-        },
-    )?;
+    let used = visit_binary_sequence_with_count(bytes, flags, count, |span| {
+        let element = span.get(bytes)?;
+        record_slice_access(element, span.len());
+        // A byte has a total, fixed-width scalar decoder. Retain the same
+        // field/depth gates without installing the arbitrary-decoder panic
+        // hook (whose process-lived Box is outside this caller's custody).
+        check_decode_field_length(
+            u64::try_from(element.len()).map_err(|_| Error::LengthMismatch)?,
+        )?;
+        let _depth = DecodeDepthGuard::enter()?;
+        let value = read_byte_value(element)?;
+        if element.len() != 1 {
+            return Err(Error::LengthMismatch);
+        }
+        destination[index] = value;
+        index += 1;
+        Ok(())
+    })?;
     note_payload_access(bytes, used);
     Ok((count, used))
 }
@@ -60,10 +54,12 @@ pub(super) fn read_byte_value(bytes: &[u8]) -> Result<u8, Error> {
     bytes.first().copied().ok_or(Error::LengthMismatch)
 }
 
+/// Visit every length-prefixed element span of a sequence with a known count.
+///
+/// Returns the total sequence payload length consumed from the front of `bytes`.
 pub(super) fn visit_binary_sequence_with_count(
     bytes: &[u8],
     flags: u8,
-    layout: BinarySequenceLayout,
     count: usize,
     mut visit: impl FnMut(SequenceSpan) -> Result<(), Error>,
 ) -> Result<usize, Error> {
@@ -71,63 +67,21 @@ pub(super) fn visit_binary_sequence_with_count(
     if declared_count != count {
         return Err(Error::LengthMismatch);
     }
-    validate_binary_sequence_reservation(bytes, flags, layout, count)?;
-    match layout {
-        BinarySequenceLayout::LengthPrefixed => {
-            for _ in 0..count {
-                let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
-                let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
-                let start = offset
-                    .checked_add(header_len)
-                    .ok_or(Error::LengthMismatch)?;
-                let end = start.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-                if end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                visit(SequenceSpan { start, end })?;
-                offset = end;
-            }
-            Ok(offset)
+    validate_binary_sequence_reservation(bytes, flags, count)?;
+    for _ in 0..count {
+        let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+        let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
+        let start = offset
+            .checked_add(header_len)
+            .ok_or(Error::LengthMismatch)?;
+        let end = start.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
+        if end > bytes.len() {
+            return Err(Error::LengthMismatch);
         }
-        BinarySequenceLayout::FixedOffsets => {
-            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let offset_table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            let offsets_start = offset;
-            let offsets_end = offsets_start
-                .checked_add(offset_table_len)
-                .ok_or(Error::LengthMismatch)?;
-            let offsets = bytes
-                .get(offsets_start..offsets_end)
-                .ok_or(Error::LengthMismatch)?;
-            let data_len = read_u64_le_at(offsets, count)?
-                .try_into()
-                .map_err(|_| Error::LengthMismatch)?;
-            let data_start = offsets_end;
-            let data_end = data_start
-                .checked_add(data_len)
-                .ok_or(Error::LengthMismatch)?;
-            if data_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-            let mut prev = 0usize;
-            for idx in 0..count {
-                let next = read_u64_le_at(offsets, idx + 1)?
-                    .try_into()
-                    .map_err(|_| Error::LengthMismatch)?;
-                if next < prev || next > data_len {
-                    return Err(Error::LengthMismatch);
-                }
-                let start = data_start.checked_add(prev).ok_or(Error::LengthMismatch)?;
-                let end = data_start.checked_add(next).ok_or(Error::LengthMismatch)?;
-                visit(SequenceSpan { start, end })?;
-                prev = next;
-            }
-            if prev != data_len {
-                return Err(Error::LengthMismatch);
-            }
-            Ok(data_end)
-        }
+        visit(SequenceSpan { start, end })?;
+        offset = end;
     }
+    Ok(offset)
 }
 
 #[cfg(test)]
@@ -136,12 +90,8 @@ mod tests {
 
     fn encode(values: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
-        write_element_sequence::<u8, _>(
-            &mut Encoder::for_buffer(&mut bytes),
-            values.iter(),
-            u64::MAX,
-        )
-        .unwrap();
+        write_element_sequence::<u8, _>(&mut Encoder::for_buffer(&mut bytes), values.iter())
+            .unwrap();
         bytes
     }
 
@@ -177,30 +127,25 @@ mod tests {
     }
 
     #[test]
-    fn first_offset_is_rejected_before_any_plan_allocation() {
-        let _flags = DecodeFlagsGuard::enter(0);
-        // Exercise the retained internal planner directly. PACKED_SEQ remains
-        // a reserved wire-header bit and is never enabled by these fixtures.
-        let mut bytes = 1_u64.to_le_bytes().to_vec();
-        bytes.extend_from_slice(&1_u64.to_le_bytes());
-        bytes.extend_from_slice(&1_u64.to_le_bytes());
-        bytes.push(0x51);
-        // Count admission keeps its existing one-byte charge. No credit remains
-        // for a SequenceSpan allocation; the framing reason must win first.
-        let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, usize::MAX);
-        let (result, usage) = with_decode_limits_measured(limits, || {
-            plan_binary_sequence(&bytes, 0, BinarySequenceLayout::FixedOffsets)
-        });
-        assert!(matches!(result, Err(Error::LengthMismatch)));
-        assert_eq!(usage.total_allocated_bytes(), 1);
-        let mut empty = 0_u64.to_le_bytes().to_vec();
-        empty.extend_from_slice(&1_u64.to_le_bytes());
-        let zero = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
-        let (result, usage) = with_decode_limits_measured(zero, || {
-            plan_binary_sequence(&empty, 0, BinarySequenceLayout::FixedOffsets)
-        });
-        assert!(matches!(result, Err(Error::LengthMismatch)));
-        assert_eq!(usage.total_allocated_bytes(), 0);
+    fn truncated_element_framing_is_rejected_before_any_plan_allocation() {
+        for flags in [0, header_flags::COMPACT_LEN] {
+            let _flags = DecodeFlagsGuard::enter(flags);
+            // Four declared elements need at least four element prefixes; only one
+            // one-byte element follows the count.
+            let mut bytes = 4_u64.to_le_bytes().to_vec();
+            write_len_to_vec_with_flags(&mut bytes, 1, flags);
+            bytes.push(0x51);
+            // Count admission keeps its existing per-element charge. No credit remains
+            // for a SequenceSpan allocation; the framing reason must win first.
+            let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 4, usize::MAX);
+            let (result, usage) =
+                with_decode_limits_measured(limits, || plan_binary_sequence(&bytes, flags));
+            assert!(
+                matches!(result, Err(Error::LengthMismatch)),
+                "flags {flags:#x}"
+            );
+            assert_eq!(usage.total_allocated_bytes(), 4, "flags {flags:#x}");
+        }
     }
 
     #[test]
