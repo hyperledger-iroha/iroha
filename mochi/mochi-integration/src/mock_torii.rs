@@ -15,11 +15,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::SumeragiDiagnosticsStatus,
-        consensus_v2::{
-            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus, SumeragiV2Status,
-            SumeragiV2StatusPhase,
-        },
+        consensus_v2::SumeragiV2GenesisContextParameters,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
@@ -31,6 +27,7 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
+    sumeragi::SumeragiStatus,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -81,7 +78,6 @@ fn canonical_block_stream_message() -> Vec<u8> {
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &ExecutionOutputLimits {
                 max_outputs: 1,
                 max_output_bytes: 64 * 1024,
@@ -130,7 +126,7 @@ pub struct MockToriiData {
     /// Snapshot returned from `GET /status`.
     pub status: TelemetryStatus,
     /// Snapshot returned from `GET /v1/sumeragi/status`.
-    pub sumeragi: SumeragiV2Status,
+    pub sumeragi: SumeragiStatus,
     /// Snapshot returned from `GET /v1/sumeragi/diagnostics`.
     pub sumeragi_diagnostics: SumeragiDiagnosticsStatus,
     /// JSON payload returned from `GET /v1/configuration`.
@@ -193,40 +189,28 @@ impl Default for MockToriiData {
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
         };
-        let sumeragi = SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"mochi-mock-node"),
-            build_fingerprint: Hash::new(b"mochi-mock-build"),
+        let sumeragi = SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
             config_fingerprint: Hash::new(b"mochi-mock-config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"mochi-mock-context",
-            ))),
+            beacon_horizon: None,
+            instance: [0x41; 32],
             height: 10,
             view: 4,
-            phase: SumeragiV2StatusPhase::Prepare,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Validated,
-            pending_persistence_id: None,
-            last_committed_height: 9,
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-            beacon_horizon: None,
+            stage: 0,
+            leader: None,
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 100,
+            committed_height: 9,
+            applied_height: 9,
+            awaiting: false,
+            signer: None,
+            unanchored: false,
+            abstaining: true,
+            halted: None,
+            footprint: Default::default(),
         };
         let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
             pipeline_execution: Default::default(),
@@ -242,16 +226,9 @@ impl Default for MockToriiData {
             npos: None,
             lane_commitments: Vec::new(),
             dataspace_commitments: Vec::new(),
-            lane_settlement_commitments: Vec::new(),
-            lane_relay_envelopes: Vec::new(),
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
-            native_amx_participant_applications: Vec::new(),
-            autonomous_lane_executions: Vec::new(),
         };
         let configuration = norito::json!({
             "torii": {
@@ -296,7 +273,7 @@ impl MockToriiData {
         })?;
         let sumeragi_path = dir.join("sumeragi.json");
         let sumeragi_bytes = read_bytes(&sumeragi_path)?;
-        let sumeragi: SumeragiV2Status =
+        let sumeragi: SumeragiStatus =
             norito::json::from_slice(&sumeragi_bytes).map_err(|err| {
                 eyre!(
                     "failed to decode Sumeragi status fixture {}: {err}",

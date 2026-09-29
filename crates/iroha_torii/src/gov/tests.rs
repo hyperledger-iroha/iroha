@@ -5,16 +5,16 @@ use crate::routing::MaybeTelemetry;
 use axum::body::Bytes;
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::{
-    block::BlockBuilder,
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::{Queue, TransactionGuard},
+    queue::Queue,
     smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
     state::{
         ElectionState, GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
         GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
         GovernanceReferendumRecord, GovernanceReferendumStatus, State, World,
     },
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -545,6 +545,7 @@ fn typed_proposal_selector_aliases(canonical: &str) -> [String; 5] {
     ]
 }
 struct GovHarness {
+    native_chain: parking_lot::Mutex<CertifiedTestChain>,
     state: Arc<State>,
     queue: Arc<Queue>,
     chain_id: Arc<ChainId>,
@@ -644,11 +645,13 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         world_tx.apply();
         world_block.commit();
     }
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
     let chain_id: ChainId = "chain".parse().expect("chain id");
-    let mut state = State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
-    let mut gov_cfg = state.gov.clone();
+    let defaults = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut gov_cfg = defaults.gov.clone();
     gov_cfg.voting_asset_id = asset_def_id.clone();
     gov_cfg.citizenship_asset_id = asset_def_id.clone();
     gov_cfg.bond_escrow_account = escrow.clone();
@@ -664,23 +667,19 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
     gov_cfg.approval_threshold_q_num = 1;
     gov_cfg.approval_threshold_q_den = 1;
     gov_cfg.min_turnout = 1;
-    state.set_gov(gov_cfg);
-    let nexus = state.nexus_snapshot();
-    let lane_manifests = Arc::new(
-        iroha_core::governance::manifest::LaneManifestRegistry::from_config(
-            &nexus.lane_catalog,
-            &iroha_config::parameters::actual::GovernanceCatalog::default(),
-            &iroha_config::parameters::actual::LaneRegistry::default(),
-        ),
-    );
-    state.install_lane_manifests_for_testing(&lane_manifests);
+    let mut config = TestChainConfig::new(world, 1);
+    config.chain_id = chain_id.clone();
+    config.governance = Some(gov_cfg);
+    let native_chain = CertifiedTestChain::start(config).expect("native governance genesis");
+    let state = native_chain.state().clone();
     let events = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),
         events,
     ));
     GovHarness {
-        state: Arc::new(state),
+        native_chain: parking_lot::Mutex::new(native_chain),
+        state,
         queue,
         chain_id: Arc::new(chain_id),
         authority,
@@ -909,38 +908,24 @@ fn queue_governance_proposal_instruction_skeleton(
         .push(accepted, harness.state.view())
         .expect("push governance proposal instruction skeleton");
 }
-fn apply_queued_block_allow_errors(
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    expected_height: u64,
-) -> Vec<bool> {
-    let max_txs_in_block = core::num::NonZeroUsize::new(1024).expect("nonzero");
-    let mut guards = Vec::new();
-    queue.get_transactions_for_block(&state.view(), max_txs_in_block, &mut guards);
-    if guards.is_empty() {
+fn apply_queued_block_allow_errors(harness: &GovHarness) -> Vec<bool> {
+    let mut chain = harness.native_chain.lock();
+    let accepted = harness
+        .queue
+        .bounded_pending_snapshot_for_testing(
+            &chain.state().view(),
+            core::num::NonZeroUsize::new(1024).expect("nonzero"),
+        )
+        .expect("healthy pending queue");
+    if accepted.is_empty() {
         return Vec::new();
     }
-    let accepted: Vec<_> = guards
+    let hashes = accepted
         .iter()
-        .map(TransactionGuard::clone_accepted)
-        .collect();
-    let latest_block = state.view().latest_block();
-    let leader = checked_governance_bls_keypair(0x94);
-    let new_block = BlockBuilder::new(accepted)
-        .chain(0, latest_block.as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-    assert_eq!(
-        new_block.header().height().get(),
-        expected_height,
-        "unexpected block height"
-    );
-    let mut state_block = state.block(new_block.header());
-    let valid_block = new_block
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let block_ref = committed_block.as_ref();
+        .map(iroha_core::tx::AcceptedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    let committed_block = crate::test_utils::commit_native_accepted_inputs(&mut chain, accepted);
+    let block_ref = committed_block.block();
     let errors = block_ref
         .external_transactions()
         .enumerate()
@@ -955,7 +940,10 @@ fn apply_queued_block_allow_errors(
             error.is_some()
         })
         .collect::<Vec<_>>();
-    crate::test_utils::finalize_committed_block(state, state_block, committed_block);
+    assert_eq!(
+        harness.queue.remove_committed_hashes_for_testing(hashes),
+        errors.len()
+    );
     errors
 }
 #[tokio::test]
@@ -985,10 +973,7 @@ async fn citizen_status_reports_registered_record() {
         .queue
         .push(accepted, harness.state.view())
         .expect("push register citizen transaction");
-    assert_eq!(
-        apply_queued_block_allow_errors(&harness.state, &harness.queue, 1),
-        vec![false]
-    );
+    assert_eq!(apply_queued_block_allow_errors(&harness), vec![false]);
     let response = handle_gov_citizen_status(
         harness.state.clone(),
         axum::extract::Path(harness.authority.to_string()),
@@ -1037,10 +1022,7 @@ async fn citizen_count_reports_exact_registry_total() {
         .queue
         .push(accepted, harness.state.view())
         .expect("push register citizen transaction");
-    assert_eq!(
-        apply_queued_block_allow_errors(&harness.state, &harness.queue, 1),
-        vec![false]
-    );
+    assert_eq!(apply_queued_block_allow_errors(&harness), vec![false]);
     let response = handle_gov_citizen_count(harness.state.clone())
         .await
         .expect("citizen count response")
@@ -1574,10 +1556,8 @@ async fn ministry_agenda_get_returns_missing_then_persisted_record() {
     };
     queue_instruction_skeleton(&harness, &body.tx_instructions);
     let applied = crate::test_utils::apply_queued_in_one_block(
-        &harness.state,
+        &mut harness.native_chain.lock(),
         &harness.queue,
-        harness.chain_id.as_ref(),
-        1,
     );
     assert_eq!(applied, 1);
     let persisted = handle_ministry_agenda_proposal_get(
@@ -1592,7 +1572,7 @@ async fn ministry_agenda_get_returns_missing_then_persisted_record() {
     assert_eq!(record.proposal, proposal);
     assert_eq!(record.authority, harness.authority);
     assert!(!record.submitted_tx_hash_hex.is_empty());
-    assert_eq!(record.submitted_height, 1);
+    assert_eq!(record.submitted_height, 2);
 }
 #[tokio::test]
 async fn ministry_agenda_draft_preflights_duplicate_proposal_ids() {
@@ -1613,10 +1593,8 @@ async fn ministry_agenda_draft_preflights_duplicate_proposal_ids() {
     };
     queue_instruction_skeleton(&harness, &body.tx_instructions);
     let applied = crate::test_utils::apply_queued_in_one_block(
-        &harness.state,
+        &mut harness.native_chain.lock(),
         &harness.queue,
-        harness.chain_id.as_ref(),
-        1,
     );
     assert_eq!(applied, 1);
     let duplicate = handle_ministry_agenda_proposal_draft(
@@ -2061,10 +2039,15 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
     governance.conviction_step_blocks = 1;
     governance.max_conviction = 1;
     governance.min_bond_amount = Quantity::zero();
-    state.set_gov(governance);
+    let mut config = TestChainConfig::new(World::default(), 1);
+    config.governance = Some(governance);
+    let mut chain = CertifiedTestChain::start(config).expect("native tally anchor");
+    let state = chain.state().clone();
     let rid = "tally-captured-view".to_owned();
     let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
-    let publish = |height, parent, totals: [u128; 3]| {
+    let mut publish = |totals: [u128; 3]| {
+        let height = chain.height() + 1;
+        let parent = state.view().latest_block().map(|block| block.hash());
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(height).unwrap(),
             parent,
@@ -2072,7 +2055,6 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
             height * 1_000,
             0,
         );
-        let hash = header.hash();
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world.governance_referenda_mut().insert(
@@ -2113,24 +2095,26 @@ async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
         tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
         block
-            .commit_empty_block_for_testing()
-            .expect("publish fixture corpus and its exact block-hash journal together");
-        hash
+            .commit_world_overlay_for_testing()
+            .expect("seed query corpus overlay");
+        // A real nonempty clock transaction publishes the next authenticated anchor.
+        chain.commit_at(height * 1_000, Vec::new());
+        chain.committed(height).block_hash()
     };
-    let first_hash = publish(1, None, [7, 3, 5]);
+    let first_hash = publish([7, 3, 5]);
     let captured = state.query_view();
-    let second_hash = publish(2, Some(first_hash), [70, 30, 50]);
+    let second_hash = publish([70, 30, 50]);
 
     let old = governance_tally_from_view(&captured, rid.clone()).unwrap();
     assert_eq!([old.approve, old.reject, old.abstain], [7, 3, 5]);
-    assert_eq!(old.evaluated_block_height, 1);
+    assert_eq!(old.evaluated_block_height, 2);
     assert_eq!(old.evaluated_block_hash, hex::encode(first_hash.as_ref()));
     let current = governance_tally_from_view(&state.query_view(), rid).unwrap();
     assert_eq!(
         [current.approve, current.reject, current.abstain],
         [70, 30, 50]
     );
-    assert_eq!(current.evaluated_block_height, 2);
+    assert_eq!(current.evaluated_block_height, 3);
     assert_eq!(
         current.evaluated_block_hash,
         hex::encode(second_hash.as_ref())
@@ -2639,7 +2623,7 @@ async fn propose_deploy_rejected_without_permission() {
         .expect("handler ok");
     let proposal_id = res.0.proposal_id.clone();
     queue_governance_proposal_instruction_skeleton(&harness, &res.0.tx_instructions);
-    let errors = apply_queued_block_allow_errors(&harness.state, &harness.queue, 1);
+    let errors = apply_queued_block_allow_errors(&harness);
     assert_eq!(errors, vec![true]);
     let pid_arr = proposal_id.into_bytes();
     assert!(

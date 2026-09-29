@@ -82,11 +82,9 @@ impl Kura {
         };
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
-        if let Err(error) = self.validate_configured_autonomous_mutation_disk_peak_locked(
+        if let Err(error) = self.validate_publication_disk_peak_locked(
             pending_canonical_bytes,
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            false,
-            false,
             &path,
         ) {
             debug!(
@@ -313,42 +311,15 @@ impl Kura {
         }
         Ok(())
     }
-    fn store_block_durable(
-        &self,
-        block: &Arc<SignedBlock>,
-        merge_entry: Option<&MergeLedgerEntry>,
-    ) -> Result<()> {
+    fn store_block_durable(&self, block: &Arc<SignedBlock>) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         let block_hash = block.hash();
         let actual_height = block.header().height().get();
         let actual_height_usize = usize::try_from(actual_height)?;
-        match (Self::block_merge_reference(block), merge_entry) {
-            (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
-            (Some(reference), None) => {
-                return Err(Error::MissingCertifiedMergeSidecar {
-                    entry_hash: reference.entry_hash,
-                });
-            }
-            (Some(_), Some(_)) => {
-                return Err(Error::MergeReferenceMismatch(
-                    "block compact reference does not match supplied merge entry".to_owned(),
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(Error::MergeReferenceMismatch(
-                    "merge entry supplied for a block without a compact reference".to_owned(),
-                ));
-            }
-            (None, None) => {}
-        }
-        if let Some(entry) = merge_entry {
-            Self::validate_merge_transaction_uniqueness(block, entry)?;
-        }
+
         {
             let block_data = self.block_data.lock();
             self.ensure_prune_recovery_not_required()?;
@@ -368,49 +339,12 @@ impl Kura {
                 let chain_len = block_data.len();
                 drop(block_data);
                 self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
-                let mut native_capacity = self
-                    .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
-                        block,
-                        merge_entry,
-                        None,
-                    )?;
-                if let Some(owner) = &mut native_capacity {
-                    owner.durable_write_started();
-                }
-                self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;
-                if let Some(owner) = &mut native_capacity {
-                    owner.publish_pending_index()?;
-                }
-                if let Some(entry) = merge_entry {
-                    self.preflight_committed_merge_entry_for_block(block, entry)?;
-                    let associated = self.associated_merge_entry_for_block(block)?;
-                    if associated.as_ref() != Some(entry) {
-                        self.persist_pending_certified_merge_entry(entry)?;
-                    }
-                }
-                self.persist_lane_payload_ownership_artifacts_for_block(block)?;
+                self.check_publication_capacity_under_prune_and_canonical_guards()?;
+
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
-                if let Some(entry) = merge_entry {
-                    self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
-                        block, entry, chain_len,
-                    )
-                    .map_err(|error| {
-                        self.committed_recovery_failure(
-                            "existing merge carrier retry publication",
-                            &error,
-                        )
-                    })?;
-                } else {
-                    self.set_transaction_entrypoint_index_entry(
-                        actual_height_usize,
-                        block,
-                        chain_len,
-                    );
-                }
-                if let Some(owner) = &native_capacity {
-                    owner.finish_exact_replacement_retirement(block)?;
-                }
+
+                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
+
                 debug!(
                     height = actual_height,
                     ?block_hash,
@@ -419,33 +353,10 @@ impl Kura {
                 return Ok(());
             }
         }
-        if let Some(entry) = merge_entry {
-            self.preflight_committed_merge_entry_for_block(block, entry)?;
-        }
-        let mut native_capacity = self
-            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
-                block,
-                merge_entry,
-                None,
-            )?;
-        self.check_storage_budget(block, merge_entry)?;
-        if let Some(owner) = &mut native_capacity {
-            owner.publish_pending_index()?;
-        }
-        if let Some(entry) = merge_entry {
-            // The exact full entry is the recovery source for every crash after
-            // the canonical block commit point, including direct callers that
-            // did not arrive through the pending sidecar transport.
-            self.persist_pending_certified_merge_entry(entry)?;
-            #[cfg(test)]
-            self.maybe_pause_store_after_pending_merge_stage_for_tests();
-        }
-        let mut lane_artifacts = self.stage_lane_payload_ownership_artifacts_for_block(
-            block,
-            LaneBlockArtifactConflictPolicy::PreserveCanonical,
-        )?;
-        // Lane-artifact staging, when present, already owns `sidecar_lock`. Canonical mutation
-        // therefore follows one global order: sidecar -> block-store write -> block_data.
+
+        self.check_storage_budget(block)?;
+
+        // Canonical mutation retains the original physical writer and block-data order.
         let write_guard = self.lock_block_store_for_write();
         let mut block_data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -465,53 +376,21 @@ impl Kura {
             let chain_len = block_data.len();
             drop(block_data);
             self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
-            if let Some(owner) = &mut native_capacity {
-                owner.durable_write_started();
-            }
-            if let Some(entry) = merge_entry {
-                self.preflight_committed_merge_entry_for_block(block, entry)?;
-            }
-            if let Some(batch) = lane_artifacts.take() {
-                batch.commit();
-            }
+
             // The canonical-chain guard still excludes another block mutation.
             // Release the physical writer before geometry/sidecar publication,
             // preserving the same lock order as the first exact-retry branch.
             drop(write_guard);
             self.set_block_height_index_entry(actual_height_usize, block_hash);
-            if let Some(entry) = merge_entry {
-                self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
-                    block, entry, chain_len,
-                )
-                .map_err(|error| {
-                    self.committed_recovery_failure(
-                        "existing merge carrier retry publication",
-                        &error,
-                    )
-                })?;
-            } else {
-                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
-            }
-            if let Some(owner) = &native_capacity {
-                owner.finish_exact_replacement_retirement(block)?;
-            }
+
+            self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
+
             debug!(
                 height = actual_height,
                 ?block_hash,
                 "block was durably stored in Kura while waiting to append"
             );
             return Ok(());
-        }
-        if let Some(entry) = merge_entry {
-            // Recheck after all fallible staging and while the canonical height
-            // is still exclusively reserved. Deterministic binding conflicts
-            // must fail before the block becomes irrevocable.
-            self.preflight_committed_merge_entry_for_block(block, entry)?;
-        }
-        self.write_canonical_association_stage(block, merge_entry)?;
-        if let Some(owner) = &mut native_capacity {
-            owner.durable_write_started();
         }
         if let Err(err) =
             self.persist_block_at_height_while_locked(block, actual_height, &write_guard)
@@ -526,34 +405,11 @@ impl Kura {
                 // association stage against the selected canonical block hash.
                 return Err(err);
             }
-            if let Some(owner) = &mut native_capacity {
-                owner.canonical_write_proven_uncommitted();
-            }
-            if let Some(mut batch) = lane_artifacts.take()
-                && let Err(rollback_err) = batch.rollback()
-            {
-                error!(
-                    ?rollback_err,
-                    ?block_hash,
-                    "Failed to rollback lane artifacts after block write failure"
-                );
-                // Keep the exact pending owner until every rollback side effect
-                // is proven complete; its guard closes later canonical admission.
-                return Err(rollback_err);
-            }
-            self.remove_canonical_association_stage()?;
             // The pending-index remover acquires sidecar ownership. Drop physical
             // block/data writers first, preserving sidecar-before-store ordering.
             drop(block_data);
             drop(write_guard);
-            drop(lane_artifacts);
-            if let Some(owner) = &mut native_capacity {
-                owner.rollback_after_proven_uncommitted_write()?;
-            }
             return Err(err);
-        }
-        if let Some(batch) = lane_artifacts.take() {
-            batch.commit();
         }
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
@@ -568,44 +424,9 @@ impl Kura {
         // incomplete regardless of separate physical sidecar publication.
         self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
         drop(block_data);
-        // Apply associations only after block_data and the durable marker agree. The durable
-        // stage remains authoritative across any post-commit association failure.
-        if let Err(association_error) = self.recover_canonical_association_stage() {
-            return Err(self.committed_recovery_failure(
-                "committed canonical association recovery",
-                &association_error,
-            ));
-        }
-        if let Some(entry) = merge_entry {
-            self.ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
-                entry, block,
-            )
-            .map_err(|error| {
-                self.committed_recovery_failure("post-WSV lane artifact budget reservation", &error)
-            })?;
-        }
+
         self.append_debug_block_dump(block);
-        if let Some(entry) = merge_entry {
-            // The block fsync above is the Kura commit point. From here on all
-            // repair is monotonic: never truncate the block, lane artifacts, or
-            // a successfully appended merge frame when a later write fails.
-            if let Err(err) = self.append_committed_merge_entry_for_block_if_missing(block, entry) {
-                error!(
-                    ?err,
-                    ?block_hash,
-                    entry_epoch = entry.epoch_id,
-                    "Failed to publish merge-ledger association after canonical block commit"
-                );
-                return Err(self.committed_recovery_failure(
-                    "committed merge-ledger association publication",
-                    &err,
-                ));
-            }
-            // Canonical-association recovery already attempted the
-            // post-commit cleanup. Preserve its redundant repair sidecar when
-            // that best-effort removal failed; an idempotent store retry uses
-            // the existing-block branch above to remove it.
-        }
+
         debug!(
             height = actual_height,
             new_len,

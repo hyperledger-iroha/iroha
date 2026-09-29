@@ -46,6 +46,29 @@ class PublicContractSchemaTests(unittest.TestCase):
         self.assertEqual(SPEC.read_bytes(), (ROOT / 'crates/iroha_torii/assets/openapi/torii.json').read_bytes())
         self.assertEqual(SPEC.read_bytes(), (ROOT / 'artifacts/openapi/versions/current/torii.json').read_bytes())
 
+    def test_ram_execute_cannot_claim_a_plaintext_opening(self):
+        payload = dict(program_id='example', program_digest='a' * 64,
+                       backend='bfv-programmed-v1', verification_mode='signed',
+                       input_ciphertext_hash='b' * 64, output_ciphertext_hash='c' * 64,
+                       parameter_digest='d' * 64, evaluation_key_digest='e' * 64,
+                       output_hash='c' * 64, associated_data_hash='f' * 64,
+                       executed_at_ms=42)
+        receipt = dict(payload=payload, attestation=dict(kind='signed', signature='aa' * 64))
+        response = dict(program_id='example', opaque_hash='a' * 64,
+                        receipt_hash='b' * 64, output_ciphertext='abcd',
+                        output_hash='c' * 64, associated_data_hash='f' * 64,
+                        executed_at_ms=42, backend='bfv-programmed-v1',
+                        verification_mode='signed', receipt=receipt)
+        validator = self.validator('RamLfeExecuteResponse')
+        self.assertTrue(validator.is_valid(response))
+        for opening in [None, {}, dict(payload=payload, signature='aa' * 64)]:
+            self.assertFalse(validator.is_valid(response | {'output_opening': opening}))
+        source = (ROOT / 'crates/iroha_torii/src/routing.rs').read_text()
+        body = re.search(r'pub struct RamLfeExecuteResponseDto \{(.*?)\n\}', source, re.S).group(1)
+        self.assertEqual(set(re.findall(r'pub (\w+):', body)),
+                         set(self.schemas['RamLfeExecuteResponse']['properties']))
+        self.assertIn('RamLfeOutputOpening', self.schemas)
+
     def test_detached_fields_are_one_complete_non_null_group(self):
         v = self.validator('ContractCallRequest')
         fields = {'public_key_hex': 'a' * 64, 'signature_b64': 'AQ==', 'transaction_payload_b64': 'Ag=='}

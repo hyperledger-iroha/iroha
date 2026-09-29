@@ -611,61 +611,31 @@ async fn contract_alias_resolve_returns_bound_contract() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn ram_lfe_program_policies_list_registered_program() {
-    let authority =
-        checked_torii_test_account_id(0xb0, "derive RAM-LFE policy-list authority fixture key");
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer =
-        checked_torii_test_ed25519_keypair(0xb1, "derive RAM-LFE policy-list signer fixture key");
-    let (_policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let mut app = mk_app_state_for_tests();
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_program_policy(&authority, &mut tx, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
+async fn ram_lfe_program_policies_list_registered_hkdf_program() {
+    let (app, _, _, _, program) = registered_hkdf_identifier_app(0xb0);
     let response = handler_ram_lfe_program_policies(
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
     )
     .await
-    .expect("handler should succeed")
+    .expect("list supported program")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
-        .expect("collect body")
+        .unwrap()
         .to_bytes();
-    let dto: routing::RamLfeProgramPolicyListDto =
-        norito::json::from_slice(&body).expect("json decode");
+    let dto: routing::RamLfeProgramPolicyListDto = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items.len(), 1);
-    assert_eq!(
-        dto.items[0].program_id,
-        program_policy.program_id.to_string()
-    );
-    assert_eq!(dto.items[0].backend, "bfv-programmed-v1");
+    assert_eq!(dto.items[0].program_id, program.program_id.to_string());
+    assert_eq!(dto.items[0].backend, "hkdf-sha3-512-prf-v1");
     assert_eq!(dto.items[0].verification_mode, "signed");
     assert!(dto.items[0].active);
-    assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
-    assert!(dto.items[0].ram_fhe_profile.is_some());
+    assert!(dto.items[0].input_encryption.is_none());
+    assert!(dto.items[0].input_encryption_public_parameters.is_none());
+    assert!(dto.items[0].ram_fhe_profile.is_none());
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -698,69 +668,55 @@ fn encrypted_only_request_dtos_reject_plaintext_fields() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn ram_lfe_execute_returns_receipt() {
-    let authority =
-        checked_torii_test_account_id(0xb2, "derive RAM-LFE execute authority fixture key");
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer =
-        checked_torii_test_ed25519_keypair(0xb3, "derive RAM-LFE execute signer fixture key");
-    let (_policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let mut app = mk_app_state_for_tests();
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_program_policy(&authority, &mut tx, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let response = handler_ram_lfe_execute(
+async fn ram_lfe_execute_rejects_unsupported_encrypted_backend() {
+    let (app, _, _, _, program) = registered_hkdf_identifier_app(0xb2);
+    let error = handler_ram_lfe_execute(
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        AxPath(program_policy.program_id.to_string()),
+        AxPath(program.program_id.to_string()),
         NoritoJson(routing::RamLfeExecuteRequestDto {
-            encrypted_input: encrypted_identifier_hex(
-                &program_policy,
-                b"identifier-input",
-                b"ram-lfe-execute-route",
-            ),
+            encrypted_input: synthetic_ciphertext_hex(),
         }),
     )
     .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let raw: norito::json::Value = norito::json::from_slice(&body).expect("raw json decode");
+    .expect_err("HKDF is not an encrypted execution backend");
     assert!(
-        raw.as_object()
-            .expect("execute response object")
-            .get("output_hex")
-            .is_none()
+        error
+            .to_string()
+            .contains("does not yet support Torii app execution receipts"),
+        "{error}"
     );
-    let dto: routing::RamLfeExecuteResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.program_id, program_policy.program_id.to_string());
-    assert_eq!(dto.backend, "bfv-programmed-v1");
-    assert_eq!(dto.verification_mode, "signed");
-    assert_eq!(dto.receipt.payload.program_id, dto.program_id);
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn ram_lfe_execute_dto_contains_ciphertext_without_a_fabricated_opening() {
+    let owner = checked_torii_test_account_id(0xb2, "DTO owner");
+    let signer = checked_torii_test_ed25519_keypair(0xb3, "DTO signer");
+    let (_, program) = sample_identifier_policy(&owner, &signer, &"string#retail".parse().unwrap());
+    let receipt = synthetic_execution_receipt(&program, &signer, 100, Some(200));
+    let p = &receipt.payload;
+    // Projection of typed synthetic metadata is not private execution or opening.
+    let draft = identifier_resolution::RamLfeExecutionDraft {
+        output: b"synthetic-output-ciphertext".to_vec(),
+        opaque_hash: Hash::new(b"synthetic-opaque"),
+        receipt_hash: Hash::new(b"synthetic-receipt"),
+        executed_at_ms: p.executed_at_ms,
+        expires_at_ms: p.expires_at_ms,
+        backend: p.backend,
+        output_hash: p.output_hash,
+        input_ciphertext_hash: p.input_ciphertext_hash,
+        output_ciphertext_hash: p.output_ciphertext_hash,
+        associated_data_hash: p.associated_data_hash,
+        program_digest: p.program_digest,
+        parameter_digest: p.parameter_digest,
+        evaluation_key_digest: p.evaluation_key_digest,
+        verification_mode: p.verification_mode,
+    };
+    let dto = ram_lfe_execute_response(&receipt, &draft);
+    assert_eq!(dto.program_id, program.program_id.to_string());
+    assert_eq!(dto.output_ciphertext, hex::encode_upper(&draft.output));
+    assert_eq!(dto.output_hash, p.output_hash.to_string());
     assert_eq!(dto.receipt.payload.output_hash, dto.output_hash);
     assert_eq!(
         dto.receipt.payload.associated_data_hash,
@@ -768,121 +724,62 @@ async fn ram_lfe_execute_returns_receipt() {
     );
     assert_eq!(dto.receipt.attestation.kind, "signed");
     assert!(dto.receipt.attestation.signature.is_some());
+    let bytes = norito::json::to_vec(&dto).unwrap();
+    let raw: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let object = raw.as_object().unwrap();
+    assert!(!object.contains_key("output_hex"));
+    assert!(!object.contains_key("output_opening"));
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
-    let authority =
-        checked_torii_test_account_id(0xb4, "derive RAM-LFE receipt-valid authority fixture key");
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer =
-        checked_torii_test_ed25519_keypair(0xb5, "derive RAM-LFE receipt-valid signer fixture key");
-    let (_policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let mut app = mk_app_state_for_tests();
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_program_policy(&authority, &mut tx, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let ciphertext = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"receipt-verify-input",
-        b"receipt-verify-route",
-    );
-    let draft = resolver
-        .execute_encrypted(&program_policy, &ciphertext)
-        .expect("execute program");
-    let receipt = resolver
-        .issue_execution_receipt(&program_policy, &draft)
-        .expect("issue RAM-LFE receipt");
-    let response = handler_ram_lfe_receipt_verify(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
-            receipt,
-            output_hex: Some(hex::encode(&draft.output)),
-        }),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::RamLfeReceiptVerifyResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert!(dto.valid);
-    assert_eq!(dto.program_id, program_policy.program_id.to_string());
-    assert_eq!(dto.backend, "bfv-programmed-v1");
-    assert_eq!(dto.verification_mode, "signed");
-    assert_eq!(dto.output_hash_matches, Some(true));
-    assert!(dto.error.is_none());
+async fn ram_lfe_receipt_verify_rejects_insecure_payload_even_when_output_matches() {
+    let (app, _, signer, _, program) = registered_hkdf_identifier_app(0xb4);
+    for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
+        for mode in [
+            RamLfeVerificationMode::Signed,
+            RamLfeVerificationMode::Proof,
+        ] {
+            let mut rejected = program.clone();
+            rejected.backend = backend;
+            rejected.verification_mode = mode;
+            let receipt = synthetic_execution_receipt(&rejected, &signer, 100, None);
+            let response = handler_ram_lfe_receipt_verify(
+                State(app.clone()),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
+                    receipt,
+                    output_hex: Some(hex::encode(b"synthetic-output-ciphertext")),
+                }),
+            )
+            .await
+            .expect("verification reports refusal")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let dto: routing::RamLfeReceiptVerifyResponseDto =
+                norito::json::from_slice(&body).unwrap();
+            assert!(!dto.valid);
+            assert_eq!(dto.program_id, program.program_id.to_string());
+            assert_eq!(dto.backend, backend.as_str());
+            assert_eq!(dto.output_hash_matches, Some(true));
+            assert!(
+                dto.error
+                    .as_deref()
+                    .unwrap()
+                    .contains("noiseless public-key equation")
+            );
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
-    let authority =
-        checked_torii_test_account_id(0xb6, "derive RAM-LFE receipt-expired authority fixture key");
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0xb7,
-        "derive RAM-LFE receipt-expired signer fixture key",
-    );
-    let (_policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let mut app = mk_app_state_for_tests();
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_program_policy(&authority, &mut tx, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let ciphertext = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"receipt-verify-input",
-        b"receipt-verify-expired-route",
-    );
-    let draft = resolver
-        .execute_encrypted(&program_policy, &ciphertext)
-        .expect("execute program");
-    let mut receipt = resolver
-        .issue_execution_receipt(&program_policy, &draft)
-        .expect("issue RAM-LFE receipt");
-    receipt.payload.executed_at_ms = 1;
-    receipt.payload.expires_at_ms = Some(2);
+    let (app, _, signer, _, program) = registered_hkdf_identifier_app(0xb6);
+    let receipt = synthetic_execution_receipt(&program, &signer, 1, Some(2));
     let response = handler_ram_lfe_receipt_verify(
         State(app),
         HeaderMap::new(),
@@ -893,170 +790,74 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
         }),
     )
     .await
-    .expect("handler should succeed")
+    .expect("expiry is reported")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
-        .expect("collect body")
+        .unwrap()
         .to_bytes();
-    let dto: routing::RamLfeReceiptVerifyResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
+    let dto: routing::RamLfeReceiptVerifyResponseDto = norito::json::from_slice(&body).unwrap();
     assert!(!dto.valid);
-    assert!(
-        dto.error
-            .as_deref()
-            .expect("expiry error")
-            .contains("is expired")
-    );
+    assert!(dto.error.as_deref().unwrap().contains("is expired"));
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_policies_lists_registered_policy() {
-    let authority =
-        checked_torii_test_account_id(0x10, "derive identifier policy-list authority fixture key");
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
-            b"uaid-directory",
-        ))))
-        .build(&authority);
-    let world = World::with([domain], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x11,
-        "derive identifier policy-list signer fixture key",
-    );
-    let (_sample_policy, program_policy) =
-        sample_identifier_policy(&authority, &signer, &policy_id);
-    let policy = IdentifierPolicy::new(
-        policy_id.clone(),
-        authority.clone(),
-        IdentifierNormalization::Exact,
-        program_policy.program_id.clone(),
-    );
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
+async fn identifier_policies_lists_registered_hkdf_policy() {
+    let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x10);
     let response =
         handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
-            .expect("handler should succeed")
+            .expect("list registered policy")
             .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
-        .expect("collect body")
+        .unwrap()
         .to_bytes();
-    let dto: routing::IdentifierPolicyListDto =
-        norito::json::from_slice(&body).expect("json decode");
+    let dto: routing::IdentifierPolicyListDto = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items.len(), 1);
-    assert_eq!(dto.items[0].policy_id, policy_id.to_string());
+    assert_eq!(dto.items[0].policy_id, policy.id.to_string());
     assert!(dto.items[0].active);
-    assert_eq!(dto.items[0].backend, "bfv-affine-v1");
+    assert_eq!(dto.items[0].backend, "hkdf-sha3-512-prf-v1");
     assert_eq!(dto.items[0].normalization, "exact");
-    assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
-    assert!(
-        dto.items[0]
-            .input_encryption_public_parameters
-            .as_ref()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(dto.items[0].input_encryption.is_none());
+    assert!(dto.items[0].input_encryption_public_parameters.is_none());
     assert!(dto.items[0].ram_fhe_profile.is_none());
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_policies_expose_programmed_ram_fhe_profile() {
-    let authority = checked_torii_test_account_id(
-        0x12,
-        "derive programmed identifier policy authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
-            b"uaid-directory-program-profile",
-        ))))
-        .build(&authority);
-    let world = World::with([domain], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x13,
-        "derive programmed identifier policy signer fixture key",
-    );
-    let (policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
+async fn identifier_program_registration_rejects_both_diagnostic_bfv_profiles() {
+    let owner = checked_torii_test_account_id(0x12, "unavailable program owner");
+    let signer = checked_torii_test_ed25519_keypair(0x13, "unavailable program signer");
+    let (_, base) = sample_identifier_policy(&owner, &signer, &"string#retail".parse().unwrap());
+    let app = mk_app_state_for_tests();
+    let mut block = app
+        .state
+        .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let response =
-        handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
-            .await
-            .expect("handler should succeed")
-            .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierPolicyListDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.total, 1);
-    assert_eq!(dto.items[0].backend, "bfv-programmed-v1");
-    let signer_public_key = signer.public_key().to_string();
-    assert_eq!(
-        dto.items[0].phone_retail_attestor_public_key.as_deref(),
-        Some(signer_public_key.as_str())
-    );
-    let profile = dto.items[0]
-        .ram_fhe_profile
-        .clone()
-        .expect("programmed policies should expose a RAM-FHE profile");
-    assert_eq!(profile.profile_version, 1);
-    assert_eq!(profile.register_count, 4);
-    assert_eq!(profile.memory_lane_count, 32);
-    assert_eq!(profile.ciphertext_mul_per_step, 16);
-    assert_eq!(
-        profile.encrypted_input_mode,
-        iroha_crypto::BfvRamEncryptedInputMode::EncryptedEnvelopeV1
+    for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
+        for mode in [
+            RamLfeVerificationMode::Signed,
+            RamLfeVerificationMode::Proof,
+        ] {
+            let mut program = base.clone();
+            program.backend = backend;
+            program.commitment.backend = backend;
+            program.commitment.public_parameters = vec![0xff];
+            program.verification_mode = mode;
+            let error = RegisterRamLfeProgramPolicy { policy: program }
+                .execute(&owner, &mut tx)
+                .expect_err("neither signed nor proof admission may enable diagnostic BFV");
+            assert!(error.to_string().contains("unavailable"), "{error}");
+        }
+    }
+    assert!(
+        tx.world
+            .ram_lfe_program_policies()
+            .get(&base.program_id)
+            .is_none()
     );
 }
 #[cfg(feature = "app_api")]
@@ -1089,440 +890,151 @@ async fn identifier_policies_enforce_token_policy() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_resolve_returns_bound_account() {
-    let authority = checked_torii_test_account_id(
-        0x14,
-        "derive identifier resolve bound authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory"));
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let world = World::with([domain], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x15,
-        "derive identifier resolve bound signer fixture key",
-    );
-    let (policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let encrypted_input = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"+15551234567",
-        b"identifier-resolve-bound-account",
-    );
-    let encrypted_input_hex =
-        hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
-    let output_opening =
-        output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
-    let network_id = app.signed_query_admission.network_id();
-    let canonicality = phone_retail_canonicality_for_ciphertext(
-        &policy,
-        &program_policy,
-        &signer,
-        network_id.clone(),
-        uaid,
-        &authority,
-        &encrypted_input,
-        &output_opening,
-    );
-    let draft = resolver
-        .derive_phone_retail_encrypted(
-            &policy,
-            &program_policy,
-            &encrypted_input,
-            output_opening.clone(),
-            canonicality.clone(),
-            &network_id,
-        )
-        .expect("derive opaque id");
-    let receipt = resolver
-        .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
-        .expect("claim receipt");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    ClaimIdentifier {
-        account: authority.clone(),
-        receipt,
-    }
-    .execute(&authority, &mut tx)
-    .expect("claim identifier");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let response = handler_identifier_resolve(
+async fn identifier_resolve_rejects_unsupported_encryption() {
+    let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x14);
+    let error = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input: encrypted_input_hex,
-            output_opening,
-            phone_retail_canonicality: Some(canonicality),
-        }),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierResolveResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.payload.policy_id, policy_id.to_string());
-    assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
-    assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.execution.backend, "bfv-programmed-v1");
-    assert!(
-        !dto.attestation
-            .signature
-            .as_deref()
-            .unwrap_or_default()
-            .is_empty(),
-        "resolve responses should carry a signed receipt"
-    );
-    assert_eq!(dto.attestation.kind, "signed");
-    assert_eq!(dto.payload.policy_id, policy_id.to_string());
-    assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
-    assert_eq!(dto.payload.account_id, authority.to_string());
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
-    let authority = checked_torii_test_account_id(
-        0x16,
-        "derive identifier resolve programmed authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-programmed"));
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let world = World::with([domain], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x17,
-        "derive identifier resolve programmed signer fixture key",
-    );
-    let (policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let encrypted_input = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"+15551234567",
-        b"identifier-resolve-programmed",
-    );
-    let encrypted_input_hex =
-        hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
-    let output_opening =
-        output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
-    let network_id = app.signed_query_admission.network_id();
-    let canonicality = phone_retail_canonicality_for_ciphertext(
-        &policy,
-        &program_policy,
-        &signer,
-        network_id.clone(),
-        uaid,
-        &authority,
-        &encrypted_input,
-        &output_opening,
-    );
-    let draft = resolver
-        .derive_phone_retail_encrypted(
-            &policy,
-            &program_policy,
-            &encrypted_input,
-            output_opening.clone(),
-            canonicality.clone(),
-            &network_id,
-        )
-        .expect("derive opaque id");
-    let receipt = resolver
-        .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
-        .expect("claim receipt");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    ClaimIdentifier {
-        account: authority.clone(),
-        receipt,
-    }
-    .execute(&authority, &mut tx)
-    .expect("claim identifier");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let response = handler_identifier_resolve(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input: encrypted_input_hex,
-            output_opening,
-            phone_retail_canonicality: Some(canonicality),
-        }),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierResolveResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.payload.policy_id, policy_id.to_string());
-    assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
-    assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.execution.backend, "bfv-programmed-v1");
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn identifier_resolve_accepts_bfv_encrypted_input() {
-    let authority =
-        checked_torii_test_account_id(0x18, "derive identifier resolve BFV authority fixture key");
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-encrypted"));
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x19,
-        "derive identifier resolve BFV signer fixture key",
-    );
-    let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
-    let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
-        &authority,
-        &signer,
-        &policy_id,
-        IdentifierNormalization::Exact,
-        &public_parameters,
-    );
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let input = "ab";
-    let encrypted_input_ciphertext = encrypt_identifier_from_seed(
-        &public_parameters,
-        input.as_bytes(),
-        b"identifier-route-bfv-ciphertext",
-    )
-    .expect("encrypt BFV identifier input");
-    let encrypted_input =
-        hex::encode(norito::to_bytes(&encrypted_input_ciphertext).expect("encode BFV input"));
-    let output_opening = output_opening_for_ciphertext(
-        &resolver,
-        &program_policy,
-        &signer,
-        &encrypted_input_ciphertext,
-    );
-    let draft = resolver
-        .derive_encrypted(
-            &policy,
-            &program_policy,
-            &encrypted_input_ciphertext,
-            output_opening.clone(),
-        )
-        .expect("derive opaque id");
-    let receipt = resolver
-        .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
-        .expect("claim receipt");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    ClaimIdentifier {
-        account: authority.clone(),
-        receipt,
-    }
-    .execute(&authority, &mut tx)
-    .expect("claim identifier");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let response = handler_identifier_resolve(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input,
-            output_opening,
-            phone_retail_canonicality: None,
-        }),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierResolveResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.payload.policy_id, policy_id.to_string());
-    assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
-    assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
-}
-#[cfg(feature = "app_api")]
-#[tokio::test]
-async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
-    let authority = checked_torii_test_account_id(
-        0x1a,
-        "derive malformed identifier BFV authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let world = World::with(
-        [Domain::new(domain_id).build(&authority)],
-        [Account::new(authority.clone()).build(&authority)],
-        [],
-    );
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x1b,
-        "derive malformed identifier BFV signer fixture key",
-    );
-    let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
-    let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
-        &authority,
-        &signer,
-        &policy_id,
-        IdentifierNormalization::Exact,
-        &public_parameters,
-    );
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver);
-    {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        register_and_activate_identifier_policy_bundle(
-            &authority,
-            &mut tx,
-            &policy,
-            &program_policy,
-        );
-        tx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit block");
-    }
-    let mut malformed = norito::to_bytes(
-        &encrypt_identifier_from_seed(
-            &public_parameters,
-            b"ab",
-            b"identifier-route-bfv-malformed-ciphertext",
-        )
-        .expect("encrypt BFV identifier input"),
-    )
-    .expect("encode BFV identifier ciphertext");
-    let payload_start = norito::core::Header::SIZE;
-    assert!(malformed.len() > payload_start + 1);
-    let mut payload = malformed[payload_start..].to_vec();
-    payload.pop();
-    let payload_len = u64::try_from(payload.len())
-        .expect("payload length fits u64")
-        .to_le_bytes();
-    let checksum = norito::hardware_crc64(&payload).to_le_bytes();
-    malformed.truncate(payload_start);
-    malformed[23..31].copy_from_slice(&payload_len);
-    malformed[31..39].copy_from_slice(&checksum);
-    malformed.extend_from_slice(&payload);
-    let err = handler_identifier_resolve(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input: hex::encode(malformed),
+            policy_id: policy.id.to_string(),
+            encrypted_input: synthetic_ciphertext_hex(),
             output_opening: dummy_output_opening_for_access_test(),
             phone_retail_canonicality: None,
         }),
     )
     .await
-    .expect_err("malformed ciphertext should be rejected");
-    let message = match &err {
-        Error::Query(ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) => message.as_str(),
-        other => panic!("expected conversion error, got {other:?}"),
-    };
+    .expect_err("HKDF policy cannot resolve encrypted identifiers");
     assert!(
-        message.contains("encrypted identifier ciphertext is not valid Norito BFV data"),
-        "unexpected conversion message: {message}"
+        error
+            .to_string()
+            .contains("requires a BFV-backed RAM-LFE program"),
+        "{error}"
     );
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_work() {
+    let (app, _, _, policy, base) = registered_hkdf_identifier_app(0x16);
+    let resolver = identifier_resolution::IdentifierResolutionService::new();
+    for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
+        for mode in [
+            RamLfeVerificationMode::Signed,
+            RamLfeVerificationMode::Proof,
+        ] {
+            for mismatch in [false, true] {
+                let mut program = base.clone();
+                program.commitment.backend = backend;
+                if !mismatch {
+                    program.backend = backend;
+                }
+                program.verification_mode = mode;
+                let error = derive_identifier_request_draft(
+                    &resolver,
+                    &policy,
+                    &program,
+                    &routing::IdentifierResolveRequestDto {
+                        policy_id: policy.id.to_string(),
+                        encrypted_input: "not-hex".to_owned(),
+                        output_opening: dummy_output_opening_for_access_test(),
+                        phone_retail_canonicality: None,
+                    },
+                    &app.signed_query_admission.network_id(),
+                )
+                .expect_err("unavailable before parse");
+                assert!(
+                    error.to_string().contains("noiseless public-key equation"),
+                    "{error}"
+                );
+                let error = derive_ram_lfe_request_draft(
+                    &resolver,
+                    &program,
+                    &routing::RamLfeExecuteRequestDto {
+                        encrypted_input: "not-hex".to_owned(),
+                    },
+                )
+                .expect_err("unavailable before parse");
+                assert!(
+                    error.to_string().contains("noiseless public-key equation"),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_receipt_dto_preserves_typed_bindings_without_execution_claim() {
+    let (_, owner, signer, policy, program) = registered_hkdf_identifier_app(0x18);
+    let execution = synthetic_execution_receipt(&program, &signer, 100, Some(200)).payload;
+    let mut opening = dummy_output_opening_for_access_test();
+    opening.payload.program_id = program.program_id.clone();
+    opening.payload.input_ciphertext_hash = execution.input_ciphertext_hash;
+    opening.payload.output_ciphertext_hash = execution.output_ciphertext_hash;
+    opening.payload.parameter_digest = execution.parameter_digest;
+    opening.payload.evaluation_key_digest = execution.evaluation_key_digest;
+    opening.payload.opened_output_hash = Hash::new(b"synthetic-opened-plaintext");
+    assert_ne!(
+        opening.payload.opened_output_hash,
+        execution.output_ciphertext_hash
+    );
+    opening.signature = SignatureOf::try_new(signer.private_key(), &opening.payload)
+        .unwrap()
+        .into();
+    let payload = iroha_data_model::identifier::IdentifierResolutionReceiptPayload {
+        policy_id: policy.id.clone(),
+        execution,
+        opening,
+        opaque_id: iroha_data_model::account::OpaqueAccountId::from(Hash::new(b"synthetic-opaque")),
+        receipt_hash: Hash::new(b"synthetic-receipt"),
+        uaid: UniversalAccountId::from_hash(Hash::new(b"synthetic-uaid")),
+        account_id: owner,
+    };
+    let receipt = iroha_data_model::identifier::IdentifierResolutionReceipt {
+        attestation: iroha_data_model::ram_lfe::RamLfeReceiptAttestation::Signed(
+            SignatureOf::try_new(signer.private_key(), &payload)
+                .unwrap()
+                .into(),
+        ),
+        payload,
+        phone_retail_canonicality: None,
+    };
+    let dto = identifier_receipt_response(&receipt, program.backend.as_str()).unwrap();
+    assert_eq!(dto.payload.policy_id, policy.id.to_string());
+    assert_eq!(dto.payload.opaque_id, receipt.payload.opaque_id.to_string());
+    assert_eq!(
+        dto.payload.receipt_hash,
+        receipt.payload.receipt_hash.to_string()
+    );
+    assert_eq!(dto.payload.uaid, receipt.payload.uaid.to_string());
+    assert_eq!(
+        dto.payload.account_id,
+        receipt.payload.account_id.to_string()
+    );
+    assert_eq!(dto.payload.opening, receipt.payload.opening);
+    assert_eq!(dto.attestation.kind, "signed");
+    assert!(!dto.attestation.signature.as_deref().unwrap().is_empty());
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn identifier_resolve_rejects_malformed_ciphertext_without_panicking() {
+    let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x1a);
+    for (wire, expected) in [("zz", "not valid hex"), ("00", "not valid Norito BFV data")] {
+        let error = handler_identifier_resolve(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy.id.to_string(),
+                encrypted_input: wire.to_owned(),
+                output_opening: dummy_output_opening_for_access_test(),
+                phone_retail_canonicality: None,
+            }),
+        )
+        .await
+        .expect_err("malformed ciphertext is rejected");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1553,226 +1065,63 @@ async fn identifier_resolve_enforces_token_policy() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_claim_receipt_accepts_canonical_phone_attestation() {
-    let authority = checked_torii_test_account_id(
-        0x1c,
-        "derive identifier claim receipt authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-claim"));
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let world = World::with([domain], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x1d,
-        "derive identifier claim receipt signer fixture key",
-    );
-    let (policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
-    let encrypted_input = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"+15551234567",
-        b"identifier-claim-receipt",
-    );
-    let encrypted_input_hex =
-        hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
-    let output_opening =
-        output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
-    let network_id = app.signed_query_admission.network_id();
-    let canonicality = phone_retail_canonicality_for_ciphertext(
-        &policy,
-        &program_policy,
-        &signer,
-        network_id.clone(),
-        uaid,
-        &authority,
-        &encrypted_input,
-        &output_opening,
-    );
-    let response = handler_identifier_claim_receipt(
-        State(app.clone()),
+async fn identifier_claim_receipt_rejects_unsupported_encryption() {
+    let (app, owner, _, policy, _) = registered_hkdf_identifier_app(0x1c);
+    let error = handler_identifier_claim_receipt(
+        State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        AxPath(authority.to_string()),
+        AxPath(owner.to_string()),
         NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input: encrypted_input_hex.clone(),
-            output_opening: output_opening.clone(),
-            phone_retail_canonicality: Some(canonicality.clone()),
-        }),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierResolveResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    let expected_draft = resolver
-        .derive_phone_retail_encrypted(
-            &policy,
-            &program_policy,
-            &encrypted_input,
-            output_opening.clone(),
-            canonicality,
-            &network_id,
-        )
-        .expect("normalized derive");
-    assert_eq!(dto.payload.opaque_id, expected_draft.opaque_id.to_string());
-    assert_eq!(
-        dto.payload.receipt_hash,
-        expected_draft.receipt_hash.to_string()
-    );
-    assert_eq!(dto.payload.account_id, authority.to_string());
-    let missing = handler_identifier_claim_receipt(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        AxPath(authority.to_string()),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy_id.to_string(),
-            encrypted_input: encrypted_input_hex,
-            output_opening: output_opening.clone(),
+            policy_id: policy.id.to_string(),
+            encrypted_input: synthetic_ciphertext_hex(),
+            output_opening: dummy_output_opening_for_access_test(),
             phone_retail_canonicality: None,
         }),
     )
     .await
-    .expect_err("phone claim receipt must fail without canonicality evidence");
+    .expect_err("unsupported encryption cannot produce a claim receipt");
     assert!(
-        missing.to_string().contains("requires a trusted canonical"),
-        "{missing}"
+        error
+            .to_string()
+            .contains("requires a BFV-backed RAM-LFE program"),
+        "{error}"
     );
-    assert!(dto.phone_retail_canonicality.is_some());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
-    assert_eq!(dto.payload.account_id, authority.to_string());
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_receipt_lookup_returns_persisted_claim() {
-    let authority = checked_torii_test_account_id(
-        0x1e,
-        "derive identifier receipt lookup authority fixture key",
-    );
-    let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
-    let account = Account::new(authority.clone())
-        .with_uaid(Some(uaid))
-        .build(&authority);
-    let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
-    let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    let signer = checked_torii_test_ed25519_keypair(
-        0x1f,
-        "derive identifier receipt lookup signer fixture key",
-    );
-    let (policy, program_policy) =
-        sample_programmed_identifier_policy(&authority, &signer, &policy_id);
-    let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-    resolver.register_program_runtime(
-        program_policy.program_id.clone(),
-        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
-            .expect("valid RAM-LFE test secret"),
-        default_bfv_programmed_hidden_program(),
-        signer.clone(),
-        Some(30_000),
-    );
-    Arc::get_mut(&mut app)
-        .expect("unique app")
-        .identifier_resolver = Some(resolver.clone());
-    let encrypted_input = encrypted_identifier_ciphertext(
-        &program_policy,
-        b"+15551234567",
-        b"identifier-receipt-lookup",
-    );
-    let output_opening =
-        output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
-    let network_id = app.signed_query_admission.network_id();
-    let canonicality = phone_retail_canonicality_for_ciphertext(
-        &policy,
-        &program_policy,
-        &signer,
-        network_id.clone(),
-        uaid,
-        &authority,
-        &encrypted_input,
-        &output_opening,
-    );
-    let draft = resolver
-        .derive_phone_retail_encrypted(
-            &policy,
-            &program_policy,
-            &encrypted_input,
-            output_opening,
-            canonicality,
-            &network_id,
-        )
-        .expect("derive opaque id");
-    let receipt = resolver
-        .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
-        .expect("claim receipt");
-    let receipt_hash = receipt.payload.receipt_hash.to_string();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction();
-    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
-    ClaimIdentifier {
-        account: authority.clone(),
-        receipt,
-    }
-    .execute(&authority, &mut tx)
-    .expect("claim identifier");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
+async fn identifier_receipt_lookup_returns_not_found_without_an_admitted_claim() {
+    let (app, owner, _, policy, _) = registered_hkdf_identifier_app(0x1e);
+    // Projection keeps lookup field coverage without inserting a fabricated
+    // claim through a test-only admission bypass.
+    let claim = iroha_data_model::identifier::IdentifierClaimRecord {
+        policy_id: policy.id.clone(),
+        opaque_id: iroha_data_model::account::OpaqueAccountId::from(Hash::new(b"synthetic-opaque")),
+        receipt_hash: Hash::new(b"synthetic-receipt"),
+        phone_retail_nullifier: None,
+        uaid: UniversalAccountId::from_hash(Hash::new(b"synthetic-uaid")),
+        account_id: owner,
+        verified_at_ms: 100,
+        expires_at_ms: Some(200),
+    };
+    let dto = identifier_claim_lookup_response(&claim);
+    assert_eq!(dto.policy_id, policy.id.to_string());
+    assert_eq!(dto.opaque_id, claim.opaque_id.to_string());
+    assert_eq!(dto.receipt_hash, claim.receipt_hash.to_string());
+    assert_eq!(dto.uaid, claim.uaid.to_string());
+    assert_eq!(dto.account_id, claim.account_id.to_string());
+    assert_eq!(dto.verified_at_ms, 100);
+    assert_eq!(dto.expires_at_ms, Some(200));
     let response = handler_identifier_receipt_lookup(
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        AxPath(receipt_hash),
+        AxPath(claim.receipt_hash.to_string()),
     )
     .await
-    .expect("handler should succeed")
+    .expect("lookup missing claim")
     .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let dto: routing::IdentifierClaimLookupResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.policy_id, policy_id.to_string());
-    assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
-    assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
-    assert_eq!(dto.uaid, uaid.to_string());
-    assert_eq!(dto.account_id, authority.to_string());
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

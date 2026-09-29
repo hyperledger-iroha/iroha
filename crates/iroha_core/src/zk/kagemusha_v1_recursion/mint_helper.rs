@@ -34,12 +34,12 @@ use halo2_proofs::{
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
 };
 use iroha_data_model::{
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaPastaSchnorrSignatureV1, KagemushaTopUpMembershipWitnessV1,
-        kagemusha_mint_finality_peer_id_digest_v1, kagemusha_mint_finality_root_v1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1,
+        KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalitySealBundleV1, KagemushaPastaSchnorrSignatureV1,
+        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_peer_id_digest_v1,
+        kagemusha_mint_finality_root_v1,
     },
     kagemusha::KagemushaMintCreditStatementV1,
 };
@@ -403,7 +403,7 @@ fn mint_certificate_builder<F: KagemushaPoseidonFieldV1>() -> BaseCircuitBuilder
 
 /// Constrain one parity of the complete dynamic-roster mint certificate.
 ///
-/// The function always allocates `MAX_VALIDATORS_PER_HEIGHT` signature slots.  Roster activity
+/// The function always allocates `KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1` signature slots.  Roster activity
 /// is a constrained prefix, signer activity is a constrained subset with exact `2f + 1` size,
 /// and disabled equations have all three scalar coefficients forced to zero.  Therefore roster
 /// size, quorum subset, and history do not change the circuit shape.
@@ -620,9 +620,10 @@ where
     let after_epoch = range.is_less_than(ctx, authorization.last_height, block_height, 64);
     gate.assert_is_const(ctx, &before_epoch, &C::Base::ZERO);
     gate.assert_is_const(ctx, &after_epoch, &C::Base::ZERO);
-    let context_id = assign_bytes(ctx, &range, message.height_context_id.0.as_ref());
-    let subject_digest = assign_bytes(ctx, &range, &message.subject_digest);
-    let execution_digest = assign_bytes(ctx, &range, &message.execution_commitment_digest);
+    let native_instance = assign_bytes(ctx, &range, &message.native_instance);
+    let native_epoch_context = assign_bytes(ctx, &range, &message.native_epoch_context);
+    let native_block_hash = assign_bytes(ctx, &range, &message.native_block_hash);
+    let native_result = assign_bytes(ctx, &range, &message.native_result);
     let next_epoch_present = ctx.load_witness(C::Base::from(u64::from(
         message.next_epoch_authorization.is_some(),
     )));
@@ -668,7 +669,13 @@ where
             .try_into()
             .expect("authorization identity width"),
     );
-    for bytes in [&network_id, &context_id, &subject_digest, &execution_digest] {
+    for bytes in [
+        &network_id,
+        &native_instance,
+        &native_epoch_context,
+        &native_block_hash,
+        &native_result,
+    ] {
         assert_bytes_nonzero(ctx, gate, bytes);
     }
     let validator_count_bytes = uint_bytes_le(ctx, gate, validator_count, 32);
@@ -685,9 +692,10 @@ where
             validator_count_bytes,
             network_id.clone(),
             block_height_bytes,
-            context_id.clone(),
-            subject_digest.clone(),
-            execution_digest.clone(),
+            native_instance.clone(),
+            native_epoch_context.clone(),
+            native_block_hash.clone(),
+            native_result.clone(),
             marked_root.to_vec(),
             top_up_count_bytes,
             vec![next_epoch_present_byte],
@@ -721,7 +729,7 @@ where
     let mut active_sum = ctx.load_zero();
     let mut signer_sum = ctx.load_zero();
     let mut previous_active = ctx.load_constant(C::Base::ONE);
-    for slot in 0..MAX_VALIDATORS_PER_HEIGHT {
+    for slot in 0..KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1 {
         let active_value = slot < validator_count_value;
         let signer = seals_by_index.get(&slot).copied();
         let signer_value = signer.is_some();
@@ -1206,8 +1214,8 @@ fn mark_iroha_hash<F: KagemushaPoseidonFieldV1>(
 }
 
 // The selector, unsigned widths, Genesis authorization and disabled validator seals are
-// constrained by the surrounding certificate relation. These three gates isolate the
-// unsigned bootstrap message from both monetary certificates and epoch transitions.
+// constrained by the surrounding certificate relation. These gates isolate unsigned
+// genesis bootstrap from normal certificates, which must have a signed post-genesis result.
 fn constrain_bootstrap_message_gates<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     gate: &halo2_base::gates::GateChip<F>,
@@ -1220,6 +1228,11 @@ fn constrain_bootstrap_message_gates<F: KagemushaPoseidonFieldV1>(
     gate.assert_is_const(ctx, &bootstrap_count, &F::ZERO);
     let one = ctx.load_constant(F::ONE);
     constrain_equal_if(ctx, gate, block_height, one, bootstrap);
+    assert_nonzero(ctx, gate, block_height);
+    let normal = gate.not(ctx, bootstrap);
+    let is_genesis = gate.is_equal(ctx, block_height, one);
+    let normal_genesis = gate.mul(ctx, normal, is_genesis);
+    gate.assert_is_const(ctx, &normal_genesis, &F::ZERO);
     let bootstrap_next = gate.mul(ctx, Existing(bootstrap), Existing(next_epoch_present));
     gate.assert_is_const(ctx, &bootstrap_next, &F::ZERO);
 }
@@ -1315,9 +1328,10 @@ where
     signing.extend_from_slice(&message.validator_count.to_le_bytes());
     signing.extend_from_slice(message.network_id.as_bytes());
     signing.extend_from_slice(&message.block_height.to_le_bytes());
-    signing.extend_from_slice(message.height_context_id.0.as_ref());
-    signing.extend_from_slice(&message.subject_digest);
-    signing.extend_from_slice(&message.execution_commitment_digest);
+    signing.extend_from_slice(&message.native_instance);
+    signing.extend_from_slice(&message.native_epoch_context);
+    signing.extend_from_slice(&message.native_block_hash);
+    signing.extend_from_slice(&message.native_result);
     let mut bridge = Sha256::new();
     bridge.update(MINT_ROOT_BRIDGE_DOMAIN_V1);
     bridge.update([0]);
@@ -1359,6 +1373,6 @@ where
 
 const _: () = {
     assert!(KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1 == 32);
-    assert!(MAX_VALIDATORS_PER_HEIGHT == 31);
+    assert!(KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1 == 31);
     assert!(MINIMUM_UNUSABLE_ROWS == 9);
 };

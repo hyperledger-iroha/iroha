@@ -510,8 +510,6 @@ pub mod queue {
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
-    /// Maximum journal size before compaction is considered.
-    pub const PLAN_JOURNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 }
 /// Transaction admission defaults enforced at pipeline ingress.
 pub mod transaction {
@@ -3405,9 +3403,8 @@ pub mod nexus {
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Exact backing for one maximum-size committed-evidence prune-key plan.
-        pub const CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES: usize = 4
-            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            * core::mem::size_of::<iroha_crypto::Hash>();
+        pub const CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES: usize =
+            4 * 31 * core::mem::size_of::<iroha_crypto::Hash>();
         /// Exact in-memory shape of one pending penalty metadata entry.
         /// Each optional peer's compact bytes hold a separate original charge.
         pub type ConsensusPenaltyPendingEntry = (
@@ -3420,24 +3417,24 @@ pub mod nexus {
             )>,
         );
         /// Exact fixed backing for the maximum retained pending penalty plan.
-        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize = 4
-            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
+        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize =
+            4 * 31 * 31 * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
         /// Maximum compact peer-key bytes in one pending plan. Actual plans
         /// reserve each present key's exact tag-plus-payload length instead.
-        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize = 4
-            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize =
+            4 * 31 * 31 * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
         /// Minimum pool able to retain one maximum prune plan and one pending plan.
         pub const CONSENSUS_EVIDENCE_ONE_PLAN_BYTES: usize = CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES
             + CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES
             + CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES;
         /// Simultaneously retained proposal, validation, application and replay plans.
         pub const CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS: usize = 8;
-        /// Finite pool for eight maximum prune/pending plans and cloned peer keys.
-        /// Stake indexes, proof snapshots and penalty scratch remain unfunded.
-        pub const CONSENSUS_EVIDENCE_PREPARATION_BYTES: usize =
-            CONSENSUS_EVIDENCE_ONE_PLAN_BYTES * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS;
+        /// Finite pool for eight maximum prune/pending plans, original peer keys,
+        /// and the bounded local observation pool (8 MiB frames plus descriptors).
+        /// TODO(S8): decoded native proof/history graphs need original funded owners.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_BYTES: usize = CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+            * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS
+            + 9 * 1024 * 1024;
         /// Minimum original-owner backing for one public-lane stake-share key,
         /// one validator group, and three cloned Ed25519 account identifiers.
         /// The Core group is a transparent wrapper around this exact tuple
@@ -3479,17 +3476,6 @@ pub mod nexus {
     pub mod dataspace {
         /// Default fault tolerance value (f) used to size per-dataspace committees (3f + 1).
         pub const FAULT_TOLERANCE: u32 = 1;
-    }
-    /// Lane-relay emergency override defaults.
-    pub mod lane_relay_emergency {
-        /// Emergency override disabled by default.
-        pub const ENABLED: bool = false;
-        /// Default multisig threshold required to authorize overrides.
-        pub const MULTISIG_THRESHOLD: u16 = 3;
-        /// Default multisig member count required to authorize overrides.
-        pub const MULTISIG_MEMBERS: u16 = 5;
-        /// Default maximum number of blocks an emergency override may remain active.
-        pub const MAX_TTL_BLOCKS: u32 = 20;
     }
     /// Lane registry defaults.
     pub mod registry {

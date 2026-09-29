@@ -14,17 +14,7 @@ pub(crate) enum Family {
     ResidentCanonical,
     /// All transaction and Kaigi index associations and inventory memberships.
     ResidentTransaction,
-    /// Merge frame, epoch, and latest-route associations.
-    ResidentMerge,
-    /// Sparse merge-carrier forward and reverse associations.
-    ResidentCarrier,
-    /// Exact block-identity records and each nested authenticated peer observation.
-    ResidentReplica,
-    /// Ordinary finality-LRU records and associations in every live startup allocation.
-    /// Arc clones count their shared allocation once, until its last reader exits.
-    ResidentVerification,
-    /// Lane/config entries, both frontier attestations and capacity reservations.
-    /// Includes nested stable, transient, execution, outstanding and terminal memberships.
+    /// Authenticated lane/config storage entries.
     ResidentFrontier,
     /// Actual pipeline/FASTPQ queue records, including requeued retries.
     /// Drained local work and payload internals are RSS, not queue associations.
@@ -35,24 +25,6 @@ pub(crate) enum Family {
     CanonicalHashes,
     /// Pipeline recovery sidecar slots.
     PipelineIndex,
-    /// Lane payload ownership sidecar slots.
-    OwnershipIndex,
-    /// Certified lane block sidecar slots.
-    CertifiedIndex,
-    /// Lane execution input sidecar slots.
-    ExecutionInputIndex,
-    /// Lane execution preflight sidecar slots.
-    ExecutionPreflightIndex,
-    /// Lane application receipt sidecar slots.
-    ApplicationReceiptIndex,
-    /// Autonomous merge source bundle sidecar slots.
-    MergeBundleIndex,
-    /// Canonical autonomous replica sidecar slots.
-    CanonicalReplicaIndex,
-    /// Standalone sparse merge-carrier index records.
-    MergeCarrierRecord,
-    /// Standalone Native AMX latest-receipt index records.
-    NativeLatestRecord,
     /// Query status and projection checkpoint marker records.
     QueryMarkerRecords,
     /// Other declared evidence-key, replay-claim and recovery index records.
@@ -69,24 +41,11 @@ const ALL_MASK: u32 = (1_u32 << FAMILY_COUNT) - 1;
 pub(crate) const ALL_FAMILIES: [Family; FAMILY_COUNT] = [
     Family::ResidentCanonical,
     Family::ResidentTransaction,
-    Family::ResidentMerge,
-    Family::ResidentCarrier,
-    Family::ResidentReplica,
-    Family::ResidentVerification,
     Family::ResidentFrontier,
     Family::ResidentQueue,
     Family::CanonicalIndex,
     Family::CanonicalHashes,
     Family::PipelineIndex,
-    Family::OwnershipIndex,
-    Family::CertifiedIndex,
-    Family::ExecutionInputIndex,
-    Family::ExecutionPreflightIndex,
-    Family::ApplicationReceiptIndex,
-    Family::MergeBundleIndex,
-    Family::CanonicalReplicaIndex,
-    Family::MergeCarrierRecord,
-    Family::NativeLatestRecord,
     Family::QueryMarkerRecords,
     Family::EvidenceKeyRecords,
     Family::StorageBytes,

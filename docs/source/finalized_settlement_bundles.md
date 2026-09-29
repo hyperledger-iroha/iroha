@@ -1,16 +1,17 @@
 # Offline finalized settlement carriers
 
-`iroha --machine app execution verify-settlement --bundle PATH` accepts the original one-file version 1 bundle and the additive version 2 index described here. Both require the same externally selected `--network-id`, `--trusted-context-id`, `--expected-entry-hash`, `--session-id`, `--profile-id` and `--outcome-hash`. No downloaded file supplies or replaces those expectations.
+`iroha --machine app execution verify-settlement --bundle PATH` accepts a tagged settlement bundle or an index of adjacent bounded carrier files. Both require independently selected `--network-id`, `--trusted-checkpoint PATH`, `--expected-entry-hash`, `--session-id`, `--profile-id` and `--outcome-hash`. The checkpoint file contains the sole canonical `SumeragiFinalityCheckpoint` layout, selected and authenticated independently of the downloaded bundle. A scalar context digest cannot replace it.
 
-Version 2 makes the 256-height limit a **per-batch bound**, not the maximum distance from the original context pin. One `BridgeFinalityVerifier` persists through every prefix and the final settlement bundle. Every next proof must be the immediate authenticated successor, including epoch changes at a file boundary. A filename, digest, height or roster supplied by an endpoint never creates a new trust anchor.
+One native verifier survives every file boundary. The first proof must reproduce the checkpoint's exact decision; every following proof must be its immediate authenticated successor, including epoch changes at a file boundary. The native certificate binds its instance, complete epoch context, authority generation, previous result and exact executed wire. An endpoint-provided filename, digest, height or committee never selects a trust root.
 
 ## Directory format
 
-The index has exactly three fields:
+Every object rejects missing or additional fields. The index is:
 
 ```json
 {
-  "version": 2,
+  "format": "iroha.execution.settlement-index",
+  "version": 1,
   "finality_batches": [
     {
       "file": "finality-000001.json",
@@ -26,46 +27,45 @@ The index has exactly three fields:
 }
 ```
 
-The example lengths and digests are placeholders. `bytes` must equal the actual positive UTF-8 JSON file length. SHA-256 covers those exact bytes, including whitespace. These digests detect file substitution or incomplete export; they are not signatures and do not establish trust. The ordered prefix array may be empty. All referenced names must be unique, flat ASCII basenames: a nonempty stem containing only letters, digits, `-` or `_`, followed by `.json`, at most 128 bytes total. Leading zeroes in names are allowed. Files are adjacent to the index; paths, URLs, directories, symlinks and special files are rejected. On Unix, opens use `NOFOLLOW | NONBLOCK`; on Windows, they use `OPEN_REPARSE_POINT` with regular-file checks.
+Example lengths and digests are placeholders. `bytes` equals the actual positive UTF-8 JSON length; SHA-256 covers those exact bytes, including whitespace. They detect substitution and incomplete export, and grant no authority. Prefix references may be empty. Names must be unique, flat ASCII basenames: a nonempty stem of letters, digits, `-` or `_`, followed by `.json`, at most 128 bytes. Files are adjacent to the index. Paths, URLs, directories, symlinks and special files reject. Unix opens use `NOFOLLOW | NONBLOCK`; Windows opens use `OPEN_REPARSE_POINT` with regular-file checks. The same regular-file policy applies to the independently selected checkpoint.
 
-Each prefix file contains exactly:
+Each prefix file contains:
 
 ```json
-{"version":1,"finality_chain_base64":["<canonical Norito bridge-finality carrier in canonical base64>"]}
+{"format":"iroha.execution.finality-batch","version":1,"finality_chain_base64":["<canonical Norito SumeragiFinalityProof in canonical base64>"]}
 ```
 
-The final file is the unchanged version 1 settlement bundle:
+The settlement file contains:
 
 ```json
 {
+  "format": "iroha.execution.settlement-bundle",
   "version": 1,
-  "finality_chain_base64": ["<one or more consecutive finality carriers>"],
-  "executed_block_wire_base64": "<canonical executed SignedBlockWire>",
+  "finality_chain_base64": ["<consecutive canonical native finality proofs>"],
+  "executed_block_wire_base64": "<canonical executed SignedBlockWire without its node-local certificate>",
   "block_proofs_base64": "<canonical BlockProofs>"
 }
 ```
 
-Neither format permits extra context or trust fields. The last carrier must authenticate the supplied executed block. Native verification then checks the exact wallet-signed entry hash and successful result, exactly one explicit `SettleGameSessionV1` for the selected session, all independently selected proof/outcome bindings, and the compiled native execution proof. An authenticated but unrelated transaction still fails. Finality and mathematical verification do not change the profile's separate qualification flag.
+The final authenticated native capability binds the exact supplied executed block, wallet-signed entry hash and successful output joined to that input. Verification requires exactly one explicit `SettleGameSessionV1` for the selected session, the independently selected network/profile/outcome, and a valid compiled native execution proof. An authenticated unrelated or rejected transaction fails. Mathematical proof verification does not change the execution profile's separate qualification flag.
 
 ## Memory and work admission
 
-Each prefix and final bundle retains the existing limits: at most 96 MiB JSON, 64 MiB aggregate decoded carriers, 256 heights, 9 MiB per finality carrier, 32 MiB executed block and 16 MiB entry/result proofs. A collector must flush a prefix when either its height or byte bound is reached. Keeping the final bundle to one height reserves enough room for its block and proofs under the aggregate limit.
+Each prefix and settlement bundle has at most 96 MiB JSON, 64 MiB aggregate decoded carriers and 256 heights. Individual bounds are 36 MiB per native finality carrier, 32 MiB executed block, 16 MiB entry/output proofs and 68 MiB for the selected checkpoint. A collector must flush a prefix before either its height or byte bound is reached. A large final block may require a smaller preceding batch to fit the same aggregate bound.
 
-The index is at most 1 MiB with at most 4,096 prefix references. Only one prefix's JSON and decoded carriers are processed at a time; the verifier retains the latest authenticated proof, not the full history. Exact file length and hash are checked before decoding its carriers. The standard bounded canonical Norito decoder and JSON preflight remain in use.
+The index has at most 1 MiB and 4,096 prefix references. One prefix's JSON and decoded carriers are processed at a time. The verifier retains authenticated decision state and the latest carrier, without keeping every proof frame. Exact referenced file lengths and hashes are checked before carrier decoding. Canonical Norito bounds and JSON preflight apply.
 
-Total work is separately admitted by explicit local CLI options:
-
-| Option | Default | Hard maximum |
+| Local work option | Default | Hard maximum |
 | --- | ---: | ---: |
 | `--max-finality-heights` | 65,536 heights | 1,048,576 heights |
 | `--max-finality-archive-bytes` | 4 GiB | 64 GiB |
 
-Both must be positive. The byte budget includes the final block and entry/result proofs. The sum of indexed JSON lengths must also fit twice the selected decoded-byte budget plus 1 MiB of framing allowance. Verification checks cumulative heights and decoded bytes as it progresses. Increasing a work budget does not alter the original trust pin. Exceeding a hard limit fails explicitly; there is no automatic endpoint checkpoint or skipped-history fallback.
+Both budgets must be positive. The byte count includes the checkpoint, every finality carrier, final executed block and entry/output proof. Indexed JSON lengths must also fit twice the chosen decoded-byte budget plus 1 MiB of framing. Raising a budget preserves the original trust pin; no automatic endpoint checkpoint or skipped-history path exists.
 
-Successful JSON verdicts additionally report `finality_heights_verified` and `archive_bytes_verified`. These counters describe the actual verification work. A successful download or index export remains unverified transport data.
+Only a fully successful settlement verification returns `checkpoint_base64` for deliberate durable promotion. `context_id` is a diagnostic decision digest and is never a replacement trust anchor. `finality_heights_verified` and `archive_bytes_verified` describe the actual admitted work.
 
-## Qualification status
+## Validation scope
 
-The native test source includes a real locally signed 257-height BLS/PoP chain split at 256, the same indexed-file path through final executed-block and Merkle authentication, an epoch transition exactly at a file boundary, missing/duplicate/reordered heights, foreign network/context pins, work-budget failures, extra trust fields, file substitution, missing files and symlink rejection. The long-chain fixture uses unrelated transactions to isolate finality and must fail at settlement identification after authenticating the complete chain; it does not claim a funded game occurred. Existing native tests separately reject invalid execution proofs, and the ignored end-to-end test generates a real execution proof.
+CLI tests use actual native BLS certificates over explicitly synthetic application outputs for the 257-height archive, inclusion, tampered quorum/PoP, wrong network/checkpoint, missing/repeated/reordered heights, file substitution and budget rejection cases. The epoch-boundary test consumes the actual Core `CertifiedTestChain` H9→10→11 output; its DKG is proved but seeded as component prestate. Core's original attestation-owner tests own altered paired-Pasta signature and schedule rejection. These fixtures do not establish live ceremony, funded settlement or validator qualification.
 
-Run `cargo iroha-fast -- test -p iroha_cli --bin iroha execution_finality::tests -- --nocapture` in the assigned warm Cargo lane. Source and syntax checks are not runtime qualification. Normal CLI execution tests, actual four-validator settlement/inclusion, wallet deployment and cryptographic release review remain required before activation.
+Run `scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_cli --bin iroha execution_finality::tests -- --nocapture`. The separately ignored expensive test must also run explicitly to claim end-to-end native execution-proof coverage. A passing source check or skipped test does not count as runtime qualification. Real four-validator settlement and wallet deployment gates remain required.

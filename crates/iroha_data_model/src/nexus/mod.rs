@@ -9,10 +9,13 @@ use crate::{
     asset::AssetDefinitionId,
     da::{commitment::DaProofScheme, confidential_compute::ConfidentialComputePolicy},
     id::IdBox,
+    parameter::{CustomParameter, CustomParameterId},
 };
 use derive_more::Display;
+use iroha_crypto::Hash;
 use iroha_model_base::topology::{DataSpaceId, LaneId, ShardId};
 
+use iroha_primitives::json::Json;
 use iroha_primitives::numeric::XorQuantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -57,10 +60,345 @@ mod staking_preparation;
 pub use staking_preparation::*;
 /// Consensus-wide maximum number of simultaneously active execution lanes.
 ///
-/// This is a protocol admission bound shared by lane catalogs and diagnostics.
-/// Sparse lane identifiers may exceed this number; only the number of active
-/// catalog entries is bounded.
+/// This is a protocol admission bound shared by lifecycle catalogs, merge
+/// execution, Native AMX manifests, and diagnostics. Sparse lane identifiers
+/// may exceed this number; only the number of active catalog entries is bounded.
 pub const MAX_ACTIVE_EXECUTION_LANES: usize = 1_024;
+/// Declarative lane lifecycle changes (additions and retirements).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct LaneLifecyclePlan {
+    /// Lane metadata to add, or to replace when the same current lane is retired.
+    pub additions: Vec<LaneConfig>,
+    /// Lane identifiers to retire.
+    pub retire: Vec<LaneId>,
+}
+/// Versioned, optimistic-concurrency envelope for a consensus-replayed lane lifecycle update.
+///
+/// The envelope is carried in a [`crate::isi::SetParameter`] instruction. The expected catalog and
+/// active-incarnation root bind an operator request to the exact topology it was reviewed against,
+/// so a delayed or concurrently reordered request fails closed instead of mutating a newer topology
+/// or a replacement lane that happens to reuse identical metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct LaneLifecycleParameterV1 {
+    /// Payload layout version. This must be [`Self::VERSION`].
+    pub version: u8,
+    /// Domain-separated hash of the exact committed catalog that must precede this transition.
+    pub expected_catalog_hash: Hash,
+    /// Domain-separated root of the exact active lane incarnations that must precede this transition.
+    pub expected_incarnation_root: Hash,
+    /// Declarative lane additions, replacements, and retirements.
+    pub plan: LaneLifecyclePlan,
+}
+/// Canonical active lane-incarnation commitment advertised to lifecycle clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+pub struct LaneLifecycleIncarnationEntry {
+    /// Active lane identifier.
+    pub lane_id: LaneId,
+    /// Non-zero commitment identifying this exact lane incarnation.
+    pub incarnation: Hash,
+}
+/// Read-only snapshot used to construct an optimistic lane lifecycle transaction.
+///
+/// The status carries the exact canonical lane catalog and its domain-separated commitment. Clients
+/// must validate the snapshot before embedding [`Self::catalog_hash`] as
+/// [`LaneLifecycleParameterV1::expected_catalog_hash`].
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneLifecycleStatusV1")]
+pub struct LaneLifecycleStatusV1 {
+    /// Status layout version. This must be [`Self::VERSION`].
+    pub version: u8,
+    /// Exclusive lane-id bound for the current catalog namespace.
+    pub lane_count: u32,
+    /// Canonically ordered active lane metadata.
+    pub lanes: Vec<LaneConfig>,
+    /// Domain-separated commitment to `lane_count` and `lanes`.
+    pub catalog_hash: Hash,
+    /// Canonically ordered active lane-incarnation commitments.
+    pub incarnations: Vec<LaneLifecycleIncarnationEntry>,
+    /// Domain-separated commitment to `incarnations`.
+    pub incarnation_root: Hash,
+    /// Native commitment to the complete committed runtime catalog overlay.
+    ///
+    /// `None` means the protected overlay parameter is absent before its first transition.
+    /// Copy this exact value into [`NexusCatalogTransitionV1::expected_runtime_catalog_hash`].
+    /// The lane-only snapshot cannot independently reconstruct this overlay commitment.
+    pub runtime_catalog_hash: Option<Hash>,
+}
+impl LaneLifecycleStatusV1 {
+    /// Supported status layout version.
+    pub const VERSION: u8 = 1;
+    /// Construct a snapshot from one committed catalog, incarnation map, and runtime overlay hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneLifecycleStatusError`] when the incarnation map does not
+    /// exactly and canonically cover the active catalog, or a present runtime hash is empty.
+    pub fn new(
+        catalog: &LaneCatalog,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        runtime_catalog_hash: Option<Hash>,
+    ) -> Result<Self, LaneLifecycleStatusError> {
+        Self::validate_runtime_catalog_hash(runtime_catalog_hash)?;
+        let incarnations = LaneLifecycleParameterV1::canonical_incarnations(catalog, incarnations)?;
+        Ok(Self {
+            version: Self::VERSION,
+            lane_count: catalog.lane_count().get(),
+            lanes: catalog.lanes().to_vec(),
+            catalog_hash: LaneLifecycleParameterV1::catalog_hash(catalog),
+            incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnations),
+            incarnations,
+            runtime_catalog_hash,
+        })
+    }
+    fn validate_runtime_catalog_hash(
+        runtime_catalog_hash: Option<Hash>,
+    ) -> Result<(), LaneLifecycleStatusError> {
+        if runtime_catalog_hash.is_some_and(|hash| {
+            hash == Hash::prehashed([0; Hash::LENGTH])
+                || hash.as_ref().iter().all(|byte| *byte == 0)
+        }) {
+            return Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash);
+        }
+        Ok(())
+    }
+    /// Validate the version, catalog structure, canonical order, and commitments.
+    ///
+    /// The runtime catalog hash is checked for a non-empty value when present; reconstructing
+    /// that commitment requires the complete protected overlay, which this status does not carry.
+    ///
+    /// # Errors
+    /// Returns [`LaneLifecycleStatusError`] when the snapshot is unsupported,
+    /// malformed, non-canonical, or carries a forged/stale catalog commitment.
+    pub fn validate(&self) -> Result<LaneCatalog, LaneLifecycleStatusError> {
+        if self.version != Self::VERSION {
+            return Err(LaneLifecycleStatusError::UnsupportedVersion {
+                actual: self.version,
+                expected: Self::VERSION,
+            });
+        }
+        Self::validate_runtime_catalog_hash(self.runtime_catalog_hash)?;
+        let lane_count =
+            NonZeroU32::new(self.lane_count).ok_or(LaneLifecycleStatusError::ZeroLaneCount)?;
+        let catalog = LaneCatalog::new(lane_count, self.lanes.clone())?;
+        if catalog.lanes() != self.lanes.as_slice() {
+            return Err(LaneLifecycleStatusError::NonCanonicalLaneOrder);
+        }
+        let expected = LaneLifecycleParameterV1::catalog_hash(&catalog);
+        if self.catalog_hash != expected {
+            return Err(LaneLifecycleStatusError::CatalogHashMismatch {
+                advertised: self.catalog_hash,
+                computed: expected,
+            });
+        }
+        LaneLifecycleParameterV1::validate_incarnations(&catalog, &self.incarnations)?;
+        let expected_root = LaneLifecycleParameterV1::incarnation_root(&self.incarnations);
+        if self.incarnation_root != expected_root {
+            return Err(LaneLifecycleStatusError::IncarnationRootMismatch {
+                advertised: self.incarnation_root,
+                computed: expected_root,
+            });
+        }
+        Ok(catalog)
+    }
+}
+/// Validation failures for a read-only lane lifecycle status snapshot.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum LaneLifecycleStatusError {
+    /// A present runtime catalog commitment used the empty hash sentinel.
+    #[error("Nexus lane lifecycle status advertised an empty runtime catalog hash")]
+    ZeroRuntimeCatalogHash,
+    /// The server advertised an unsupported status layout version.
+    #[error("unsupported Nexus lane lifecycle status version {actual}; expected {expected}")]
+    UnsupportedVersion {
+        /// Advertised version.
+        actual: u8,
+        /// Version understood by this client.
+        expected: u8,
+    },
+    /// A catalog namespace cannot have a zero exclusive bound.
+    #[error("Nexus lane lifecycle status advertised a zero lane count")]
+    ZeroLaneCount,
+    /// Lane entries were not ordered canonically by lane identifier.
+    #[error("Nexus lane lifecycle status lane entries are not canonically ordered")]
+    NonCanonicalLaneOrder,
+    /// The advertised catalog commitment did not bind the supplied catalog.
+    #[error(
+        "Nexus lane lifecycle status catalog hash mismatch: advertised {advertised}, computed {computed}"
+    )]
+    CatalogHashMismatch {
+        /// Hash supplied by the server.
+        advertised: Hash,
+        /// Hash computed from the supplied catalog.
+        computed: Hash,
+    },
+    /// Active incarnation entries were not strictly ordered by lane identifier.
+    #[error("Nexus lane lifecycle incarnation entries are not canonically ordered")]
+    NonCanonicalIncarnationOrder,
+    /// Active incarnation entries did not cover exactly the catalog's lane identifiers.
+    #[error("Nexus lane lifecycle incarnation lane ids do not exactly match the active catalog")]
+    IncarnationLaneSetMismatch,
+    /// An active lane advertised an all-zero incarnation commitment.
+    #[error("Nexus lane lifecycle status lane {lane_id} has an all-zero incarnation")]
+    ZeroIncarnation {
+        /// Lane carrying the invalid commitment.
+        lane_id: LaneId,
+    },
+    /// Two active lanes reused the same incarnation commitment.
+    #[error("Nexus lane lifecycle status lane {lane_id} reuses an active incarnation")]
+    DuplicateIncarnation {
+        /// Later lane carrying the duplicate commitment.
+        lane_id: LaneId,
+    },
+    /// The incarnation root did not bind the advertised active entries.
+    #[error(
+        "Nexus lane lifecycle status incarnation root mismatch: advertised {advertised}, computed {computed}"
+    )]
+    IncarnationRootMismatch {
+        /// Root supplied by the server.
+        advertised: Hash,
+        /// Root computed from the supplied entries.
+        computed: Hash,
+    },
+    /// The supplied lane metadata did not form a valid catalog.
+    #[error(transparent)]
+    InvalidCatalog(#[from] LaneCatalogError),
+}
+impl LaneLifecycleParameterV1 {
+    /// Supported payload layout version.
+    pub const VERSION: u8 = 1;
+    /// Reserved custom-parameter identifier for consensus lane lifecycle changes.
+    pub const PARAMETER_ID_STR: &'static str = "nexus_lane_lifecycle_v1";
+    /// Construct a lifecycle parameter bound to the exact catalog and incarnations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneLifecycleStatusError`] when the incarnation entries do not
+    /// exactly and canonically cover the expected catalog.
+    pub fn new(
+        expected_catalog: &LaneCatalog,
+        expected_incarnations: &[LaneLifecycleIncarnationEntry],
+        plan: LaneLifecyclePlan,
+    ) -> Result<Self, LaneLifecycleStatusError> {
+        Self::validate_incarnations(expected_catalog, expected_incarnations)?;
+        Ok(Self {
+            version: Self::VERSION,
+            expected_catalog_hash: Self::catalog_hash(expected_catalog),
+            expected_incarnation_root: Self::incarnation_root(expected_incarnations),
+            plan,
+        })
+    }
+    /// Compute the canonical, domain-separated commitment for a lane catalog.
+    #[must_use]
+    pub fn catalog_hash(catalog: &LaneCatalog) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:nexus:lane-catalog:v1\0";
+        let encoded = (catalog.lane_count().get(), catalog.lanes().to_vec()).encode();
+        Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
+    }
+    /// Convert the active incarnation map to its canonical exact catalog order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneLifecycleStatusError`] when the map does not exactly cover
+    /// the catalog, contains a zero or duplicate incarnation, or cannot be
+    /// represented in canonical lane-id order.
+    pub fn canonical_incarnations(
+        catalog: &LaneCatalog,
+        incarnations: &BTreeMap<LaneId, Hash>,
+    ) -> Result<Vec<LaneLifecycleIncarnationEntry>, LaneLifecycleStatusError> {
+        let entries = incarnations
+            .iter()
+            .map(|(&lane_id, &incarnation)| LaneLifecycleIncarnationEntry {
+                lane_id,
+                incarnation,
+            })
+            .collect::<Vec<_>>();
+        Self::validate_incarnations(catalog, &entries)?;
+        Ok(entries)
+    }
+    /// Validate exact coverage, canonical ordering, non-zero values, and uniqueness.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneLifecycleStatusError`] when any invariant is violated.
+    pub fn validate_incarnations(
+        catalog: &LaneCatalog,
+        incarnations: &[LaneLifecycleIncarnationEntry],
+    ) -> Result<(), LaneLifecycleStatusError> {
+        let expected_ids = catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect::<Vec<_>>();
+        let actual_ids = incarnations
+            .iter()
+            .map(|entry| entry.lane_id)
+            .collect::<Vec<_>>();
+        if actual_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(LaneLifecycleStatusError::NonCanonicalIncarnationOrder);
+        }
+        if actual_ids != expected_ids {
+            return Err(LaneLifecycleStatusError::IncarnationLaneSetMismatch);
+        }
+        let mut unique = BTreeSet::new();
+        for entry in incarnations {
+            if entry.incarnation.as_ref().iter().all(|byte| *byte == 0) {
+                return Err(LaneLifecycleStatusError::ZeroIncarnation {
+                    lane_id: entry.lane_id,
+                });
+            }
+            if !unique.insert(entry.incarnation) {
+                return Err(LaneLifecycleStatusError::DuplicateIncarnation {
+                    lane_id: entry.lane_id,
+                });
+            }
+        }
+        Ok(())
+    }
+    /// Compute the domain-separated commitment to canonical incarnation entries.
+    #[must_use]
+    pub fn incarnation_root(incarnations: &[LaneLifecycleIncarnationEntry]) -> Hash {
+        const DOMAIN: &[u8] = b"iroha:nexus:lane-incarnations:v1\0";
+        let encoded = incarnations.to_vec().encode();
+        Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
+    }
+    /// Identifier used by the on-chain custom parameter.
+    #[must_use]
+    pub fn parameter_id() -> CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid Nexus lane lifecycle custom parameter identifier")
+    }
+    /// Convert this envelope into the custom parameter accepted by `SetParameter`.
+    #[must_use]
+    pub fn into_custom_parameter(self) -> CustomParameter {
+        CustomParameter::new(Self::parameter_id(), Json::new(self))
+    }
+    /// Decode a matching lifecycle custom parameter.
+    ///
+    /// Non-matching parameter identifiers return `Ok(None)`. Matching identifiers
+    /// are parsed strictly and reject unsupported versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::json::Error`] when a matching payload is malformed or
+    /// carries an unsupported lifecycle version.
+    pub fn from_custom_parameter(
+        custom: &CustomParameter,
+    ) -> Result<Option<Self>, norito::json::Error> {
+        if custom.id != Self::parameter_id() {
+            return Ok(None);
+        }
+        let payload = norito::json::from_str::<Self>(custom.payload().get())?;
+        if payload.version != Self::VERSION {
+            return Err(norito::json::Error::Message(format!(
+                "unsupported Nexus lane lifecycle parameter version {}; expected {}",
+                payload.version,
+                Self::VERSION
+            )));
+        }
+        Ok(Some(payload))
+    }
+}
 impl crate::Identifiable for LaneId {
     type Id = LaneId;
     fn id(&self) -> &Self::Id {
@@ -855,6 +1193,421 @@ impl norito::json::JsonDeserialize for LaneConfig {
     }
 }
 
+impl norito::json::FastJsonWrite for LaneLifecyclePlan {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("additions", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.additions, out);
+        out.push(',');
+        norito::json::write_json_string("retire", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.retire, out);
+        out.push('}');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"additions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.additions, out)?;
+        out.push_str(",\"retire\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.retire, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for LaneLifecyclePlan {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use norito::json::MapVisitor;
+        let mut visitor = MapVisitor::new(parser)?;
+        let mut additions: Option<Vec<LaneConfig>> = None;
+        let mut retire: Option<Vec<LaneId>> = None;
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "additions" => {
+                    if additions.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `additions` in lane lifecycle plan".into(),
+                        ));
+                    }
+                    additions = Some(visitor.parse_value()?);
+                }
+                "retire" => {
+                    if retire.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `retire` in lane lifecycle plan".into(),
+                        ));
+                    }
+                    retire = Some(visitor.parse_value()?);
+                }
+                other => {
+                    return Err(norito::json::Error::Message(format!(
+                        "unknown field `{other}` in lane lifecycle plan"
+                    )));
+                }
+            }
+        }
+        visitor.finish()?;
+        Ok(Self {
+            additions: additions.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle plan field `additions`".into(),
+                )
+            })?,
+            retire: retire.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle plan field `retire`".into(),
+                )
+            })?,
+        })
+    }
+}
+
+impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("version", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.version, out);
+        out.push(',');
+        norito::json::write_json_string("expected_catalog_hash", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.expected_catalog_hash, out);
+        out.push(',');
+        norito::json::write_json_string("expected_incarnation_root", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.expected_incarnation_root, out);
+        out.push(',');
+        norito::json::write_json_string("plan", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.plan, out);
+        out.push('}');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"expected_catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_catalog_hash, out)?;
+        out.push_str(",\"expected_incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_incarnation_root, out)?;
+        out.push_str(",\"plan\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.plan, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use norito::json::MapVisitor;
+        let mut visitor = MapVisitor::new(parser)?;
+        let mut version = None;
+        let mut expected_catalog_hash = None;
+        let mut expected_incarnation_root = None;
+        let mut plan = None;
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "version" => {
+                    if version.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `version` in Nexus lane lifecycle parameter".into(),
+                        ));
+                    }
+                    version = Some(visitor.parse_value()?);
+                }
+                "expected_catalog_hash" => {
+                    if expected_catalog_hash.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `expected_catalog_hash` in Nexus lane lifecycle parameter"
+                                .into(),
+                        ));
+                    }
+                    expected_catalog_hash = Some(visitor.parse_value()?);
+                }
+                "plan" => {
+                    if plan.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `plan` in Nexus lane lifecycle parameter".into(),
+                        ));
+                    }
+                    plan = Some(visitor.parse_value()?);
+                }
+                "expected_incarnation_root" => {
+                    if expected_incarnation_root.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `expected_incarnation_root` in Nexus lane lifecycle parameter"
+                                .into(),
+                        ));
+                    }
+                    expected_incarnation_root = Some(visitor.parse_value()?);
+                }
+                other => {
+                    return Err(norito::json::Error::Message(format!(
+                        "unknown field `{other}` in Nexus lane lifecycle parameter"
+                    )));
+                }
+            }
+        }
+        visitor.finish()?;
+        Ok(Self {
+            version: version.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required Nexus lane lifecycle field `version`".into(),
+                )
+            })?,
+            expected_catalog_hash: expected_catalog_hash.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required Nexus lane lifecycle field `expected_catalog_hash`".into(),
+                )
+            })?,
+            expected_incarnation_root: expected_incarnation_root.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required Nexus lane lifecycle field `expected_incarnation_root`"
+                        .into(),
+                )
+            })?,
+            plan: plan.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required Nexus lane lifecycle field `plan`".into(),
+                )
+            })?,
+        })
+    }
+}
+
+impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("lane_id", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.lane_id, out);
+        out.push(',');
+        norito::json::write_json_string("incarnation", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.incarnation, out);
+        out.push('}');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"lane_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_id, out)?;
+        out.push_str(",\"incarnation\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use norito::json::MapVisitor;
+        let mut visitor = MapVisitor::new(parser)?;
+        let mut lane_id = None;
+        let mut incarnation = None;
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "lane_id" => {
+                    if lane_id.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `lane_id` in lane lifecycle incarnation".into(),
+                        ));
+                    }
+                    lane_id = Some(visitor.parse_value()?);
+                }
+                "incarnation" => {
+                    if incarnation.is_some() {
+                        return Err(norito::json::Error::Message(
+                            "duplicate field `incarnation` in lane lifecycle incarnation".into(),
+                        ));
+                    }
+                    incarnation = Some(visitor.parse_value()?);
+                }
+                other => {
+                    return Err(norito::json::Error::Message(format!(
+                        "unknown field `{other}` in lane lifecycle incarnation"
+                    )));
+                }
+            }
+        }
+        visitor.finish()?;
+        Ok(Self {
+            lane_id: lane_id.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle incarnation field `lane_id`".into(),
+                )
+            })?,
+            incarnation: incarnation.ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing required lane lifecycle incarnation field `incarnation`".into(),
+                )
+            })?,
+        })
+    }
+}
+
+impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("version", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.version, out);
+        out.push(',');
+        norito::json::write_json_string("lane_count", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.lane_count, out);
+        out.push(',');
+        norito::json::write_json_string("lanes", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.lanes, out);
+        out.push(',');
+        norito::json::write_json_string("catalog_hash", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.catalog_hash, out);
+        out.push(',');
+        norito::json::write_json_string("incarnations", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.incarnations, out);
+        out.push(',');
+        norito::json::write_json_string("incarnation_root", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.incarnation_root, out);
+        out.push(',');
+        norito::json::write_json_string("runtime_catalog_hash", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.runtime_catalog_hash, out);
+        out.push('}');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"lane_count\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
+        out.push_str(",\"lanes\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lanes, out)?;
+        out.push_str(",\"catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.catalog_hash, out)?;
+        out.push_str(",\"incarnations\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
+        out.push_str(",\"incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
+        out.push_str(",\"runtime_catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.runtime_catalog_hash, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use norito::json::MapVisitor;
+        let mut visitor = MapVisitor::new(parser)?;
+        let mut version = None;
+        let mut lane_count = None;
+        let mut lanes = None;
+        let mut catalog_hash = None;
+        let mut incarnations = None;
+        let mut incarnation_root = None;
+        let mut runtime_catalog_hash: Option<Option<Hash>> = None;
+        while let Some(key) = visitor.next_key()? {
+            let duplicate = |field: &str| {
+                norito::json::Error::Message(format!(
+                    "duplicate field `{field}` in Nexus lane lifecycle status"
+                ))
+            };
+            match key.as_str() {
+                "version" => {
+                    if version.is_some() {
+                        return Err(duplicate("version"));
+                    }
+                    version = Some(visitor.parse_value()?);
+                }
+                "lane_count" => {
+                    if lane_count.is_some() {
+                        return Err(duplicate("lane_count"));
+                    }
+                    lane_count = Some(visitor.parse_value()?);
+                }
+                "lanes" => {
+                    if lanes.is_some() {
+                        return Err(duplicate("lanes"));
+                    }
+                    lanes = Some(visitor.parse_value()?);
+                }
+                "catalog_hash" => {
+                    if catalog_hash.is_some() {
+                        return Err(duplicate("catalog_hash"));
+                    }
+                    catalog_hash = Some(visitor.parse_value()?);
+                }
+                "incarnations" => {
+                    if incarnations.is_some() {
+                        return Err(duplicate("incarnations"));
+                    }
+                    incarnations = Some(visitor.parse_value()?);
+                }
+                "incarnation_root" => {
+                    if incarnation_root.is_some() {
+                        return Err(duplicate("incarnation_root"));
+                    }
+                    incarnation_root = Some(visitor.parse_value()?);
+                }
+                "runtime_catalog_hash" => {
+                    if runtime_catalog_hash.is_some() {
+                        return Err(duplicate("runtime_catalog_hash"));
+                    }
+                    runtime_catalog_hash = Some(visitor.parse_value()?);
+                }
+                other => {
+                    return Err(norito::json::Error::Message(format!(
+                        "unknown field `{other}` in Nexus lane lifecycle status"
+                    )));
+                }
+            }
+        }
+        visitor.finish()?;
+        let missing = |field: &str| {
+            norito::json::Error::Message(format!(
+                "missing required Nexus lane lifecycle status field `{field}`"
+            ))
+        };
+        Ok(Self {
+            version: version.ok_or_else(|| missing("version"))?,
+            lane_count: lane_count.ok_or_else(|| missing("lane_count"))?,
+            lanes: lanes.ok_or_else(|| missing("lanes"))?,
+            catalog_hash: catalog_hash.ok_or_else(|| missing("catalog_hash"))?,
+            incarnations: incarnations.ok_or_else(|| missing("incarnations"))?,
+            incarnation_root: incarnation_root.ok_or_else(|| missing("incarnation_root"))?,
+            runtime_catalog_hash: runtime_catalog_hash
+                .ok_or_else(|| missing("runtime_catalog_hash"))?,
+        })
+    }
+}
 /// Validated catalog of configured lanes.
 ///
 /// `lane_count` is the exclusive identifier bound for the current namespace, not the number of
@@ -939,6 +1692,55 @@ impl LaneCatalog {
     pub fn by_alias(&self, alias: &str) -> Option<&LaneConfig> {
         self.lanes.iter().find(|lane| lane.alias == alias)
     }
+    /// Apply a lifecycle plan, producing a new catalog with the requested additions and retirements.
+    ///
+    /// The exclusive namespace bound expands for higher additions but never shrinks when lanes are
+    /// retired, preserving sparse identifiers and retained incarnation lineage.
+    ///
+    /// # Errors
+    /// Returns a [`LaneCatalogError`] when additions or retirements are duplicated, retirements
+    /// reference unknown lanes, or the resulting catalog is invalid (empty, duplicate
+    /// identifiers/aliases, out-of-bounds ids, or too many active entries).
+    pub fn apply_lifecycle(&self, plan: &LaneLifecyclePlan) -> Result<Self, LaneCatalogError> {
+        let mut retire_set = BTreeSet::new();
+        for retire_id in &plan.retire {
+            if !retire_set.insert(*retire_id) {
+                return Err(LaneCatalogError::DuplicateRetireLane(*retire_id));
+            }
+        }
+        for retire_id in &retire_set {
+            let present = self.lanes.iter().any(|lane| lane.id == *retire_id);
+            if !present {
+                return Err(LaneCatalogError::MissingLane(*retire_id));
+            }
+        }
+        let mut addition_ids = BTreeSet::new();
+        let mut addition_aliases = BTreeSet::new();
+        for addition in &plan.additions {
+            if addition.alias.trim().is_empty() {
+                return Err(LaneCatalogError::EmptyAlias(addition.id));
+            }
+            if !addition_ids.insert(addition.id) {
+                return Err(LaneCatalogError::DuplicateLaneId(addition.id));
+            }
+            if !addition_aliases.insert(addition.alias.as_str()) {
+                return Err(LaneCatalogError::DuplicateLaneAlias(addition.alias.clone()));
+            }
+        }
+        let mut merged: Vec<LaneConfig> = self
+            .lanes
+            .iter()
+            .filter(|lane| !retire_set.contains(&lane.id))
+            .cloned()
+            .collect();
+        merged.extend(plan.additions.iter().cloned());
+        let Some(max_lane_id) = merged.iter().map(|lane| lane.id.as_u32()).max() else {
+            return Err(LaneCatalogError::EmptyCatalog);
+        };
+        let lane_count = NonZeroU32::new(self.lane_count.get().max(max_lane_id.saturating_add(1)))
+            .expect("lane ids are u32 so +1 always fits NonZeroU32");
+        LaneCatalog::new(lane_count, merged)
+    }
 }
 impl Default for LaneCatalog {
     fn default() -> Self {
@@ -957,6 +1759,12 @@ pub enum LaneCatalogError {
     /// Duplicate alias detected.
     #[error("duplicate lane alias {0}")]
     DuplicateLaneAlias(String),
+    /// Retire plan referenced a lane that does not exist.
+    #[error("cannot retire unknown lane {0}")]
+    MissingLane(LaneId),
+    /// Retire plan referenced the same lane more than once.
+    #[error("duplicate retire lane {0}")]
+    DuplicateRetireLane(LaneId),
     /// Alias was left blank.
     #[error("lane {0} has an empty alias")]
     EmptyAlias(LaneId),
@@ -981,7 +1789,7 @@ pub enum LaneCatalogError {
         /// Deterministic explanation of the rejected metadata.
         reason: String,
     },
-    /// Catalog has no lanes.
+    /// Lifecycle plan would leave the catalog empty.
     #[error("lane catalog cannot be empty")]
     EmptyCatalog,
     /// Catalog contains more simultaneously active lanes than consensus can represent.
@@ -1136,6 +1944,22 @@ mod tests {
             asset_definition_id,
             "1000".parse().expect("positive XOR capacity"),
         )
+    }
+    fn incarnation_map(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
+        catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                (
+                    lane.id,
+                    Hash::new(format!("test-lane-incarnation-{}", lane.id.as_u32())),
+                )
+            })
+            .collect()
+    }
+    fn lifecycle_status(catalog: &LaneCatalog) -> LaneLifecycleStatusV1 {
+        LaneLifecycleStatusV1::new(catalog, &incarnation_map(catalog), None)
+            .expect("valid lifecycle status")
     }
     #[test]
     fn lane_profile_labels_are_canonical() {
@@ -1330,7 +2154,7 @@ mod tests {
         let boundary_count =
             NonZeroU32::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32"))
                 .expect("active-lane bound is non-zero");
-        LaneCatalog::new(boundary_count, lanes.clone())
+        let catalog = LaneCatalog::new(boundary_count, lanes.clone())
             .expect("the exact active-lane protocol bound is admissible");
         let overflow_id =
             LaneId::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32"));
@@ -1344,13 +2168,26 @@ mod tests {
         )
         .expect("bound plus one is non-zero");
         let mut oversized = lanes;
-        oversized.push(overflow);
+        oversized.push(overflow.clone());
         assert_eq!(
             LaneCatalog::new(overflow_count, oversized),
             Err(LaneCatalogError::ActiveLaneBoundExceeded {
                 actual: MAX_ACTIVE_EXECUTION_LANES + 1,
                 maximum: MAX_ACTIVE_EXECUTION_LANES,
             })
+        );
+        let lifecycle_error = catalog
+            .apply_lifecycle(&LaneLifecyclePlan {
+                additions: vec![overflow],
+                retire: Vec::new(),
+            })
+            .expect_err("lifecycle admission must reject an unrepresentable active catalog");
+        assert_eq!(
+            lifecycle_error,
+            LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: MAX_ACTIVE_EXECUTION_LANES + 1,
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            }
         );
     }
     #[test]
@@ -1374,6 +2211,11 @@ mod tests {
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
             vec![LaneId::SINGLE, LaneId::new(1)]
+        );
+        assert_eq!(
+            LaneLifecycleParameterV1::catalog_hash(&permuted),
+            LaneLifecycleParameterV1::catalog_hash(&canonical),
+            "semantic catalog permutations must share one optimistic-concurrency commitment"
         );
     }
     #[test]
@@ -1731,6 +2573,344 @@ mod tests {
         }
     }
     #[test]
+    fn lane_lifecycle_plan_adds_and_retires() {
+        let lane_count = NonZeroU32::new(2).expect("nonzero");
+        let base = LaneCatalog::new(
+            lane_count,
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "alpha".into(),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("base catalog");
+        let plan = LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(1),
+                alias: "beta".into(),
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        };
+        let expanded = base.apply_lifecycle(&plan).expect("apply lifecycle");
+        assert_eq!(expanded.lane_count().get(), 2);
+        assert!(expanded.by_alias("beta").is_some());
+        let retire_plan = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::new(1)],
+        };
+        let trimmed = expanded
+            .apply_lifecycle(&retire_plan)
+            .expect("retire lifecycle");
+        assert_eq!(
+            trimmed.lane_count().get(),
+            2,
+            "retiring the highest active lane must not shrink the namespace bound"
+        );
+        assert_eq!(trimmed.lanes().len(), 1);
+        assert!(trimmed.by_alias("beta").is_none());
+    }
+    #[test]
+    fn lane_lifecycle_parameter_roundtrips_and_binds_exact_catalog() {
+        let catalog = LaneCatalog::default();
+        let incarnation_entries =
+            LaneLifecycleParameterV1::canonical_incarnations(&catalog, &incarnation_map(&catalog))
+                .expect("canonical incarnations");
+        let parameter = LaneLifecycleParameterV1::new(
+            &catalog,
+            &incarnation_entries,
+            LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "manual-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            },
+        )
+        .expect("valid lifecycle parameter");
+        let custom = parameter.clone().into_custom_parameter();
+        assert_eq!(
+            LaneLifecycleParameterV1::from_custom_parameter(&custom)
+                .expect("decode lifecycle custom parameter"),
+            Some(parameter.clone())
+        );
+        let changed = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "other".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("changed catalog");
+        assert_ne!(
+            parameter.expected_catalog_hash,
+            LaneLifecycleParameterV1::catalog_hash(&changed),
+            "catalog commitment must change with topology metadata"
+        );
+    }
+    #[test]
+    fn lane_lifecycle_parameter_rejects_unknown_version_and_fields() {
+        let catalog = LaneCatalog::default();
+        let entries = lifecycle_status(&catalog).incarnations;
+        let mut unsupported =
+            LaneLifecycleParameterV1::new(&catalog, &entries, LaneLifecyclePlan::default())
+                .expect("valid lifecycle parameter");
+        unsupported.version = LaneLifecycleParameterV1::VERSION.saturating_add(1);
+        let err =
+            LaneLifecycleParameterV1::from_custom_parameter(&unsupported.into_custom_parameter())
+                .expect_err("unsupported lifecycle payload version must fail closed");
+        assert!(err.to_string().contains("unsupported"));
+        let valid = LaneLifecycleParameterV1::new(&catalog, &entries, LaneLifecyclePlan::default())
+            .expect("valid lifecycle parameter");
+        let mut encoded = norito::json::to_value(&valid).expect("serialize lifecycle payload");
+        encoded
+            .as_object_mut()
+            .expect("lifecycle payload object")
+            .insert("unexpected".to_owned(), norito::json::Value::Bool(true));
+        let custom = CustomParameter::new(
+            LaneLifecycleParameterV1::parameter_id(),
+            iroha_primitives::json::Json::from_norito_value_ref(&encoded)
+                .expect("serialize canonical adversarial payload"),
+        );
+        let err = LaneLifecycleParameterV1::from_custom_parameter(&custom)
+            .expect_err("unknown lifecycle payload field must fail closed");
+        assert!(err.to_string().contains("unexpected"));
+    }
+    #[test]
+    fn lane_lifecycle_status_roundtrips_json_and_norito() {
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid lifecycle status catalog");
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let status = LaneLifecycleStatusV1::new(
+                &catalog,
+                &incarnation_map(&catalog),
+                runtime_catalog_hash,
+            )
+            .expect("valid lifecycle status");
+            assert_eq!(status.validate().expect("validate status"), catalog);
+            let json = norito::json::to_string(&status).expect("serialize lifecycle status JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(&status, json.len()).expect("bounded status JSON"),
+                json
+            );
+            assert!(norito::json::to_json_bounded(&status, json.len() - 1).is_err());
+            if runtime_catalog_hash.is_none() {
+                assert!(json.contains("\"runtime_catalog_hash\":null"));
+            }
+            let from_json = norito::json::from_str::<LaneLifecycleStatusV1>(&json)
+                .expect("decode lifecycle status JSON");
+            assert_eq!(from_json, status);
+            let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+            let from_norito = norito::decode_from_bytes::<LaneLifecycleStatusV1>(&bytes)
+                .expect("decode lifecycle status Norito");
+            assert_eq!(from_norito, status);
+        }
+    }
+    #[test]
+    fn lane_lifecycle_status_rejects_empty_runtime_catalog_hash() {
+        let catalog = LaneCatalog::default();
+        let empty = Hash::prehashed([0; Hash::LENGTH]);
+        assert_eq!(
+            LaneLifecycleStatusV1::new(&catalog, &incarnation_map(&catalog), Some(empty)),
+            Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash)
+        );
+        let mut status = lifecycle_status(&catalog);
+        status.runtime_catalog_hash = Some(empty);
+        assert_eq!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash)
+        );
+    }
+    #[test]
+    fn lane_lifecycle_status_requires_explicit_unique_nullable_runtime_catalog_hash() {
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let mut status = lifecycle_status(&LaneCatalog::default());
+            status.runtime_catalog_hash = runtime_catalog_hash;
+            let mut encoded = norito::json::to_string(&status).unwrap();
+            assert_eq!(encoded.pop(), Some('}'));
+            encoded.push_str(",\"runtime_catalog_hash\":null}");
+            let error = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+                .expect_err("duplicate runtime hash, including null, must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("duplicate field `runtime_catalog_hash`")
+            );
+            let mut value = norito::json::to_value(&status).unwrap();
+            let fields = value.as_object_mut().unwrap();
+            fields.remove("runtime_catalog_hash").unwrap();
+            let error = norito::json::from_str::<LaneLifecycleStatusV1>(
+                &norito::json::to_string(&value).unwrap(),
+            )
+            .expect_err("missing runtime hash must not become absence");
+            assert!(error.to_string().contains("runtime_catalog_hash"));
+            for malformed in [
+                norito::json::Value::Bool(false),
+                norito::json::Value::String(String::new()),
+            ] {
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("runtime_catalog_hash".into(), malformed);
+                assert!(
+                    norito::json::from_str::<LaneLifecycleStatusV1>(
+                        &norito::json::to_string(&value).unwrap(),
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+    #[test]
+    fn lane_lifecycle_status_rejects_forged_hash_version_and_order() {
+        let mut status = lifecycle_status(&LaneCatalog::default());
+        status.catalog_hash = Hash::prehashed([0xA5; Hash::LENGTH]);
+        assert!(matches!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::CatalogHashMismatch { .. })
+        ));
+        let mut status = lifecycle_status(&LaneCatalog::default());
+        status.version = LaneLifecycleStatusV1::VERSION.saturating_add(1);
+        assert!(matches!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::UnsupportedVersion { .. })
+        ));
+        let canonical = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid catalog");
+        let mut status = lifecycle_status(&canonical);
+        status.lanes.reverse();
+        assert_eq!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::NonCanonicalLaneOrder)
+        );
+        let mut status = lifecycle_status(&canonical);
+        status.incarnations.reverse();
+        assert_eq!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::NonCanonicalIncarnationOrder)
+        );
+        let mut status = lifecycle_status(&canonical);
+        status.incarnations[1].incarnation = status.incarnations[0].incarnation;
+        assert!(matches!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::DuplicateIncarnation { .. })
+        ));
+        let mut status = lifecycle_status(&canonical);
+        status.incarnation_root = Hash::new(b"forged-incarnation-root");
+        assert!(matches!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::IncarnationRootMismatch { .. })
+        ));
+    }
+    #[test]
+    fn lane_lifecycle_incarnation_root_changes_for_identical_catalog_replacement() {
+        let catalog = LaneCatalog::default();
+        let first = BTreeMap::from([(
+            LaneId::SINGLE,
+            Hash::new(b"lane-incarnation-before-replacement"),
+        )]);
+        let replacement = BTreeMap::from([(
+            LaneId::SINGLE,
+            Hash::new(b"lane-incarnation-after-replacement"),
+        )]);
+        let first_status =
+            LaneLifecycleStatusV1::new(&catalog, &first, None).expect("first lifecycle status");
+        let replacement_status = LaneLifecycleStatusV1::new(&catalog, &replacement, None)
+            .expect("replacement lifecycle status");
+        assert_eq!(first_status.catalog_hash, replacement_status.catalog_hash);
+        assert_ne!(
+            first_status.incarnation_root, replacement_status.incarnation_root,
+            "same metadata must not make a prior-incarnation request replayable"
+        );
+    }
+    #[test]
+    fn lane_lifecycle_status_json_rejects_duplicate_unknown_and_missing_fields() {
+        let status = lifecycle_status(&LaneCatalog::default());
+        let encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        assert!(
+            !encoded.contains("nexus_enabled"),
+            "the first-release status layout must not retain the removed enablement switch"
+        );
+        let mut encoded = encoded;
+        assert_eq!(encoded.pop(), Some('}'));
+        encoded.push_str(",\"version\":1}");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("duplicate status fields must fail closed");
+        assert!(err.to_string().contains("duplicate field `version`"));
+        let mut encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        assert_eq!(encoded.pop(), Some('}'));
+        encoded.push_str(",\"unexpected\":true}");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("unknown status fields must fail closed");
+        assert!(err.to_string().contains("unexpected"));
+        let mut encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        assert_eq!(encoded.pop(), Some('}'));
+        encoded.push_str(",\"nexus_enabled\":true}");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("the removed enablement field must fail as unknown");
+        assert!(err.to_string().contains("nexus_enabled"));
+        let mut value = norito::json::to_value(&status).expect("serialize lifecycle status value");
+        assert!(
+            value
+                .as_object_mut()
+                .expect("lifecycle status JSON object")
+                .remove("incarnation_root")
+                .is_some()
+        );
+        let encoded = norito::json::to_string(&value).expect("serialize shortened status");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("a missing current field must fail closed");
+        assert!(err.to_string().contains("incarnation_root"));
+    }
+    #[test]
+    fn lane_lifecycle_plan_json_rejects_duplicate_fields() {
+        let duplicate = r#"{"additions":[],"retire":[],"retire":[]}"#;
+        let err = norito::json::from_str::<LaneLifecyclePlan>(duplicate)
+            .expect_err("duplicate lifecycle plan field must fail closed");
+        assert!(err.to_string().contains("duplicate field `retire`"));
+    }
+    #[test]
+    fn lane_lifecycle_plan_json_requires_both_current_fields() {
+        for (payload, missing) in [
+            (r#"{"retire":[]}"#, "additions"),
+            (r#"{"additions":[]}"#, "retire"),
+        ] {
+            let err = norito::json::from_str::<LaneLifecyclePlan>(payload)
+                .expect_err("shortened lifecycle plan must fail closed");
+            assert!(
+                err.to_string().contains(&format!(
+                    "missing required lane lifecycle plan field `{missing}`"
+                )),
+                "unexpected missing-field error: {err}"
+            );
+        }
+    }
+    #[test]
     fn lane_config_json_rejects_duplicate_fields() {
         use core::fmt::Write as _;
 
@@ -1823,6 +3003,126 @@ mod tests {
         assert!(error.to_string().contains("starvation_bound_slots"));
     }
     #[test]
+    fn lane_lifecycle_json_rejects_nested_duplicate_lane_field() {
+        let catalog = LaneCatalog::default();
+        let entries = lifecycle_status(&catalog).incarnations;
+        let parameter = LaneLifecycleParameterV1::new(
+            &catalog,
+            &entries,
+            LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "manual-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            },
+        )
+        .expect("valid lifecycle parameter");
+        let encoded = norito::json::to_string(&parameter)
+            .expect("serialize lifecycle payload")
+            .replacen(
+                "\"alias\":\"manual-lane\"",
+                "\"alias\":\"manual-lane\",\"alias\":\"forged-lane\"",
+                1,
+            );
+        assert!(encoded.contains("\"alias\":\"forged-lane\""));
+        let err = norito::json::from_str::<LaneLifecycleParameterV1>(&encoded)
+            .expect_err("nested duplicate lane fields must fail closed");
+        assert!(err.to_string().contains("duplicate field `alias`"));
+    }
+    #[test]
+    fn lane_lifecycle_rejects_unknown_retire_or_empty() {
+        let base = LaneCatalog::default();
+        let missing = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::new(9)],
+        };
+        let err = base
+            .apply_lifecycle(&missing)
+            .expect_err("unknown retire must fail");
+        assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
+        let duplicate_retire = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::SINGLE, LaneId::SINGLE],
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_retire)
+            .expect_err("duplicate retire must fail");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateRetireLane(lane) if lane == LaneId::SINGLE
+        ));
+        let forged_present = LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(9),
+                alias: "forged-present".into(),
+                ..LaneConfig::default()
+            }],
+            retire: vec![LaneId::new(9)],
+        };
+        let err = base
+            .apply_lifecycle(&forged_present)
+            .expect_err("addition must not satisfy retire precondition");
+        assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
+        let empty_plan = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::SINGLE],
+        };
+        let err = base
+            .apply_lifecycle(&empty_plan)
+            .expect_err("empty catalog must be rejected");
+        assert!(matches!(err, LaneCatalogError::EmptyCatalog));
+    }
+    #[test]
+    fn lane_lifecycle_rejects_duplicate_additions_before_merge() {
+        let base = LaneCatalog::default();
+        let duplicate_id = LaneLifecyclePlan {
+            additions: vec![
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "gamma".into(),
+                    ..LaneConfig::default()
+                },
+            ],
+            retire: Vec::new(),
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_id)
+            .expect_err("duplicate additions must fail before merge");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateLaneId(lane) if lane == LaneId::new(1)
+        ));
+        let duplicate_alias = LaneLifecyclePlan {
+            additions: vec![
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+            ],
+            retire: Vec::new(),
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_alias)
+            .expect_err("duplicate addition aliases must fail before merge");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateLaneAlias(alias) if alias == "beta"
+        ));
+    }
+    #[test]
     fn lane_catalog_constructor_rejects_empty_catalog() {
         let error = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero bound"), Vec::new())
             .expect_err("validated catalogs must never be empty");
@@ -1833,7 +3133,21 @@ mod tests {
 pub mod prelude {
     pub use super::{
         DaManifestPolicy, DaManifestPolicyParseError, DataSpaceCatalog, DataSpaceCatalogError,
-        DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig, LaneStorageProfile,
+        DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig,
+        LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneStorageProfile,
         LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
     };
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::nexus::LaneLifecycleStatusV1,
+        >("iroha_data_model::nexus::LaneLifecycleStatusV1");
+    }
 }

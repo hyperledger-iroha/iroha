@@ -6887,12 +6887,18 @@ impl<'a> ArchiveView<'a> {
     /// Decode a value with a custom payload decoder while enforcing the header schema,
     /// type-specific padding, payload-derived resource limits, and complete payload consumption.
     ///
+    /// `T` is the original wire type and determines schema and padding. `R` may retain borrowed
+    /// payload views or independently prepaid allocations instead of reconstructing `T`. The
+    /// callback remains responsible for field structure and canonical validation; a frame view
+    /// never authenticates the decoded value. It must report complete payload consumption.
+    ///
     /// The view's payload context and layout flags are installed only while `decode` runs and are
-    /// restored even if the decoder returns an error or unwinds.
-    pub fn decode_exact_with<T, F>(&self, decode: F) -> Result<T, Error>
+    /// restored even if the decoder returns an error or unwinds. Payload-derived limits compose
+    /// with any stricter outer decoder budget regardless of the callback's result type.
+    pub fn decode_exact_with<T, R, F>(&self, decode: F) -> Result<R, Error>
     where
         T: NoritoDeserialize<'a>,
-        F: FnOnce(&'a [u8]) -> Result<(T, usize), Error>,
+        F: FnOnce(&'a [u8]) -> Result<(R, usize), Error>,
     {
         if self.schema != crate::schema::identity::frame_hash::<T>() {
             return Err(Error::SchemaMismatch);

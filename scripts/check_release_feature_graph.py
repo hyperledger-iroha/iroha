@@ -156,7 +156,7 @@ FORBIDDEN_FEATURES = (
 # therefore requires an explicit policy review instead of relying on its name
 # matching a short fixture denylist.
 SHIPPING_ROOT_FEATURE_ALLOWLIST = {
-    "connect_norito_bridge": frozenset({"privacy-production-enabled"}),
+    "connect_norito_bridge": frozenset({"cuda", "privacy-production-enabled"}),
     "iroha_cli": frozenset(
         {"bridge", "cli", "default", "offline-visual-codecs"}
     ),
@@ -219,12 +219,16 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
             "expensive-telemetry",
             "external-software-signer-bin",
             "gost",
+            "ivm-cuda",
             "schema-endpoint",
             "sm",
             "telemetry",
         }
     ),
-    "ivm": frozenset(),
+    # Production IVM backends retain their build-time signed-artifact admission.
+    # This permits their normal graph; physical-test gates and toolkit-coupled
+    # aggregate helper features remain outside the shipping root policy.
+    "ivm": frozenset({"cuda", "default", "metal"}),
     "sorafs_car": frozenset({"cli", "default", "manifest"}),
     "sorafs_orchestrator": frozenset(
         {"cli-orchestrator", "default", "moderation-grpc"}
@@ -951,6 +955,8 @@ def _quoted_arg_words(
         if required:
             raise RuntimeError(f"{path}: missing quoted ARG {name}")
         return None
+    if name == "FEATURES":
+        return _split_features(match.group(1))
     return tuple(word for word in match.group(1).split() if word)
 
 
@@ -1661,6 +1667,10 @@ def docker_publish_invocations(repo: Path) -> tuple[DockerInvocation, ...]:
                     f"{relative}: Docker build arguments are not declared by "
                     f"{dockerfile_relative}: {', '.join(sorted(undeclared_args))}"
                 )
+            if "ARG IVM_CUDA_TRUSTED_KEY_SHA256" in dockerfile_source and args.get(
+                "IVM_CUDA_TRUSTED_KEY_SHA256"
+            ) != "${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}":
+                raise RuntimeError(f"{relative}: reviewed CUDA public-key configuration is not forwarded")
             if "USE_PREBUILT" in args:
                 raise RuntimeError(
                     f"{relative}: official workflow may not override USE_PREBUILT"
@@ -1701,6 +1711,21 @@ def docker_publish_invocations(repo: Path) -> tuple[DockerInvocation, ...]:
     )
 
 
+def _validate_docker_acceleration_inputs(source: str, path: Path) -> None:
+    """Keep every Linux image build bound to its signed bundled CUDA input."""
+
+    markers = (
+        "ARG IVM_CUDA_TRUSTED_KEY_SHA256",
+        "ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}",
+        "ENV IVM_CUDA_PTX_MODE=bundled",
+        'case ",${FEATURES}," in *,irohad/ivm-cuda,*)',
+        'test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64',
+        '*[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000)',
+    )
+    if any(source.count(marker) != 1 for marker in markers):
+        raise RuntimeError(f"{path}: signed CUDA build-input handoff changed")
+
+
 def docker_shipping_targets(
     repo: Path,
     catalog: WorkspaceCatalog | None = None,
@@ -1723,22 +1748,19 @@ def docker_shipping_targets(
     )
     resolved = tuple(_resolve_binary(catalog, binary) for binary in binary_names)
 
-    for feature in global_features:
-        if not any(
-            feature in package_features
-            for package_features in catalog.package_features.values()
-        ):
-            raise RuntimeError(
-                f"{dockerfile}: shipping feature {feature!r} belongs to no workspace package"
-            )
+    owned_features = {
+        pair for value in global_features for pair in declared_feature_owners(value, catalog)
+    }
+    if any(target.package == "irohad" for target in resolved):
+        if ("irohad", "ivm-cuda") not in owned_features:
+            raise RuntimeError(f"{dockerfile}: shipping daemon omits mandatory CUDA")
+        _validate_docker_acceleration_inputs(source, dockerfile)
 
     targets: list[ShippingTarget] = []
     for target in resolved:
         features = set(target.required_features)
         features.update(
-            feature
-            for feature in global_features
-            if feature in catalog.package_features[target.package]
+            feature for owner, feature in owned_features if owner == target.package
         )
         targets.append(
             ShippingTarget(
@@ -2079,13 +2101,25 @@ def _validate_nix_cargo_envelope(source: str, relative: Path) -> None:
     expected = (
         'default ++ ["--target" targetTriple] '
         '++ builtins.concatMap (target: ["-p" target.package "--bin" '
-        'target.binary]) binaries ++ (if features == [] then [] else '
-        '["--features" (builtins.concatStringsSep "," features)])'
+        'target.binary]) binaries ++ (if releaseFeatures == [] then [] else '
+        '["--features" (builtins.concatStringsSep "," releaseFeatures)])'
     )
     if observed != expected:
         raise RuntimeError(
             f"{relative}: Nix cargoBuildOptions is not the reviewed target/feature envelope"
         )
+
+    capability_markers = (
+        'includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;',
+        'needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);',
+        'releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");',
+        'IVM_CUDA_PTX_MODE = "bundled";',
+        'IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;',
+        'builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null',
+        'cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"',
+    )
+    if any(source.count(marker) != 1 for marker in capability_markers):
+        raise RuntimeError(f"{relative}: target-qualified acceleration or reviewed CUDA trust input changed")
 
     rustflag_assignments = tuple(
         re.findall(
@@ -2272,6 +2306,10 @@ def nix_shipping_targets(
         for package, binary in pairs:
             resolved = _resolve_binary(catalog, binary, package)
             features = set(feature_sets[package])
+            if package == "irohad":
+                if "ivm-cuda" not in catalog.package_features[package]:
+                    raise RuntimeError(f"{relative}: daemon lacks mandatory shipping CUDA feature")
+                features.add("ivm-cuda")
             features.update(resolved.required_features)
             targets.append(
                 ShippingTarget(
@@ -2567,12 +2605,20 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         "--cargo-profile",
         "--features",
         '"${provenance_binaries[@]}"',
+        '"${cuda_provenance_args[@]}"',
         "--output-directory",
     )
     for script, source in (
         (RELEASE_BUNDLE_SCRIPT, bundle_source),
         (RELEASE_IMAGE_SCRIPT, image_source),
     ):
+        capability_markers = (
+            "from release_artifact_contract import release_acceleration_features",
+            'release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))',
+            'cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")',
+        )
+        if any(source.count(marker) != 1 for marker in capability_markers):
+            raise RuntimeError(f"{script}: target acceleration or independent CUDA trust handoff changed")
         environment_markers = (
             "#!/usr/bin/env -S -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS "
             "-u PS4 -u BASH_XTRACEFD -u CDPATH -u GLOBIGNORE bash -p\n",
@@ -2796,6 +2842,11 @@ def release_bundle_targets(
             catalog, target.package, fixed_features, RELEASE_BUNDLE_SCRIPT
         )
         features.update(target.required_features)
+        # This graph is the union over canonical Linux/macOS/Windows targets.
+        if target.package == "irohad":
+            if "ivm-cuda" not in catalog.package_features[target.package]:
+                raise RuntimeError("canonical daemon lacks required shipping CUDA feature")
+            features.add("ivm-cuda")
         targets.append(
             ShippingTarget(
                 package=target.package,
@@ -2842,6 +2893,20 @@ def declared_shipping_targets(repo: Path) -> tuple[ShippingTarget, ...]:
     )
 
 
+def declared_feature_owners(value: str, catalog: WorkspaceCatalog) -> tuple[tuple[str, str], ...]:
+    """Bind qualified Cargo feature names to exactly their declared package."""
+
+    if "/" in value:
+        owner, feature = value.split("/", 1)
+        if feature not in catalog.package_features.get(owner, ()):
+            raise RuntimeError(f"no workspace package declares qualified feature {value!r}")
+        return ((owner, feature),)
+    owners = tuple((package, value) for package, features in catalog.package_features.items() if value in features)
+    if not owners:
+        raise RuntimeError(f"no workspace package declares feature {value!r}")
+    return owners
+
+
 def shipping_profiles(repo: Path) -> tuple[ShippingProfile, ...]:
     """Return distinct baseline and declaration-derived shipping profiles."""
 
@@ -2871,18 +2936,9 @@ def shipping_profiles(repo: Path) -> tuple[ShippingProfile, ...]:
                 source, "FEATURES", Path(invocation.dockerfile), required=False
             ) or ()
         for feature in declared_features:
-            owners = tuple(
-                package
-                for package, package_features in catalog.package_features.items()
-                if feature in package_features
-            )
-            if not owners:
-                raise RuntimeError(
-                    f"{invocation.workflow}: no workspace package declares feature {feature!r}"
-                )
             profiles.update(
-                ShippingProfile(package=package, features=(feature,))
-                for package in owners
+                ShippingProfile(package=package, features=(local_feature,))
+                for package, local_feature in declared_feature_owners(feature, catalog)
             )
     ordered = tuple(sorted(profiles))
     validate_shipping_profile_policy(ordered)

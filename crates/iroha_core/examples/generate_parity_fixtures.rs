@@ -146,8 +146,10 @@ fn run_block_and_events(
             .into()
     };
     // Execute and commit
-    let mut sb = state.block(block.header());
-    let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+            .expect("original writer-first component execution");
+    let vb = ValidBlock::validate_unchecked(block, &mut sb, sb_recorder).unpack(|_| {});
     let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
     assert!(
         errors.is_empty(),

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     exec_witness,
-    state::{State, TransactionsBlockError},
+    state::{State, TransactionsBlockError, WorldReadOnly},
 };
 use iroha_data_model::{
     asset::AssetId,
@@ -537,7 +537,7 @@ fn failed_output_binding_publishes_no_partial_capture_and_cannot_be_retried() {
                 .unwrap();
             block.drain_transfer_transcripts_with_pending(None)
         };
-        let prior_lane_seal = block.lane_consensus_contexts_seal;
+        let prior_lane_seal = block.sumeragi_lane_state_seal;
         block.execution_output_plan = Some(ExecutionOutputPlanState::Running);
         let error = block.capture_exec_witness().unwrap_err();
         assert_eq!(
@@ -545,7 +545,7 @@ fn failed_output_binding_publishes_no_partial_capture_and_cannot_be_retried() {
             "witness capture requires completed execution outputs"
         );
         assert_eq!(assert_raw_content_failure(&block), error);
-        assert_eq!(block.lane_consensus_contexts_seal, prior_lane_seal);
+        assert_eq!(block.sumeragi_lane_state_seal, prior_lane_seal);
         assert!(matches!(
             block.execution_output_plan,
             Some(ExecutionOutputPlanState::Poisoned)
@@ -581,23 +581,25 @@ fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure(
         cache_canonical_test_transaction_set(&mut block, &[]);
         let original = finalized_source(&mut block, Hash::new(b"interrupted capture source"));
         let prior = had_lane_seal.then(|| {
-            block
-                .lane_consensus_contexts
-                .get()
-                .canonical_hash()
-                .unwrap()
+            iroha_data_model::sumeragi_finality::SumeragiLaneStateCommitment::from_state(
+                block.network_id,
+                block._curr_block.height().get(),
+                block.world.sumeragi_lanes(),
+            )
+            .unwrap()
+            .state_hash()
         });
-        block.lane_consensus_contexts_seal = prior;
+        block.sumeragi_lane_state_seal = prior;
         block.execution_output_plan = Some(ExecutionOutputPlanState::Running);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let capture = WitnessCaptureGuard::new(&mut block);
-            capture.state.lane_consensus_contexts_seal = Some(Hash::new(b"partial lane seal"));
+            capture.state.sumeragi_lane_state_seal = Some(Hash::new(b"partial lane seal"));
             capture.state.parliament_timed_ovn_casting_bindings = Some(Vec::new());
             capture.state.exec_witness = Some(crate::exec_witness::drain_exec_witness());
             panic!("test-only capture interruption");
         }));
         assert!(outcome.is_err());
-        assert_eq!(block.lane_consensus_contexts_seal, prior);
+        assert_eq!(block.sumeragi_lane_state_seal, prior);
         let error = assert_raw_content_failure(&block);
         assert_eq!(error, "execution witness capture was interrupted");
         assert!(matches!(

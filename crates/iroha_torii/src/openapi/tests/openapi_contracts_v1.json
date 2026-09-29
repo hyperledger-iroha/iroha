@@ -139,140 +139,26 @@
       ]
     },
     {
-      "id": "sumeragi.da.required",
-      "values": ["encoding", "data_shards", "parity_shards"]
-    },
-    {
       "id": "bridge.proof.required",
-      "values": ["version", "block_header", "finality_artifact"]
+      "values": [
+        "block_header",
+        "block_wire",
+        "committee"
+      ]
     },
     {
       "id": "bridge.attestation.required",
-      "values": ["body", "signature"]
-    },
-    {
-      "id": "finality.artifact.required",
       "values": [
-        "format_version",
-        "protocol_version",
-        "height",
-        "height_context",
-        "subject",
-        "block_hash",
-        "commit_qc",
-        "validator_set_pops"
+        "body",
+        "signature"
       ]
-    },
-    {
-      "id": "height.context.required",
-      "values": [
-        "network_id",
-        "protocol_version",
-        "height",
-        "epoch",
-        "epoch_end_height",
-        "next_epoch_snapshot",
-        "mode",
-        "parent_commit_qc",
-        "snapshot_bootstrap",
-        "roster",
-        "quorum",
-        "nexus_amx_context_hash",
-        "execution_policy_hash",
-        "da_layout",
-        "leader_seed",
-        "kagemusha_mint_finality_authority",
-        "kagemusha_mint_finality_authorization"
-      ]
-    },
-    {
-      "id": "height.context.nullable",
-      "values": ["next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap"]
-    },
-    {
-      "id": "validator.power.required",
-      "values": ["validator", "power"]
-    },
-    {
-      "id": "dual.quorum.required",
-      "values": ["min_signers", "total_power"]
-    },
-    {
-      "id": "block.subject.required",
-      "values": ["parent_block_hash", "block_hash", "payload_hash"]
-    },
-    {
-      "id": "block.subject.nullable",
-      "values": ["parent_block_hash"]
-    },
-    {
-      "id": "merge.carrier.required",
-      "values": ["version", "entry_hash"]
-    },
-    {
-      "id": "execution.required",
-      "values": [
-        "parent_state_root",
-        "post_state_root",
-        "ordinary_writes_root",
-        "kagemusha_top_up_root",
-        "kagemusha_top_up_count",
-        "native_amx_application_manifest_version",
-        "native_amx_application_manifest_root",
-        "native_amx_application_manifest_count",
-        "lane_finality_manifest",
-        "merge_carrier",
-        "executed_block_wire_len",
-        "executed_block_wire_hash"
-      ]
-    },
-    {
-      "id": "execution.nullable",
-      "values": ["kagemusha_top_up_root", "lane_finality_manifest", "merge_carrier"]
-    },
-    {
-      "id": "qc.required",
-      "values": [
-        "round",
-        "proposal_round",
-        "phase",
-        "subject",
-        "execution_commitment",
-        "signers",
-        "aggregate_signature"
-      ]
-    },
-    {
-      "id": "snapshot.bootstrap.required",
-      "values": [
-        "snapshot_height",
-        "snapshot_block_hash",
-        "snapshot_block_creation_time_ms",
-        "snapshot_state_hash"
-      ]
-    },
-    {
-      "id": "next.epoch.required",
-      "values": [
-        "epoch",
-        "epoch_end_height",
-        "mode",
-        "roster",
-        "validator_set_pops",
-        "quorum",
-        "leader_seed",
-        "kagemusha_mint_finality_authority",
-        "kagemusha_mint_finality_authorization",
-        "committee_preparation"
-      ]
-    },
-    {
-      "id": "bridge.commitment.required",
-      "values": ["network_id", "height_context_id", "block_height", "block_hash"]
     },
     {
       "id": "bridge.bundle.required",
-      "values": ["network_id", "finality_proof"]
+      "values": [
+        "network_id",
+        "finality_proof"
+      ]
     },
     {
       "id": "block.header.required",
@@ -310,14 +196,19 @@
       "values": [
         "height",
         "block_hash",
-        "state_root",
+        "witnessed_post_state_root",
         "block_header",
-        "finality_artifact"
+        "finality_proof"
       ]
     },
     {
       "id": "ledger.state_finality.retired",
-      "values": ["source", "commit_qc"]
+      "values": [
+        "source",
+        "commit_qc",
+        "state_root",
+        "finality_artifact"
+      ]
     },
     {
       "id": "ledger.state_finality.retired_paths",
@@ -340,49 +231,6 @@
       ]
     },
     {
-      "id": "bridge.components",
-      "values": [
-        "BridgeFinalityProof",
-        "SumeragiFinalityAttestationBody",
-        "SumeragiFinalityAttestation",
-        "BridgeCommitment",
-        "SumeragiFinalityBundle",
-        "SumeragiV2FinalityArtifact",
-        "SumeragiV2FinalizedNextEpochSnapshot",
-        "SumeragiV2HeightContext",
-        "SumeragiV2ValidatorPower",
-        "SumeragiV2DualQuorum",
-        "SumeragiV2BlockSubject",
-        "SumeragiV2LaneFinalityManifestCommitment",
-        "SumeragiV2MergeCarrierCommitment",
-        "SumeragiV2ExecutionCommitment",
-        "SumeragiV2QuorumCertificate",
-        "SumeragiV2CommitQuorumCertificate"
-      ]
-    },
-    {
-      "id": "bridge.retired",
-      "values": [
-        "authority_set",
-        "next_authority_set",
-        "justification",
-        "signatures",
-        "validator_set_hash",
-        "validator_set_hash_version",
-        "validator_set",
-        "subject_block_hash",
-        "mode_tag",
-        "highest_qc",
-        "aggregate",
-        "signers_bitmap",
-        "bls_aggregate_signature",
-        "mmr_root",
-        "mmr_leaf_index",
-        "mmr_peaks",
-        "result_merkle_root"
-      ]
-    },
-    {
       "id": "fixture.header.required",
       "values": [
         "height",
@@ -397,36 +245,6 @@
         "confidential_features",
         "execution_context_hash",
         "global_beacon_pulse_hash"
-      ]
-    },
-    {
-      "id": "fixture.artifact.fields",
-      "values": [
-        "block_hash",
-        "commit_qc",
-        "format_version",
-        "height",
-        "height_context",
-        "protocol_version",
-        "subject",
-        "validator_set_pops"
-      ]
-    },
-    {
-      "id": "fixture.execution.fields",
-      "values": [
-        "executed_block_wire_hash",
-        "executed_block_wire_len",
-        "native_amx_application_manifest_count",
-        "native_amx_application_manifest_root",
-        "native_amx_application_manifest_version",
-        "lane_finality_manifest",
-        "merge_carrier",
-        "ordinary_writes_root",
-        "parent_state_root",
-        "post_state_root",
-        "kagemusha_top_up_root",
-        "kagemusha_top_up_count"
       ]
     },
     {
@@ -469,6 +287,9 @@
     {
       "id": "status.required",
       "values": [
+        "protocol_version",
+        "config_fingerprint",
+        "beacon_horizon",
         "instance",
         "height",
         "view",
@@ -492,9 +313,7 @@
     {
       "id": "status.absent",
       "values": [
-        "protocol_version",
         "node_fingerprint",
-        "config_fingerprint",
         "build_fingerprint",
         "phase",
         "height_context_id",
@@ -504,65 +323,10 @@
         "last_committed_subject",
         "last_commit_qc",
         "liveness",
-        "beacon_horizon",
         "lane_settlement_commitments",
         "lane_relay_envelopes",
         "rbc_status",
         "missing_qc_total"
-      ]
-    },
-    {
-      "id": "native.receipt.required",
-      "values": [
-        "network_id",
-        "lane_incarnation",
-        "authority_context_height",
-        "lane_block_height",
-        "lane_block_view",
-        "coordinator_proposal_hash"
-      ]
-    },
-    {
-      "id": "native.leg.required",
-      "values": [
-        "lane_id",
-        "dataspace_id",
-        "participant_proposal",
-        "participant_settlement",
-        "participant_settlement_hash",
-        "prepare_qc",
-        "commit_qc"
-      ]
-    },
-    {
-      "id": "native.proposal.required",
-      "values": [
-        "descriptor",
-        "proposal_hash",
-        "payload_block_hint"
-      ]
-    },
-    {
-      "id": "native.body.required",
-      "values": [
-        "round",
-        "epoch",
-        "network_id",
-        "coordinator_lane_incarnation",
-        "participant_lane_incarnation",
-        "participant_previous_block_height",
-        "participant_previous_block_descriptor_hash",
-        "participant_lane_block_height",
-        "participant_lane_block_view",
-        "participant_proposal_hash",
-        "participant_settlement_commitment",
-        "participant_validator_set_hash",
-        "participant_validator_count",
-        "participant_min_quorum",
-        "authority_context_height",
-        "coordinator_lane_block_view",
-        "coordinator_proposal_hash",
-        "planned_coordinator_block_height"
       ]
     },
     {
@@ -577,7 +341,11 @@
     },
     {
       "id": "app.page.required",
-      "values": ["items", "has_more", "count_mode"]
+      "values": [
+        "items",
+        "has_more",
+        "count_mode"
+      ]
     },
     {
       "id": "app.page.properties",
@@ -601,19 +369,34 @@
     },
     {
       "id": "repo.query.fields",
-      "values": ["filter", "select", "aggregate", "fetch_size", "count_mode"]
+      "values": [
+        "filter",
+        "select",
+        "aggregate",
+        "fetch_size",
+        "count_mode"
+      ]
     },
     {
       "id": "contract.alias.request.required",
-      "values": ["contract_alias"]
+      "values": [
+        "contract_alias"
+      ]
     },
     {
       "id": "contract.alias.binding.required",
-      "values": ["alias", "status", "bound_at_ms"]
+      "values": [
+        "alias",
+        "status",
+        "bound_at_ms"
+      ]
     },
     {
       "id": "contract.alias.binding.optional",
-      "values": ["lease_expiry_ms", "grace_until_ms"]
+      "values": [
+        "lease_expiry_ms",
+        "grace_until_ms"
+      ]
     },
     {
       "id": "contract.alias.response.required",
@@ -655,7 +438,11 @@
     },
     {
       "id": "governed.missing.fields",
-      "values": ["found", "contract_address", "dataspace"]
+      "values": [
+        "found",
+        "contract_address",
+        "dataspace"
+      ]
     }
   ]
 }

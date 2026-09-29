@@ -200,6 +200,11 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         SumeragiConsensusMode::Permissioned,
         1000,
         &iroha_config::parameters::actual::Pipeline::default(),
+        &iroha_config::parameters::actual::FraudMonitoring::default(),
+        None,
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert!(

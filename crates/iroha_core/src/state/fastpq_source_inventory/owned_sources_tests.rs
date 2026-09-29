@@ -283,7 +283,6 @@ fn execute(block: &mut StateBlock<'_>, source: &SignedBlock) {
 fn seal_metadata(block: &mut StateBlock<'_>) -> Result<ExecutionOutputSealMetadata, String> {
     Ok(ExecutionOutputSealMetadata {
         committed_fragment_count: u64::try_from(block.committed_fragment_count()).unwrap(),
-        lane_finality_statements: Vec::new(),
     })
 }
 

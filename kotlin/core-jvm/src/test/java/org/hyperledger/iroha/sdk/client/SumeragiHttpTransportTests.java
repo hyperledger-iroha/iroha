@@ -45,7 +45,7 @@ public final class SumeragiHttpTransportTests {
     final OneResponseExecutor executor = new OneResponseExecutor(jsonResponse(body));
     final HttpClientTransport transport = transport(executor);
 
-    assertEquals(8, transport.getSumeragiStatus().join().protocolVersion);
+    assertEquals(1, transport.getSumeragiStatus().join().protocolVersion);
     assertEquals(1, executor.requests);
     assertEquals("https://torii.example/api/v1/sumeragi/status", executor.last.uri.toString());
     assertEquals("GET", executor.last.method);
@@ -83,7 +83,7 @@ public final class SumeragiHttpTransportTests {
       final TransportResponse statusResponse =
           new TransportResponse(200, body, "", headers, null, false);
       assertEquals(
-          8,
+          1,
           transport(new OneResponseExecutor(statusResponse))
               .getSumeragiStatus()
               .join()

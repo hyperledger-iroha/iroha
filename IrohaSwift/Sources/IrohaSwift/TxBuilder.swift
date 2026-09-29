@@ -131,7 +131,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
             guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
-            // Re-run the ABI24 catalog getter+validator and the exact manifest/
+            // Re-run the ABI25 catalog getter+validator and the exact manifest/
             // envelope tuple comparison at final encoding. A previously issued
             // token cannot turn a missing or stale native artifact into authority.
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
@@ -965,7 +965,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Build the exact payer-signed transaction shape required by KAGEMUSHA top-up ingress.
     ///
     /// Encodes exactly one native top-up in `Executable::Instructions` with
-    /// `QueuePlanSynced` admission. The caller supplies the trusted network,
+    /// canonical transaction admission. The caller supplies the trusted network,
     /// payer authority, fee intent, signing key, creation time, and TTL. The
     /// signing key must control a single-key payer; multisig needs a signature
     /// bundle. Persist the returned versioned bytes before submission and reuse

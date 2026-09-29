@@ -46,7 +46,7 @@ use iroha_data_model::{
             ReserveMovementKindV1, ReserveMovementStatusV1, ReserveProviderAccountV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionAdmissionIntent},
+    transaction::{Executable, SignedTransaction},
 };
 use iroha_logger::{debug, warn};
 use norito::json;
@@ -421,14 +421,7 @@ async fn submit_reserve_signed_transaction(
     if let Err(response) = validate_reserve_signed_transaction(&state, &transaction, route) {
         return response;
     }
-    match crate::submit_signed_transaction_for_ingress_strict_durable(
-        state,
-        headers,
-        accept,
-        transaction,
-    )
-    .await
-    {
+    match crate::submit_signed_transaction_for_ingress(state, headers, accept, transaction).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -575,12 +568,7 @@ fn validate_reserve_signed_envelope_and_route(
             "SoraFS reserve transaction signature or authority binding is invalid",
         )
     })?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS reserve transaction requires signature-bound QueuePlanSynced admission",
-        ));
-    }
+
     if transaction.creation_time().is_zero()
         || transaction.time_to_live() != Some(RESERVE_TRANSACTION_TTL_V1)
         || transaction.nonce().is_some()
@@ -1733,8 +1721,7 @@ mod tests {
             *network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         builder.set_ttl(RESERVE_TRANSACTION_TTL_V1);
         mutate(builder)
             .with_instructions(instructions)
@@ -1773,7 +1760,10 @@ mod tests {
         treasury: &AccountId,
         caller: &AccountId,
         replacement: &AccountId,
-    ) -> SharedAppState {
+    ) -> (
+        SharedAppState,
+        iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    ) {
         let definition_id = reserve_test_asset_definition();
         let domain =
             Domain::new(DomainId::try_new("reserve", "universal").expect("reserve domain"))
@@ -1806,7 +1796,16 @@ mod tests {
         world
             .account_permissions_mut_for_testing()
             .insert(governance.clone(), permissions);
-        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
+        let config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("reserve original genesis");
+        let mut app =
+            crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(World::default());
+        let inner = Arc::get_mut(&mut app).expect("unique reserve fixture app");
+        inner.chain_id = Arc::new(chain.state().chain_id_ref().clone());
+        inner.state = Arc::clone(chain.state());
+        inner.kura = Arc::clone(chain.kura());
+        (app, chain)
     }
     fn reserve_stream_policy(
         revision: u64,
@@ -1833,33 +1832,27 @@ mod tests {
         }
     }
     fn commit_reserve_stream_policies(
-        state: &SharedAppState,
+        chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
         governance: &AccountId,
         policies: impl IntoIterator<Item = ReserveAuthorityPolicyV1>,
         now_unix: u64,
     ) {
-        let height = u64::try_from(state.state.view().block_hashes().len())
-            .expect("reserve test height")
-            .checked_add(1)
-            .expect("reserve test height overflow");
-        let header = BlockHeader::new(
-            height.try_into().expect("non-zero reserve test height"),
-            None,
-            None,
-            now_unix.checked_mul(1_000).expect("reserve test time"),
-            0,
+        let key = KeyPair::try_from_seed(vec![0xB1; 32], Algorithm::Ed25519)
+            .expect("reserve governance key");
+        assert_eq!(governance, &AccountId::new(key.public_key().clone()));
+        let time_ms = now_unix.checked_mul(1_000).expect("reserve test time");
+        let transaction = chain.sign(
+            &key,
+            policies
+                .into_iter()
+                .map(|policy| SetSorafsReservePolicy::new(policy).into()),
+            time_ms - 1,
         );
-        let mut block = state.state.block(header);
-        let mut transaction = block.transaction();
-        for policy in policies {
-            SetSorafsReservePolicy::new(policy)
-                .execute(governance, &mut transaction)
-                .expect("commit reserve stream policy");
-        }
-        transaction.apply();
-        block
-            .commit_empty_block_for_testing()
-            .expect("commit reserve stream test block");
+        assert_eq!(
+            chain.commit_at(time_ms, vec![transaction]),
+            [true],
+            "original signed reserve policy instructions execute and finalize"
+        );
     }
     struct FirstFrameFlushGateSink {
         output: mpsc::UnboundedSender<WsMessage>,
@@ -2036,13 +2029,13 @@ mod tests {
         let treasury = reserve_test_account(0xB3);
         let caller = reserve_test_account(0xB4);
         let replacement = reserve_test_account(0xB5);
-        let state =
+        let (state, mut chain) =
             reserve_stream_test_app(&governance, &custody, &treasury, &caller, &replacement);
         let first = reserve_stream_policy(1, None, &custody, &treasury, &caller);
         let first_digest = first.digest().expect("first reserve policy digest");
         let second = reserve_stream_policy(2, Some(first_digest), &custody, &treasury, &caller);
         let second_digest = second.digest().expect("second reserve policy digest");
-        commit_reserve_stream_policies(&state, &governance, [first, second], 10);
+        commit_reserve_stream_policies(&mut chain, &governance, [first, second], 10);
         let buffered = query_reserve_events(&state, &caller, None, None, 100)
             .expect("authorized initial reserve page");
         assert_eq!(buffered.events.len(), 2, "two frames must be buffered");
@@ -2111,7 +2104,7 @@ mod tests {
         tokio::task::yield_now().await;
         let third =
             reserve_stream_policy(3, Some(second_digest), &custody, &treasury, &replacement);
-        commit_reserve_stream_policies(&state, &governance, [third], 11);
+        commit_reserve_stream_policies(&mut chain, &governance, [third], 11);
         let replacement_page =
             query_reserve_events(&state, &replacement, None, Some(buffered_after), 100)
                 .expect("replacement authority sees finalized post-rotation event");

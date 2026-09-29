@@ -10,7 +10,7 @@ use crate::kura::scaling_evidence::lane_proof::{
 };
 use iroha_core::{
     query::native_context_archive::NativeContextArchive,
-    state::{AllocationBudget, NativeLaneStateProjectionV1},
+    state::{AllocationBudget, NativeExecutionProjectionV1},
 };
 use iroha_model_base::chain::ChainId;
 use std::num::NonZeroUsize;
@@ -81,7 +81,6 @@ pub(crate) fn collect_native_inputs(
     genesis_epoch_context_id: [u8; 32],
     original_genesis: &[u8],
     block_store: &Path,
-    merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
     limits: CollectionLimits,
 ) -> Result<CollectedNativeInputs> {
@@ -126,7 +125,7 @@ pub(crate) fn collect_native_inputs(
         budget,
         NonZeroUsize::new(limits.context_bytes).ok_or_else(|| eyre!("zero context admission"))?,
     )?;
-    let mut reader = CanonicalKuraEvidenceReader::open(block_store, merge_log, reader_limits)?;
+    let mut reader = CanonicalKuraEvidenceReader::open(block_store, reader_limits)?;
     let mut native = NativeExecutionEvidenceVerifier::new(
         chain_id.clone(),
         network,
@@ -180,7 +179,7 @@ pub(crate) fn collect_native_inputs(
             projection.as_slice().len(),
             limits.total_bytes,
         )?;
-        let state: NativeLaneStateProjectionV1 = canonical(projection.as_slice())?;
+        let state: NativeExecutionProjectionV1 = canonical(projection.as_slice())?;
         let mut frames = Vec::new();
         if let Some(section) = block.lane_merge() {
             let count = section.merges.iter().try_fold(0usize, |count, merge| {
@@ -310,11 +309,6 @@ pub(crate) fn collect_native_inputs(
             lane_evidence,
         });
     }
-    reader.scan_merge_entries(&[], |_, _, _| {
-        Err(CanonicalKuraEvidenceError::Invalid(
-            "unexpected native merge selection",
-        ))
-    })?;
     let disk = reader.finish()?;
     ensure!(
         disk.committed_height() == reader_limits.last_height

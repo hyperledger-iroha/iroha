@@ -14,10 +14,7 @@ use iroha_data_model::{
         SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionStatus, SubscriptionTriggerRef,
         SubscriptionUsageDelta,
     },
-    transaction::{
-        Executable, FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
-        TransactionPayload,
-    },
+    transaction::{Executable, FeePaymentIntent, TransactionBuilder, TransactionPayload},
     trigger::{Trigger, TriggerId},
 };
 use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
@@ -89,11 +86,6 @@ fn payload(
         builder.payload().attachments.is_none(),
         operation,
         "attachments",
-    )?;
-    require(
-        builder.payload().admission_intent == TransactionAdmissionIntent::Ordinary,
-        operation,
-        "admission_intent",
     )?;
     // Torii quotes may change charge limits, which remain visible in the draft
     // for review. These routes always select authority payment without gas.

@@ -92,10 +92,6 @@ def payload_body(name: str, *, shared: bool) -> dict:
         }
     )
     return {
-        "admission_intent": {
-            "intent": "ordinary",
-            "value": None,
-        },
         "authority": f"authority-{name}",
         "creation_time_ms": 1,
         "executable": {"Instructions": [instruction]},
@@ -384,11 +380,12 @@ def test_shared_empty_batch_is_rejected(tmp_path: Path) -> None:
         {},
         {"intent": "ordinary"},
         {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "ordinary", "value": None},
         {"intent": "queue_plan_synced", "value": None},
         {"intent": "ordinary", "value": 0},
     ],
 )
-def test_shared_admission_intent_is_exact_ordinary(
+def test_shared_retired_admission_intent_is_rejected(
     tmp_path: Path, intent: object
 ) -> None:
     source, target, payloads, _ = populate_valid_corpus(tmp_path)
@@ -406,11 +403,12 @@ def test_shared_admission_intent_is_exact_ordinary(
         {},
         {"intent": "ordinary"},
         {"intent": "ordinary", "value": None, "legacy": True},
+        {"intent": "ordinary", "value": None},
         {"intent": "queue_plan_synced", "value": None},
         {"intent": "ordinary", "value": 0},
     ],
 )
-def test_swift_owned_admission_intent_is_exact_ordinary(
+def test_swift_owned_retired_admission_intent_is_rejected(
     tmp_path: Path, intent: object
 ) -> None:
     source, target, _, _ = populate_valid_corpus(tmp_path)

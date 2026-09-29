@@ -7,7 +7,7 @@ fn transaction_history_budget_rejects_zero_before_storage_creation() {
     let mut config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
     config.transaction_history_bytes = iroha_config_base::util::Bytes(0);
     let error =
-        open_configured_kura_with_pending_limits(&config, &SumeragiV2RuntimeLimits::default())
+        Kura::new_with_configured_lane_catalog(&config, &RuntimeLaneConfig::default(), &LaneCatalog::default())
             .expect_err("zero transaction history capacity is invalid");
     assert!(matches!(error, Error::IO(ref source, ref path)
         if source.kind() == ErrorKind::InvalidInput

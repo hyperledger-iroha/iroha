@@ -143,7 +143,9 @@ fn actual_zk_padding_is_reserved_and_retained_on_padding_gas_failure() {
     ] {
         let allowance = budget(limit);
         let mut runtime = vm(&[halt()]);
-        runtime.set_zk_mode(true);
+        runtime
+            .set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         runtime.set_max_cycles(8);
         runtime.set_gas_limit(gas);
         let result = runtime.run_with_host_and_cycle_budget(&mut DefaultHost::new(), &allowance);
@@ -255,7 +257,9 @@ fn parent_unwind_keeps_completed_child_work_and_closes_retained_copies_on_owner_
     assert!(runtime.active_cycle_budget.is_none());
     let mut retained = host.retained.take().unwrap();
     drop(allowance);
-    retained.reset();
+    retained
+        .reset()
+        .expect("private lifecycle cleanup succeeds");
     assert_eq!(
         retained.run_with_host(&mut DefaultHost::new()),
         Err(VMError::HostUnavailable)
@@ -271,7 +275,9 @@ fn retained_runtime_cannot_rebind_a_foreign_allowance_after_an_actual_nested_run
         .run_with_host_and_cycle_budget(&mut host, &original)
         .unwrap();
     let mut retained = host.retained.take().unwrap();
-    retained.reset();
+    retained
+        .reset()
+        .expect("private lifecycle cleanup succeeds");
     let foreign = budget(10);
     assert_eq!(
         retained.run_with_host_and_cycle_budget(&mut DefaultHost::new(), &foreign),

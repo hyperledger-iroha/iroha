@@ -6,6 +6,7 @@ use crate::{
     state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
@@ -88,13 +89,15 @@ fn fixture_world() -> World {
     world
 }
 fn fixture() -> Fixture {
+    // Select a disposable signed-genesis scope; these mutation tests grant no finality.
+    let native_scope = NativeFinalityFixture::start("sorafs-release-manifest-custody-fixture");
     Fixture {
         state: State::new_with_chain_and_network_id_for_testing(
             fixture_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            FIXTURE_CHAIN_ID.parse().expect("fixture chain"),
-            FIXTURE_NETWORK_ID.parse().expect("fixture network"),
+            native_scope.chain_id().parse().expect("fixture chain"),
+            native_scope.network_id(),
         ),
         manager: account(1),
         operator: account(2),

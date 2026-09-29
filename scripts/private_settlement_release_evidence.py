@@ -38,19 +38,9 @@ REQUIRED_PHASE_CUTS = (
     "da_before_availability_qc",
     "prepare_before_complete_barrier",
     "commit_before_complete_barrier",
-    "carrier_before_global_finality",
+    "restart_before_global_finality",
 )
-REQUIRED_CRASH_BOUNDARIES = (
-    "sidecar_fsync",
-    "staged_delta_fsync",
-    "prepare_qc",
-    "prepare_registration_kura_append",
-    "prepare_registration_wsv_application",
-    "commit_qc",
-    "finalization_kura_append",
-    "finalization_wsv_application",
-    "receipt_publication",
-)
+REQUIRED_CRASH_BOUNDARIES: tuple[str, ...] = ()
 FAULT_TRANSCRIPT_ARTIFACT_KINDS = frozenset({"operator_log"})
 FAULT_CAPTURE_ARTIFACT_KINDS = frozenset({"sanitized_capture"})
 REQUIRED_AUDIT_SCOPES = (
@@ -2675,7 +2665,7 @@ def _validate_configuration_manifest(
             raise EvidenceError(f"{label}.consensus must be an object")
         if (
             consensus.get("mandatory_signed_rs16_da_rbc") is not True
-            or consensus.get("authenticated_message_control") is not True
+            or consensus.get("authenticated_private_settlement_route_control") is not True
             or consensus.get("legacy_rbc_bypass_permitted") is not False
         ):
             raise EvidenceError(f"{label}.consensus weakens the release profile")
@@ -3102,7 +3092,7 @@ def _validate_fault_report(
             "da_before_availability_qc",
             "prepare_before_complete_barrier",
             "commit_before_complete_barrier",
-            "carrier_before_global_finality",
+            "restart_before_global_finality",
         ),
         "real_network_fault_report.requirements.phase_cuts",
     )

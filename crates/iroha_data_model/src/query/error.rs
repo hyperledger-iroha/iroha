@@ -92,13 +92,6 @@ mod model {
             /// Last height committed by the immutable query snapshot.
             committed_height: u64,
         },
-        /// Canonical history body at height {height} is unavailable because the authenticated snapshot retains only hash `{expected_hash}`
-        HashOnlyBodyUnavailable {
-            /// One-based committed height.
-            height: u64,
-            /// Header hash authenticated by the snapshot lineage and WSV.
-            expected_hash: HashOf<BlockHeader>,
-        },
         /// Canonical history body at height {height} is unavailable; expected hash `{expected_hash}`
         BodyUnavailable {
             /// One-based committed height.
@@ -359,23 +352,18 @@ impl IntoSchema for CanonicalHistoryError {
                     ty: Some(core::any::TypeId::of::<CanonicalHistorySnapshotHeightSchema>()),
                 },
                 EnumVariant {
-                    tag: "HashOnlyBodyUnavailable".to_owned(),
+                    tag: "BodyUnavailable".to_owned(),
                     discriminant: 1,
                     ty: Some(core::any::TypeId::of::<CanonicalHistoryHeightHashSchema>()),
                 },
                 EnumVariant {
-                    tag: "BodyUnavailable".to_owned(),
-                    discriminant: 2,
-                    ty: Some(core::any::TypeId::of::<CanonicalHistoryHeightHashSchema>()),
-                },
-                EnumVariant {
                     tag: "BlockHashMismatch".to_owned(),
-                    discriminant: 3,
+                    discriminant: 2,
                     ty: Some(core::any::TypeId::of::<CanonicalHistoryHashMismatchSchema>()),
                 },
                 EnumVariant {
                     tag: "BlockHeightMismatch".to_owned(),
-                    discriminant: 4,
+                    discriminant: 3,
                     ty: Some(core::any::TypeId::of::<CanonicalHistoryHeightMismatchSchema>()),
                 },
             ],
@@ -390,9 +378,7 @@ impl CanonicalHistoryError {
     pub const fn is_unavailable(self) -> bool {
         matches!(
             self,
-            Self::HeightOutsideSnapshot { .. }
-                | Self::HashOnlyBodyUnavailable { .. }
-                | Self::BodyUnavailable { .. }
+            Self::HeightOutsideSnapshot { .. } | Self::BodyUnavailable { .. }
         )
     }
 }
@@ -422,23 +408,18 @@ mod tests {
                 RustTypeId::of::<CanonicalHistorySnapshotHeightSchema>(),
             ),
             (
-                "HashOnlyBodyUnavailable",
+                "BodyUnavailable",
                 1,
                 RustTypeId::of::<CanonicalHistoryHeightHashSchema>(),
             ),
             (
-                "BodyUnavailable",
-                2,
-                RustTypeId::of::<CanonicalHistoryHeightHashSchema>(),
-            ),
-            (
                 "BlockHashMismatch",
-                3,
+                2,
                 RustTypeId::of::<CanonicalHistoryHashMismatchSchema>(),
             ),
             (
                 "BlockHeightMismatch",
-                4,
+                3,
                 RustTypeId::of::<CanonicalHistoryHeightMismatchSchema>(),
             ),
         ];

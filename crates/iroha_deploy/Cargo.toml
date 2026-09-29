@@ -33,4 +33,7 @@ toml = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+halo2curves = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
+iroha_sumeragi = { workspace = true }
 tempfile = { workspace = true }

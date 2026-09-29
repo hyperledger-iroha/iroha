@@ -138,6 +138,15 @@ impl ProcessResources {
         })
     }
 
+    /// Reserve exact consumer registry metadata from the original process envelope.
+    /// The caller must attach this reservation to its actual allocation owner.
+    pub fn try_consumer_metadata(
+        &self,
+        layout: Layout,
+    ) -> Option<mv::allocation::AllocationReservation> {
+        self.metadata.try_reserve(layout).ok()
+    }
+
     /// Borrow existing process capacity without allocating or changing admission.
     pub fn get() -> Option<&'static Self> {
         OWNER.get()
@@ -180,6 +189,23 @@ impl ProcessResources {
 mod tests {
     use super::*;
     use crate::{GpuResourceLimits, resources::BufferRequest};
+
+    #[test]
+    fn consumer_metadata_uses_original_pool_and_survives_limit_shrink() {
+        let mut limits = RegistryLimits::STANDARD;
+        limits.metadata_bytes = 64;
+        let owner = ProcessResources::new(limits);
+        let credit = owner
+            .try_consumer_metadata(Layout::array::<u64>(8).unwrap())
+            .expect("exact metadata credit");
+        assert_eq!(owner.usage().metadata_bytes[0], 64);
+        limits.metadata_bytes = 0;
+        owner.configure(limits);
+        assert!(owner.try_consumer_metadata(Layout::new::<u8>()).is_none());
+        assert_eq!(owner.usage().metadata_bytes[0], 64);
+        drop(credit);
+        assert_eq!(owner.usage().metadata_bytes[0], 0);
+    }
 
     #[test]
     fn unified_backing_and_native_commands_share_the_existing_process_envelope() {

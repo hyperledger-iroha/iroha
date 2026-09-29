@@ -42,6 +42,27 @@ final class KagemushaCoreCoordinatorArchiveV1Tests: XCTestCase {
     }
   }
 
+  func testRedemptionSelectorRequiresNativeFactsAndPreservesUnsignedHeight() throws {
+    let fixture = try CoordinatorArchiveFixtureV1()
+    let value = try KagemushaCoreCoordinatorArchiveV1.decodeRedemptionTerminalReceiptShapeExact(
+      fixture.bytes("redemption_terminal_receipt"))
+    func copy(height: UInt64? = nil, block: Data? = nil, core: Data? = nil, result: Data? = nil)
+      throws -> KagemushaDeviceRedemptionTerminalReceiptV1 {
+      try .init(networkID: value.networkID, operationID: value.operationID, redemptionID: value.redemptionID,
+        terminalNullifier: value.terminalNullifier, envelopeDigest: value.envelopeDigest,
+        reserveReceiptDigest: value.reserveReceiptDigest, authenticatedStatusDigest: value.authenticatedStatusDigest,
+        finalizedBlockHeight: height ?? value.finalizedBlockHeight, finalizedBlockHash: block ?? value.finalizedBlockHash,
+        finalizedCoreHash: core ?? value.finalizedCoreHash, finalizedResult: result ?? value.finalizedResult)
+    }
+    for height: UInt64 in [0, 1] { XCTAssertThrowsError(try copy(height: height)) }
+    XCTAssertThrowsError(try copy(block: Data(repeating: 0, count: 32)))
+    XCTAssertThrowsError(try copy(core: Data(repeating: 0, count: 32)))
+    XCTAssertThrowsError(try copy(result: Data(repeating: 0, count: 32)))
+    let maximum = try copy(height: UInt64.max)
+    XCTAssertEqual(try KagemushaCoreCoordinatorArchiveV1.decodeRedemptionTerminalReceiptShapeExact(
+      KagemushaCoreCoordinatorArchiveV1.encodeRedemptionTerminalReceiptShape(maximum)), maximum)
+  }
+
   func testSenderInputDigestMatchesRustAndBindsCallerAndAmount() throws {
     let fixture = try CoordinatorArchiveFixtureV1()
     let preparation = fixture.preparation

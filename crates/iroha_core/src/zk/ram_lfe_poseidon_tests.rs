@@ -61,6 +61,27 @@ impl<F: PastaField, const L: usize> HashCircuit<F, L> {
             Vec::new()
         }
     }
+
+    fn preflight(k: u32) -> Result<(), Error> {
+        if L == 0 || L > MAX_FIELDS {
+            return Err(Error::Synthesis);
+        }
+        let mut meta = ConstraintSystem::<F>::default();
+        let _ = Self::configure(&mut meta);
+        // Source cells have explicit disjoint absolute rows after the hash.
+        // Axiom's MockProver panics if assignment reaches unusable rows, so
+        // check the bounded layout before any domain-sized allocation.
+        let required = hash_rows(L) + L + meta.minimum_rows();
+        if 1_usize.checked_shl(k).is_none_or(|rows| rows < required) {
+            return Err(Error::NotEnoughRowsAvailable { current_k: k });
+        }
+        Ok(())
+    }
+
+    fn mock(&self, k: u32, instances: Vec<Vec<F>>) -> Result<MockProver<F>, Error> {
+        Self::preflight(k)?;
+        MockProver::run(k, self, instances)
+    }
 }
 
 impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
@@ -95,8 +116,11 @@ impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
                 Ok(std::array::from_fn(|index| {
                     let value: F = Option::from(F::from_repr(self.values.0[index]))
                         .expect("owned canonical input");
+                    // Axiom's single-pass floor planner uses absolute rows;
+                    // region names do not reserve disjoint advice cells.
+                    // Keep original sources beyond the complete hash region.
                     region
-                        .assign_advice(config.input[0], index, Value::known(value))
+                        .assign_advice(config.input[0], hash_rows(L) + index, Value::known(value))
                         .cell()
                 }))
             },
@@ -119,7 +143,8 @@ impl<F: PastaField, const L: usize> Circuit<F> for HashCircuit<F, L> {
 
 fn assert_valid<F: PastaField, const L: usize>(values: [F; L], k: u32) {
     let circuit = HashCircuit::new(values);
-    MockProver::run(k, &circuit, vec![circuit.expected()])
+    circuit
+        .mock(k, vec![circuit.expected()])
         .expect("bounded shape")
         .assert_satisfied();
 }
@@ -135,7 +160,8 @@ fn every_upstream_hash_vector_matches_both_field_circuits() {
             let expected = Option::from(F::from_repr(case[64..].try_into().unwrap())).unwrap();
             let circuit = HashCircuit::<F, 2>::new(values);
             assert_eq!(circuit.expected(), vec![expected]);
-            MockProver::run(7, &circuit, vec![vec![expected]])
+            circuit
+                .mock(7, vec![vec![expected]])
                 .unwrap()
                 .assert_satisfied();
         }
@@ -161,25 +187,22 @@ fn odd_even_lengths_match_native_and_reject_wrong_public_output() {
         let circuit = HashCircuit::new([F::ONE; 3]);
         let mut public = circuit.expected();
         public[0] += F::ONE;
-        assert!(
-            MockProver::run(8, &circuit, vec![public])
-                .unwrap()
-                .verify()
-                .is_err()
-        );
+        assert!(circuit.mock(8, vec![public]).unwrap().verify().is_err());
     }
     check::<Fp>();
     check::<Fq>();
 }
 
 fn failures<F: PastaField>(fault: Fault<F>) -> Vec<VerifyFailure> {
+    let label = format!("coordinated mutation must fail without an output binding: {fault:?}");
     let mut circuit = HashCircuit::new([F::from(3), F::from(7), F::from(11)]);
     circuit.bind_output = false;
     circuit.faults.push(fault);
-    MockProver::run(8, &circuit, vec![Vec::new()])
+    circuit
+        .mock(8, vec![Vec::new()])
         .unwrap()
         .verify()
-        .expect_err("coordinated mutation must fail without an output binding")
+        .expect_err(&label)
 }
 
 #[test]
@@ -258,30 +281,34 @@ fn initial_absorption_copy_and_padding_constraints_reject_coordinated_fractions(
 
 #[test]
 fn actual_owned_field_and_input_cells_clear_on_success_error_and_unwind() {
-    for (fail, panic) in [(false, false), (true, false), (false, true)] {
-        CLEARED.with(|values| values.borrow_mut().clear());
-        INPUTS_CLEARED.with(|values| values.borrow_mut().clear());
-        let outcome = std::panic::catch_unwind(|| {
-            let mut circuit = HashCircuit::new([Fp::ONE; 3]);
-            circuit.fail_after_absorb = fail;
-            circuit.panic_after_absorb = panic;
-            MockProver::run(8, &circuit, vec![circuit.expected()])
-        });
-        if panic {
-            assert!(outcome.is_err());
-        } else if fail {
-            assert!(outcome.unwrap().is_err());
-        } else {
-            outcome.unwrap().unwrap().assert_satisfied();
-        }
-        for observed in [&CLEARED, &INPUTS_CLEARED] {
-            observed.with(|values| {
-                let values = values.borrow();
-                assert!(!values.is_empty());
-                assert!(values.iter().all(|value| *value));
+    fn check<F: PastaField>() {
+        for (fail, panic) in [(false, false), (true, false), (false, true)] {
+            CLEARED.with(|values| values.borrow_mut().clear());
+            INPUTS_CLEARED.with(|values| values.borrow_mut().clear());
+            let outcome = std::panic::catch_unwind(|| {
+                let mut circuit = HashCircuit::new([F::ONE; 3]);
+                circuit.fail_after_absorb = fail;
+                circuit.panic_after_absorb = panic;
+                circuit.mock(8, vec![circuit.expected()])
             });
+            if panic {
+                assert!(outcome.is_err());
+            } else if fail {
+                assert!(outcome.unwrap().is_err());
+            } else {
+                outcome.unwrap().unwrap().assert_satisfied();
+            }
+            for observed in [&CLEARED, &INPUTS_CLEARED] {
+                observed.with(|values| {
+                    let values = values.borrow();
+                    assert!(!values.is_empty());
+                    assert!(values.iter().all(|value| *value));
+                });
+            }
         }
     }
+    check::<Fp>();
+    check::<Fq>();
 }
 
 #[test]
@@ -299,14 +326,15 @@ fn geometry_and_fixed_bounds_are_explicit() {
         hash_rows(MAX_FIELDS) > 1 << 16,
         "one lane does not fit the maximum record at default k"
     );
-    assert!(MockProver::run(8, &HashCircuit::<Fp, 0>::new([]), vec![Vec::new()]).is_err());
     assert!(
-        MockProver::run(
-            8,
-            &HashCircuit::<Fp, 2055>::new([Fp::ZERO; 2055]),
-            vec![Vec::new()]
-        )
-        .is_err()
+        HashCircuit::<Fp, 0>::new([])
+            .mock(8, vec![Vec::new()])
+            .is_err()
+    );
+    assert!(
+        HashCircuit::<Fp, 2055>::new([Fp::ZERO; 2055])
+            .mock(8, vec![Vec::new()])
+            .is_err()
     );
     println!(
         "RAM_LFE_POSEIDON_GEOMETRY degree={} advice_columns={} advice_queries={} fixed_columns_before_selector_compression={} fixed_queries_before_selector_compression={} permutation_columns={} blinding_factors={} minimum_rows={} max_record_rows={} owned_working_fields=8",
@@ -323,8 +351,26 @@ fn geometry_and_fixed_bounds_are_explicit() {
 }
 
 #[test]
+fn maximum_record_matches_native_and_refuses_insufficient_rows() {
+    fn check<F: PastaField>() {
+        let circuit = HashCircuit::new([F::ZERO; MAX_FIELDS]);
+        assert!(matches!(
+            circuit.mock(16, vec![circuit.expected()]),
+            Err(Error::NotEnoughRowsAvailable { current_k: 16 })
+        ));
+        circuit
+            .mock(17, vec![circuit.expected()])
+            .unwrap()
+            .assert_satisfied();
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
 fn genuine_ipa_sample_rejects_wrong_instance_tamper_and_trailing_bytes() {
     let circuit = HashCircuit::new([Fp::from(3), Fp::from(7), Fp::from(11)]);
+    HashCircuit::<Fp, 3>::preflight(8).unwrap();
     let started = Instant::now();
     let params = halo2_backend::params_new(8);
     let vk = halo2_backend::keygen_vk(&params, &circuit.without_witnesses()).unwrap();

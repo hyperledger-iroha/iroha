@@ -8881,7 +8881,6 @@ mod tests {
                 UploadSmartContractCodeChunk,
             },
         },
-        merge::{LaneDrainIntentV1, LaneDrainStateV1},
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
@@ -9027,27 +9026,16 @@ mod tests {
                 universal
             );
             for height in [1, 2, 3] {
-                assert_eq!(
-                    super::super::reconcile_execution_routing_plan(
-                        &transaction,
-                        &universal,
-                        &view,
-                        0,
-                        height
-                    )
-                    .unwrap(),
-                    universal,
-                );
-                assert!(matches!(
-                    super::super::reconcile_execution_routing_plan(
-                        &transaction,
-                        &foreign,
-                        &view,
-                        0,
-                        height
-                    ),
-                    Err(super::super::ExecutionRoutingReconciliationError::TopologyMismatch)
-                ));
+                let block_route = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    view.nexus(),
+                    &transaction,
+                    view.world(),
+                    0,
+                    height,
+                )
+                .unwrap();
+                assert_eq!(block_route, universal);
+                assert_ne!(block_route, foreign);
             }
         }
     }
@@ -10234,6 +10222,42 @@ mod tests {
         }
     }
     #[test]
+    fn default_route_sharding_rejects_retired_drain_metadata() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let mut elastic = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7);
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_DRAIN_STATE.to_owned(), "{}".to_owned());
+        let lane_catalog = lane_catalog_from_configs(vec![default_lane_config(), elastic]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            DataSpaceCatalog::default(),
+            lane_catalog,
+        );
+        let state = blank_state();
+        install_synthetic_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+        seed_committed_height_for_router_test(&state, 7);
+        for index in 0..256 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("retireddrain{index}"),
+                )],
+            );
+            let plan = router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("base lane remains routable");
+            assert_eq!(
+                plan,
+                RoutingPlan::single(RoutingDecision::default()),
+                "retired metadata cannot authorize an elastic lane"
+            );
+        }
+    }
+    #[test]
     fn nexus_world_routing_at_block_height_excludes_future_created_elastic_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let mut nexus = iroha_config::parameters::actual::Nexus {
@@ -11339,6 +11363,315 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
+    #[test]
+    fn bilateral_settlement_plans_retain_state_backed_participant_legs() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let delivery_dataspace = DataSpaceId::new(7);
+        let payment_dataspace = DataSpaceId::new(9);
+        let delivery_lane = LaneId::new(1);
+        let payment_lane = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[
+            (delivery_dataspace, "delivery"),
+            (payment_dataspace, "payment"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (delivery_lane, delivery_dataspace),
+            (payment_lane, payment_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let delivery_domain =
+            DomainId::try_new("settlement", "delivery").expect("delivery domain id");
+        let payment_domain = DomainId::try_new("settlement", "payment").expect("payment domain id");
+        let delivery_definition = AssetDefinitionId::derive_from_components(
+            delivery_domain.clone(),
+            "bond".parse().expect("asset definition name"),
+        );
+        let payment_definition = AssetDefinitionId::derive_from_components(
+            payment_domain.clone(),
+            "cash".parse().expect("asset definition name"),
+        );
+        let global_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("settlement", "universal").expect("global domain id"),
+            "global".parse().expect("asset definition name"),
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    delivery_definition.clone(),
+                    "bond".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(delivery_domain),
+                )
+                .build(&alice_id),
+                AssetDefinition::numeric(
+                    payment_definition.clone(),
+                    "cash".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(payment_domain),
+                )
+                .build(&alice_id),
+                AssetDefinition::numeric(
+                    global_definition.clone(),
+                    "global".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&alice_id),
+            ],
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        install_router_nexus(&mut state, &router);
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(delivery_lane, delivery_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(payment_lane, payment_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let instructions = [
+            (
+                "DVP",
+                InstructionBox::from(DvpIsi::new(
+                    "dvp_plan".parse().expect("settlement id"),
+                    SettlementLeg::new(
+                        delivery_definition.clone(),
+                        1_u32,
+                        alice_id.clone(),
+                        bob_id.clone(),
+                    ),
+                    SettlementLeg::new(
+                        payment_definition.clone(),
+                        1_u32,
+                        bob_id.clone(),
+                        alice_id.clone(),
+                    ),
+                    SettlementPlan::default(),
+                )),
+            ),
+            (
+                "boxed PVP",
+                InstructionBox::from(SettlementInstructionBox::Pvp(PvpIsi::new(
+                    "pvp_plan".parse().expect("settlement id"),
+                    SettlementLeg::new(
+                        delivery_definition.clone(),
+                        1_u32,
+                        alice_id.clone(),
+                        bob_id.clone(),
+                    ),
+                    SettlementLeg::new(
+                        payment_definition.clone(),
+                        1_u32,
+                        bob_id.clone(),
+                        alice_id.clone(),
+                    ),
+                    SettlementPlan::default(),
+                ))),
+            ),
+            (
+                "multisig-wrapped DVP",
+                InstructionBox::from(MultisigPropose::new(
+                    alice_id.clone(),
+                    vec![InstructionBox::from(DvpIsi::new(
+                        "multisig_dvp_plan".parse().expect("settlement id"),
+                        SettlementLeg::new(
+                            delivery_definition.clone(),
+                            1_u32,
+                            alice_id.clone(),
+                            bob_id.clone(),
+                        ),
+                        SettlementLeg::new(
+                            payment_definition.clone(),
+                            1_u32,
+                            bob_id.clone(),
+                            alice_id.clone(),
+                        ),
+                        SettlementPlan::default(),
+                    ))],
+                    None,
+                )),
+            ),
+            (
+                "multisig mixed private settlement and write",
+                InstructionBox::from(MultisigPropose::new(
+                    alice_id.clone(),
+                    vec![
+                        InstructionBox::from(DvpIsi::new(
+                            "multisig_mixed_plan".parse().expect("settlement id"),
+                            SettlementLeg::new(
+                                delivery_definition.clone(),
+                                1_u32,
+                                alice_id.clone(),
+                                bob_id.clone(),
+                            ),
+                            SettlementLeg::new(
+                                delivery_definition.clone(),
+                                1_u32,
+                                bob_id.clone(),
+                                alice_id.clone(),
+                            ),
+                            SettlementPlan::default(),
+                        )),
+                        InstructionBox::from(Register::domain(Domain::new(
+                            DomainId::try_new("merchant", "payment").expect("domain id"),
+                        ))),
+                    ],
+                    None,
+                )),
+            ),
+        ];
+        for (label, instruction) in instructions {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![instruction.clone()],
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_without_state(&tx)
+                    .expect("settlement state requirement should be deterministic"),
+                None,
+                "{label} must defer until definition ownership is loaded",
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_state(&tx, &state)
+                    .unwrap_or_else(|error| panic!("{label} state plan failed: {error}")),
+                expected,
+                "{label} state-backed plan must retain both settlement legs",
+            );
+            let view = state.view();
+            assert_eq!(
+                deferred_instruction_concrete_dataspace_targets(
+                    &*instruction,
+                    Some(&dataspace_catalog),
+                    Some(&view),
+                ),
+                Ok(Some(BTreeSet::from([
+                    delivery_dataspace,
+                    payment_dataspace,
+                ]))),
+                "{label} must expose both concrete settlement targets",
+            );
+            assert_eq!(
+                evaluate_policy_plan_with_catalog_and_world(
+                    &default_routing_policy(),
+                    &lane_catalog,
+                    &dataspace_catalog,
+                    &tx,
+                    view.world(),
+                )
+                .unwrap_or_else(|error| panic!("{label} world plan failed: {error}")),
+                expected,
+                "{label} world-backed plan must retain both settlement legs",
+            );
+            let mut strict_metadata = Metadata::default();
+            strict_metadata.insert(
+                AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+                iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+            );
+            let strict_tx = sample_transaction_with_metadata(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![instruction],
+                strict_metadata,
+            );
+            assert_eq!(
+                router.try_route_plan_with_state(&strict_tx, &state),
+                Err(
+                    RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                        first_dataspace_id: delivery_dataspace,
+                        second_dataspace_id: payment_dataspace,
+                    }
+                ),
+                "strict metadata must reject cross-dataspace {label}",
+            );
+        }
+
+        let global_private_instruction = InstructionBox::from(DvpIsi::new(
+            "global_private_plan".parse().expect("settlement id"),
+            SettlementLeg::new(global_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+            SettlementLeg::new(
+                delivery_definition.clone(),
+                1_u32,
+                bob_id.clone(),
+                alice_id.clone(),
+            ),
+            SettlementPlan::default(),
+        ));
+        let global_private_tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![global_private_instruction.clone()],
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&global_private_tx, &state)
+                .expect("global/private settlement plan should resolve"),
+            RoutingPlan::native_amx(
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                vec![RouteLeg::new(
+                    RoutingDecision::new(delivery_lane, delivery_dataspace),
+                    RouteLegRole::Participant,
+                )],
+            ),
+        );
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_global_private_tx = sample_transaction_with_metadata(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![global_private_instruction],
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan_with_state(&strict_global_private_tx, &state),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: DataSpaceId::UNIVERSAL,
+                    second_dataspace_id: delivery_dataspace,
+                }
+            ),
+            "strict policy must reject a universal coordinator plus private participant",
+        );
+
+        let same_dataspace_tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(DvpIsi::new(
+                "same_dataspace_plan".parse().expect("settlement id"),
+                SettlementLeg::new(
+                    delivery_definition.clone(),
+                    1_u32,
+                    alice_id.clone(),
+                    bob_id.clone(),
+                ),
+                SettlementLeg::new(delivery_definition, 1_u32, bob_id.clone(), alice_id.clone()),
+                SettlementPlan::default(),
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&same_dataspace_tx, &state)
+                .expect("same-dataspace DVP plan should resolve"),
+            RoutingPlan::single(RoutingDecision::new(delivery_lane, delivery_dataspace,)),
+        );
+    }
     include!("router_route_resolution_tests.rs"); // Preserve stable route-resolution test paths.
     #[test]
     fn matches_register_domain_rule() {
@@ -12149,6 +12482,320 @@ mod tests {
                 .try_route(&tx)
                 .expect("atomic contract deployment route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+    #[test]
+    fn smart_contract_deploy_rule_with_target_dataspace_builds_native_amx_plan() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let zk_dataspace = DataSpaceId::new(2);
+        let contract_dataspace = DataSpaceId::new(10);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::new(2),
+                    dataspace: Some(zk_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(zk_dataspace, "zk"), (contract_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), zk_dataspace),
+                (LaneId::new(3), contract_dataspace),
+            ]),
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &super::super::queue_test_network_id(),
+            &alice_id,
+            0,
+            contract_dataspace,
+        )
+        .expect("contract address");
+        let instructions = vec![
+            InstructionBox::from(RegisterSmartContractBytes {
+                code_hash: Hash::new(&code),
+                code,
+            }),
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                    contract_address,
+                    expected_revision: 1,
+                    code_hash: Hash::new(b"contract-code"),
+                },
+            ),
+        ];
+        let tx = sample_transaction(&alice_id, alice_keypair.private_key(), instructions.clone());
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("contract deploy rule and target dataspace should build a native AMX plan");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("contract deploy should not collapse to a single mismatched route");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::new(2), zk_dataspace)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(2), zk_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(LaneId::new(3), contract_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ]
+        );
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &alice_id,
+            alice_keypair.private_key(),
+            instructions,
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan(&strict_tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: zk_dataspace,
+                    second_dataspace_id: contract_dataspace,
+                }
+            ),
+            "strict policy must include the deploy-rule participant",
+        );
+    }
+    #[test]
+    fn smart_contract_deploy_rule_with_universal_target_builds_native_amx_plan() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let is_dataspace = DataSpaceId::new(6647857470246403404);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::new(3),
+                    dataspace: Some(is_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(is_dataspace, "is")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(3), is_dataspace),
+            ]),
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &super::super::queue_test_network_id(),
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let instructions = vec![
+            InstructionBox::from(RegisterSmartContractBytes {
+                code_hash: Hash::new(&code),
+                code,
+            }),
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                    contract_address,
+                    expected_revision: 1,
+                    code_hash: Hash::new(b"contract-code"),
+                },
+            ),
+        ];
+        let tx = sample_transaction(&alice_id, alice_keypair.private_key(), instructions.clone());
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("universal contract deploy rule should build a native AMX plan");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("universal contract deploy should not collapse to a mismatched single route");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(3), is_dataspace),
+                RouteLegRole::Participant,
+            )]
+        );
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &alice_id,
+            alice_keypair.private_key(),
+            instructions,
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan(&strict_tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: DataSpaceId::UNIVERSAL,
+                    second_dataspace_id: is_dataspace,
+                }
+            ),
+            "strict policy must reject a universal coordinator with a private participant",
+        );
+    }
+    #[test]
+    fn musubi_alias_registration_uses_universal_amx_with_home_dataspace_participant() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let target = iroha_data_model::musubi::MusubiPackageIdV1::new(
+            dataspace_id,
+            iroha_data_model::musubi::MusubiPackageScopeV1::Domain(
+                "mibank".parse().expect("domain scope"),
+            ),
+            "fx".parse().expect("package name"),
+        );
+        let instruction = iroha_data_model::isi::musubi::RegisterMusubiAliasV1::new(
+            "fx".parse().expect("alias"),
+            target,
+            1,
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("Musubi alias route must resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("Musubi alias registration must use Native AMX");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(lane_id, dataspace_id),
+                RouteLegRole::Participant,
+            )]
+        );
+    }
+    #[test]
+    fn musubi_release_publication_uses_universal_amx_with_home_dataspace_participant() {
+        use iroha_data_model::{
+            isi::musubi::PublishMusubiReleaseV1,
+            musubi::{
+                ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
+                MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+                MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
+                MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
+                MusubiVerificationLockV1,
+            },
+        };
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let package = MusubiPackageIdV1::new(
+            dataspace_id,
+            MusubiPackageScopeV1::Domain("mibank".parse().expect("domain scope")),
+            "fx".parse().expect("package name"),
+        );
+        let release =
+            MusubiReleaseIdV1::new(package, "1.0.0".parse().expect("publication version"));
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release.clone(),
+            root_dependencies: Vec::new(),
+            nodes: Vec::new(),
+        };
+        let publication = MusubiPublicationV1 {
+            manifest: MusubiReleaseManifestV1 {
+                release,
+                edition: MusubiKotodamaEditionV1::V1,
+                abi: MusubiAbiBindingV1::new([0x41; 32]).expect("ABI binding"),
+                dependencies: Vec::new(),
+                exports: Vec::new(),
+                interface_digest: MusubiContentDigestV1::new([0x42; 32]),
+                metadata: MusubiReleaseMetadataV1::default(),
+                archive_id: ArchiveId::new([0x43; 32]),
+                verification_lock_digest: lock.digest(),
+            },
+            resolution: MusubiResolutionProofV1 {
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 7,
+                    finalized_block_hash: [0x44; 32],
+                    index_revision: 3,
+                },
+                lock,
+            },
+        };
+        let instruction = PublishMusubiReleaseV1::new(
+            "mibank.paynet".parse().expect("publication namespace"),
+            publication,
+            None,
+            1,
+            None,
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("Musubi publication route must resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("Musubi publication must use Native AMX");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(lane_id, dataspace_id),
+                RouteLegRole::Participant,
+            )]
         );
     }
     #[test]
@@ -13799,6 +14446,941 @@ mod tests {
         );
     }
     #[test]
+    fn restricted_asset_plan_is_invariant_to_duplicate_cross_dataspace_transfer() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(7);
+        let destination_dataspace = DataSpaceId::new(8);
+        let source_lane = LaneId::new(2);
+        let destination_lane = LaneId::new(3);
+        let dataspace_catalog = dataspace_catalog(&[
+            (source_dataspace, "source"),
+            (destination_dataspace, "destination"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let owning_domain = DomainId::try_new("cash", "source").expect("asset definition domain");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "coin".parse().expect("asset definition name"),
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "coin".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(owning_domain),
+                )
+                .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        install_router_nexus(&mut state, &router);
+        scope_account_to_dataspace(&mut state, &sender_id, source_dataspace);
+        scope_account_to_dataspace(&mut state, &receiver_id, destination_dataspace);
+        let transfer = InstructionBox::from(Transfer::asset_quantity(
+            AssetId::of(asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        ));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(source_lane, source_dataspace),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(destination_lane, destination_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+        for instructions in [
+            vec![transfer.clone()],
+            vec![transfer.clone(), transfer.clone()],
+        ] {
+            let tx = sample_transaction(&sender_id, sender_keypair.private_key(), instructions);
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("restricted transfer plan should resolve with account scopes"),
+                expected,
+                "duplicating the collapsed transfer must not change its coordinator",
+            );
+        }
+
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![transfer],
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&strict_tx, &state.view()),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: source_dataspace,
+                    second_dataspace_id: destination_dataspace,
+                }
+            ),
+        );
+    }
+    fn fx_corridor_fixture(
+        source_dataspace: DataSpaceId,
+        destination_dataspace: DataSpaceId,
+        owner: AccountId,
+        _former_destination_reserve: AccountId,
+        recipient: AccountId,
+        settlement_id: &str,
+    ) -> (FxCorridorPolicy, InstructionBox) {
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cbuae", "universal").expect("source asset domain"),
+            "aed".parse().expect("source asset name"),
+        );
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("sbp", "universal").expect("destination asset domain"),
+            "pkr".parse().expect("destination asset name"),
+        );
+        let corridor = FxCorridorPolicy {
+            policy_id: "mobile_aed_pkr".parse().expect("FX corridor policy id"),
+            revision: 1,
+            owner,
+            source_dataspace,
+            source_asset_definition_id: source_asset_definition_id.clone(),
+            destination_dataspace,
+            destination_asset_definition_id: destination_asset_definition_id.clone(),
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
+            ]),
+            oracle_feed_id: "mobile_aed_pkr_rate".parse().expect("FX corridor feed id"),
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: 1_000_u32.into(),
+            max_destination_amount_per_settlement: 100_000_u32.into(),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: 10_000_u32.into(),
+            max_destination_amount_per_window: 1_000_000_u32.into(),
+            enabled: true,
+        };
+        let request_hash = Hash::new(b"router-fx-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: corridor.oracle_feed_id.clone(),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
+        };
+        let settlement = SettleFxCorridor {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            source_asset_definition_id,
+            destination_asset_definition_id,
+            settlement_id: settlement_id.parse().expect("FX settlement id"),
+            recipient,
+            source_amount: iroha_primitives::numeric::Quantity::from(10_u32),
+            expected_destination_amount: 760_u32.into(),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
+        };
+        (
+            corridor,
+            InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement)),
+        )
+    }
+    fn install_fx_corridor_policy(state: &crate::state::State, corridor: FxCorridorPolicy) {
+        let mut registry = FxCorridorPolicyRegistry::default();
+        registry.upsert(corridor);
+        let mut world = state.world.block();
+        world
+            .parameters
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                registry.into_custom_parameter(),
+            ));
+        world.commit();
+    }
+    fn fx_route_plan_results(
+        router: &ConfigLaneRouter,
+        tx: &dyn TransactionRoutingView,
+        corridor: FxCorridorPolicy,
+        world: crate::state::World,
+    ) -> (
+        Result<RoutingPlan, RoutingResolveError>,
+        Result<RoutingPlan, RoutingResolveError>,
+    ) {
+        let mut state = state_from_world(world);
+        install_router_nexus(&mut state, router);
+        install_fx_corridor_policy(&state, corridor);
+        let view = state.view();
+        let queued_plan = router.try_route_plan_with_view(tx, &view);
+        let block_plan = evaluate_policy_plan_with_nexus_and_world_at(
+            view.nexus(),
+            tx,
+            view.world(),
+            state_view_ledger_time_ms(&view),
+        );
+        (queued_plan, block_plan)
+    }
+    fn expected_fx_plan(
+        source_lane: LaneId,
+        source_dataspace: DataSpaceId,
+        destination_lane: LaneId,
+        destination_dataspace: DataSpaceId,
+    ) -> RoutingPlan {
+        RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(destination_lane, destination_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        )
+    }
+    #[test]
+    fn fx_policy_update_mixed_with_private_target_retains_amx_plan_with_state() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let private_dataspace = DataSpaceId::new(7);
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let private_lane = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[
+                (private_dataspace, "private"),
+                (source_dataspace, "cbuae"),
+                (destination_dataspace, "sbp"),
+            ]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (private_lane, private_dataspace),
+                (LaneId::new(3), source_dataspace),
+                (LaneId::new(4), destination_dataspace),
+            ]),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "policy_update_route",
+        );
+        let updates = [
+            InstructionBox::from(SetFxCorridorPolicy {
+                policy: corridor.clone(),
+            }),
+            InstructionBox::from(SettlementInstructionBox::SetFxCorridorPolicy(
+                SetFxCorridorPolicy { policy: corridor },
+            )),
+        ];
+        let private_write = InstructionBox::from(Register::domain(Domain::new(
+            DomainId::try_new("merchant", "private").expect("private domain id"),
+        )));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(private_lane, private_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+        for (index, update) in updates.into_iter().enumerate() {
+            let tx = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![update.clone(), private_write.clone()],
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_without_state(&tx)
+                    .unwrap_or_else(|error| panic!("policy update {index} failed: {error}")),
+                None,
+                "textual domain routing must wait for SNS state",
+            );
+            assert_eq!(
+                router
+                    .try_route_plan(&tx)
+                    .unwrap_or_else(|error| panic!("policy update plan {index} failed: {error}")),
+                expected,
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_state(&tx, &state)
+                    .unwrap_or_else(|error| panic!("state plan {index} failed: {error}")),
+                expected,
+            );
+
+            let mut strict_metadata = Metadata::default();
+            strict_metadata.insert(
+                AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+                iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+            );
+            let strict_tx = sample_transaction_with_metadata(
+                &authority,
+                authority_keypair.private_key(),
+                vec![update, private_write.clone()],
+                strict_metadata,
+            );
+            assert_eq!(router.try_route_plan_without_state(&strict_tx), Ok(None),);
+            assert_eq!(
+                router.try_route_plan_with_state(&strict_tx, &state),
+                Err(
+                    RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                        first_dataspace_id: DataSpaceId::UNIVERSAL,
+                        second_dataspace_id: private_dataspace,
+                    }
+                ),
+            );
+        }
+    }
+    #[test]
+    fn same_transaction_fx_policy_overlay_is_ordered_across_executables() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog.clone(),
+            lane_catalog,
+        );
+        let (corridor, settlement) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "same_transaction_policy",
+        );
+        let fund = FundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let refund = RefundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let destination_plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let operations = [
+            (
+                "direct fund",
+                InstructionBox::from(fund),
+                destination_plan.clone(),
+            ),
+            (
+                "boxed refund",
+                InstructionBox::from(SettlementInstructionBox::RefundFxCorridorEscrow(refund)),
+                destination_plan,
+            ),
+            (
+                "boxed settlement",
+                settlement,
+                expected_fx_plan(
+                    source_lane,
+                    source_dataspace,
+                    destination_lane,
+                    destination_dataspace,
+                ),
+            ),
+        ];
+        let updates = [
+            (
+                "direct policy",
+                InstructionBox::from(SetFxCorridorPolicy {
+                    policy: corridor.clone(),
+                }),
+            ),
+            (
+                "boxed policy",
+                InstructionBox::from(SettlementInstructionBox::SetFxCorridorPolicy(
+                    SetFxCorridorPolicy {
+                        policy: corridor.clone(),
+                    },
+                )),
+            ),
+        ];
+        let executable_variants = |instructions: Vec<InstructionBox>| {
+            vec![
+                (
+                    "instructions",
+                    Executable::Instructions(instructions.clone().into()),
+                ),
+                (
+                    "batch",
+                    Executable::Batch(
+                        instructions
+                            .iter()
+                            .cloned()
+                            .map(ExecutableBatchItem::Instruction)
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                ),
+                ("proved overlay", sample_proved_executable(instructions)),
+            ]
+        };
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+        for (update_label, update) in updates {
+            for (operation_label, operation, expected) in &operations {
+                for (executable_label, executable) in
+                    executable_variants(vec![update.clone(), operation.clone()])
+                {
+                    let tx = sample_executable_transaction(
+                        &authority,
+                        authority_keypair.private_key(),
+                        executable,
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_view(&tx, &state.view()),
+                        Ok(expected.clone()),
+                        "{update_label} before {operation_label} in {executable_label}",
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_state(&tx, &state),
+                        Ok(expected.clone()),
+                        "state-backed {update_label} before {operation_label} in {executable_label}",
+                    );
+                }
+                for (executable_label, executable) in
+                    executable_variants(vec![operation.clone(), update.clone()])
+                {
+                    let tx = sample_executable_transaction(
+                        &authority,
+                        authority_keypair.private_key(),
+                        executable,
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_view(&tx, &state.view()),
+                        Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                        "{operation_label} before {update_label} in {executable_label}",
+                    );
+                    assert_eq!(
+                        router.try_route_plan_with_state(&tx, &state),
+                        Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                        "state-backed {operation_label} before {update_label} in {executable_label}",
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn nested_fx_policy_overlay_is_ordered_and_does_not_leak() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let destination_lane = LaneId::new(4);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(3), source_dataspace),
+                (destination_lane, destination_dataspace),
+            ]),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "nested_policy_overlay",
+        );
+        let update = InstructionBox::from(SetFxCorridorPolicy {
+            policy: corridor.clone(),
+        });
+        let fund = InstructionBox::from(SettlementInstructionBox::FundFxCorridorEscrow(
+            FundFxCorridorEscrow {
+                policy_id: corridor.policy_id,
+                expected_policy_revision: corridor.revision,
+                destination_asset_definition_id: corridor.destination_asset_definition_id,
+                amount: 10_u32.into(),
+            },
+        ));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+        let nested_cases = [
+            (
+                "trigger",
+                sample_trigger_registration(
+                    &authority,
+                    "ordered_nested_fx_policy",
+                    Executable::Instructions(vec![update.clone(), fund.clone()].into()),
+                ),
+                sample_trigger_registration(
+                    &authority,
+                    "reversed_nested_fx_policy",
+                    Executable::Instructions(vec![fund.clone(), update.clone()].into()),
+                ),
+                sample_trigger_registration(
+                    &authority,
+                    "isolated_nested_fx_policy",
+                    Executable::Instructions(vec![update.clone()].into()),
+                ),
+            ),
+            (
+                "multisig proposal",
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![update.clone(), fund.clone()],
+                    None,
+                )),
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![fund.clone(), update.clone()],
+                    None,
+                )),
+                InstructionBox::from(MultisigPropose::new(
+                    authority.clone(),
+                    vec![update.clone()],
+                    None,
+                )),
+            ),
+        ];
+        for (label, ordered, reversed, isolated_update) in nested_cases {
+            let ordered_tx =
+                sample_transaction(&authority, authority_keypair.private_key(), vec![ordered]);
+            assert_eq!(
+                router.try_route_plan_with_state(&ordered_tx, &state),
+                Ok(expected.clone()),
+                "ordered {label} overlay",
+            );
+            let reversed_tx =
+                sample_transaction(&authority, authority_keypair.private_key(), vec![reversed]);
+            assert_eq!(
+                router.try_route_plan_with_state(&reversed_tx, &state),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "reversed {label} overlay",
+            );
+            let leak_tx = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![isolated_update, fund.clone()],
+            );
+            assert_eq!(
+                router.try_route_plan_with_state(&leak_tx, &state),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "{label} overlay must not escape to a later outer instruction",
+            );
+        }
+    }
+    #[test]
+    fn multisig_approve_fx_policy_overlay_flows_to_later_outer_instruction() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let policy = default_routing_policy();
+        let router = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "approved_policy_overlay",
+        );
+        let update = InstructionBox::from(SetFxCorridorPolicy {
+            policy: corridor.clone(),
+        });
+        let fund = InstructionBox::from(SettlementInstructionBox::FundFxCorridorEscrow(
+            FundFxCorridorEscrow {
+                policy_id: corridor.policy_id.clone(),
+                expected_policy_revision: corridor.revision,
+                destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+                amount: 10_u32.into(),
+            },
+        ));
+        let proposed = vec![update.clone()];
+        let proposal_hash = HashOf::new(&proposed);
+        let proposal = InstructionBox::from(MultisigPropose::new(
+            multisig_id.clone(),
+            proposed.clone(),
+            None,
+        ));
+        let approval =
+            InstructionBox::from(MultisigApprove::new(multisig_id.clone(), proposal_hash));
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![RouteLeg::new(
+                RoutingDecision::new(destination_lane, destination_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![proposal.clone(), approval.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&tx, &state.view()),
+            Ok(expected.clone()),
+            "an authenticated preceding proposal may execute its FX policy update",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &tx,
+                state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on approval effects",
+        );
+
+        let reversed_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![approval.clone(), proposal.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&reversed_tx, &state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an approval must not authenticate a later sibling proposal",
+        );
+
+        let nested_cases = [
+            sample_trigger_registration(
+                &authority,
+                "nested_multisig_fx_approval",
+                Executable::Instructions(vec![approval.clone()].into()),
+            ),
+            InstructionBox::from(MultisigPropose::new(
+                multisig_id.clone(),
+                vec![approval.clone()],
+                None,
+            )),
+        ];
+        for (index, nested_approval) in nested_cases.into_iter().enumerate() {
+            let leak_tx = sample_transaction(
+                &authority,
+                authority_keypair.private_key(),
+                vec![proposal.clone(), nested_approval, fund.clone()],
+            );
+            assert_eq!(
+                router.try_route_plan_with_view(&leak_tx, &state.view()),
+                Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+                "nested approval case {index} must not leak payload effects",
+            );
+        }
+
+        let mut persisted_state = blank_state();
+        install_router_nexus(&mut persisted_state, &router);
+        let persisted_proposal = MultisigProposalState::new(
+            multisig_id.clone(),
+            proposal_hash,
+            proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&multisig_id, &proposal_hash),
+                encoded_multisig_proposal_state(&persisted_proposal),
+            );
+        let persisted_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![approval.clone(), fund.clone()],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&persisted_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "persisted proposal fallback must propagate the same ordered effect",
+        );
+
+        let (outer_multisig_id, _) = gen_account_in("wonderland");
+        let outer_proposed = vec![approval.clone()];
+        let outer_proposal_hash = HashOf::new(&outer_proposed);
+        let outer_proposal = MultisigProposalState::new(
+            outer_multisig_id.clone(),
+            outer_proposal_hash,
+            outer_proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&outer_multisig_id, &outer_proposal_hash),
+                encoded_multisig_proposal_state(&outer_proposal),
+            );
+        let nested_approval_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(MultisigApprove::new(outer_multisig_id, outer_proposal_hash)),
+                fund.clone(),
+            ],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&nested_approval_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "a persisted approval chain must propagate authenticated FX policy effects",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &nested_approval_tx,
+                persisted_state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on nested approval effects",
+        );
+
+        let (payload_multisig_id, _) = gen_account_in("wonderland");
+        let payload_proposed = vec![approval.clone(), fund.clone()];
+        let payload_proposal_hash = HashOf::new(&payload_proposed);
+        let payload_proposal = MultisigProposalState::new(
+            payload_multisig_id.clone(),
+            payload_proposal_hash,
+            payload_proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&payload_multisig_id, &payload_proposal_hash),
+                encoded_multisig_proposal_state(&payload_proposal),
+            );
+        let nested_payload_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                payload_multisig_id,
+                payload_proposal_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&nested_payload_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "an approval chain must expose FX policy effects to later authenticated payload instructions",
+        );
+
+        let (local_multisig_id, _) = gen_account_in("wonderland");
+        let local_proposed = vec![update.clone()];
+        let local_proposal_hash = HashOf::new(&local_proposed);
+        let local_proposal = InstructionBox::from(MultisigPropose::new(
+            local_multisig_id.clone(),
+            local_proposed,
+            None,
+        ));
+        let local_approval =
+            InstructionBox::from(MultisigApprove::new(local_multisig_id, local_proposal_hash));
+        let (ordered_outer_id, _) = gen_account_in("wonderland");
+        let ordered_outer_instructions =
+            vec![local_proposal.clone(), local_approval.clone(), fund.clone()];
+        let ordered_outer_hash = HashOf::new(&ordered_outer_instructions);
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&ordered_outer_id, &ordered_outer_hash),
+                encoded_multisig_proposal_state(&MultisigProposalState::new(
+                    ordered_outer_id.clone(),
+                    ordered_outer_hash,
+                    ordered_outer_instructions,
+                    1,
+                    10_000,
+                    BTreeSet::new(),
+                    None,
+                )),
+            );
+        let ordered_local_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                ordered_outer_id,
+                ordered_outer_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&ordered_local_tx, &persisted_state.view()),
+            Ok(expected.clone()),
+            "a persisted payload must observe a locally executed proposal before its approval",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &ordered_local_tx,
+                persisted_state.view().world(),
+            ),
+            Ok(expected.clone()),
+            "queue and validation routing must agree on local proposal effects",
+        );
+
+        let (reversed_outer_id, _) = gen_account_in("wonderland");
+        let reversed_outer_instructions =
+            vec![local_approval.clone(), local_proposal.clone(), fund.clone()];
+        let reversed_outer_hash = HashOf::new(&reversed_outer_instructions);
+        persisted_state
+            .world
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                multisig_proposal_state_key(&reversed_outer_id, &reversed_outer_hash),
+                encoded_multisig_proposal_state(&MultisigProposalState::new(
+                    reversed_outer_id.clone(),
+                    reversed_outer_hash,
+                    reversed_outer_instructions,
+                    1,
+                    10_000,
+                    BTreeSet::new(),
+                    None,
+                )),
+            );
+        let reversed_local_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                reversed_outer_id,
+                reversed_outer_hash,
+            ))],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&reversed_local_tx, &persisted_state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an approval must not see a local proposal that executes later in its payload",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &reversed_local_tx,
+                persisted_state.view().world(),
+            ),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+        );
+
+        let (inert_outer_id, _) = gen_account_in("wonderland");
+        let inert_proposal = InstructionBox::from(MultisigPropose::new(
+            inert_outer_id,
+            vec![local_proposal, local_approval],
+            None,
+        ));
+        let inert_leak_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![inert_proposal, fund],
+        );
+        assert_eq!(
+            router.try_route_plan_with_view(&inert_leak_tx, &persisted_state.view()),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+            "an unapproved proposal payload must not leak its local approval effects",
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &inert_leak_tx,
+                persisted_state.view().world(),
+            ),
+            Err(RoutingResolveError::FxCorridorPolicyRegistryMissing),
+        );
+    }
+    #[test]
     fn authenticated_multisig_approval_fx_effect_projection_breaks_cycles() {
         let (multisig_id, _) = gen_account_in("wonderland");
         let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
@@ -14009,6 +15591,932 @@ mod tests {
             Ok(None),
         );
         assert_eq!(stack.expansions, NODE_COUNT);
+    }
+    #[test]
+    fn fx_escrow_operations_preserve_the_policy_destination_route() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let private_dataspace = DataSpaceId::new(7);
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let private_lane = LaneId::new(2);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog = dataspace_catalog(&[
+            (private_dataspace, "private"),
+            (source_dataspace, "cbuae"),
+            (destination_dataspace, "sbp"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (private_lane, private_dataspace),
+            (LaneId::new(3), source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let (corridor, _) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "escrow_route",
+        );
+        let fund = FundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let refund = RefundFxCorridorEscrow {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            destination_asset_definition_id: corridor.destination_asset_definition_id.clone(),
+            amount: 10_u32.into(),
+        };
+        let operations = [
+            InstructionBox::from(fund.clone()),
+            InstructionBox::from(SettlementInstructionBox::FundFxCorridorEscrow(fund.clone())),
+            InstructionBox::from(refund.clone()),
+            InstructionBox::from(SettlementInstructionBox::RefundFxCorridorEscrow(refund)),
+        ];
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+        install_fx_corridor_policy(&state, corridor);
+        let expected_single = RoutingPlan::single(RoutingDecision::new(
+            destination_lane,
+            destination_dataspace,
+        ));
+        for (index, operation) in operations.into_iter().enumerate() {
+            let tx =
+                sample_transaction(&authority, authority_keypair.private_key(), vec![operation]);
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .unwrap_or_else(|error| panic!("escrow operation {index} failed: {error}")),
+                expected_single,
+            );
+            assert_eq!(
+                evaluate_policy_plan_with_catalog_and_world(
+                    &default_routing_policy(),
+                    &lane_catalog,
+                    &dataspace_catalog,
+                    &tx,
+                    state.view().world(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("world-backed escrow operation {index} failed: {error}")
+                }),
+                expected_single,
+            );
+        }
+
+        let private_write = InstructionBox::from(Register::domain(Domain::new(
+            DomainId::try_new("merchant", "private").expect("private domain id"),
+        )));
+        let mixed_tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![private_write.clone(), InstructionBox::from(fund.clone())],
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&mixed_tx, &state.view())
+                .expect("mixed escrow plan should resolve"),
+            RoutingPlan::native_amx(
+                RoutingDecision::new(private_lane, private_dataspace),
+                vec![
+                    RouteLeg::new(
+                        RoutingDecision::new(private_lane, private_dataspace),
+                        RouteLegRole::Participant,
+                    ),
+                    RouteLeg::new(
+                        RoutingDecision::new(destination_lane, destination_dataspace),
+                        RouteLegRole::Participant,
+                    ),
+                ],
+            ),
+        );
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &authority,
+            authority_keypair.private_key(),
+            vec![private_write, InstructionBox::from(fund)],
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan_with_state(&strict_tx, &state),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: private_dataspace,
+                    second_dataspace_id: destination_dataspace,
+                }
+            ),
+        );
+    }
+    #[test]
+    fn fx_corridor_non_deploy_first_match_does_not_add_rule_dataspaces() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let non_deploy_dataspace = DataSpaceId::new(14);
+        let deploy_dataspace = DataSpaceId::new(16);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let non_deploy_lane = LaneId::new(5);
+        let deploy_lane = LaneId::new(6);
+        let dataspace_catalog = dataspace_catalog(&[
+            (source_dataspace, "cbuae"),
+            (destination_dataspace, "sbp"),
+            (non_deploy_dataspace, "domain_policy"),
+            (deploy_dataspace, "deploy_policy"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+            (non_deploy_lane, non_deploy_dataspace),
+            (deploy_lane, deploy_dataspace),
+        ]);
+        let routing_policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![
+                LaneRoutingRule {
+                    lane: non_deploy_lane,
+                    dataspace: Some(non_deploy_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("register::domain".to_owned()),
+                        description: None,
+                    },
+                },
+                LaneRoutingRule {
+                    lane: deploy_lane,
+                    dataspace: Some(deploy_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                },
+            ],
+        };
+        let router = ConfigLaneRouter::new(routing_policy, dataspace_catalog, lane_catalog);
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_non_deploy_first_match",
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "universal").expect("universal domain"),
+                ))),
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                settlement_instruction,
+            ],
+        );
+        let world = crate::state::World::default();
+        {
+            let view = world.view();
+            assert!(rule_matches_with_world(
+                &router.policy.rules[0],
+                &tx,
+                &router.dataspace_catalog,
+                &view,
+                Some(0),
+            ));
+            assert!(rule_matches_with_world(
+                &router.policy.rules[1],
+                &tx,
+                &router.dataspace_catalog,
+                &view,
+                Some(0),
+            ));
+        }
+        let expected = expected_fx_plan(
+            source_lane,
+            source_dataspace,
+            destination_lane,
+            destination_dataspace,
+        );
+        let (queued_plan, block_plan) = fx_route_plan_results(&router, &tx, corridor, world);
+        assert_eq!(queued_plan, Ok(expected.clone()));
+        assert_eq!(block_plan, Ok(expected));
+    }
+    #[test]
+    fn fx_corridor_universal_deploy_rule_does_not_add_policy_participant() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::SINGLE,
+                    dataspace: Some(DataSpaceId::UNIVERSAL),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (source_lane, source_dataspace),
+                (destination_lane, destination_dataspace),
+            ]),
+        );
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_universal_deploy_policy",
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                settlement_instruction,
+            ],
+        );
+        let expected = expected_fx_plan(
+            source_lane,
+            source_dataspace,
+            destination_lane,
+            destination_dataspace,
+        );
+        let (queued_plan, block_plan) =
+            fx_route_plan_results(&router, &tx, corridor, crate::state::World::default());
+        assert_eq!(queued_plan, Ok(expected.clone()));
+        assert_eq!(block_plan, Ok(expected));
+    }
+    #[test]
+    fn fx_corridor_deploy_policy_participant_is_deduplicated_from_intrinsic_participants() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: source_lane,
+                    dataspace: Some(source_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (source_lane, source_dataspace),
+                (destination_lane, destination_dataspace),
+            ]),
+        );
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_duplicate_deploy_policy",
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                settlement_instruction,
+            ],
+        );
+        let expected = expected_fx_plan(
+            source_lane,
+            source_dataspace,
+            destination_lane,
+            destination_dataspace,
+        );
+        let (queued_plan, block_plan) =
+            fx_route_plan_results(&router, &tx, corridor, crate::state::World::default());
+        assert_eq!(queued_plan, Ok(expected.clone()));
+        assert_eq!(block_plan, Ok(expected));
+    }
+    #[test]
+    fn fx_corridor_expired_sns_only_alias_is_excluded_with_queue_block_parity() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let expired_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic dataspace id");
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (source_lane, source_dataspace),
+                (destination_lane, destination_dataspace),
+            ]),
+        );
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_expired_sns",
+        );
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "alpha").expect("SNS-only domain"),
+                ))),
+                settlement_instruction,
+            ],
+        );
+        let expected = expected_fx_plan(
+            source_lane,
+            source_dataspace,
+            destination_lane,
+            destination_dataspace,
+        );
+        let (queued_plan, block_plan) = fx_route_plan_results(
+            &router,
+            &tx,
+            corridor,
+            world_with_dynamic_dataspace_until("alpha", &authority, 0),
+        );
+        assert_eq!(queued_plan, Ok(expected.clone()));
+        assert_eq!(block_plan, Ok(expected));
+        assert!(
+            !queued_plan
+                .expect("queued plan should resolve")
+                .legs()
+                .iter()
+                .any(|leg| leg.route.dataspace_id == expired_dataspace)
+        );
+    }
+    #[test]
+    fn fx_corridor_deploy_policy_without_canonical_lane_fails_closed_with_parity() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let deploy_dataspace = DataSpaceId::new(14);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let deploy_lane = LaneId::new(5);
+        let lane_catalog = lane_catalog_from_configs(vec![
+            LaneConfig {
+                id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: source_lane,
+                dataspace_id: source_dataspace,
+                alias: "source".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: destination_lane,
+                dataspace_id: destination_dataspace,
+                alias: "destination".to_owned(),
+                ..LaneConfig::default()
+            },
+            autoscale_elastic_lane_config(deploy_lane, deploy_dataspace, 0),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: deploy_lane,
+                    dataspace: Some(deploy_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[
+                (source_dataspace, "cbuae"),
+                (destination_dataspace, "sbp"),
+                (deploy_dataspace, "deploy_policy"),
+            ]),
+            lane_catalog,
+        );
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_missing_deploy_lane",
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                settlement_instruction,
+            ],
+        );
+        let state = blank_state();
+        install_synthetic_router_nexus(&state, &router);
+        install_fx_corridor_policy(&state, corridor);
+        let view = state.view();
+        let queued_plan = router.try_route_plan_with_view(&tx, &view);
+        let block_plan = evaluate_policy_plan_with_nexus_and_world_at(
+            view.nexus(),
+            &tx,
+            view.world(),
+            state_view_ledger_time_ms(&view),
+        );
+        let expected_error = RoutingResolveError::NoLaneForDataspace {
+            dataspace_id: deploy_dataspace,
+        };
+        assert_eq!(queued_plan, Err(expected_error.clone()));
+        assert_eq!(block_plan, Err(expected_error));
+    }
+    #[test]
+    fn fx_corridor_plan_includes_smart_contract_deploy_policy_participant() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let contract_dataspace = DataSpaceId::new(14);
+        let deploy_policy_dataspace = DataSpaceId::new(16);
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let contract_lane = LaneId::new(5);
+        let deploy_policy_lane = LaneId::new(6);
+        let dataspace_catalog = dataspace_catalog(&[
+            (source_dataspace, "cbuae"),
+            (destination_dataspace, "sbp"),
+            (contract_dataspace, "contracts"),
+            (deploy_policy_dataspace, "private_deploy"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+            (contract_lane, contract_dataspace),
+            (deploy_policy_lane, deploy_policy_dataspace),
+        ]);
+        let routing_policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: deploy_policy_lane,
+                dataspace: Some(deploy_policy_dataspace),
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".to_owned()),
+                    description: None,
+                },
+            }],
+        };
+        let router = ConfigLaneRouter::new(routing_policy, dataspace_catalog, lane_catalog);
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_deploy_policy",
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &super::super::queue_test_network_id(),
+            &authority,
+            0,
+            contract_dataspace,
+        )
+        .expect("contract address");
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                InstructionBox::from(
+                    iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                        contract_address,
+                        expected_revision: 1,
+                        code_hash: Hash::new(b"contract-code"),
+                    },
+                ),
+                settlement_instruction,
+            ],
+        );
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
+        install_fx_corridor_policy(&state, corridor);
+        let view = state.view();
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(destination_lane, destination_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(contract_lane, contract_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(deploy_policy_lane, deploy_policy_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &view)
+                .expect("state-view FX deployment plan should resolve"),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_nexus_and_world_at(
+                view.nexus(),
+                &tx,
+                view.world(),
+                state_view_ledger_time_ms(&view),
+            )
+            .expect("block-time FX deployment plan should resolve"),
+            expected
+        );
+    }
+    #[test]
+    fn fx_corridor_state_view_plan_rejects_sns_dataspace_without_canonical_lane() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+        let dynamic_dataspace =
+            crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic dataspace id");
+        let source_lane = LaneId::new(3);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog =
+            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let routing_policy = default_routing_policy();
+        let router = ConfigLaneRouter::new(routing_policy, dataspace_catalog, lane_catalog);
+        let (corridor, settlement_instruction) = fx_corridor_fixture(
+            source_dataspace,
+            destination_dataspace,
+            source_sink,
+            destination_reserve,
+            recipient,
+            "fx_dynamic_sns",
+        );
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "alpha").expect("SNS-only domain"),
+                ))),
+                settlement_instruction,
+            ],
+        );
+        let mut state = state_from_world(world_with_dynamic_dataspace("alpha", &authority));
+        install_router_nexus(&mut state, &router);
+        install_fx_corridor_policy(&state, corridor);
+        let view = state.view();
+        let queued_plan = router.try_route_plan_with_view(&tx, &view);
+        let block_plan = evaluate_policy_plan_with_nexus_and_world_at(
+            view.nexus(),
+            &tx,
+            view.world(),
+            state_view_ledger_time_ms(&view),
+        );
+        let expected = RoutingResolveError::NoLaneForDataspace {
+            dataspace_id: dynamic_dataspace,
+        };
+        assert_eq!(queued_plan, Err(expected.clone()));
+        assert_eq!(block_plan, Err(expected));
+    }
+    #[test]
+    fn fx_corridor_full_plan_routes_native_amx_from_governed_policy() {
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (source_sink, _) = gen_account_in("wonderland");
+        let (_former_destination_reserve, _) = gen_account_in("wonderland");
+        let (recipient, _) = gen_account_in("wonderland");
+        let source_dataspace = DataSpaceId::new(10);
+        let auxiliary_dataspace = DataSpaceId::new(11);
+        let destination_dataspace = DataSpaceId::new(12);
+        let source_lane = LaneId::new(3);
+        let auxiliary_lane = LaneId::new(5);
+        let destination_lane = LaneId::new(4);
+        let dataspace_catalog = dataspace_catalog(&[
+            (source_dataspace, "cbuae"),
+            (auxiliary_dataspace, "sepa"),
+            (destination_dataspace, "sbp"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (source_lane, source_dataspace),
+            (auxiliary_lane, auxiliary_dataspace),
+            (destination_lane, destination_dataspace),
+        ]);
+        let routing_policy = default_routing_policy();
+        let router = ConfigLaneRouter::new(
+            routing_policy.clone(),
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cbuae", "universal").expect("source asset domain"),
+            "aed".parse().expect("source asset name"),
+        );
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("sbp", "universal").expect("destination asset domain"),
+            "pkr".parse().expect("destination asset name"),
+        );
+        let corridor = FxCorridorPolicy {
+            policy_id: "mobile_aed_pkr".parse().expect("FX corridor policy id"),
+            revision: 1,
+            owner: source_sink.clone(),
+            source_dataspace,
+            source_asset_definition_id: source_asset_definition_id.clone(),
+            destination_dataspace,
+            destination_asset_definition_id: destination_asset_definition_id.clone(),
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
+            ]),
+            oracle_feed_id: "mobile_aed_pkr_rate".parse().expect("FX corridor feed id"),
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: 1_000_u32.into(),
+            max_destination_amount_per_settlement: 100_000_u32.into(),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: 10_000_u32.into(),
+            max_destination_amount_per_window: 1_000_000_u32.into(),
+            enabled: true,
+        };
+        let request_hash = Hash::new(b"router-fx-full-plan-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: corridor.oracle_feed_id.clone(),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
+        };
+        let settlement = SettleFxCorridor {
+            policy_id: corridor.policy_id.clone(),
+            expected_policy_revision: corridor.revision,
+            source_asset_definition_id,
+            destination_asset_definition_id,
+            settlement_id: "mobile_fx_1".parse().expect("FX settlement id"),
+            recipient,
+            source_amount: iroha_primitives::numeric::Quantity::from(10_u32),
+            expected_destination_amount: 760_u32.into(),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
+        };
+        let settlement_instruction =
+            InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement));
+        let dvp_source_domain =
+            DomainId::try_new("cash", "cbuae").expect("source DVP asset domain");
+        let dvp_auxiliary_domain =
+            DomainId::try_new("securities", "sepa").expect("auxiliary DVP asset domain");
+        let dvp_source_definition = AssetDefinitionId::derive_from_components(
+            dvp_source_domain.clone(),
+            "aed".parse().expect("source DVP asset name"),
+        );
+        let dvp_auxiliary_definition = AssetDefinitionId::derive_from_components(
+            dvp_auxiliary_domain.clone(),
+            "bond".parse().expect("auxiliary DVP asset name"),
+        );
+        let bilateral_settlement = InstructionBox::from(DvpIsi::new(
+            "mobile_dvp_1".parse().expect("DVP settlement id"),
+            SettlementLeg::new(
+                dvp_source_definition.clone(),
+                1_u32,
+                authority.clone(),
+                source_sink.clone(),
+            ),
+            SettlementLeg::new(
+                dvp_auxiliary_definition.clone(),
+                1_u32,
+                source_sink,
+                authority.clone(),
+            ),
+            SettlementPlan::default(),
+        ));
+        let scoped_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: source_dataspace,
+        }
+        .into();
+        let tx = sample_transaction(
+            &authority,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    scoped_permission,
+                    authority.clone(),
+                )),
+                bilateral_settlement,
+                settlement_instruction.clone(),
+            ],
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(
+                    dvp_source_definition,
+                    "AED".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(dvp_source_domain),
+                )
+                .build(&authority),
+                AssetDefinition::numeric(
+                    dvp_auxiliary_definition,
+                    "bond".to_owned(),
+                    AssetBalancePolicy::DataspaceRestricted,
+                    Some(dvp_auxiliary_domain),
+                )
+                .build(&authority),
+            ],
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        install_router_nexus(&mut state, &router);
+        let mut registry = FxCorridorPolicyRegistry::default();
+        registry.upsert(corridor);
+        {
+            let mut world = state.world.block();
+            world.parameters.get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(registry.into_custom_parameter()),
+            );
+            world.commit();
+        }
+        let expected = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            vec![
+                RouteLeg::new(
+                    RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(auxiliary_lane, auxiliary_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(destination_lane, destination_dataspace),
+                    RouteLegRole::Participant,
+                ),
+            ],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("FX route state requirement should be deterministic"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_state(&tx, &state)
+                .expect("universal FX coordinator route should resolve with state"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("FX route state requirement should be deterministic"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state-backed FX plan should resolve"),
+            expected
+        );
+        let view = state.view();
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &view)
+                .expect("state-view FX plan should resolve"),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &routing_policy,
+                &lane_catalog,
+                &dataspace_catalog,
+                &tx,
+                view.world(),
+            )
+            .expect("world-backed FX plan should resolve"),
+            expected
+        );
+        let mut strict_metadata = Metadata::default();
+        strict_metadata.insert(
+            AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+            iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+        );
+        let strict_tx = sample_transaction_with_metadata(
+            &authority,
+            authority_keypair.private_key(),
+            vec![settlement_instruction],
+            strict_metadata,
+        );
+        assert_eq!(
+            router.try_route_plan_with_state(&strict_tx, &state),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: source_dataspace,
+                    second_dataspace_id: destination_dataspace,
+                }
+            )
+        );
     }
     #[test]
     fn asset_home_coverage_burn_global_binding_routes_to_universal() {

@@ -18,6 +18,42 @@
 //!   State apply begins, any failure requires recovery; the worker cannot re-execute or retry
 //!   partially consumed publication. Successful repeated completion emits no duplicate events.
 
+/// Move-only authority issued inside the original native execution worker.
+/// No decoder, clone or public constructor can recreate this proof of origin.
+pub(crate) struct NativeExecutionAuthorization {
+    state: usize,
+    tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
+    parent: Option<(Hash32, Hash32)>,
+}
+impl NativeExecutionAuthorization {
+    /// The startup module can transfer only its own original signed-genesis execution.
+    pub(super) fn from_genesis(original: super::startup::GenesisExecutionAuthorization) -> Self {
+        let (state, tip) = original.into_parts();
+        Self {
+            state,
+            tip,
+            parent: None,
+        }
+    }
+
+    /// Return fixed claims only for the exact State that owns the execution.
+    pub(crate) fn for_state(
+        &self,
+        state: &State,
+    ) -> Result<
+        (
+            crate::state::native_execution_tip::NativeExecutionTipRecord,
+            Option<(Hash32, Hash32)>,
+        ),
+        String,
+    > {
+        if self.state != std::ptr::from_ref(state) as usize {
+            return Err("native execution authorization belongs to another State".into());
+        }
+        Ok((self.tip, self.parent))
+    }
+}
+
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -31,7 +67,7 @@ use iroha_data_model::{
     block::{BlockHeader as IrohaHeader, CommitCertificate, SignedBlock},
     events::EventBox,
     parameter::system::ConsensusMode,
-    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
+    transaction::TransactionEntrypoint,
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
@@ -156,6 +192,23 @@ pub struct PendingExecutionView<'borrow, 'state> {
     pub witness: &'borrow mut iroha_data_model::block::consensus::ExecWitness,
 }
 
+/// Immutable observation of the actual certificate-authorized publication overlay.
+/// No source mutation or publication capability is exposed by this test view.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub struct PreparedExecutionView<'borrow, 'state> {
+    /// The exact originally executed carrier with its native certificate.
+    pub block: &'borrow CommittedBlock,
+    /// The original prepared overlay whose projected snapshot will be published.
+    pub state: &'borrow StateBlock<'state>,
+    /// The original execution witness, retained with certified R.
+    pub witness: &'borrow iroha_data_model::block::consensus::ExecWitness,
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+type PreparedInspection = Box<
+    dyn for<'borrow, 'state> FnOnce(Result<PreparedExecutionView<'borrow, 'state>, String>) + Send,
+>;
+
 #[cfg(any(test, feature = "iroha-core-tests"))]
 type PendingInspection = Box<
     dyn for<'borrow, 'state> FnOnce(Result<PendingExecutionView<'borrow, 'state>, String>) + Send,
@@ -164,6 +217,8 @@ type PendingInspection = Box<
 enum Request {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     InspectPending(Hash32, PendingInspection),
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    InspectPrepared(Hash32, PreparedInspection),
     Execute(Block, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
     Discard(u64, Vec<Hash32>),
     Prepare(
@@ -270,6 +325,29 @@ impl StateExecutor {
                     let result = original.and_then(|original| {
                         catch_unwind(AssertUnwindSafe(|| inspect(original)))
                             .map_err(|_| "pending execution inspection panicked".to_owned())
+                    });
+                    let _ = reply.send(result);
+                }),
+            )
+        })
+        .ok_or_else(|| "original execution Worker stopped".to_owned())?
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn inspect_prepared<R: Send + 'static>(
+        &self,
+        block_hash: Hash32,
+        inspect: impl for<'borrow, 'state> FnOnce(PreparedExecutionView<'borrow, 'state>) -> R
+        + Send
+        + 'static,
+    ) -> Result<R, String> {
+        self.call(|reply| {
+            Request::InspectPrepared(
+                block_hash,
+                Box::new(move |original| {
+                    let result = original.and_then(|original| {
+                        catch_unwind(AssertUnwindSafe(|| inspect(original)))
+                            .map_err(|_| "prepared execution inspection panicked".to_owned())
                     });
                     let _ = reply.send(result);
                 }),
@@ -634,6 +712,38 @@ impl<'s> Worker<'s> {
                                 witness: &mut live.witness,
                             })
                         });
+                inspect(original);
+            }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
+            Request::InspectPrepared(block_hash, inspect) => {
+                let original = self
+                    .live
+                    .as_ref()
+                    .ok_or_else(|| "no original prepared execution".to_owned())
+                    .and_then(|live| {
+                        if live.block_hash != block_hash {
+                            return Err(
+                                "prepared inspection belongs to a different execution".into()
+                            );
+                        }
+                        let PublicationPhase::Prepared {
+                            committed,
+                            state_events: Some(_),
+                            ..
+                        } = &live.phase
+                        else {
+                            return Err("original execution is not prepared for publication".into());
+                        };
+                        let state = live
+                            .overlay
+                            .as_deref()
+                            .ok_or_else(|| "original prepared overlay was consumed".to_owned())?;
+                        Ok(PreparedExecutionView {
+                            block: committed,
+                            state,
+                            witness: &live.witness,
+                        })
+                    });
                 inspect(original);
             }
             Request::Execute(block, block_hash, reply) => {
@@ -1004,6 +1114,7 @@ impl<'s> Worker<'s> {
             &original.overlay,
             original.valid.as_ref(),
             original.phase.ready().expect("original prepared result"),
+            &original.witness,
         ) {
             Ok(projection) => {
                 original.native_contexts = Some(projection);
@@ -1510,7 +1621,26 @@ impl<'s> Worker<'s> {
         if state_events.is_none() {
             // A normal authorization refusal retains the same original and can retry
             // after append. Metadata finalization itself is one-shot and may unwind.
-            overlay.authorize_sumeragi_output_publication(committed, &live.witness, certificate)?;
+            let native_execution = NativeExecutionAuthorization {
+                state: std::ptr::from_ref(self.state) as usize,
+                tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
+                    height: live.header.height,
+                    creation_time_ms: u64::try_from(
+                        committed.as_ref().header().creation_time().as_millis(),
+                    )
+                    .expect("block creation time fits u64"),
+                    iroha_hash: committed.as_ref().hash(),
+                    core_hash: live.block_hash.0,
+                    result: live.result.0,
+                },
+                parent: Some((live.header.parent_hash, live.header.parent_result)),
+            };
+            overlay.authorize_sumeragi_output_publication(
+                committed,
+                &live.witness,
+                certificate,
+                native_execution,
+            )?;
             self.recovery =
                 Some("finalizing original metadata; recovery required on failure".into());
             *state_events = Some(
@@ -1718,6 +1848,7 @@ fn proposal_matches_header(header: IrohaHeader, block: &Block) -> bool {
 
 /// Whether a block requires commit attestations (§3.7, KAGEMUSHA mint finality): it carries a
 /// KAGEMUSHA V1 top-up, which admission confines to single-instruction transactions.
+/// The native transaction layout has no optional admission mode that can disable this seal.
 ///
 /// The caller additionally requires a seal at every authenticated epoch boundary,
 /// for each nonempty boundary block. This predicate checks only the transaction-dependent rule.
@@ -1727,16 +1858,14 @@ pub fn attestation_required(block: &SignedBlock) -> bool {
         let TransactionEntrypoint::External(tx) = entrypoint else {
             return false;
         };
-        tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
-            && tx
-                .instructions()
-                .explicit_instructions()
-                .any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
-                        .is_some()
-                })
+        tx.instructions()
+            .explicit_instructions()
+            .any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+                    .is_some()
+            })
     })
 }
 
@@ -1906,3 +2035,38 @@ mod archive_tests;
 #[cfg(test)]
 #[path = "executor_publication_tests.rs"]
 mod publication_tests;
+
+#[cfg(test)]
+mod native_execution_authorization_tests {
+    use super::*;
+
+    #[test]
+    fn original_execution_authorization_is_bound_to_its_actual_state() {
+        use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+        let original = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let foreign = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let token = NativeExecutionAuthorization {
+            state: std::ptr::from_ref(&original) as usize,
+            tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
+                height: 1,
+                creation_time_ms: 0,
+                iroha_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"origin identity test",
+                )),
+                core_hash: [1; 32],
+                result: [2; 32],
+            },
+            parent: None,
+        };
+        assert!(token.for_state(&original).is_ok());
+        assert!(token.for_state(&foreign).is_err());
+    }
+}

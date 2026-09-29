@@ -71,7 +71,7 @@ use halo2_proofs::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::{HeightContextId, ValidatorPower},
+    block::consensus_v2::ValidatorPower,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
@@ -1215,12 +1215,10 @@ impl FundingCertificate {
             validator_count: u32::try_from(roster.validators.len()).expect("four validators"),
             network_id: roster.network_id,
             block_height,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(digest(
-                b"funding-height",
-                u64::from(count),
-            )))),
-            subject_digest: digest(b"funding-subject", u64::from(count)),
-            execution_commitment_digest: digest(b"funding-execution", u64::from(count)),
+            native_instance: digest(b"funding-native-instance", 0),
+            native_epoch_context: digest(b"funding-native-epoch-context", authorization.epoch),
+            native_block_hash: digest(b"funding-native-block", u64::from(count)),
+            native_result: digest(b"funding-native-result", u64::from(count)),
             kagemusha_top_up_root: root,
             kagemusha_top_up_count: count,
             next_epoch_authorization: next,
@@ -2821,7 +2819,7 @@ fn funding_certificate_preflight_has_exact_real_quorum_and_positive_membership()
     substituted.membership.leaf.amount += 1;
     assert!(substituted.validate_shape().is_err());
     let mut substituted = funding.finalized.clone();
-    substituted.seal_bundle.message.subject_digest = digest(b"substituted-finality-subject", 0);
+    substituted.seal_bundle.message.native_block_hash = digest(b"substituted-native-block", 0);
     assert!(!certificate_signature_equations(&substituted));
 }
 

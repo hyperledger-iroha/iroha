@@ -2867,7 +2867,6 @@ fn committed_provider_observation_uses_only_the_matching_network_output() {
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &limits,
         )
         .unwrap();

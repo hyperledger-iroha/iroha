@@ -20,7 +20,6 @@ use iroha::{
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
     isi::{
         RegisterBox,
         register::RegisterPeerWithPop,
@@ -67,11 +66,9 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-const IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-        .get();
+// Cover the largest admitted validator roster plus the standard core peer capacity.
 const IZANAMI_MAX_TOTAL_CONNECTIONS: usize =
-    MAX_VALIDATORS_PER_HEIGHT - 1 + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
+    iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
 const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
@@ -2226,9 +2223,6 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
             .as_millis(),
     )
     .unwrap_or(u64::MAX);
-    let (derived_round_deadline_ms, derived_retransmit_interval_ms) =
-        iroha_config::parameters::actual::sumeragi_v2_timing_ms(block_cadence_ms)
-            .unwrap_or((u64::MAX, u64::MAX));
     info!(
         target: "izanami::profile",
         consensus_mode = consensus_mode_label(config),
@@ -2236,10 +2230,8 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
         latency_p95_gate_configured = config.latency_p95_threshold.is_some(),
         latency_p95_gate_ms,
         block_cadence_ms,
-        derived_round_deadline_ms,
-        derived_retransmit_interval_ms,
         max_transactions = config.sumeragi_block_max_transactions,
-        "effective first-release Sumeragi v2 soak profile"
+        "effective native Sumeragi soak profile"
     );
 }
 fn workload_account_count(config: &ChaosConfig) -> usize {
@@ -2267,18 +2259,6 @@ fn make_network_builder_with_sorafs(
     genesis: Vec<Vec<InstructionBox>>,
     sorafs_provider_owners: BTreeMap<String, String>,
 ) -> Result<NetworkBuilder> {
-    let sumeragi_body_bytes = izanami_sumeragi_body_bytes(config.peer_count)?;
-    let sumeragi_queue_commands = i64::try_from(IZANAMI_SUMERAGI_QUEUE_COMMANDS)
-        .wrap_err("Izanami Sumeragi command queue exceeds TOML limits")?;
-    let sumeragi_queue_bodies = i64::try_from(IZANAMI_SUMERAGI_QUEUE_BODIES)
-        .wrap_err("Izanami Sumeragi body queue exceeds TOML limits")?;
-    let sumeragi_authenticated_non_validator_sources =
-        i64::try_from(IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-            .wrap_err("Izanami Sumeragi authenticated source count exceeds TOML limits")?;
-    let sumeragi_body_source_bytes = i64::try_from(IZANAMI_SUMERAGI_BODY_SOURCE_BYTES)
-        .wrap_err("Izanami Sumeragi source byte cap exceeds TOML limits")?;
-    let sumeragi_body_bytes = i64::try_from(sumeragi_body_bytes)
-        .wrap_err("Izanami Sumeragi aggregate body bytes exceed TOML limits")?;
     let max_total_connections = i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS)
         .wrap_err("Izanami network connection capacity exceeds TOML limits")?;
     let mut genesis = genesis;
@@ -2523,43 +2503,7 @@ fn make_network_builder_with_sorafs(
                 IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP,
             )
             .write(["network", "max_total_connections"], max_total_connections)
-            .write(
-                ["sumeragi", "block", "max_transactions"],
-                i64::try_from(config.sumeragi_block_max_transactions)
-                    .expect("Izanami block transaction cap fits config layer"),
-            )
-            .write(
-                ["sumeragi", "block", "proposal_queue_scan_multiplier"],
-                i64::try_from(config.sumeragi_proposal_queue_scan_multiplier)
-                    .expect("Izanami proposal scan multiplier fits config layer"),
-            )
             .write(["sumeragi", "role"], "validator")
-            .write(
-                ["sumeragi", "block", "max_payload_bytes"],
-                i64::try_from(
-                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
-                )
-                .expect("Sumeragi payload limit fits config layer"),
-            )
-            .write(["sumeragi", "queues", "commands"], sumeragi_queue_commands)
-            .write(["sumeragi", "queues", "bodies"], sumeragi_queue_bodies)
-            .write(
-                ["sumeragi", "queues", "authenticated_non_validator_sources"],
-                sumeragi_authenticated_non_validator_sources,
-            )
-            .write(
-                ["sumeragi", "queues", "body_source_bytes"],
-                sumeragi_body_source_bytes,
-            )
-            .write(["sumeragi", "queues", "body_bytes"], sumeragi_body_bytes)
-            .write(
-                ["sumeragi", "queues", "chunks"],
-                IZANAMI_SUMERAGI_QUEUE_CHUNKS,
-            )
-            .write(
-                ["sumeragi", "queues", "ready_bodies"],
-                IZANAMI_SUMERAGI_QUEUE_READY_BODIES,
-            )
             .write(
                 ["sumeragi", "keys", "allowed_algorithms"],
                 TomlValue::Array(vec![TomlValue::String("bls_normal".into())]),
@@ -7565,8 +7509,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10642,8 +10585,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
@@ -11146,19 +11088,8 @@ mod tests {
             ),
             "Izanami's admissible reply-source bound must override the Nexus profile"
         );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "bodies"]).and_then(TomlValue::as_integer),
-            Some(i64::try_from(IZANAMI_SUMERAGI_QUEUE_BODIES).expect("bodies fit TOML")),
-            "Izanami's admissible body queue must override the Nexus profile"
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "queues", "body_bytes"]).and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(izanami_sumeragi_body_bytes(config.peer_count)?)
-                    .expect("aggregate body bytes fit TOML")
-            ),
-            "Izanami must retain one byte partition per validator and ingress source"
-        );
+        assert!(lookup(&["sumeragi", "queues"]).is_none());
+        assert!(lookup(&["sumeragi", "block"]).is_none());
         let has_nexus_layer = layers.iter().any(|layer| {
             layer
                 .as_ref()

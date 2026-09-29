@@ -2,18 +2,6 @@
 
 use super::*;
 
-#[test]
-fn autoscale_catalog_owners_commit_on_default_stack() {
-    std::thread::Builder::new()
-        .name("autoscale-tiered-stack".into())
-        // Pin the ordinary libtest budget even when RUST_MIN_STACK is set.
-        .stack_size(2 * 1024 * 1024)
-        .spawn(super::autoscale_catalog_caches_cannot_replace_current_or_undo_runtime_owners)
-        .expect("spawn with the ordinary stack budget")
-        .join()
-        .expect("autoscale commits preserve runtime owners within the stack budget");
-}
-
 fn assert_cold_values(backend: &TieredStateBackend, mut expected: Vec<Vec<u8>>) {
     let manifest = backend.last_manifest().expect("snapshot manifest");
     assert_eq!(manifest.total_entries, expected.len());

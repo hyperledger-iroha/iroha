@@ -444,7 +444,6 @@ mod tests {
                 vec![],
                 Default::default(),
                 Default::default(),
-                vec![],
                 &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
             )
             .unwrap();

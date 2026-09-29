@@ -181,6 +181,27 @@ fn sponsor_instruction_records() -> [Value; 10] {
     ]
 }
 
+#[test]
+fn nexus_header_fixture_preserves_independent_confidential_identity() {
+    let expected = sample_header(5)
+        .confidential_features()
+        .expect("confidential header");
+    assert_eq!(expected.vk_set_hash, None);
+    assert_eq!(expected.poseidon_params_id, None);
+    assert_eq!(expected.pedersen_params_id, None);
+    assert_eq!(expected.conf_rules_version, Some(1));
+    assert_eq!(
+        hex::encode(expected.zk_policy_hash.expect("captured policy hash")),
+        "93769134d0a34d4c937a95bbc34005771b9d82ef0fcfdff06957f207e216896f"
+    );
+    for height in [5, 9] {
+        assert_eq!(
+            sample_header(height).confidential_features(),
+            Some(expected)
+        );
+    }
+}
+
 fn current_instruction_records() -> Value {
     let mut rows = sponsor_instruction_records().to_vec();
     rows.extend(verified_instruction_records());
@@ -221,4 +242,35 @@ fn nexus_instructions_preserve_captured_frames() {
         &current_instruction_records(),
         "Nexus instruction identities",
     );
+}
+
+#[test]
+fn retired_lane_relay_instruction_frames_have_no_builtin_decoder() {
+    let rows: Value = json::from_str(include_str!(
+        "../../../../tests/fixtures/retired_lane_instruction_frames.json"
+    ))
+    .expect("retired instruction frames");
+    let registry = crate::isi::instruction_registry();
+    for row in rows.as_array().expect("retired records") {
+        let nominal = row["nominal"].as_str().expect("nominal");
+        let wire_id = nominal
+            .strip_prefix("iroha_data_model::isi::")
+            .expect("instruction");
+        assert!(!registry.contains(wire_id), "retired wire id {wire_id}");
+        assert!(!registry.contains(nominal), "retired nominal id {nominal}");
+        for case in row["cases"].as_array().expect("cases") {
+            let raw = hex::decode(case["frame"].as_str().expect("frame")).unwrap();
+            assert!(registry.decode(wire_id, &raw).is_none());
+            assert!(
+                matches!(crate::isi::decode_instruction_from_pair(wire_id, &raw),
+                Err(norito::Error::Message(message)) if message == "unknown instruction wire identifier")
+            );
+            if let Some(carrier) = case.get("instruction_frame") {
+                let bytes = hex::decode(carrier.as_str().unwrap()).unwrap();
+                if let Ok(value) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
+                    assert!(value.as_any().is::<crate::isi::InvalidInstruction>());
+                }
+            }
+        }
+    }
 }

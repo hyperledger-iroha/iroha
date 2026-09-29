@@ -507,8 +507,8 @@ def test_public_query_helpers_reject_raw_network_bytes_before_native_dispatch(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=raw_network_id,
-            finality_bundle_chain_json="[]",
-            trusted_height_context_id="trusted-root",
+            native_finality_proof_chain_json="[]",
+            expected_chain="trusted-chain", trusted_checkpoint=b"trusted-checkpoint",
             private_key=b"\x11" * 32,
         ),
     )
@@ -550,8 +550,8 @@ def test_public_query_helpers_reject_legacy_network_keyword_aliases(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=NETWORK_ID,
-            finality_bundle_chain_json="[finality-bundle]",
-            trusted_height_context_id="trusted-root",
+            native_finality_proof_chain_json="[native-proof]",
+            expected_chain="trusted-chain", trusted_checkpoint=b"trusted-checkpoint",
             private_key=b"\x11" * 32,
             **{retired_key: "retired"},
         ),
@@ -592,7 +592,8 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
             "block_height": 7,
             "output_hash": output_hash,
             "network_id": "trusted-network",
-            "height_context_id": "trusted-context",
+            "context_id": "trusted-context",
+            "promoted_checkpoint": b"promoted-checkpoint",
             "execution_commitment": {"executed_block_wire_len": 123},
             "executed_block_wire_hash": "55" * 32,
             "executed_block_wire_len": 123,
@@ -625,8 +626,8 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
         transaction_hash=transaction_hash,
         authority="authority@payments",
         network_id=NETWORK_ID,
-        finality_bundle_chain_json="[finality-bundle]",
-        trusted_height_context_id="trusted-root",
+        native_finality_proof_chain_json="[native-proof]",
+        expected_chain="trusted-chain", trusted_checkpoint=b"trusted-checkpoint",
         private_key_hex="44" * 32,
     )
 
@@ -647,13 +648,15 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
     ]
     assert query_network_ids == [NETWORK_ID]
     assert verification_inputs == [(transaction_hash, b"transaction-response", {
-        "finality_bundle_chain_json": "[finality-bundle]",
+        "native_finality_proof_chain_json": "[native-proof]",
         "expected_network_id": NETWORK_ID,
-        "trusted_height_context_id": "trusted-root",
+        "expected_chain": "trusted-chain",
+        "trusted_checkpoint": b"trusted-checkpoint",
     })]
     assert verified.executed_block_wire_hash == "55" * 32
     assert verified.executed_block_wire_len == 123
-    assert verified.height_context_id == "trusted-context"
+    assert verified.context_id == "trusted-context"
+    assert verified.promoted_checkpoint == b"promoted-checkpoint"
     assert all(
         call["headers"]["Accept"] == "application/x-norito"
         for call in session.calls
@@ -668,7 +671,8 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "block_height": 7,
         "output_hash": "33" * 32,
         "network_id": "trusted-network",
-        "height_context_id": "trusted-context",
+        "context_id": "trusted-context",
+            "promoted_checkpoint": b"promoted-checkpoint",
         "execution_commitment": {"executed_block_wire_len": 123},
         "executed_block_wire_hash": "55" * 32,
         "executed_block_wire_len": 123,
@@ -978,25 +982,52 @@ def test_committed_output_crypto_wrapper_requires_and_forwards_exact_trust_input
                 if isinstance(item, ast.FunctionDef)
                 and item.name == "verify_committed_transaction_inclusion")
     calls = []
-    native = types.SimpleNamespace(verify_committed_transaction_inclusion_json=
-        lambda *args: calls.append(args) or '{"output_hash":"verified"}')
+    native = types.SimpleNamespace(verify_committed_transaction_inclusion=
+        lambda *args: calls.append(args) or ('{"output_hash":"verified"}', b"promoted-checkpoint"))
     contract = types.ModuleType("contract")
     _install_network_id_contract(contract)
     namespace = {"_crypto": native, "_require_network_id": contract._require_network_id,
                  "NetworkId": FakeNetworkId, "Mapping": Mapping, "Any": Any, "json": json}
     exec(compile(ast.Module(body=[node], type_ignores=[]), "crypto.py", "exec"), namespace)
     verify = namespace["verify_committed_transaction_inclusion"]
-    trust = dict(finality_bundle_chain_json="[exact-bundle]", expected_network_id=NETWORK_ID,
-                 trusted_height_context_id="trusted-root")
-    assert verify("transaction", b"response", **trust) == {"output_hash": "verified"}
-    assert calls == [("transaction", b"response", "[exact-bundle]", NETWORK_ID, "trusted-root")]
+    trust = dict(native_finality_proof_chain_json="[exact-native-proof]", expected_network_id=NETWORK_ID,
+                 expected_chain="trusted-chain", trusted_checkpoint=b"trusted-checkpoint")
+    assert verify("transaction", b"response", **trust) == {"output_hash": "verified", "promoted_checkpoint": b"promoted-checkpoint"}
+    assert calls == [("transaction", b"response", "[exact-native-proof]", NETWORK_ID, "trusted-chain", b"trusted-checkpoint")]
     for response in [bytearray(b"response"), memoryview(b"response")]:
         with pytest.raises(TypeError, match="exact immutable bytes"):
             verify("transaction", response, **trust)
     with pytest.raises(TypeError, match="expected_network_id must be a NetworkId"):
         verify("transaction", b"response", **{**trust, "expected_network_id": b"untrusted"})
     with pytest.raises(ValueError, match="16 MiB"):
-        verify("transaction", b"response", **{**trust, "finality_bundle_chain_json": " " * (16 * 1024 * 1024 + 1)})
+        verify("transaction", b"response", **{**trust, "native_finality_proof_chain_json": " " * (16 * 1024 * 1024 + 1)})
     with pytest.raises(TypeError, match="required keyword-only"):
         verify("transaction", b"response")
     assert len(calls) == 1
+
+
+def test_committed_verifier_rejects_mutable_or_empty_checkpoint_before_native_call() -> None:
+    import ast
+    from typing import Mapping
+    node = next(item for item in ast.parse((PACKAGE_ROOT / "crypto.py").read_text()).body
+                if isinstance(item, ast.FunctionDef) and item.name == "verify_committed_transaction_inclusion")
+    calls = []
+    native = types.SimpleNamespace(verify_committed_transaction_inclusion=lambda *args: calls.append(args))
+    contract = types.ModuleType("contract")
+    _install_network_id_contract(contract)
+    namespace = {"_crypto": native, "_require_network_id": contract._require_network_id,
+                 "NetworkId": FakeNetworkId, "Mapping": Mapping, "Any": Any, "json": json}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "crypto.py", "exec"), namespace)
+    verify = namespace["verify_committed_transaction_inclusion"]
+    trust = dict(native_finality_proof_chain_json="[]", expected_network_id=NETWORK_ID,
+                 expected_chain="chain", trusted_checkpoint=b"checkpoint")
+    for checkpoint in (bytearray(b"checkpoint"), memoryview(b"checkpoint")):
+        with pytest.raises(TypeError, match="exact immutable bytes"):
+            verify("transaction", b"response", **{**trust, "trusted_checkpoint": checkpoint})
+    for checkpoint in (b"", b"x" * (68 * 1024 * 1024 + 1)):
+        with pytest.raises(ValueError, match="68 MiB"):
+            verify("transaction", b"response", **{**trust, "trusted_checkpoint": checkpoint})
+    for chain in ("", "x" * 1025):
+        with pytest.raises(ValueError, match="1024 UTF-8"):
+            verify("transaction", b"response", **{**trust, "expected_chain": chain})
+    assert calls == []

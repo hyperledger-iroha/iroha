@@ -113,7 +113,6 @@ fn validate_admission(
         pipeline_parallelism: crate::state::PipelineParallelism::new(&pipeline),
         pipeline_cfg: pipeline,
         aggregate_lane: view.nexus().routing_policy.default_lane,
-        queue_plan_stateless_validation_times: vec![None; prepared.len()],
     };
     #[cfg(feature = "telemetry")]
     let metrics = Some(view.metrics());

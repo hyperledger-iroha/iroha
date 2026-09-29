@@ -9,7 +9,6 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -169,9 +168,6 @@ object AccountOnboardingPreparedVerifier {
             "prepared onboarding transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
-        require(payload.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
-            "prepared onboarding transaction must use Ordinary admission"
-        }
         requirePreparedOperationLifetime(payload, binding)
         require(
             AccountOnboardingReceiptVerifier.verifyAuthoritySignature(

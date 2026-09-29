@@ -154,7 +154,7 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
             .unwrap()
             .is_some()
     );
-    let mut foreign: NativeLaneStateProjectionV1 = norito::decode_canonical(&original).unwrap();
+    let mut foreign: NativeExecutionProjectionV1 = norito::decode_canonical(&original).unwrap();
     foreign.carrier_hash = frame(&chain, 3).hash();
     std::fs::write(&path, norito::encode_canonical(&foreign).unwrap()).unwrap();
     assert!(
@@ -205,7 +205,7 @@ fn certified_result_rejects_changed_actual_lane_history_and_counter() {
         verifier
             .push_height(genesis.clone(), &projection(&chain, &genesis))
             .unwrap();
-        let mut value: NativeLaneStateProjectionV1 =
+        let mut value: NativeExecutionProjectionV1 =
             norito::decode_canonical(&projection(&chain, &second)).unwrap();
         match field {
             0 => value.lanes.incarnations += 1,

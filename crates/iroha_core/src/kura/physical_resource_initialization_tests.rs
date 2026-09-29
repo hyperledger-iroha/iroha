@@ -10,7 +10,7 @@ fn physical_component(kura: &Kura, family: ResourceFamily) -> ResourceUsage {
 }
 
 #[test]
-fn physical_initialization_observes_owned_trees_markers_and_all_fifteen_families() {
+fn physical_initialization_observes_current_owned_trees_and_all_six_families() {
     let kura = Kura::blank_kura_for_testing();
     kura.reconcile_physical_resource_inventory().unwrap();
     let before = physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes;
@@ -18,65 +18,25 @@ fn physical_initialization_observes_owned_trees_markers_and_all_fifteen_families
     let mut added = 0_u64;
     let mut write = |path: PathBuf, bytes: Vec<u8>| {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        assert!(!path.exists(), "fixture must add distinct retained storage");
+        assert!(!path.exists(), "fixture adds distinct retained storage");
         added += bytes.len() as u64;
         std::fs::write(path, bytes).unwrap();
     };
-    for (name, family) in [
-        (PIPELINE_SIDECARS_INDEX_FILE, ResourceFamily::PipelineIndex),
-        (LANE_ARTIFACTS_INDEX_FILE, ResourceFamily::OwnershipIndex),
-        (
-            CERTIFIED_LANE_BLOCKS_INDEX_FILE,
-            ResourceFamily::CertifiedIndex,
-        ),
-        (
-            LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
-            ResourceFamily::ExecutionInputIndex,
-        ),
-        (
-            LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
-            ResourceFamily::ExecutionPreflightIndex,
-        ),
-        (
-            LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
-            ResourceFamily::ApplicationReceiptIndex,
-        ),
-        (
-            AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE,
-            ResourceFamily::MergeBundleIndex,
-        ),
-        (
-            CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE,
-            ResourceFamily::CanonicalReplicaIndex,
-        ),
-    ] {
-        let mut bytes = SidecarIndexLayout::base_header(1).to_vec();
-        bytes.extend_from_slice(&[0_u8; PIPELINE_INDEX_ENTRY_SIZE]);
-        write(blocks.join(name), bytes);
-        assert_eq!(physical_component(&kura, family).persisted_entries, 0);
-    }
-    write(
-        kura.store_root.join(MERGE_CARRIERS_DIR).join("1.norito"),
-        vec![7; 9],
-    );
-    write(
-        blocks.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE),
-        vec![8; 11],
-    );
+    write(blocks.join(DATA_FILE_NAME), vec![1; 9]);
+    write(blocks.join(INDEX_FILE_NAME), vec![0; 16]);
+    write(blocks.join(HASHES_FILE_NAME), vec![2; Hash::LENGTH]);
+    let mut pipeline = SidecarIndexLayout::base_header(1).to_vec();
+    pipeline.extend_from_slice(&[0; PIPELINE_INDEX_ENTRY_SIZE]);
+    write(blocks.join(PIPELINE_SIDECARS_INDEX_FILE), pipeline);
     write(
         kura.store_root
             .join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE),
         vec![9; 13],
     );
     write(
-        kura.store_root.join(
-            "retired/lane_geometry/a/blocks/lane/retained_blocks/00000000000000000001.norito",
-        ),
+        kura.store_root
+            .join("retired/lane_geometry/a/original-custody.norito"),
         vec![10; 15],
-    );
-    write(
-        kura.store_root.join("merge_ledger/retained.norito"),
-        vec![11; 17],
     );
     write(
         kura.lane_geometry_journal_path()
@@ -84,13 +44,12 @@ fn physical_initialization_observes_owned_trees_markers_and_all_fifteen_families
         vec![12; 19],
     );
     drop(write);
-    // Consensus stores own these files independently. They cannot inflate Kura's
-    // physical family or be mistaken for an uninstrumented Kura writer.
     let delegated = kura
-        .sumeragi_v2_storage_root()
+        .store_root
+        .join("sumeragi")
         .join("wal/transactions.index");
     std::fs::create_dir_all(delegated.parent().unwrap()).unwrap();
-    std::fs::write(&delegated, [12_u8; 101]).unwrap();
+    std::fs::write(&delegated, [12; 101]).unwrap();
     kura.reconcile_physical_resource_inventory().unwrap();
     assert_eq!(
         physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes,
@@ -99,12 +58,7 @@ fn physical_initialization_observes_owned_trees_markers_and_all_fifteen_families
     for family in PHYSICAL_RESOURCE_FAMILIES {
         let usage = physical_component(&kura, family);
         assert_eq!(usage.resident_associations, 0);
-        if !matches!(
-            family,
-            ResourceFamily::CanonicalIndex
-                | ResourceFamily::CanonicalHashes
-                | ResourceFamily::StorageBytes
-        ) {
+        if family != ResourceFamily::StorageBytes {
             assert!(usage.persisted_entries > 0, "{family:?}");
         }
     }
@@ -217,7 +171,7 @@ fn physical_reaudit_rejects_busy_resident_owner_and_real_writer_generation_cross
 }
 
 #[test]
-fn physical_initialization_rejects_deferred_unauthenticated_poisoned_and_recovery_pending_states() {
+fn physical_initialization_rejects_deferred_poisoned_and_recovery_pending_states() {
     let mut kura = Kura::blank_kura_for_testing();
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
@@ -226,14 +180,6 @@ fn physical_initialization_rejects_deferred_unauthenticated_poisoned_and_recover
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
         .auxiliary_history_deferred = false;
-    *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(ProvisionalSnapshotBootstrap {
-            hash_only_prefix_height: 1,
-            bootstrap_lineage_hash: None,
-            hash_journal_digest: None,
-        });
-    assert!(kura.reconcile_physical_resource_inventory().is_err());
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
     kura.canonical_storage_poisoned
         .store(true, Ordering::Release);
     assert!(kura.reconcile_physical_resource_inventory().is_err());
@@ -292,13 +238,11 @@ fn physical_initialization_checks_full_fastpq_policy_before_registering_any_fami
 #[test]
 fn physical_root_discovery_is_bounded_and_rejects_unresolved_reserved_residue() {
     let kura = Kura::blank_kura_for_testing();
-    let malformed = kura.store_root.join(format!(
-        "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}unresolved"
-    ));
+    let malformed = kura.store_root.join("lane_geometry_journal.unresolved");
     std::fs::write(&malformed, b"x").unwrap();
     assert!(kura.physical_resource_scope().is_err());
     std::fs::remove_file(malformed).unwrap();
-    for index in 0..=AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT {
+    for index in 0..=4_096 {
         std::fs::write(kura.store_root.join(format!("foreign-{index}")), []).unwrap();
     }
     assert!(kura.physical_resource_scope().is_err());
@@ -317,14 +261,15 @@ fn physical_writer_scope_uses_same_owned_roots_and_rejects_delegated_or_new_root
     for path in [
         kura.store_root.clone(),
         kura.store_root.join(STORE_ROOT_LOCK_FILE_NAME),
-        kura.sumeragi_v2_storage_root()
+        kura.store_root
+            .join("sumeragi")
             .join("wal/transactions.index"),
         kura.store_root.join("future-owner/blocks.data"),
         kura.store_root.join("new-marker.norito"),
-        kura.store_root.join("blocks/../sumeragi_v2/foreign.data"),
-        kura.store_root.join(format!(
-            "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-invalid"
-        )),
+        kura.store_root.join("blocks/../sumeragi/foreign.data"),
+        kura.store_root.join("autonomous_pending"),
+        kura.store_root.join("merge_ledger/canonical.log"),
+        kura.store_root.join("retired/merge_ledger/retained.log"),
     ] {
         assert!(
             !kura.physical_resource_path_is_owned(&path),
@@ -332,11 +277,7 @@ fn physical_writer_scope_uses_same_owned_roots_and_rejects_delegated_or_new_root
             path.display()
         );
     }
-    assert!(
-        kura.physical_resource_path_is_owned(&kura.store_root.join(format!(
-            "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}pending"
-        )))
-    );
+    assert!(!kura.physical_resource_path_is_owned(&kura.store_root.join("autonomous_pending")));
 }
 
 #[test]
@@ -362,52 +303,30 @@ fn physical_reaudit_rejects_replaced_live_kura_root_identity() {
 }
 
 #[test]
-fn native_publication_index_is_in_the_complete_physical_scope() {
-    let kura = Kura::blank_kura_for_testing();
-    kura.reconcile_physical_resource_inventory().unwrap();
-    let before_storage = physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes;
-    let before_evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
-    let namespace = kura.store_root.join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
-    std::fs::create_dir(&namespace).unwrap();
-    let digest = "a1".repeat(Hash::LENGTH);
-    let main = namespace.join(format!("00000000000000000001-{digest}.norito"));
-    let temporary = namespace.join(format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}A1b2C3"));
-    std::fs::write(&main, [1_u8; 13]).unwrap();
-    std::fs::write(&temporary, [2_u8; 17]).unwrap();
-    assert!(kura.physical_resource_path_is_owned(&main));
-    assert!(kura.physical_resource_path_is_owned(&temporary));
-    kura.reconcile_physical_resource_inventory().unwrap();
-    let evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
-    assert_eq!(
-        evidence.persisted_entries,
-        before_evidence.persisted_entries + 2
-    );
-    assert_eq!(evidence.index_bytes, before_evidence.index_bytes + 13);
-    assert_eq!(
-        evidence.temporary_index_bytes,
-        before_evidence.temporary_index_bytes + 17
-    );
-    assert_eq!(
-        physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes,
-        before_storage + 30
-    );
-    let unowned = namespace.join("unknown.norito");
-    std::fs::write(&unowned, b"unowned").unwrap();
-    assert!(kura.reconcile_physical_resource_inventory().is_err());
-    std::fs::remove_file(unowned).unwrap();
-    std::fs::remove_file(temporary).unwrap();
-    kura.reconcile_physical_resource_inventory().unwrap();
-    let evidence = physical_component(&kura, ResourceFamily::EvidenceKeyRecords);
-    assert_eq!(
-        evidence.persisted_entries,
-        before_evidence.persisted_entries + 1
-    );
-    assert_eq!(
-        evidence.temporary_index_bytes,
-        before_evidence.temporary_index_bytes
-    );
-    assert_eq!(
-        physical_component(&kura, ResourceFamily::StorageBytes).storage_bytes,
-        before_storage + 13
-    );
+fn retired_publication_namespaces_refuse_physical_registration_without_repair() {
+    for relative in [
+        "native_amx_publication_index",
+        "merge_ledger",
+        "retired/merge_ledger",
+    ] {
+        let kura = Kura::blank_kura_for_testing();
+        kura.reconcile_physical_resource_inventory().unwrap();
+        let namespace = kura.store_root.join(relative);
+        std::fs::create_dir_all(&namespace).unwrap();
+        let sentinel = namespace.join("original.norito");
+        std::fs::write(&sentinel, b"original obsolete bytes").unwrap();
+        assert!(!kura.physical_resource_path_is_owned(&sentinel));
+        assert!(kura.reconcile_physical_resource_inventory().is_err());
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            b"original obsolete bytes"
+        );
+        for family in PHYSICAL_RESOURCE_FAMILIES {
+            assert!(
+                kura.resource_inventory
+                    .component_usage_for_tests(family)
+                    .is_err()
+            );
+        }
+    }
 }

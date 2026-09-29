@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     api::{HaltReason, LocalFault},
-    crypto::{AttestationVerifier, Crypto, verify_qc},
+    crypto::{AttestationVerifier, Crypto},
     message::{self, Qc, TimeoutCert, VoteKind},
     types::{Committee, EpochConfig, EpochId, Hash32, PublicKey, ValidatorIndex},
 };
@@ -146,62 +146,42 @@ impl SafetyRecord {
     // timeout carrying a QC above its view; a justify that is not for `view − 1`) was not written
     // by an honest core, so it is treated as corrupt (halt) rather than trusted (Appendix E, E17).
     fn check_consistency(&self) -> Result<(), RecordError> {
-        let fail = RecordError::Inconsistent;
-        let limits_ok = self.key.is_well_formed()
-            && message::check_opt_qc(self.parent_commit_qc.as_ref()).is_ok()
-            && message::check_opt_qc(self.lock.as_ref()).is_ok()
-            && self
-                .high_tc
-                .as_ref()
-                .is_none_or(|tc| message::check_tc(tc).is_ok())
-            && self
-                .timeout
-                .as_ref()
-                .is_none_or(|t| message::check_opt_qc(t.high_pqc.as_ref()).is_ok())
-            && self.proposal.as_ref().is_none_or(|p| {
-                p.justify
-                    .as_ref()
-                    .is_none_or(|tc| message::check_tc(tc).is_ok())
-            });
-        if !limits_ok {
-            return Err(fail);
-        }
         let prepare_qc_here = |qc: &Qc| {
             qc.kind == VoteKind::Prepare
                 && qc.height == self.height
                 && qc.instance == self.instance
                 && qc.epoch == self.epoch
+                && message::check_qc(qc).is_ok()
         };
         let tc_here = |tc: &TimeoutCert| {
-            tc.height == self.height && tc.instance == self.instance && tc.epoch == self.epoch
+            tc.height == self.height
+                && tc.instance == self.instance
+                && tc.epoch == self.epoch
+                && message::check_tc(tc).is_ok()
         };
-        if let Some(qc) = &self.parent_commit_qc
-            && (qc.kind != VoteKind::Commit
-                || qc.instance != self.instance
-                || Some(qc.height) != self.height.checked_sub(1))
-        {
-            return Err(fail);
-        }
-        if self.lock.as_ref().is_some_and(|qc| !prepare_qc_here(qc)) {
-            return Err(fail);
-        }
-        if self.high_tc.as_ref().is_some_and(|tc| !tc_here(tc)) {
-            return Err(fail);
-        }
-        if let Some(timeout) = &self.timeout
-            && let Some(qc) = &timeout.high_pqc
-            && (!prepare_qc_here(qc) || qc.view > timeout.view)
-        {
-            return Err(fail);
-        }
-        if let Some(proposal) = &self.proposal {
-            match (&proposal.justify, proposal.view.checked_sub(1)) {
-                (None, None) => {}
-                (Some(tc), Some(prev)) if tc_here(tc) && tc.view == prev => {}
-                _ => return Err(fail),
-            }
-        }
-        Ok(())
+        let valid = self.key.is_well_formed()
+            && self.parent_commit_qc.as_ref().is_none_or(|qc| {
+                qc.kind == VoteKind::Commit
+                    && qc.instance == self.instance
+                    && Some(qc.height) == self.height.checked_sub(1)
+                    && message::check_qc(qc).is_ok()
+            })
+            && self.lock.as_ref().is_none_or(prepare_qc_here)
+            && self.high_tc.as_ref().is_none_or(tc_here)
+            && self.timeout.as_ref().is_none_or(|timeout| {
+                timeout
+                    .high_pqc
+                    .as_ref()
+                    .is_none_or(|qc| prepare_qc_here(qc) && qc.view <= timeout.view)
+            })
+            && self.proposal.as_ref().is_none_or(|proposal| {
+                match (&proposal.justify, proposal.view.checked_sub(1)) {
+                    (None, None) => true,
+                    (Some(tc), Some(prev)) => tc_here(tc) && tc.view == prev,
+                    _ => false,
+                }
+            });
+        valid.then_some(()).ok_or(RecordError::Inconsistent)
     }
 
     /// `timeout_view` restored from the record (R4).
@@ -398,20 +378,17 @@ pub fn check_recommit<'a>(
         && epoch_next.contains(qc.height)
         && (qc.height != epoch_next.last_height || qc.attest)
         && (cfg!(sumeragi_mutation = "MS32a")
-            || verify_qc(
+            || crate::crypto::Verifier::new(
                 crypto,
-                verifier,
                 &record.instance,
                 &epoch_next.id,
                 committee_next,
-                qc,
             )
+            .verify_qc(verifier, qc)
             .is_ok());
-    if valid {
-        Ok(qc)
-    } else {
-        Err(HaltReason::SafetyRecordInconsistent)
-    }
+    valid
+        .then_some(qc)
+        .ok_or(HaltReason::SafetyRecordInconsistent)
 }
 
 /// The R2 anchoring threshold `2f + 1` for a committee with fault threshold `f` (§1.2, §7.4 R2).

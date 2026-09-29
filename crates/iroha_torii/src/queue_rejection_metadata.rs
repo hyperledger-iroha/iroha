@@ -21,10 +21,7 @@ impl Error {
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            queue::Error::PlanJournalDurabilityRejected { .. }
-            | queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            queue::Error::AdmissionInvariant { .. } => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
     fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {
@@ -98,13 +95,9 @@ impl Error {
                 "queue_nexus_fee_config_invalid",
                 "node Nexus fee configuration is invalid",
             ),
-            queue::Error::PlanJournalDurabilityRejected { .. } => (
-                "queue_plan_journal_unavailable",
-                "transaction queue could not establish the required durability boundary",
-            ),
-            queue::Error::PlanJournalDurabilityIndeterminate { .. } => (
-                "queue_plan_journal_outcome_unknown",
-                "transaction admission outcome is unknown; reconcile by exact entrypoint hash before retrying",
+            queue::Error::AdmissionInvariant { .. } => (
+                "queue_admission_invariant",
+                "transaction queue admission requires recovery",
             ),
         }
     }
@@ -131,33 +124,6 @@ impl Error {
             }),
             _ => None,
         };
-        let (entrypoint_hash, tx_hash, hint) = match err {
-            queue::Error::PlanJournalDurabilityIndeterminate {
-                entrypoint_hash,
-                signed_transaction_hash,
-                ..
-            } => {
-                let hint = if signed_transaction_hash.is_some() {
-                    "Reconcile this exact entrypoint hash, then query status by the signed transaction hash or resubmit byte-identical signed bytes; do not create a replacement transaction until the outcome is known."
-                } else {
-                    "Reconcile this exact entrypoint hash; do not create a replacement transaction until the outcome is known."
-                };
-                (
-                    Some(entrypoint_hash.to_string()),
-                    signed_transaction_hash.as_ref().map(ToString::to_string),
-                    Some(hint.to_owned()),
-                )
-            }
-            queue::Error::PlanJournalDurabilityRejected { .. } => (
-                None,
-                None,
-                Some(
-                    "The transaction was not admitted; restore queue-plan journal health before retrying."
-                        .to_owned(),
-                ),
-            ),
-            _ => (None, None, None),
-        };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
             queue: backpressure.map(|backpressure| {
@@ -175,9 +141,6 @@ impl Error {
             }),
             retry_after_seconds,
             fee,
-            entrypoint_hash,
-            tx_hash,
-            hint,
             ..Default::default()
         })
     }
@@ -264,23 +227,9 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
                 code.as_str()
             ),
         ),
-        queue::Error::PlanJournalDurabilityRejected { reason } => (
-            "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
-            format!("transaction queue did not durably admit the transaction: {reason}"),
-        ),
-        queue::Error::PlanJournalDurabilityIndeterminate {
-            entrypoint_hash,
-            signed_transaction_hash,
-            reason,
-        } => (
-            "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
-            format!(
-                "transaction admission outcome is unknown for entrypoint {entrypoint_hash}{}; reconcile that exact entrypoint before retrying: {reason}",
-                signed_transaction_hash
-                    .as_ref()
-                    .map(|hash| format!(" (signed transaction {hash})"))
-                    .unwrap_or_default()
-            ),
+        queue::Error::AdmissionInvariant { reason } => (
+            "PRTRY:QUEUE_ADMISSION_INVARIANT",
+            format!("transaction queue admission requires recovery: {reason}"),
         ),
     }
 }

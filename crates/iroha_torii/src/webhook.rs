@@ -2628,9 +2628,7 @@ fn pipeline_webhook_event_fields(
                 norito::json::Value::from(event.header.height().get()),
             );
         }
-        PipelineEventBox::Warning(_)
-        | PipelineEventBox::Merge(_)
-        | PipelineEventBox::Witness(_) => {}
+        PipelineEventBox::Warning(_) | PipelineEventBox::Witness(_) => {}
     }
     fields
 }

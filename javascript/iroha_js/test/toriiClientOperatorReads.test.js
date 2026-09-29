@@ -35,8 +35,7 @@ const OPERATOR_READS = [
   ["/v1/pipeline/preflight", (client) => client.getPipelinePreflight()],
   ["/v1/pipeline/recovery/42", (client) => client.getPipelineRecovery(42)],
   ["/v1/sumeragi/status", (client) => client.getSumeragiStatus()],
-  ["/v1/sumeragi/diagnostics", (client) => client.getSumeragiDiagnostics()],
-  ["/v1/sumeragi/qc", (client) => client.getSumeragiQc()],
+  ["/v1/sumeragi/status", (client) => client.getSumeragiStatusTyped()],
   ["/v1/sumeragi/bls-keys", (client) => client.getSumeragiBlsKeys()],
   ["/v1/sumeragi/leader", (client) => client.getSumeragiLeader()],
   ["/v1/sumeragi/params", (client) => client.getSumeragiParams()],
@@ -130,14 +129,14 @@ test("Sumeragi evidence signs the final query target exactly once", async () => 
   await assert.rejects(() => client.listSumeragiEvidence({
     limit: 2,
     offset: 1,
-    kind: "SumeragiV2Equivocation",
+    kind: "NativeSumeragiEvidence",
   }));
 
   assert.equal(calls.length, 1);
   const { url, init } = calls[0];
   assert.equal(
     url,
-    `${BASE_URL}/v1/sumeragi/evidence?limit=2&offset=1&kind=SumeragiV2Equivocation`,
+    `${BASE_URL}/v1/sumeragi/evidence?limit=2&offset=1&kind=NativeSumeragiEvidence`,
   );
   assert.equal(init.method, "GET");
   assert.equal(init.body, undefined);

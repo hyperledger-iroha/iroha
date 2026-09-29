@@ -9,13 +9,13 @@ use mv::{BlockAcquisition, BlockMode, BlockRetirement};
 // One declaration generates pending/completed Cell phases and their retirement.
 // No second World inventory or reconstructed payload generation is introduced.
 macro_rules! runtime_cells {
-    ($($field:ident: $value:ty),+ $(,)?) => {
+    ($($field:ident: $value:ty => $charge:ty, $acquire:path),+ $(,)?) => {
         struct PendingCells<'state> {
-            $($field: Option<mv::cell::BlockAcquisitionSlot<'state, $value>>,)+
+            $($field: Option<mv::cell::BlockAcquisitionSlot<'state, $value, $charge>>,)+
         }
 
         struct AcquiredCells<'state> {
-            $($field: Option<CellBlock<'state, $value>>,)+
+            $($field: Option<CellBlock<'state, $value, $charge>>,)+
         }
 
         enum CellPhase<'state> {
@@ -36,7 +36,7 @@ macro_rules! runtime_cells {
                 // All four original tokens exist before World can acquire its
                 // first writer. A partial allocation refusal has no physical locks.
                 let pending = PendingCells {
-                    $($field: Some(crate::state::world_acquisition::original_cell(&state.$field, budget, &mut parent)?),)+
+                    $($field: Some($acquire(&state.$field, budget, &mut parent)?),)+
                 };
                 assert_eq!(parent.remaining_bytes(), 0, "complete State Cell successor inventory");
                 Ok(Self::Pending(pending))
@@ -74,7 +74,7 @@ macro_rules! runtime_cells {
         pub(in crate::state) struct AcquiredRuntimeBlockFields<'state> {
             pub(in crate::state) world: WorldBlock<'state>,
             pub(in crate::state) transactions: TransactionsBlock<'state>,
-            $(pub(in crate::state) $field: CellBlock<'state, $value>,)+
+            $(pub(in crate::state) $field: CellBlock<'state, $value, $charge>,)+
             pub(in crate::state) projection: CanonicalRuntimeProjection,
             pub(in crate::state) block_hashes: BlockHashesBlock<'state>,
             pub(in crate::state) da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,
@@ -130,9 +130,10 @@ macro_rules! runtime_cells {
 }
 
 runtime_cells! {
-    commit_topology: Vec<PeerId>,
-    prev_commit_topology: Vec<PeerId>,
-    canonical_runtime: SnapshotNexusRuntime,
+    commit_topology: Vec<PeerId> => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
+    prev_commit_topology: Vec<PeerId> => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
+    canonical_runtime: SnapshotNexusRuntime => concread::ebrcell::Untracked, crate::state::world_acquisition::original_cell,
+    native_execution_tip: Option<NativeExecutionTip> => mv::allocation::AllocationCharge, crate::state::native_execution_tip::original_cell,
 }
 
 /// Complete original acquisition, armed throughout State input preparation.

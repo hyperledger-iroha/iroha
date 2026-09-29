@@ -28,7 +28,6 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
     sns::{NameControllerV1, NameRecordV1},
-    transaction::TransactionAdmissionIntent,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -61,6 +60,7 @@ const ONBOARDING_WRONG_SCOPE_API_TOKEN: &str = "torii-onboarding-wrong-scope-tok
 const ONBOARDING_SIGNER_PATH: &str = "/runtime-only/onboarding-test-signer.key";
 static ONBOARDING_TORII_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct OnboardingTestContext {
+    native_chain: parking_lot::Mutex<iroha_core::sumeragi::test_chain::CertifiedTestChain>,
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -236,20 +236,6 @@ fn build_onboarding_test_context_at(
         })]),
     );
     let chain_id = iroha_model_base::chain::ChainId::from("onboarding-test-chain");
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query,
-        chain_id.clone(),
-        network_id,
-    ));
-    let nexus = state.nexus_snapshot();
-    let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
-        &nexus.lane_catalog,
-        &nexus.governance,
-        &nexus.registry,
-    ));
-    state.install_lane_manifests_for_testing(&lane_manifests);
     let mut genesis_instructions: Vec<iroha_data_model::prelude::InstructionBox> =
         vec![Log::new(Level::INFO, "onboarding anchor".to_owned()).into()];
     for key_pair in &validator_keys {
@@ -288,13 +274,24 @@ fn build_onboarding_test_context_at(
             .into(),
         );
     }
-    fixtures::commit_genesis_fixture(
-        &state,
-        &authority_id,
+    let chain = fixtures::commit_genesis_fixture(
+        world,
+        chain_id.clone(),
         &authority_key_pair,
         genesis_instructions,
+        Some(validator_keys),
         iroha_primitives::time::TimeSource::new_fixed(anchor_time),
     );
+    let state = chain.state().clone();
+    let kura = chain.kura().clone();
+    let network_id = chain.network_id();
+    let nexus = state.nexus_snapshot();
+    let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &nexus.registry,
+    ));
+    state.install_lane_manifests_for_testing(&lane_manifests);
     let committee = state
         .resolve_lane_committee(LaneAuthorityRoute::new(
             LaneId::SINGLE,
@@ -354,6 +351,7 @@ fn build_onboarding_test_context_at(
     );
     drop(init_guard);
     OnboardingTestContext {
+        native_chain: parking_lot::Mutex::new(chain),
         app: torii.router(),
         state,
         queue,
@@ -845,7 +843,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
 }
 
 #[tokio::test]
-async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admission() {
+async fn sponsored_onboarding_prepared_submit_is_idempotent_until_certified_execution() {
     let context = build_onboarding_test_context();
     let target_key_pair =
         checked_key_pair(0xD3, Algorithm::Ed25519, "derive onboarding target fixture");
@@ -896,10 +894,9 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admis
         &typed_prepared.fee_payment,
     )
     .expect("prepared envelope authenticates its exact signed transaction");
-    assert_eq!(
-        signed.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    signed
+        .verify_signature()
+        .expect("exact current transaction signature");
     assert_eq!(
         context.queue.active_len(),
         0,
@@ -918,44 +915,28 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admis
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         submitted.status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::ACCEPTED,
         "{}",
         submitted.raw_body
     );
-    assert!(
-        submitted
-            .payload
-            .as_object()
-            .and_then(|body| body.get("outcome"))
-            .is_none(),
-        "a peer without durable admission must not claim Pending"
-    );
-    #[cfg(feature = "connect")]
-    let expected_code = "queue_plan_journal_unavailable";
-    #[cfg(not(feature = "connect"))]
-    let expected_code = "queue_plan_synced_transport_unavailable";
-    assert_eq!(response_field(&submitted.payload, "code"), expected_code);
-    assert_eq!(context.queue.active_len(), 0);
-
+    assert_eq!(response_field(&submitted.payload, "outcome"), "Pending");
+    assert_eq!(context.queue.active_len(), 1);
     let response_loss_replay =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         response_loss_replay.status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::ACCEPTED,
         "{}",
         response_loss_replay.raw_body
     );
-    assert!(
-        response_loss_replay
-            .payload
-            .as_object()
-            .and_then(|body| body.get("outcome"))
-            .is_none()
+    assert_eq!(
+        response_field(&response_loss_replay.payload, "outcome"),
+        "Pending"
     );
     assert_eq!(
         context.queue.active_len(),
-        0,
-        "retry without durable admission must not create local queue custody"
+        1,
+        "exact retry preserves one local input"
     );
     let wrong_scope_replay = send_onboarding_request_with_token(
         &context.app,
@@ -970,7 +951,7 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admis
         "a known hash must not bypass receipt credential scope: {}",
         wrong_scope_replay.raw_body
     );
-    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.queue.active_len(), 1);
     let still_preparable = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
@@ -988,7 +969,7 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admis
         "iroha.prepared-transaction.v1"
     );
     assert_eq!(disposition_kind(&still_preparable.payload), "create");
-    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.queue.active_len(), 1);
     assert_secret_free(&still_preparable);
 
     let current_state = send_onboarding_request(
@@ -1028,11 +1009,21 @@ async fn sponsored_onboarding_prepared_submit_fails_closed_without_durable_admis
     assert!(!current_state.account_exists);
     assert_eq!(alias_target, None);
     assert_eq!(context.state.view().height(), 1);
+    assert_eq!(
+        iroha_torii::test_utils::apply_queued_in_one_block(
+            &mut context.native_chain.lock(),
+            &context.queue
+        ),
+        1
+    );
+    assert_eq!(context.state.view().height(), 2);
+    assert!(context.state.view().world().account(&target_id).is_ok());
+    assert_eq!(context.queue.active_len(), 0);
     context.shutdown().await;
 }
 
 #[tokio::test]
-async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs_quorum() {
+async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enters_native_queue() {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
@@ -1103,11 +1094,11 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         submitted.status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::ACCEPTED,
         "{}",
         submitted.raw_body
     );
-    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.queue.active_len(), 1);
     assert_eq!(context.state.view().height(), 1);
     assert!(context.state.view().world().account(&target).is_err());
     assert_secret_free(&prepared);
@@ -1337,14 +1328,12 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     let (known, known_transaction) = historical(0);
     let (unknown, unknown_transaction) = historical(1);
     assert_ne!(known.transaction_hash_hex, unknown.transaction_hash_hex);
-    assert_eq!(
-        known_transaction.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
-    assert_eq!(
-        unknown_transaction.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    known_transaction
+        .verify_signature()
+        .expect("exact current transaction signature");
+    unknown_transaction
+        .verify_signature()
+        .expect("exact current transaction signature");
     let known = norito::json::to_value(&known).expect("known envelope JSON");
     let unknown = norito::json::to_value(&unknown).expect("unknown envelope JSON");
     for expired in [known, unknown] {
@@ -1451,10 +1440,9 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
         &prepared.fee_payment,
     )
     .expect("racing envelope authenticates its exact transaction");
-    assert_eq!(
-        transaction.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    transaction
+        .verify_signature()
+        .expect("exact current transaction signature");
     install_conflicting_onboarding_state_for_test(&context, alias, &conflicting_target);
     assert!(
         context

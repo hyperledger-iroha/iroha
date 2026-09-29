@@ -1252,6 +1252,8 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
         [
             sys.executable,
             str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
+            "--trusted-cuda-key-sha256",
+            "9" * 64,
             "--version",
             version,
             "--source-commit",
@@ -1304,6 +1306,7 @@ def test_release_pipeline_dry_run_uses_closed_oci_image_contract(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+    assert result.stdout.count("--trusted-cuda-key-sha256") == 2
     assert "-linux-amd64-image.oci.tar" in result.stdout
     assert "-linux-arm64-image.oci.tar" in result.stdout
     assert "oci-archive" in result.stdout
@@ -1335,7 +1338,9 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
     command = [
         sys.executable,
         str(REPO_ROOT / "scripts" / "run_release_pipeline.py"),
-        "--version",
+        "--trusted-cuda-key-sha256",
+            "9" * 64,
+            "--version",
         version,
         "--source-commit",
         commit,
@@ -1374,6 +1379,7 @@ def test_release_pipeline_dry_run_uses_complete_bundle_target_matrix(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+    assert result.stdout.count("--trusted-cuda-key-sha256") == 3
     assert result.stdout.count("--prebuilt-bin-dir") == 5
     for target in targets:
         assert target in result.stdout

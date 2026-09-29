@@ -572,8 +572,8 @@ fn read_finality_chain(
 
 fn read_genesis_dkg_finality_chain(
     client: &Client,
-    genesis: &GenesisBlock,
-    chain_id: &str,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     end: u64,
 ) -> Result<NativeFinalityJournal> {
     ensure!(
@@ -1626,8 +1626,6 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             5,
             |height| {
                 let admin = admin.clone();
-                let genesis = genesis.clone();
-                let chain_id = chain_id.clone();
                 async move {
                     advance_exact_genesis_phase(network_ref, height).await?;
                     let observed = spawn_blocking({

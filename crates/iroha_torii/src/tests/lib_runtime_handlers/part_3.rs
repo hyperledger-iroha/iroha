@@ -205,7 +205,7 @@ async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
         .await
         .expect("fetch upstream response");
     assert_eq!(response.content_length(), Some(12));
-    let error = match super::reqwest_response_to_torii_proxy_snapshot(response, 4, false).await {
+    let error = match super::reqwest_response_to_torii_proxy_snapshot(response, 4).await {
         Ok(_) => panic!("expected capped response error"),
         Err(error) => error,
     };
@@ -242,7 +242,7 @@ async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
     let response = reqwest::get(format!("http://{addr}/exact"))
         .await
         .expect("fetch upstream response");
-    let snapshot = super::reqwest_response_to_torii_proxy_snapshot(response, 4, false)
+    let snapshot = super::reqwest_response_to_torii_proxy_snapshot(response, 4)
         .await
         .expect("exact-limit response should be accepted");
     upstream_task.abort();
@@ -257,7 +257,7 @@ async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
 }
 #[cfg(feature = "connect")]
 #[test]
-fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
+fn torii_proxy_response_body_limit_caps_hosted_http_and_submission_responses() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.soracloud_public_max_response_bytes = 0;
@@ -291,8 +291,17 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
     let query_envelope =
         QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
             .expect("test query memory geometry should fit");
-    let (_strict_app, strict_request) =
-        incoming_proxy_submit_fixture(0xaa, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let key = checked_torii_test_ed25519_keypair(0xaa, "native proxy response budget");
+    let transaction = signed_log_transaction_for_test(
+        *app.state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        "native submission response budget",
+        &key,
+    );
+    let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction: TransactionEntrypoint::External(transaction),
+        expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
+    };
     assert_eq!(
         super::torii_proxy_response_body_limit(app.as_ref(), &hosted_request),
         1,
@@ -314,9 +323,9 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
         "a final fanout snapshot must fit the admitted final-body phase"
     );
     assert_eq!(
-        super::torii_proxy_response_body_limit(app.as_ref(), &strict_request.request),
-        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-        "strict durable-admission receipts retain a bounded protocol budget even when the public transaction cap is smaller"
+        super::torii_proxy_response_body_limit(app.as_ref(), &submit_request),
+        TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1,
+        "native submission responses retain a bounded protocol budget even when the public transaction cap is smaller"
     );
 }
 #[cfg(feature = "connect")]
@@ -428,8 +437,6 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
     let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
         transaction,
         expected_plan,
-        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        admission_binding: None,
     };
     assert_eq!(
         super::torii_proxy_attempt_timeout(&submit_request),
@@ -598,26 +605,20 @@ fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
         ));
 }
 
-
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread")]
 async fn certified_transaction_batch_invalid_later_signature_does_not_admit_prefix() {
-    let mut app = mk_app_state_for_tests();
-    let key = checked_torii_test_ed25519_keypair(0xb4, "invalid later batch signer");
-    let authority = AccountId::new(key.public_key().clone());
-    let tx1 = signed_queue_plan_log_for_test(
-        *app.state.network_id_ref(),
-        authority.clone(),
-        "valid prefix",
+    let (app, key, _, _) = lifecycle_ordinary_fixture(true);
+    let tx1 = lifecycle_ordinary_transaction(
+        &app,
         &key,
+        vec![Log::new(Level::INFO, "valid prefix".into()).into()],
     );
-    let valid_second = signed_queue_plan_log_for_test(
-        *app.state.network_id_ref(),
-        authority,
-        "invalid later",
+    let valid_second = lifecycle_ordinary_transaction(
+        &app,
         &key,
+        vec![Log::new(Level::INFO, "invalid later".into()).into()],
     );
-    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &valid_second]).await;
     let tx2 = transaction_with_invalid_signature_for_test(valid_second);
     let error = super::handler_post_transactions_batch(
         State(app.clone()),
@@ -638,8 +639,6 @@ async fn certified_transaction_batch_invalid_later_signature_does_not_admit_pref
         Some(SignatureRejectionCode::InvalidSignature.as_str())
     );
     assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(fixture.peer.queue.active_len(), 0);
-    fixture.finish().await;
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 #[tokio::test]
@@ -998,7 +997,6 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
         route,
         request,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(50),
         move |candidate, _request| {
             let attempts = attempts_ref.clone();
             let first_peer_id = first_peer_id_for_closure.clone();
@@ -1039,23 +1037,6 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
         Some("signed_query_outcome_unknown")
     );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[cfg(all(feature = "connect", feature = "app_api"))]
 #[tokio::test]
@@ -1117,8 +1098,8 @@ async fn prepared_current_admission_rejects_actual_multiroute_payload_before_cus
 
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn prepared_current_admission_retains_exact_durable_pending_identity() {
-    let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
+async fn prepared_current_admission_retains_exact_local_pending_identity() {
+    let (app, key, _, _) = lifecycle_ordinary_fixture(true);
     let transaction = lifecycle_ordinary_transaction(
         &app,
         &key,
@@ -1135,17 +1116,17 @@ async fn prepared_current_admission_retains_exact_durable_pending_identity() {
             .expect("ordinary prepared admission");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
-    let retained = std::fs::read(journal.path().join("queue.norito")).unwrap();
+    let retained = lifecycle_pending_wire(&app);
     assert!(
         !retained.is_empty(),
-        "accepted preparation requires durable custody"
+        "accepted preparation retains local pending custody"
     );
     assert_eq!(
         routing::prepared_submit_outcome(&app, &transaction).unwrap(),
         Some("Pending")
     );
     assert_eq!(
-        std::fs::read(journal.path().join("queue.norito")).unwrap(),
+        lifecycle_pending_wire(&app),
         retained,
         "read-only recovery must not append another transaction"
     );
@@ -1156,18 +1137,98 @@ async fn prepared_current_admission_retains_exact_durable_pending_identity() {
         queued[0].external().unwrap().encode_wire_v1().unwrap(),
         wire
     );
-    let retired = TransactionBuilder::from_payload(transaction.payload().clone())
-        .unwrap()
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-        .sign(key.private_key());
-    assert!(
-        routing::submit_current_prepared_transaction(&app, retired, &app.telemetry)
-            .await
-            .is_err()
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn current_pending_identity_never_bypasses_signature_or_network_authentication() {
+    let (app, key, _, _) = lifecycle_ordinary_fixture(true);
+    let transaction = lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![Log::new(Level::INFO, "native pending authentication".into()).into()],
     );
+    let accepted = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let original = lifecycle_pending_wire(&app);
+    assert_eq!(original.len(), 1);
+    let forged = transaction_with_invalid_signature_for_test(transaction.clone());
     assert_eq!(
-        app.queue.active_len(),
-        1,
-        "retired intent never enters current prepared custody"
+        forged.hash(),
+        transaction.hash(),
+        "a matching payload hash cannot authenticate its signature"
     );
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &forged)
+        .await
+        .expect_err("pending hash cannot bypass the outer signature");
+    assert!(matches!(
+        error,
+        Error::AcceptTransaction(AcceptTransactionFail::SignatureVerification(_))
+    ));
+    let foreign = TransactionBuilder::new(
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"foreign native ingress genesis",
+        ))),
+        AccountId::new(key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "foreign network".into())])
+    .sign(key.private_key());
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &foreign)
+        .await
+        .expect_err("independently foreign network input must fail");
+    assert!(matches!(
+        error,
+        Error::AcceptTransaction(AcceptTransactionFail::TransactionDomainMismatch(_))
+    ));
+    assert_eq!(lifecycle_pending_wire(&app), original);
+    assert_eq!(app.queue.active_len(), 1);
+    assert!(
+        !app.state
+            .has_committed_entrypoint(transaction.hash_as_entrypoint())
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn current_native_ingress_revalidates_expiry_and_current_signing_policy() {
+    let (app, key, _, _) = lifecycle_ordinary_fixture(true);
+    let transaction = lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![Log::new(Level::INFO, "native policy admission".into()).into()],
+    );
+    let accepted = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let original = lifecycle_pending_wire(&app);
+    let mut builder = TransactionBuilder::from_payload(transaction.payload().clone()).unwrap();
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_secs(1));
+    let expired = builder.sign(key.private_key());
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &expired)
+        .await
+        .expect_err("expired input cannot acquire fresh custody");
+    assert!(matches!(
+        error,
+        Error::AcceptTransaction(AcceptTransactionFail::TransactionExpired { .. })
+    ));
+    let mut crypto = app.state.crypto().as_ref().clone();
+    crypto
+        .allowed_signing
+        .retain(|algorithm| *algorithm != Algorithm::Ed25519);
+    app.state.set_crypto(crypto);
+    let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+        .await
+        .expect_err("pending identity cannot bypass the current signing policy");
+    let Error::AcceptTransaction(AcceptTransactionFail::SignatureVerification(error)) = error
+    else {
+        panic!("expected current signing-policy rejection");
+    };
+    assert_eq!(error.code(), SignatureRejectionCode::AlgorithmNotPermitted);
+    assert_eq!(lifecycle_pending_wire(&app), original);
+    assert_eq!(app.queue.active_len(), 1);
 }

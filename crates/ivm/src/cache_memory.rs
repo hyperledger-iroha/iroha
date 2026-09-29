@@ -1031,7 +1031,6 @@ impl<T> OwnedVec<T> {
         Ok(copied)
     }
 
-    #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.values.capacity()
     }

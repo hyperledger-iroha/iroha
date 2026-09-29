@@ -621,9 +621,12 @@ impl Sandbox {
                 .unpack(|_| {})
                 .into()
         };
+        let (state, recording) = ValidBlock::start_component_execution(&block, &self.state)
+            .expect("sandbox original execution owner");
         SandboxBlock {
-            state: self.state.block(block.header()),
+            state,
             block: Some(block),
+            recording: Some(recording),
         }
     }
 }
@@ -636,6 +639,7 @@ impl SandboxBlock<'_> {
         let valid = ValidBlock::validate_unchecked(
             core::mem::take(&mut self.block).unwrap(),
             &mut self.state,
+            self.recording.take().expect("original execution recorder"),
         )
         .unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});

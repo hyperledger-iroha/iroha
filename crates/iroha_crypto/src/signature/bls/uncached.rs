@@ -8,7 +8,7 @@ use group::prime::PrimeCurveAffine as _;
 
 /// The two existing Iroha BLS public-key/signature orientations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Orientation {
+pub(crate) enum Orientation {
     /// Public key in G1 and signature in G2.
     Normal,
     /// Public key in G2 and signature in G1.
@@ -17,7 +17,7 @@ pub(super) enum Orientation {
 
 impl Orientation {
     /// Select only an existing BLS algorithm; this is not backend policy.
-    pub(super) const fn for_algorithm(algorithm: Algorithm) -> Option<Self> {
+    pub(crate) const fn for_algorithm(algorithm: Algorithm) -> Option<Self> {
         match algorithm {
             Algorithm::BlsNormal => Some(Self::Normal),
             Algorithm::BlsSmall => Some(Self::Small),
@@ -35,7 +35,7 @@ impl Orientation {
 
 /// Unformatted failures from canonical parsing or the signature relation.
 #[derive(Debug)]
-pub(super) enum Rejection {
+pub(crate) enum Rejection {
     /// Exact deterministic canonical input failure.
     Parse(canonical::Failure),
     /// Canonical inputs fail the relation, or generic signature geometry is invalid.
@@ -44,7 +44,7 @@ pub(super) enum Rejection {
 
 impl Rejection {
     /// Materialize the existing ordinary API error outside the fixed core.
-    pub(super) fn into_error(self) -> Error {
+    pub(crate) fn into_error(self) -> Error {
         match self {
             Self::Parse(failure) => failure.into_parse_error().into(),
             Self::Verification => Error::BadSignature,
@@ -140,7 +140,7 @@ pub(super) fn prepare_facade(
 }
 
 /// Verify the generic public facade with no key or positive-result cache.
-pub(super) fn verify_facade(
+pub(crate) fn verify_facade(
     orientation: Orientation,
     key: &[u8],
     proof: &[u8],

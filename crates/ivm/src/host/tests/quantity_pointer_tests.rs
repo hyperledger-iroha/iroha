@@ -242,7 +242,9 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
             "{label}"
         );
         assert_eq!(
-            vm.memory.read_set(),
+            vm.memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")[..],
             vec![crate::memory::AccessRange {
                 addr: pointer,
                 len: 7,
@@ -276,7 +278,10 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         Err(VMError::NoritoInvalid)
     );
     assert!(
-        vm.memory.read_set().is_empty(),
+        vm.memory
+            .try_read_log_snapshot()
+            .expect("allocate read-log snapshot")
+            .is_empty(),
         "header-only preparation must reject the oversized frame before reading its payload"
     );
     assert!(
@@ -291,7 +296,9 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         Err(VMError::NoritoInvalid)
     );
     assert_eq!(
-        vm.memory.read_set(),
+        vm.memory
+            .try_read_log_snapshot()
+            .expect("allocate read-log snapshot")[..],
         vec![crate::memory::AccessRange {
             addr: quantity_ptr,
             len: 7,
@@ -325,7 +332,9 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         Err(VMError::NoritoInvalid)
     );
     assert_eq!(
-        vm.memory.read_set(),
+        vm.memory
+            .try_read_log_snapshot()
+            .expect("allocate read-log snapshot")[..],
         vec![crate::memory::AccessRange {
             addr: quantity_ptr,
             len: 7,

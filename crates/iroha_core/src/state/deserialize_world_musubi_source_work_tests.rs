@@ -59,7 +59,12 @@ fn complete_cut_accepts_exact_bounds_and_refuses_each_short_dimension() {
     let before = json::to_json(&world).unwrap();
     let plan = admit(&world.view(), allowance()).unwrap();
     assert_eq!(plan.table_rows, 18);
-    assert_eq!(plan.operations, 6);
+    assert_eq!(plan.operations, 8);
+    assert_eq!(
+        plan.occurrences[Operation::NamespaceScratchPlan as usize],
+        2
+    );
+    assert_eq!(plan.nfc_scratch_bytes, 0);
     assert_eq!(plan.signatures, 0);
     let exact = measured(&plan);
     let budget = AllocationBudget::new(1_000_000);
@@ -174,7 +179,7 @@ fn source_work_refusal_precedes_validation_but_sufficient_work_preserves_rejecti
     assert_eq!(budget.peak_reserved_bytes(), 0);
     let direct = musubi_universal::validate_musubi_universal_projection_cut(
         &world.view(),
-        "capture",
+        ProjectionCut::Capture,
         &budget,
     )
     .unwrap_err();
@@ -185,7 +190,7 @@ fn source_work_refusal_precedes_validation_but_sufficient_work_preserves_rejecti
     };
     assert_eq!(actual.to_string(), direct.to_string());
     assert!(
-        matches!(&actual, ExecutionAttemptError::Rejected(json::Error::InvalidField { field, .. })
+        matches!(&actual.clone().map_rejection(ProjectionRejection::into_json), ExecutionAttemptError::Rejected(json::Error::InvalidField { field, .. })
         if field == "world.musubi_resolver_index"),
         "{actual:?}"
     );
@@ -317,4 +322,161 @@ fn fixed_key_evidence_index_population_is_admitted_before_point_lookups() {
         }))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
+}
+
+#[test]
+fn live_model_rejection_keeps_static_reason_before_original_pool_admission() {
+    let (mut world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+    let mut archive = world
+        .musubi_archives
+        .view()
+        .get(&archive_id)
+        .unwrap()
+        .clone();
+    archive.location_revision = 0;
+    let original = archive.validate().unwrap_err();
+    world.musubi_archives.insert(archive_id, archive);
+    let before = json::to_json(&world).unwrap();
+    let budget = AllocationBudget::new(0);
+    let ExecutionAttemptError::Rejected(rejection) =
+        validate_musubi_live_projection_cut(&world.view(), &budget).unwrap_err()
+    else {
+        panic!("earlier semantic rejection must precede live scratch admission")
+    };
+    assert_eq!(
+        rejection,
+        ProjectionRejection::new(ProjectionTable::Archives, original.reason())
+    );
+    assert!(std::ptr::eq(rejection.reason(), original.reason()));
+    let SourceValidationError::Attempt(actual) =
+        validate(&world.view(), &budget, allowance()).unwrap_err()
+    else {
+        panic!("source work must retain the completed semantic rejection")
+    };
+    assert_eq!(actual, ExecutionAttemptError::Rejected(rejection));
+    assert_eq!(budget.peak_reserved_bytes(), 0);
+    assert_eq!(json::to_json(&world).unwrap(), before);
+}
+
+#[test]
+fn universal_model_rejection_keeps_static_reason_and_cut_before_scratch() {
+    let (mut world, release, _, _) = seeded_musubi_publication_snapshot();
+    let mut package = world
+        .musubi_packages
+        .view()
+        .get(&release.package)
+        .unwrap()
+        .clone();
+    package.claimed_at_height = 0;
+    let original = package.validate().unwrap_err();
+    world.musubi_packages.insert(release.package, package);
+    let before = json::to_json(&world).unwrap();
+    let budget = AllocationBudget::new(0);
+    for cut in [
+        ProjectionCut::Current,
+        ProjectionCut::Predecessor,
+        ProjectionCut::Capture,
+        ProjectionCut::Candidate,
+    ] {
+        let ExecutionAttemptError::Rejected(rejection) =
+            musubi_universal::validate_musubi_universal_projection_cut(&world.view(), cut, &budget)
+                .unwrap_err()
+        else {
+            panic!("package model rejection precedes universal scratch admission")
+        };
+        assert_eq!(
+            rejection,
+            ProjectionRejection::new(ProjectionTable::PublicDirectory, original.reason())
+                .with_cut(cut)
+        );
+        assert!(std::ptr::eq(rejection.reason(), original.reason()));
+    }
+    assert_eq!(budget.peak_reserved_bytes(), 0);
+    assert_eq!(json::to_json(&world).unwrap(), before);
+}
+
+#[test]
+fn capture_rejection_outlives_the_world_and_budget_without_retained_backing() {
+    let rejection = {
+        let (mut world, release, _, _) = seeded_musubi_publication_snapshot();
+        let mut row = world
+            .musubi_resolver_index
+            .view()
+            .get(&release)
+            .unwrap()
+            .clone();
+        row.source_digest = MusubiContentDigestV1::new([0x97; 32]);
+        world.musubi_resolver_index.insert(release, row);
+        let budget = AllocationBudget::new(1_000_000);
+        let SourceValidationError::Attempt(ExecutionAttemptError::Rejected(rejection)) =
+            validate(&world.view(), &budget, allowance()).unwrap_err()
+        else {
+            panic!("actual capture rejects the substituted resolver source")
+        };
+        assert_eq!(budget.reserved_bytes(), 0);
+        rejection
+    };
+    fn requires_copy_static<T: Copy + 'static>(value: T) -> T {
+        value
+    }
+    let copied = requires_copy_static(rejection);
+    assert_eq!(
+        copied.to_string(),
+        "JSON error: invalid field `world.musubi_resolver_index`: capture World cut: resolver row diverges from authoritative release/archive projections"
+    );
+}
+
+#[test]
+fn publication_renders_the_same_rejection_without_erasing_local_refusals() {
+    let (world, release, _, _) = seeded_musubi_publication_snapshot();
+    let before = json::to_json(&world).unwrap();
+    let mut row = world
+        .musubi_resolver_index
+        .view()
+        .get(&release)
+        .unwrap()
+        .clone();
+    row.source_digest = MusubiContentDigestV1::new([0x98; 32]);
+    let mut block = world.block();
+    block.musubi_resolver_index.insert(release, row);
+    let budget = AllocationBudget::new(1_000_000);
+    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let Err(ExecutionAttemptError::Deferred(reason)) =
+        crate::state::world_commit::PreparedWorldCommit::validate_prepared_overlay(&block, &budget)
+    else {
+        panic!("publication must retain the local refusal before its later semantic failure")
+    };
+    assert!(matches!(
+        reason.allocation_refusal(),
+        Some(AllocationRefusal::Capacity { .. })
+    ));
+    let mut wait = pin!(
+        reason
+            .allocation_refusal()
+            .and_then(|refusal| match refusal {
+                AllocationRefusal::Capacity { release, .. } => Some(release.clone()),
+                _ => None,
+            })
+            .unwrap()
+            .wait_for_release()
+    );
+    let mut context = Context::from_waker(Waker::noop());
+    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    let unrelated = AllocationBudget::new(1);
+    drop(unrelated.try_reserve_bytes(1).unwrap());
+    assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+    drop(occupied);
+    assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+    let Err(ExecutionAttemptError::Rejected(rejection)) =
+        crate::state::world_commit::PreparedWorldCommit::validate_prepared_overlay(&block, &budget)
+    else {
+        panic!("completed retry must report the original deterministic failure")
+    };
+    assert_eq!(
+        rejection,
+        "Musubi World publication refused: JSON error: invalid field `world.musubi_resolver_index`: candidate World cut: resolver row diverges from authoritative release/archive projections"
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    drop(block);
+    assert_eq!(json::to_json(&world).unwrap(), before);
 }

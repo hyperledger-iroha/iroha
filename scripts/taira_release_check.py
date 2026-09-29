@@ -32,7 +32,7 @@ later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
 After configuration, explicit MV ownership stages and the complete admitted-map,
-Concread admission/writer/checkpoint source census execute before exact Pending Kura
+Concread admission/writer/checkpoint source census execute before native archive
 recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
 the same complete native compile graph. Focused development checks execute
@@ -63,8 +63,8 @@ unrequested data-model tests. Selected portable MV/Concread controls run first i
 a separate diagnostic Cargo graph. Configuration and the remaining targets build
 afterward in the same warm lane; configuration must pass
 before nonportable tests and overall success. Unselected harnesses wait for
-immutable preparation, whose complete compile graph is unchanged. Selected Pending
-Kura recovery runs immediately after configuration and must pass before the
+immutable preparation, whose complete compile graph is unchanged. Selected native archive
+recovery runs immediately after configuration and must pass before the
 remaining nonportable focused regressions.
 The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
@@ -75,7 +75,7 @@ install clang-18 and lld-18 with the platform package manager, or explicitly sel
 --native-linker system for diagnosis. macOS keeps Apple ld. Switching linkers
 invalidates Cargo fingerprints and can rebuild dependencies once. Authenticated
 preparation pins its native linker pair separately from shipping Zig. The same
-coordinated pair reaches Cargo and the direct-rustc standalone checks; arbitrary
+coordinated pair reaches Cargo; arbitrary
 inherited compiler flags remain excluded.
 """
 
@@ -102,6 +102,12 @@ import time
 import tomllib
 import uuid
 
+
+# The static native census is captured alongside this gate. It contains no source-dependent filtering.
+_native_inventory_path = Path(__file__).with_name("taira_native_test_inventory.py")
+_native_inventory = {"__name__": "taira_native_inventory", "__file__": str(_native_inventory_path)}
+exec(compile(_native_inventory_path.read_bytes(), str(_native_inventory_path), "exec"), _native_inventory)
+native_owner_stages = _native_inventory["native_owner_stages"]
 
 STAGES = (
     ("core canary command composition", (
@@ -406,21 +412,15 @@ if sys.platform == "linux":
 
 TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_faucet::accounts_faucet_prepares_alias_selector_config_but_needs_quorum",
-    "accounts_faucet::accounts_faucet_preserves_prefunded_balance_without_durable_admission",
-    "accounts_faucet::accounts_faucet_repeated_claims_do_not_spend_without_durable_admission",
     "accounts_faucet::accounts_faucet_puzzle_exposes_current_anchor",
     "accounts_faucet::accounts_faucet_puzzle_ignores_uncertified_claim",
     "accounts_faucet::accounts_faucet_prepares_registration_without_mutating_unfunded_account",
     "accounts_faucet::accounts_faucet_rejects_missing_pow_when_required",
-    "accounts_faucet::accounts_faucet_prepared_transfer_fails_closed_without_durable_admission",
     "accounts_faucet::faucet_account_fixture_uses_checked_ed25519_key_generation",
     "accounts_faucet::faucet_block_leader_fixture_uses_checked_bls_key_generation",
-    "accounts_faucet::faucet_prepared_envelope_aging_reaches_durable_admission_gate",
     "accounts_faucet::faucet_submit_rejects_old_tampered_and_uncertified_exact_retries",
     "accounts_onboard::expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed",
     "accounts_onboard::sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness",
-    "accounts_onboard::sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs_quorum",
-    "accounts_onboard::sponsored_onboarding_prepared_submit_fails_closed_without_durable_admission",
     "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
     "accounts_onboard::sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys",
     "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
@@ -482,23 +482,6 @@ P2P_STAGES += (("immutable reply identity and exact dynamic history", (
 )),)
 
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
-    "sumeragi::v2_runner::tests::runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
-    "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
-    "sumeragi::v2_runner::tests::finalized_rollover_drains_source_effects_after_handoff_reopens_capacity",
-    "sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain",
-    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix",
-    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_turn",
-    "sumeragi::lane_planner::tests::autonomous_reservation_retries_only_transient_planning_failures",
-    "sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery",
-    "sumeragi::v2_worker::tests::deferred_apply_retry_full_queue_preserves_output_and_exact_task",
-    "sumeragi::v2_worker::tests::deferred_apply_retry_disconnected_or_conflicting_queue_fails_closed",
-    "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
-    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
-    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
-    "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
-    "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
     "fastpq::lane::tests::statement_expectations_are_canonical_and_bind_every_ambient_layout",
     "fastpq::lane::tests::real_engine_enforces_artifact_output_limit_before_proof_work",
 )),)
@@ -508,76 +491,6 @@ CORE_STAGES += (("descriptor-bound storage namespace identity", (
     "kura::tests::progress_witness_durability::bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors",
     "kura::tests::progress_witness_durability::bound_progress_directory_chain_rejects_inconsistent_child_paths",
     "kura::tests::progress_witness_durability::progress_sidecar_mutation_rejects_symlinks_without_external_writes",
-)),)
-
-CORE_STAGES += (("durable output capacity and strict handoff", (
-    "sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue",
-    "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
-    "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
-    "sumeragi::v2_worker::tests::independent_applied_handoff_releases_covered_states_and_retains_lane_owners",
-    "sumeragi::v2_worker::tests::independent_applied_handoff_retains_active_historical_recovery_request",
-    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
-    "sumeragi::v2_worker::tests::autonomous_payload_carrier_comparison_promotes_only_a_missing_advisory_hint",
-    "sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically",
-    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
-    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
-    "sumeragi::v2_worker::tests::prepared_historical_body_retries_after_exact_output_capacity_rejection",
-    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
-    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
-    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
-    "sumeragi::v2_worker::tests::applied_height_handoff_authenticates_exact_payload_chunk_fanout",
-    "sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit",
-    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target",
-    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_covered_ticketless_payload_chunks",
-    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_advert_before_retiring_ranked_output",
-    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_queue_plan_admission_before_retiring_ranked_output",
-    "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
-)),)
-
-CORE_STAGES += (("resolved validation and exact application ownership", (
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_live_validate_retained_terminal_publishes_one_current_commit_apply",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_historical_prepare_repair_then_same_tag_commit_publishes_once",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::physical_validate_busy_retains_exact_result_until_timeout_quorum_then_commit",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_rejected_validate_replays_report_once_without_revalidation_or_apply",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_published_validate_retained_terminal_publishes_one_current_commit_apply",
-    "sumeragi::v2_runtime::tests::historical_prepare_rejection_retains_exact_report_authority",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::already_terminal_validate_cold_reopen_preserves_success_and_rejection",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::rejected_terminal_and_published_report_cold_reopen_preserves_one_output_owner",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_accepts_standalone_report_with_exact_terminal_rejection",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_rejects_standalone_report_without_exact_terminal_authority",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::committed_standalone_prepare_pair_preserves_inert_validate_without_a_link",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_owner",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_survives_unprotected_view_until_current_commit",
-    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::recovered_released_decision_apply_does_not_hide_current_source_with_changed_owner",
-    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::resolved_report_owner_tracks_terminal_and_statement_not_retry_encoding",
-    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_body_keys_distinguish_prepare_and_decision_authority",
-    "sumeragi::v2_lifecycle_coordinator::ledger::lifecycle_phase_codes_round_trip_without_aliases",
-    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::decision_body_retirement_preserves_current_winner_and_rejects_future_tags",
-    "sumeragi::v2::tests::recovered_decision_validate_cold_projection_installs_with_body_census",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_preserves_historical_prepare_owners_through_terminal_recovery",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_rejects_corrupt_historical_prepare_before_terminalization",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_terminal_join_binds_the_full_finality_family",
-    "sumeragi::v2_effects::tests::current_prepare_body_replay_requires_exact_current_durable_authority",
-    "sumeragi::v2_effects::tests::active_validate_retry_owners_preserve_single_admission",
-    "sumeragi::v2_effects::tests::bound_validate_retry_rejects_stale_and_conflicting_authority",
-    "sumeragi::v2_effects::tests::validate_retry_lifecycle_transitions_require_exact_owner",
-    "sumeragi::v2_effects::tests::later_decision_apply_uses_its_runtime_owner_after_validate_successor_release",
-    "sumeragi::v2_effects::tests::protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body",
-    "sumeragi::v2_effects::tests::protected_prepare_bound_retry_rolls_back_with_a_malformed_later_effect",
-    "sumeragi::v2_effects::tests::admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay_reuse",
-    "sumeragi::v2_effects::tests::cold_active_rejection_denies_local_adoption_without_live_pipeline_owner",
-    "sumeragi::v2_effects::tests::recovered_apply_releases_only_its_authenticated_validate_retry_predecessor",
-    "sumeragi::v2_effects::tests::decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolution",
-    "sumeragi::v2_effects::tests::durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate",
-    "sumeragi::v2_effects::tests::protected_commit_validate_reseeds_missing_replay_without_applying",
-    "sumeragi::v2_effects::tests::missing_replay_commit_rejects_foreign_decision_and_commitment",
-    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission",
-    "sumeragi::v2_lane_work::tests::durable_merge_refresh_retains_journal_across_real_parent_publication",
-    "sumeragi::v2_lane_work::tests::merge_signing_fence_refuses_private_key_after_parent_publication",
-    "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
 )),)
 
 CLIENT_STAGES = (("public compatibility discovery before account bootstrap", (
@@ -601,8 +514,6 @@ CLIENT_STAGES = (("public compatibility discovery before account bootstrap", (
 )), ("public contract SDK envelope", (
     "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
     "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
-    "client::evidence_http_tests::post_contract_call_rejects_retired_admission_draft_before_signing_or_submission",
-    "client::tests::prepared_account_verifiers_reject_signed_retired_admission",
     "client::evidence_http_tests::post_contract_call_rejects_substituted_operation_receipt",
     "client::evidence_http_tests::post_contract_call_rejects_omitted_operation_receipt_fields",
     "client::evidence_http_tests::post_contract_call_rejects_unsupported_response_root_fields",
@@ -652,14 +563,11 @@ DAEMON_STAGES = (("offline final genesis deployment authority", (
     "tests::manifest_crypto_checks::detects_allowed_signing_mismatch",
     "tests::manifest_crypto_checks::detects_allowed_curve_ids_mismatch",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_crypto_mismatch_in_block",
-    "tests::manifest_crypto_checks::fresh_v2_genesis_staging_does_not_commit_state_or_kura",
     "tests::manifest_crypto_checks::check_config_offline_executes_available_genesis",
     "tests::manifest_crypto_checks::check_config_accepts_taira_without_offline_backend_settings",
     "tests::manifest_crypto_checks::check_config_qualifies_the_fixed_moderation_strict_ingress",
     "tests::manifest_crypto_checks::check_config_offline_rejects_genesis_instruction_failure",
     "tests::manifest_crypto_checks::consensus_config_caps_use_canonical_v2_fields",
-    "authenticated_sumeragi_ingress_geometry_tests::permissioned_capacity_uses_the_frozen_roster",
-    "authenticated_sumeragi_ingress_geometry_tests::npos_capacity_uses_the_signed_ceiling",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_consensus_mode_mismatch",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_fingerprint_mismatch",
     "tests::cli_args::inrou_deployment_authority_requires_offline_check_config",
@@ -681,7 +589,6 @@ DAEMON_STAGES += DAEMON_STARTUP_STAGES
 TORII_STARTUP_STAGES = (("configured initial catalog and explicit network identity", (
     "tests_runtime_handlers::configured_catalog_fixture_binds_initial_geometry_and_explicit_network",
 )), ("HTTP admission waits for Queue startup reconciliation", (
-    "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
     "tests_runtime_handlers::readyz_rejects_stopped_consensus_driver",
 )), ("actual public MCP catalogue and response bounds", (
     "mcp::tests::tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit",
@@ -715,7 +622,6 @@ TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_current_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
     "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
-    "routing::multisig_selector_tests::contract_call_detached_handler_requires_durable_public_admission",
     "routing::multisig_selector_tests::contract_call_detached_submission_requires_complete_retained_envelope",
     "routing::multisig_selector_tests::contract_call_prepare_serializes_complete_canonical_response",
     "openapi::tests::public_contract_call_schema_matches_exact_current_admission",
@@ -732,7 +638,6 @@ TORII_UNIT_STAGES += (("single-operator funding, deployment and proof admission"
 TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isolation", (
     "tests_runtime_handlers::transaction_details_http_sdk_preserves_exact_absence_and_authorization",
     "tests_runtime_handlers::transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts",
-    "tests_runtime_handlers::transaction_details_native_beneficiaries_preserve_restricted_history_isolation",
     "tests_runtime_handlers::transaction_details_allows_operator_and_rejects_wrong_network_and_replay",
     "tests_runtime_handlers::transaction_details_rejects_unsigned_and_broadened_queries",
 )),)
@@ -740,12 +645,7 @@ TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isol
 TORII_UNIT_STAGES += (("current prepared and public transaction admission", (
     "routing::prepared_transaction_submit_response_requires_real_acceptance",
     "routing::prepared_transaction_signature_fixture_tests::prepared_transaction_signature_fixture_is_current",
-    "tests_runtime_handlers::prepared_current_admission_retains_exact_durable_pending_identity",
     "tests_runtime_handlers::prepared_current_admission_rejects_actual_multiroute_payload_before_custody",
-    "tests_runtime_handlers::current_http_admission_rejects_unsupported_intent_before_any_durable_promise",
-    "tests_runtime_handlers::current_http_admission_rejects_actual_multiroute_before_journal_write",
-    "tests_runtime_handlers::current_peer_and_canonical_retry_reject_unsupported_admission_without_custody",
-    "kagemusha_commands::tests::unsupported_current_admission_precedes_monetary_reservation_signing_and_pending",
 )),)
 
 TORII_UNIT_STAGES += (("signed account permission query preservation", (
@@ -778,30 +678,6 @@ DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan 
 )), )
 STAGES += DISPATCHER_TRANSITION_STAGES
 
-TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact receipt ownership", (
-    "queue_plan_capacity_wait::tests::closed_owner_waits_and_rechecks_until_activation",
-    "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",
-    "queue_plan_capacity_wait::tests::original_monotonic_and_wire_deadlines_are_not_renewed",
-    "queue_plan_capacity_wait::tests::cancellation_drops_wait_without_detached_checks",
-    "tests_runtime_handlers::current_local_proxy_admission_rejects_unsupported_intent_with_journal",
-    "tests_runtime_handlers::queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_quorum",
-    "tests_runtime_handlers::queue_plan_synced_capacity_retry_requires_exact_bounded_rejection",
-    "tests_runtime_handlers::current_peer_admission_rejects_unsupported_future_context_without_waiting",
-    "tests_runtime_handlers::queue_plan_quorum_is_not_publicly_accepted_before_registry_application",
-    "tests_runtime_handlers::current_peer_admission_keeps_unsupported_retry_rejected_after_height_advance",
-    "tests_runtime_handlers::strict_proxy_finalization_keeps_w_through_canonical_admission_wait",
-    "tests_runtime_handlers::queue_plan_synced_capacity_exhaustion_preserves_original_deadline_and_partial_claim",
-    "tests_runtime_handlers::queue_plan_synced_capacity_recovery_retains_distinct_claim_and_physical_permit",
-    "tests_runtime_handlers::current_peer_admission_rejects_unsupported_intent_without_journal",
-    "tests_runtime_handlers::late_physical_admission_preserves_durability_and_reports_reconciliation",
-    "tests_runtime_handlers::queue_plan_capacity_loss_after_quorum_remains_indeterminate",
-    "tests_runtime_handlers::queue_plan_synced_future_authority_retries_same_request_until_quorum",
-    "tests_runtime_handlers::queue_plan_synced_persistent_future_preserves_partial_claim_at_deadline",
-    "tests_runtime_handlers::queue_plan_synced_deadline_cancels_only_its_owned_waiter",
-    "tests_runtime_handlers::queue_plan_synced_other_rejections_do_not_rearm_partial_admission",
-)),)
-TORII_STARTUP_STAGES += TORII_ADMISSION_HANDOFF_STAGES
-TORII_UNIT_STAGES += TORII_ADMISSION_HANDOFF_STAGES
 
 TORII_UNIT_STAGES += (("canonical lifecycle status runtime root and public schema", (
     "routing::nexus_lane_lifecycle_tests::lane_lifecycle_status_binds_exact_current_catalog",
@@ -832,43 +708,7 @@ TORII_STAGES += (("public contract HTTP preparation and strict admission", (
     "contracts_call_integration::contracts_call_prepares_exact_payload_and_requires_durable_admission",
 )),)
 
-CORE_STAGES += (("authenticated admission and coherent State publication", (
-    "state::tests::ordinary_lane_frontier_publishes_once_and_rejects_invalid_successors_atomically",
-    "state::tests::ordinary_lane_frontier_extends_autonomous_application_and_unblocks_next_merge",
-    "sumeragi::v2_apply::tests::ordinary_lane_frontier_preserves_third_certified_source_after_merge_execution_rejection",
-    "state::tests::sparse_merge_execution_frontier_rejects_replay_conflict_and_malformed_predecessor",
-    "kura::tests::carrier_lookup_requires_finality_even_while_body_is_present",
-    "kura::tests::finality_store_rejects_missing_or_wrong_merge_carrier_projection",
-    "kura::tests::finality_authenticated_carrier_survives_body_removal_and_restart",
-    "state::tests::autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external",
-    "state::tests::live_autonomous_merge_rejects_historical_sealed_signed_execution_alias",
-    "state::tests::malformed_merge_execution_batch_rejects_empty_lane_set",
-    "state::tests::staged_merge_missing_transaction_block_mutates_nothing",
-    "state::tests::durable_kura_carrier_requires_exact_committed_state_carrier_before_publication",
-    "state::tests::same_block_merge_and_lane_replacement_preserves_history_and_prunes_old_progress",
-    "state::tests::pending_queue_plan_authentication_does_not_hold_the_publication_fence",
-    "state::tests::pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance",
-    "state::tests::pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives",
-    "state::tests::pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarnation",
-    "state::tests::pending_queue_plan_admission_checks_historical_native_amx_participant_sources",
-    "state::tests::pending_queue_plan_persistence_serializes_alternate_quorum_subsets",
-    "state::tests::pending_queue_plan_persistence_yields_to_one_ahead_state_publication",
-    "state::tests::pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew",
-    "state::tests::pending_queue_plan_old_carrier_retains_only_valid_current_sources",
-    "state::tests::pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_current_source",
-    "state::tests::queue_plan_conflict_requires_pending_or_applied_owner_evidence",
-    "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
-)),)
-
-CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
-    "queue::tests::empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion",
-    "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
-    "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
-    "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
-    "queue::tests::strict_queue_plan_journal_admission_replays_exact_transaction_after_restart",
-    "queue::tests::strict_queue_plan_journal_full_write_ambiguity_replays_exact_put",
-    "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
-)), ("fee sponsor activation and public fee admission", (
+CORE_ADMISSION_STARTUP_STAGES = ( ("fee sponsor activation and public fee admission", (
     "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
     "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
     "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
@@ -881,112 +721,15 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
     "block::tests::public_contract_creation_fees::public_contract_artifact_stages_pay_fees_without_management_grants",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable restart", (
-    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
-    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("current Prepare recovery and durable validation retry", (
-    "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
-    "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
-    "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
-    "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
-)),)
 CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared merge budget", (
-    "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
     "queue::tests::current_payload_selects_full_block_gas_call_with_idle_catalog_route",
-    "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
-    "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
-    "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressure", (
-    "telemetry::tests::public_mode_tracks_frozen_reducer_context_and_clears_without_owner",
     "telemetry::tests::queue_backpressure_metrics_updated",
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("nested failure closes admission without blocking its owner", (
-    "sumeragi::v2_effects::tests::executor_fatal_callbacks_close_before_outer_operation_releases",
-    "sumeragi::v2_worker::tests::service_failure_and_drop_finish_before_outer_operation_drains",
-    "sumeragi::v2_worker::tests::abnormal_io_worker_exit_finishes_before_outer_operation_drains",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("live Decision cleanup after an idle runtime turn", (
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::live_idle_decision_cleanup_reconciles_runner_frontier",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("recovered Decision Fetch and periodic runtime ownership", (
-    "sumeragi::v2_effects::tests::recovered_decision_fetch_fences_later_ordinary_body_coordinates",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("cold Decision body publication and owner-open ledger recovery", (
-    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together",
-    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs",
-    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_overlapping_body_stage",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::cold_decision_fetch_publishes_first_network_body_through_completion_and_apply",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("authenticated retained body custody and proposal recovery", (
-    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_restores_work_without_voting_authority",
-    "sumeragi::v2_core::reducer::source_link_tests::retained_local_body_custody_coalesces_without_downgrading_or_revalidating",
-    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_rejects_foreign_identity_and_safety_debt_atomically",
-    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_respects_the_exact_durable_decision",
-    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_preserves_normal_proposal_validation_vote_authority",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_restores_proposal_validate_without_wal_authority",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_coalesces_proposal_validate_with_retained_prepare_qc",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_cancels_timeout_superseded_body_before_replay",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_preserves_current_body_after_timeout_recovery",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_rejects_future_body_generation_without_retirement",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
-    "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
-    "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",
-    "sumeragi::v2_runtime::tests::authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_upgrade",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_only_exact_proposal_child_below_installed_view",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_same_view_proposal_after_authenticated_decision_without_timeout",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_decision_proposal_cancellation_preserves_authentication_boundaries",
-    "sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
-    "sumeragi::v2::tests::production_complete_tip_activates_recovered_unapplied_decision",
-    "sumeragi::v2::tests::complete_tip_decision_activation_requires_exact_replayed_wal",
-    "sumeragi::v2::tests::complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state",
-    "sumeragi::v2::tests::complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache",
-    "sumeragi::v2_core::refinement::tests::recovered_decided_successor_kernel_keeps_canonical_parent_and_commit_frontier_distinct",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_current_and_future_proposal_cancellation",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_proposal_without_authenticated_installed_timeout",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_foreign_installed_timeout_frontier",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_unlinked_proposal_despite_another_exact_sign_parent",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_tampered_proposal_even_with_exact_parent_and_later_timeout",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_forged_timeout_cancellation_frontier",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_preserves_row_and_skips_output_service",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
-    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("bounded fair-ingress ownership projection and changed-cut retry", (
-    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
-    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
-    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::captured_cut_classifies_valid_concurrent_coalescence_as_retryable",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded frontier reads", (
-    "sumeragi::v2::tests::same_round_timeout_cancellation_uses_exact_durable_proposal_intent",
-    "sumeragi::v2::tests::same_round_timeout_cold_owner_cancels_exact_retained_proposal",
-    "sumeragi::lane_planner::tests::canonical_frontier_reads_scale_with_distinct_routes_including_absence",
-    "sumeragi::lane_planner::tests::canonical_frontier_reads_preserve_first_storage_failure_and_stop",
-)),)
-CORE_ADMISSION_STARTUP_STAGES += (("terminal validation history and shared outcome recovery", (
-    "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
-    "sumeragi::v2::tests::same_round_timeout_cold_owner_publishes_broadcast_after_retired_validation_history",
-    "sumeragi::v2::tests::same_round_timeout_cold_owner_reconciles_standalone_broadcast",
-    "sumeragi::v2::tests::same_round_timeout_cold_owner_rejects_foreign_standalone_broadcast",
-    "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
-    "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
-)),)
 CORE_ADMISSION_STARTUP_STAGES += (("atomic committed catalog authority and preserved history", (
-    "lane_consensus::tests::canonical_recovery_restores_only_an_exact_complete_drained_handoff",
-    "sumeragi::v2_lane_work::tests::canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement",
-    "kura::tests::consensus_certificate_read_rejects_occupied_corruption_without_repair",
-    "sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants",
-    "kura::tests::canonical_autonomous_replica_corruption_and_wrong_context_fail_closed",
     "state::runtime_configuration_tests::runtime_nexus_setter_preserves_configured_dataspaces_and_rejects_post_genesis_drift",
     "state::runtime_configuration_tests::runtime_nexus_setter_requires_exact_protected_dataspace_projection",
     "state::runtime_catalog_tests::runtime_catalog_preflight_preserves_prior_additions_and_rejects_replacement",
@@ -999,14 +742,7 @@ CORE_ADMISSION_STARTUP_STAGES += (("atomic committed catalog authority and prese
     "state::runtime_catalog_tests::runtime_catalog_final_overlay_rechecks_late_validator_invalidation",
     "state::runtime_catalog_tests::runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state",
     "state::runtime_catalog_tests::runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_policy",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_preserves_baseline_and_rebuilds_cumulatively",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_rejects_takeover_duplicates_and_schema_drift_atomically",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_quorum_tracks_dataspace_fault_tolerance",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_never_loads_deferred_paths_and_preserves_manual_rebind",
     "governance::manifest::runtime_overlay::tests::manifest_catalog_binding_rejects_stale_refresh_after_source_preserving_lifecycle",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_retains_frozen_file_source_and_rejects_alias_takeover",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_governed_lane_is_ready_without_a_filesystem_path",
-    "governance::manifest::runtime_overlay::tests::runtime_manifest_overlay_rejects_private_torii_urls_before_publication",
     "governance::manifest::tests::manifest_rejects_invalid_validator_torii_url",
     "governance::manifest::tests::builder_allows_runtime_sources_but_requires_parsed_rules",
 )),)
@@ -1014,30 +750,10 @@ CORE_ADMISSION_STARTUP_STAGES += (("committed runtime catalog readback and next 
     "state::runtime_catalog_tests::runtime_catalog_readback_tracks_committed_state_and_rejects_malformed_parameter",
     "state::runtime_catalog_tests::runtime_catalog_readback_binds_next_transition_and_rejects_stale_root",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("certified runtime catalog and parameter commit effects", (
-    "state::tests::autonomous_runtime_catalog_effects_commit_and_recover_exactly",
-    "state::tests::autonomous_bootstrap_parameter_effects_commit_and_recover_exactly",
-    "state::tests::autonomous_runtime_catalog_effects_reject_post_stage_tampering",
-    "state::tests::autonomous_parameter_effects_reject_post_stage_tampering",
-    "state::tests::autonomous_runtime_catalog_effects_require_matching_pending_transition",
-)),)
-
 CORE_ADMISSION_STARTUP_STAGES += (("governance sweep execution fragments", (
     "state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired",
     "state::tests::block_sweeps_expired_governance_locks_and_records_height",
     "state::tests::block_retains_expired_governance_lock_when_atomic_release_fails",
-)),)
-
-CORE_ADMISSION_STARTUP_STAGES += (("retained and compacted Kura replay floors", (
-    "kura::lane_geometry::tests::configured_primary_replay_preflight_is_read_only_when_floor_is_retained",
-    "kura::lane_geometry::tests::configured_primary_replay_preflight_requires_snapshot_after_compaction",
-)),)
-
-CORE_ADMISSION_STARTUP_STAGES += (("certified historical recovery and exact live QueuePlan ownership", (
-    "state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",
-    "state::tests::live_autonomous_merge_requires_exact_pending_queue_plan_owner",
-    "state::tests::autonomous_merge_rejects_reforged_reservation_bindings",
-    "state::tests::historical_autonomous_merge_rejects_restored_registry_conflict",
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (('typed native SNS registration absence', (
@@ -1045,15 +761,7 @@ CORE_ADMISSION_STARTUP_STAGES += (('typed native SNS registration absence', (
 )), )
 
 CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay against isolated committed state", (
-    "block::valid::tests::authenticated_replay_added_lane_uses_replicated_frontier_without_published_storage",
-    "block::valid::tests::authenticated_replay_authority_rejects_different_proposal_wire_and_state_prefix",
-    "block::valid::tests::authenticated_replay_lane_predecessor_requires_exact_replicated_height_and_hash",
-    "block::valid::tests::authenticated_replay_ordinary_and_native_amx_keep_exact_predecessors_without_live_slots",
     "state::tests::da_hydration_test_cases::replay_private_da_hydration_reconstructs_exact_prefix_and_rejects_wrong_body",
-    "state::replay_validation_tests::replay_uncached_da_prefix_keeps_shared_journal_unchanged_until_publication",
-    "state::replay_lane_drain::tests::replay_native_drain_frontier_binds_marker_prefix_and_certificate_evidence",
-    "state::tests::pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_change",
-    "state::tests::retired_lane_cleanup_preserves_frontier_for_historical_drain_recovery",
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (("governed replay and signed snapshot restart", (
@@ -1062,22 +770,11 @@ CORE_ADMISSION_STARTUP_STAGES += (("governed replay and signed snapshot restart"
     "snapshot::tests::signed_snapshot_restore_accepts_configured_governed_lane",
 )),)
 
-CORE_ADMISSION_STARTUP_STAGES += (("paired Commit signature completion", (
-    "sumeragi::v2_effects::tests::epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal",
-)),)
-
 CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred startup writers", (
-    "kura::tests::startup_replay_geometry_transition_preserves_shared_binding_for_added_lane",
-    "kura::tests::startup_replay_geometry_transition_rejects_checkpoint_and_manifest_drift",
-    "kura::tests::startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift",
-    "kura::tests::startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guards",
-    "kura::tests::startup_replay_geometry_transition_rejects_unretained_request",
-    "kura::tests::startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure",
     "snapshot::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
     "snapshot::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
     "snapshot::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
     "snapshot::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
-    "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
     "block::valid::tests::account_profile_validation_preserves_delegated_metadata_results",
     "block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads",
 )),)
@@ -1087,19 +784,8 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
     "queue::router::alias_registry_routing_tests::alias_registry_routing_is_independent_of_height_and_catalog",
     "queue::router::alias_registry_routing_tests::alias_registry_routing_nested_walkers_use_universal_registry",
     "queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards",
-    "queue::router::alias_registry_routing_tests::alias_registry_routing_keeps_real_private_participants_in_mixed_transactions",
     "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap",
     "queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay",
-)), )
-
-CORE_ADMISSION_STARTUP_STAGES += (("finite closed ingress and fresh finalized handoff", (
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_closed_drained_cut_rejects_each_stale_lane_account",
-    "sumeragi::v2_runner::tests::finalized_closed_prefix_retires_historical_lane_certificate_without_adapter_admission",
-    "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
-    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_terminal_apply_store_join_rejects_store_drift",
-    "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
 )), )
 
 CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters", (
@@ -1111,14 +797,7 @@ CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters
     'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
 )), )
 
-CORE_PENDING_KURA_RECOVERY_STAGES = (("standalone and linked Apply recovery across retained Kura shutdown", (
-    'sumeragi::v2::tests::pending_kura_standalone_apply_recovers_real_kura_shutdown_cut',
-    'sumeragi::v2::tests::pending_kura_standalone_apply_rejects_foreign_owner_without_mutation',
-    'sumeragi::v2::tests::pending_kura_linked_apply_recovers_real_kura_shutdown_cut',
-    'sumeragi::v2::tests::pending_kura_linked_apply_rejects_changed_parent_and_decision_without_mutation',
-    'sumeragi::v2::tests::pending_kura_recovered_decision_chain_recovers_real_kura_shutdown_cut',
-    'sumeragi::v2::tests::pending_kura_validated_apply_preview_rejects_foreign_authority_and_fence_exhaustion_inertly',
-)), )
+CORE_PENDING_KURA_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
 CORE_ADMISSION_STARTUP_STAGES += CORE_PENDING_KURA_RECOVERY_STAGES
 
 
@@ -1169,61 +848,14 @@ CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot 
     "state::tests::set_nexus_rejects_live_single_lane_stake_owner_reassignment",
     "state::tests::state_json_rejects_prior_nexus_runtime_version",
     "state::tests::emergency_fast_restored_config_rejects_dataspace_catalog_replacement",
-    "sumeragi::v2_recovery::tests::imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_state",
-    "sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor",
-    "sumeragi::v2_recovery::tests::snapshot_bootstrap_authentication_rejects_future_kaigi_feedback_and_rolls_back",
-    "sumeragi::v2_recovery::tests::all_hash_only_snapshot_without_authenticated_record_fails_closed",
-    "sumeragi::v2_recovery::tests::later_snapshot_before_first_full_finality_is_rejected_without_mutation",
-    "sumeragi::v2_recovery::tests::later_snapshot_rejects_lineage_changed_from_immutable_first_height",
-    "sumeragi::v2_recovery::tests::hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution",
     "state::tests::startup_sumeragi_key_policy_matches_canonical_state_without_mutation",
     "state::tests::startup_sumeragi_key_policy_rejects_each_mismatch_without_mutation",
-)), ("cold certified history and exact publication recovery", (
-    "kura::tests::sequential_autonomous_certificates_advance_the_durable_frontier",
-    "kura::tests::mixed_ordinary_autonomous_certificates_cold_restore_preserves_completed_history",
-    "kura::tests::certified_bundle_cold_restore_repairs_only_latest_partial_publication",
-    "kura::tests::certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_without_mutation",
-    "kura::tests::certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obligation",
-    "kura::tests::certified_pair_crash_rebuilds_only_bundle_obligation",
-    "kura::tests::durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback",
-    "kura::tests::bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation",
-    "kura::tests::append_intent_and_build_restart_preflight_reject_one_under_without_mutation",
-    "kura::tests::latest_certified_frontier_rejects_equal_height_conflict_before_publication",
-    "kura::tests::latest_certified_frontier_corruption_and_post_validation_substitution_fail_closed",
-)), ("authenticated history compaction and cold recovery", (
-    "kura::tests::lane_history_cold_restore_accepts_independent_authenticated_prefix_cuts",
-    "kura::tests::lane_history_cold_restore_recovers_certified_and_bundle_rewrite_cuts",
-    "kura::tests::lane_history_cold_restore_rejects_untrusted_frontier_and_retained_evidence_loss",
-    "kura::tests::lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix",
-    "kura::tests::lane_history_cold_restore_does_not_resurrect_terminal_local_frontier",
-    "kura::tests::lane_history_cold_restore_admits_obsolete_append_at_exact_capacity",
-    "kura::tests::lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal",
-    "kura::tests::lane_history_compaction_rejects_data_only_temp_before_capacity_refusal",
-    "kura::tests::lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal",
-)),)
+)),  )
 CORE_STAGES += CORE_STARTUP_STAGES
 
-CORE_READ_BOUNDARY_STAGES = (("bounded lane recovery and strict durable evidence reads", (
-    'kura::tests::autonomous_latest_snapshot_reuses_validated_current_cursor',
-    'kura::tests::autonomous_completion_selected_view_rejects_corruption_and_foreign_suffix',
-    'kura::tests::certified_lane_block_read_rejects_qc_signature_mismatch',
-    'kura::tests::certified_lane_block_read_rejects_qc_body_mismatch',
-    'sumeragi::v2_runner::tests::open_preflight_batch_services_queued_prepare_and_commit_before_reaudit',
-    'sumeragi::v2_runner::tests::open_preflight_batch_preserves_budget_completion_yield_and_errors',
-    'sumeragi::v2_runner::tests::open_preflight_batch_does_not_admit_global_traffic_as_lane_recovery',
-    'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_replaces_same_slot_conflict_at_capacity',
-    'sumeragi::v2_lane_work::tests::historical_autonomous_hydration_preserves_conflicting_quorum_at_capacity',
-    'sumeragi::v2_lane_work::tests::finalized_carrier_nonmember_cache_invalid_commit_certificate_rolls_back_hydration',
-    'sumeragi::v2_lane_work::tests::global_validator_outside_lane_committee_uses_canonical_replica_for_rollover',
-    'kura::tests::certified_lane_block_rejects_foreign_active_dataspace',
-    'kura::tests::autonomous_completion_missing_view_state_keeps_full_payload_validation',
-    'kura::tests::autonomous_completion_selected_view_validates_artifact_once',
-)), )
-CORE_STAGES = CORE_READ_BOUNDARY_STAGES + CORE_STAGES
+CORE_STAGES = CORE_STAGES
 # Keep the existing full-scope position while requiring this affected control early in basic.
-CORE_ADMISSION_STARTUP_STAGES = CORE_READ_BOUNDARY_STAGES + (("bounded open preflight and finite closed ingress", (
-    'sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain',
-)), ) + CORE_ADMISSION_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = ( ) + CORE_ADMISSION_STARTUP_STAGES
 
 PROOF_STAGES = (("canonical proof resource bounds", (
     "axt_binding::tests::compact_artifact_decoder_enforces_canonical_bytes_and_restores_layout",
@@ -1289,7 +921,6 @@ DATA_MODEL_STAGES += (("exact canonical asset identifier decoders", (
 
 DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
     "query::canonical_output_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
-    "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority",
     "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_rejects_unbound_wire_and_header_material",
     "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_joins_network_indices_without_time_inputs",
     "query::canonical_output_inclusion_tests::committed_query_rejects_retired_parallel_result_and_merge_wire",
@@ -1623,10 +1254,8 @@ STAGES += (("parliament seating retains exact genesis replacement authority", (
 
 KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof limits", (
     'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
-    'kura::beacon_history::tests::beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects',
     'kura::beacon_history::tests::beacon_history_projects_nested_callbacks_once_and_distinguishes_rejected_roots',
     'kura::beacon_history::tests::beacon_history_requires_exact_bounded_range_and_preserves_read_only_journals',
-    'kura::beacon_history::tests::beacon_history_rejects_malformed_sidecars_and_preserves_their_source',
     'kura::beacon_history::tests::beacon_history_rejects_block_height_mismatch_without_publishing_partial_json',
     'kura::beacon_history::tests::beacon_history_never_emits_opaque_install_state_or_unrelated_parameter_payloads',
     'kura::beacon_history::tests::beacon_history_cli_exposes_explicit_bounded_scope',
@@ -1662,11 +1291,6 @@ CURRENT_CONSENSUS_STAGES = (("current nonempty consensus and bounded work wakeup
 )),)
 
 CURRENT_BEACON_CORE_STAGES = (("current authenticated threshold pulse production and execution", (
-    'block::valid::current_beacon_tests::current_threshold_pulse_commits_real_work_and_replays_exact_result',
-    'block::valid::current_beacon_tests::current_threshold_pulse_rejects_missing_unrequested_tampered_and_empty_carriers',
-    'sumeragi::beacon::tests::current_partials_require_exact_parent_instance_and_authenticated_seat',
-    'sumeragi::beacon::tests::current_partials_from_four_validators_converge_without_idle_signing',
-    'sumeragi::schedule::tests::schedule_rejects_conflicting_npos_epoch_authority',
     'smartcontracts::isi::world::isi::tests::set_parameter_rejects_consensus_epoch_that_conflicts_with_npos',
 )),)
 CORE_STARTUP_STAGES = CURRENT_BEACON_CORE_STAGES + CORE_STARTUP_STAGES
@@ -1681,11 +1305,7 @@ CORE_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_ADMISSION_STARTUP_STAGES
 CORE_STAGES = CURRENT_FINALITY_CORE_STAGES + CORE_STAGES
 CURRENT_QUEUE_ADMISSION_STAGES = (("current executable queue and peer admission", (
-    'queue::tests::current_admission_rejects_unsupported_intent_across_direct_queue_boundaries',
     'queue::tests::current_admission_rejects_actual_multiroute_before_queue_custody',
-    'queue::tests::current_admission_replay_rejects_unsupported_record_without_publishing_or_rewriting',
-    'gossiper::tests::current_gossip_rejects_certified_unsupported_intent_before_persistence_or_deferral',
-    'gossiper::tests::current_gossip_rejects_uncertified_unsupported_work_without_suppressing_ordinary',
 )),)
 CORE_STARTUP_STAGES = CURRENT_QUEUE_ADMISSION_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CURRENT_QUEUE_ADMISSION_STAGES + CORE_ADMISSION_STARTUP_STAGES
@@ -1762,32 +1382,12 @@ TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
 )),)
 DAEMON_STAGES += (("current certificate beacon admission before custody", (
     'beacon_bootstrap::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
-    'beacon_bootstrap::tests::rotation_requires_current_state_evidence_before_opening_custody',
 )),)
 
 # Production beacon setup must fail before unrelated tests and network fixtures.
 CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
     'state::tests::component_commit_topology_preserves_scheduled_network_authority',
-    'state::tests::native_admission_fixture_binds_final_controls_results_signature_and_body',
-    'state::tests::native_economic_executor_transfers_once_across_shared_roles_and_drops_atomically',
-    'state::tests::autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once',
-    'state::tests::autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift',
-    'sumeragi::v2_candidate::tests::proposal_work_gate_rejects_beacon_pulse_only',
-    'sumeragi::v2_candidate::tests::proposal_work_gate_preserves_non_beacon_effects',
-    'sumeragi::v2_candidate::tests::mandatory_beacon_wait_requires_independent_work',
-    'sumeragi::v2_candidate::tests::mandatory_beacon_wait_releases_same_queue_prefix_for_retry',
-    'beacon::tests::threshold_beacon_deferred_mandatory_height_stays_idle_until_real_work',
-    'beacon::tests::threshold_beacon_live_v2_producer_is_bound_restartable_and_persists_effect',
     'beacon::tests::runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing',
-    'beacon::readiness::tests::readiness_authenticates_exact_session_once_without_signing_on_http_checks',
-    'beacon::readiness::tests::readiness_reuses_only_exact_authenticated_transcripts_across_heights',
-    'beacon::readiness::tests::readiness_requires_pending_session_to_cover_the_mandatory_pulse',
-    'beacon::readiness::tests::readiness_requires_both_current_parliament_and_future_npos_pulses',
-    'beacon::readiness::tests::readiness_rejects_missing_foreign_and_corrupt_public_sessions',
-    'beacon::readiness::tests::readiness_rejects_absent_unavailable_and_wrong_seat_providers',
-    'beacon::readiness::tests::readiness_invalidates_old_height_roster_and_publication_owner',
-    'beacon::readiness::tests::readiness_does_not_require_local_custody_for_observers_or_unused_permissioned_beacons',
-    'sumeragi::emergency_fast_handle_tests::missing_beacon_readiness_preserves_bootstrap_ingress',
 )), )
 DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
     'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
@@ -1815,7 +1415,6 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'beacon_bootstrap::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
     'beacon_bootstrap::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
     'beacon_bootstrap::tests::rotation_config_descriptor_uses_only_exact_native_consensus_identity',
-    'beacon_bootstrap::tests::rotation_phase_rejects_replay_gap_header_mismatch_and_cutoff',
     'beacon_bootstrap::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
     'beacon_bootstrap::tests::rotation_seat_parser_requires_independent_pins_and_private_identity',
     'beacon_bootstrap::tests::genesis_seat_parser_requires_signed_anchor_and_one_private_identity',
@@ -1825,13 +1424,11 @@ TORII_BEACON_STAGES = (('current consensus readiness leaves setup ingress open',
     'tests_runtime_handlers::readyz_tracks_live_consensus_without_gating_beacon_setup',
 )), )
 STAGES += (("exact-height native lifecycle installation", (
-    'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
     'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
     'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_current_canary_and_install',
 )), )
 TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
     'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-    'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
 )), )
@@ -2059,31 +1656,7 @@ STAGES += (('invocation-owned authenticated finality prefix', (
     'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_lower_tip_keeps_frontier_and_rejects_conflicting_decision',
 )), )
 
-KAGAMI_STAGES += (('read-only bounded native finality inspection', (
-    'kura::tests::finality_inspection_rejects_invalid_height_before_store_access',
-    'kura::tests::finality_inspection_failure_preserves_output_and_store',
-    'kura::tests::finality_command_rejects_output_inside_store',
-)), )
 
-CORE_FINALITY_INSPECTION_STAGES = (('read-only retained finality native validation', (
-    'kura::tests::block_store_read_only_finality_verifies_without_mutation',
-    'kura::tests::block_store_read_only_finality_rejects_invalid_signature_and_binding',
-    'kura::tests::block_store_read_only_finality_rejects_noncanonical_and_missing_records',
-    'kura::tests::block_store_read_only_finality_rejects_unpublished_journal_boundary',
-)), )
-CORE_STAGES += CORE_FINALITY_INSPECTION_STAGES
-CORE_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
-CORE_ADMISSION_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
-
-CORE_EXECUTION_PUBLICATION_STAGES = (("actual execution fixture finality and publication ownership", (
-    'state::execution_publication_test_support::tests::executed_genesis_and_successor_publish_real_finality_and_witnesses',
-    'state::execution_publication_test_support::tests::publication_rejects_an_overlay_from_another_state_before_durable_writes',
-    'state::execution_publication_test_support::tests::publication_rejects_changed_sealed_wire_with_the_same_header',
-    'state::execution_publication_test_support::tests::publication_requires_the_original_captured_witness',
-    'state::execution_publication_test_support::tests::publication_refuses_other_signed_genesis_validator_keys',
-)),)
-CORE_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
-CORE_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 
 CORE_WORLD_ACQUISITION_STAGES = (("original World and trigger aggregate acquisition and abandonment", (
     'state::tests::world_complete_drop_tests::ordinary_world_drop_unlocks_peers_before_parameters_notification',
@@ -2097,7 +1670,6 @@ CORE_WORLD_ACQUISITION_STAGES = (("original World and trigger aggregate acquisit
 CORE_STAGES += CORE_WORLD_ACQUISITION_STAGES
 CORE_STARTUP_STAGES += CORE_WORLD_ACQUISITION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_WORLD_ACQUISITION_STAGES
-CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 
 
 CORE_WORLD_CAPTURE_STAGES = (("original World and trigger capture custody", (
@@ -2116,12 +1688,6 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_WORLD_CAPTURE_STAGES
 
 
 CORE_STATE_CAPTURE_STAGES = (("original State, runtime and membership capture custody", (
-    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_unlocks_state_topology_before_world_parameters_notification',
-    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_refused_original_drop_releases_membership_before_world_notification',
-    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_admission_panic_releases_healthy_membership_before_world_notification',
-    'state::carrier_preparation::journals::tests::state_capture_tests::state_capture_late_membership_refusal_retains_completed_world_and_runtime_until_joint_drop',
-    'state::carrier_preparation::journals::runtime_journals::publication_tests::capture_tests::ordinary_runtime_capture_unlocks_contexts_before_runtime_notification',
-    'state::carrier_preparation::journals::runtime_journals::publication_tests::capture_tests::replacement_runtime_capture_unlocks_contexts_before_runtime_notification',
     'state::storage_transactions::block::capture_tests::membership_capture_retains_original_ordinary_and_replacement_journals_and_releases',
     'state::storage_transactions::block::capture_tests::membership_capture_real_refusal_keeps_original_writer_until_joint_release',
     'state::storage_transactions::block::capture_tests::membership_capture_outer_unwind_releases_prepared_or_captured_and_attached_sibling',
@@ -2317,72 +1883,19 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 # retain exact sources and resource obligations; they do not open live ingress.
 CORE_NATIVE_CONNECTION_STAGES = (
     ('native producer assembly retains exact decisions and independent work', (
-        'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
-        'state::tests::native_candidate_after_idle_uses_input_time_in_full_preparation',
-        'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
-        'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
-        'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
-        'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
-        'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
-        'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
-        'state::tests::native_candidate_handoff_rejects_foreign_original_state',
-        'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-        'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
-        'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
-        'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
-        'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
-        'sumeragi::v2_apply::tests::current_carrier_accepts_signed_direct_ordinary_route_without_local_queue',
-        'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
-        'state::tests::native_preparation_preserves_local_recorder_conflict',
     )),
     ('native preparation and recorded controls preserve original validation', (
-        'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
-        'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
-        'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
-        'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
-        'state::tests::native_preparation_rejects_signed_noncanonical_time',
-        'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
-        'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
-        'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
-        'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
-        'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
-        'state::tests::native_preparation_snapshot_anchor_retains_source_owned_execution',
-        'state::tests::native_preparation_snapshot_anchor_rejects_wrong_state_authentication',
-        'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
-        'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
     )),
     ('native source and recorded execution retain original custody', (
-        'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
-        'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
-        'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
-        'state::tests::native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged',
-        'state::tests::native_consumer_source_preparation_retains_exact_recovery_positions_then_stages',
-        'state::tests::native_consumer_source_refuses_authentically_resigned_first_carrier_substitution',
-        'state::tests::native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset',
-        'state::tests::native_recorded_execution_late_failure_discards_hook_effects_and_recorder',
-        'state::tests::native_completed_history_rejects_reapplication_after_second_economic_commit',
     )),
     ('native failure provenance retains local dependencies', (
-        'sumeragi::v2_apply::tests::native_preparation_errors::local_admission_retains_original_release_and_runner_through_all_native_origins',
-        'sumeragi::v2_apply::tests::native_preparation_errors::npos_application_semantic_error_remains_a_deterministic_rejection',
-        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_preparation_refusal_is_local_and_keeps_its_original_release',
-        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection',
-        'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
-        'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
-        'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
     )),
     ('current committed archive capture retains exact decision through retry', (
-        'sumeragi::executor::archive_tests::partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications',
-        'sumeragi::executor::archive_tests::pending_capture_rejects_substituted_header_qc_state_and_missing_certificate',
-        'sumeragi::executor::archive_tests::archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen',
-        'sumeragi::executor::archive_tests::below_quorum_current_frame_cannot_finish_pending_archive_capture',
         'query::archive_finality::tests::certified_archive_authenticates_genesis_and_current_commit_certificates',
         'query::archive_finality::tests::certified_archive_rejects_foreign_kura_and_hash_cache_only_state',
         'query::archive_finality::tests::certified_archive_refuses_changed_durable_boundary_and_uncommitted_successor',
         'query::archive_finality::tests::certified_archive_does_not_accept_a_below_quorum_certificate',
         'query::archive_finality::tests::certified_archive_rejects_identical_durable_frames_for_a_foreign_state_network',
-        'kura::tests::certified_archive_reads_release_kura_custody_on_success_and_refusal',
     )),
     ('current archive contention retains exact physical ownership through retry', (
         'query::provider_ingest_finalized::tests::certified_capture_tests::certified_capture_capacity_refusal_retries_without_artifact_or_state_writes',
@@ -2393,11 +1906,6 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'query::reputation_finalized::tests::certified_capture_rebuilds_after_partial_io_with_identical_bytes_and_one_policy_charge',
     )),
     ('retained validation dispatch preserves original request and carrier', (
-        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
-        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
-        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
-        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
-        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
     )),
     ('original successor admission and reader readiness', (
         'state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
@@ -2409,22 +1917,10 @@ CORE_NATIVE_CONNECTION_STAGES = (
     ('joint Kura partial and cold release ownership', (
         'kura::publication_lease::tests::partial_kura_refusal_releases_every_acquired_fence_before_callbacks',
         'kura::publication_lease::tests::full_and_partial_kura_abandonment_release_jointly_even_on_unwind',
-        'kura::publication_lease::tests::cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal',
-        'kura::publication_lease::tests::repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind',
-        'kura::publication_lease::tests::foreign_cold_batch_returns_original_guard_for_joint_cleanup',
-        'kura::tests::native_amx_live_custody_wrappers_unlock_together_before_callbacks',
     )),
     ('partial publication refusals release before notification', (
-        'queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura',
-        'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake',
     )),
     ('native process transport and exact source recovery', (
-        'state::tests::native_transport_production_poll_retries_real_actor_pressure_without_substitution',
-        'state::tests::native_transport_production_poll_fences_closed_actor_without_losing_fanout',
-        'state::tests::native_transport_production_decision_reaches_global_nonmembers_after_rollover',
-        'state::tests::native_driver_source_recovery_rejoins_original_owner_after_foreign_refusal',
     )),
     ('finite World journal shell planning', (
         'state::world_journals::tests::publication_tests::world_publication_retains_original_busy_notification_until_aggregate_unlock',
@@ -2432,7 +1928,6 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop',
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
-        'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
     )),
     ('scoped original World storage publication', (
         'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers',
@@ -2440,145 +1935,30 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
     )),
     ('retained candidate descriptors and exact marker custody', (
-        'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_reproposal_directory_sync_refusal_preserves_prior_confirmed_receipt',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_consumption_tombstone_rejects_delayed_earlier_round_without_execution',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_validation_requires_exact_store_and_existing_cached_owner',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_capacity_refuses_before_execution_or_marker_write',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_byte_admission_precedes_allocation_and_execution',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_charge_outlives_payload_and_wakes_exact_pool_retry',
-        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_zero_and_overflow_do_not_allocate_or_execute',
     )),
     ('original service Queue retirement publication', (
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_binds_retirement_and_replacement_until_drop',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::empty_decoy_queue_and_foreign_state_never_supply_original_cut',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::malformed_captured_retirement_route_releases_original_queue_cut',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::pending_queue_work_releases_without_applying_the_blocked_carrier',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::queue_cut_does_not_replace_kura_or_original_geometry_authority',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::sticky_queue_fault_revokes_retained_retirement_before_storage_or_visibility',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::immutable_apply_service_exposes_only_its_actual_state_and_queue',
-        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_completes_retirement_storage_without_publishing_state',
     )),
     ('retained carrier physical publication and release', (
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_execution_phases_survive_marker_reproposal_and_publication_refusals',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::physical_preparation_diagnostics_retain_storage_cause_and_busy_owner',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_state_and_header_are_required_before_witness_writes',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::source_substitution_refuses_before_state_acquisition_and_retains_original_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_carrier_wire_refuses_source_join_and_restored_owner_reauthenticates',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::aggregate_acquisition_holds_every_family_without_publishing_or_losing_originals',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_refusal_returns_original_decision_and_releases_every_physical_writer',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_capture_reservation_survives_physical_refusal_and_exact_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_releases_hash_before_retaining_membership_writers',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_reservation_outlives_component_writers_and_state_fences_on_drop_and_abort',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owners',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::checkpoint_storage_refusal_precedes_state_and_retains_exact_originals',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::exact_checkpoint_retry_preserves_receipt_across_physical_abort',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::attached_foreign_checkpoint_never_grants_state_acquisition',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::signed_retirement_and_replacement_publish_once_under_original_service_queue_cut',
     )),
     ('original carrier geometry retries and retirement', (
-        'state::carrier_geometry_preparation::tests::carrier_geometry_captures_original_predecessor_and_drop_does_not_publish',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_identity_requires_its_exact_captured_header',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_rejects_changed_header_and_forged_pending_predecessor',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_rejects_ownerless_successor_and_ignores_physical_cache',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_replacement_uses_actual_undo_including_retired_lineage',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_completion_requires_original_state_and_exact_header_before_effects',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_retirement_and_replacement_require_original_queue_custody',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_preparation_is_pure_and_root_change_refuses_before_raw_effects',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_retries_sync_failure_under_held_lease_without_state_publication',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_completion_requires_original_prepared_descriptors',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_completed_catalog_refuses_identical_replacement_journal',
-        'state::carrier_geometry_preparation::tests::carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner',
     )),
     ('actual terminal carrier publication', (
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::consumes_original_journals_once_with_one_visibility_interval',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::wrong_retained_header_returns_original_decision_and_releases_every_writer',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::prevalidation_returns_owner_without_visibility_then_real_owner_publishes',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::foreign_geometry_returns_original_owner_before_any_visibility_change',
     )),
     ('native publication and original driver Apply settlement', (
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_single_publishes_original_sources_and_exact_checkpoint_once',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_atomic_publishes_original_sources_and_exact_checkpoint_once',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_driver_settles_original_closed_apply_only_after_real_publication',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_retires_closed_body_without_local_qc',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_checks_unacknowledged_durable_decision',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_durable_decision',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_checks_unlaunched_decision',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_unlaunched_decision',
     )),
 )
-CORE_QUEUE_PLAN_CONNECTION_STAGES = (('original global QueuePlan admission across actual runner callers', (
-    'sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
-    'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
-    'sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
-    'queue::tests::current_ordinary_fifo_survives_committed_height_and_replay',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
-    'sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_retains_exact_outbound_until_original_acknowledgement',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_capacity_retry_preserves_transferred_inventory',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_view_change_rejects_old_occurrence_acknowledgement',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_leader_uses_original_persistence_and_selection',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_rejects_foreign_kura_without_replacing_original_sources',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_shared_fail_stop_guard_fences_output_and_ingress',
-    'sumeragi::v2_lane_work::tests::queue_plan_owner_same_context_rollover_preserves_original_occurrence',
-    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_preserves_original_certificate_allocation',
-    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_refusal_keeps_original_source',
-    'sumeragi::v2_lane_work::tests::queue_plan_runner_relay_uses_global_owner_without_old_lane_admission',
-    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer',
-    'sumeragi::v2_queue_plan_admission::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination',
-    'sumeragi::v2_runner::tests::queue_plan_batch_scans_once_and_reuses_exact_sources',
-    'sumeragi::v2_lane_work::tests::queued_successor_generation_hint_cancels_ranked_older_close_before_retry',
-    'state::tests::pending_queue_plan_replay_requires_exact_live_durable_binding',
-)),)
-
 CORE_KEY_ROLE_STAGES = (('authenticated indexed polynomial key ownership', (
     'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
     'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
 )),)
 
-CORE_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
-CORE_ADMISSION_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
-CORE_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+CORE_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
+CORE_STAGES += CORE_KEY_ROLE_STAGES
 
 CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap isolation', (
-    'state::tests::native_driver_observer_role_cannot_open_or_admit_voting_control',
-    'state::tests::native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence',
-    'state::tests::native_driver_owned_rejection_returns_original_payload_without_poisoning_output',
-    'state::tests::native_driver_owned_ingress_without_original_fair_evidence_fails_closed',
-    'state::native_execution_resources::tests::source_layouts_reserve_and_refund_exact_original_bytes',
-    'state::native_execution_resources::tests::final_execution_charge_remains_with_source_admission',
-    'state::carrier_preparation::journals::decision_binding::tests::original_capture_pool_remains_reserved_through_decision_binding_and_handoff',
-    'state::carrier_preparation::journals::decision_binding::tests::other_signed_context_retains_original_capture_owner_for_retry',
-    'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint',
-    'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_driver_settles_complete_published_carrier_after_owned_worker_handoff',
     'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
     'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
-    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_are_conditional_in_both_fields',
-)), )
-
-CORE_NATIVE_CONNECTION_STAGES += (('Native retained local-source completion and original publication', (
-    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_passes_ordinary_completion_without_releasing_wait',
-    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_prefix_without_releasing_wait',
-    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_batch_without_releasing_wait',
-    'sumeragi::v2_runner::tests::native_source_barrier_preserves_progress_physical_completion_and_dependency_service',
-    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original',
-    'sumeragi::v2_apply::tests::retained_current_genesis_executes_once_and_publishes_original_owner',
 )), )
 
 CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
@@ -2882,6 +2262,29 @@ WALLET_STAGES = (("bounded faucet proof-of-work deadline", (
 CLIENT_STAGES += (("canonical public faucet advertisement decoder", (
     "account_bootstrap::tests::faucet_discovery_requires_exact_canonical_v1_fields",
 )),)
+
+DAEMON_STAGES += (("native bootstrap evidence and configured genesis authority", (
+    "beacon_bootstrap::tests::rotation_rejects_unadmitted_evidence_before_opening_custody",
+    "beacon_bootstrap::tests::finality_admission_rejects_zero_contradictory_and_over_protocol_limits",
+    "beacon_bootstrap::tests::rotation_phase_rejects_replay_gap_and_cutoff",
+    "beacon_bootstrap::tests::claimed_journal_count_never_substitutes_for_actual_native_source",
+    "configured_genesis_tests::configured_genesis_is_always_read_and_authenticated",
+)),)
+
+KAGAMI_STAGES += (("native beacon history and retired source refusal", (
+    "kura::beacon_history::tests::beacon_history_distinguishes_proposals_from_recorded_execution_and_nested_effects",
+    "kura::beacon_history::tests::beacon_history_rejects_removed_merge_sidecar_option",
+    "kura::beacon_history::tests::beacon_history_projects_actual_native_pulse_and_rejects_foreign_execution_claim",
+)),)
+DATA_MODEL_STAGES += (("native selective execution inclusion", (
+    "query::canonical_output_inclusion_tests::selective_inclusion_binds_both_qc_roots_counts_network_and_source_join",
+)),)
+
+# Exact native owners supplement the independent application and custody regressions above.
+_NATIVE_CURRENT_STAGES = native_owner_stages(exclude=("native durable archive recovery",))
+CORE_STAGES += _NATIVE_CURRENT_STAGES
+CORE_STARTUP_STAGES += _NATIVE_CURRENT_STAGES
+CORE_ADMISSION_STARTUP_STAGES += _NATIVE_CURRENT_STAGES
 
 def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
     """Select honest test coverage without changing shipping features or artifacts."""
@@ -3816,7 +3219,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha_test_runtime_provider_broker"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-private-settlement-routes", "iroha_test_runtime_provider_broker"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -3827,7 +3230,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         paths = {}
         for selection, record in records.items():
             package = {"iroha3d": "irohad", "iroha": "iroha_cli",
-                       "iroha3d-message-control": "irohad",
+                       "iroha3d-private-settlement-routes": "irohad",
                        "iroha_test_runtime_provider_broker": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
@@ -4186,7 +3589,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     if (message_control and disposable_broker) or (focused_fixture and (message_control or disposable_broker)):
         raise CheckError("feature-isolated codegen cannot use another fixture graph")
     if message_control:
-        expected = {"iroha3d": ("iroha3d-message-control", "irohad")}
+        expected = {"iroha3d": ("iroha3d-private-settlement-routes", "irohad")}
     elif disposable_broker:
         expected = {"iroha_test_runtime_provider_broker": ("iroha_test_runtime_provider_broker", "irohad")}
     else:
@@ -4210,10 +3613,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
-               *(["--features", "irohad/test-network-message-control"] if message_control else []),
+               *(["--features", "irohad/test-network-private-settlement-route-control"] if message_control else []),
                *(["--features", "irohad/test-network-disposable-broker"] if disposable_broker else []),
                "--message-format=json-render-diagnostics"]
-    phase = ("message-control fixture codegen" if message_control else
+    phase = ("private-settlement HTTP route fixture codegen" if message_control else
              "disposable broker fixture codegen" if disposable_broker else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
@@ -4479,6 +3882,8 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             raise CheckError(f"selected source inventory has unknown harness: {harness}")
         package = HARNESS_TARGETS[harness][3][1]
         names = [name for _, tests in stages for name in tests]
+        if any(name.startswith(("sumeragi::v2", "block::consensus_v2::finality::")) for name in names):
+            raise CheckError(f"retired protocol owner selected in {harness}")
         if len(names) != len(set(names)):
             raise CheckError(f"selected source inventory repeats a test in {harness}")
         selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
@@ -4494,7 +3899,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
             re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
                        r"(?:sync|async|consensus_stack)\s+([A-Za-z_]\w*)"),
-            re.compile(r"\b(?:source_contract_test|v2_apply_test|scenario_test|world_test)!\s*[({]\s*"
+            re.compile(r"\b(?:source_contract_test|scenario_test|world_test)!\s*[({]\s*"
                        r"([A-Za-z_]\w*)"),
         )
         missing = []
@@ -4660,23 +4065,23 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
         raise CheckError("Torii lifecycle test source registration failed: " + str(error)) from error
 
 
+def validate_native_consensus_test_registration(root: Path) -> None:
+    """Bind the reviewed native source census before compiling any test harness."""
+    try:
+        _native_inventory["validate_native_source_inventory"](root)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CheckError("native source inventory failed: " + str(error)) from error
+
+
 def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                                 scoped_stages: dict[str, tuple] | None = None) -> None:
-    """Reject invalid source assets, then run shared contracts before Cargo."""
+    """Require registered native owners and the independent Initial instruction audit."""
     if scoped_stages is not None:
         validate_selected_source_test_inventory(root, scoped_stages)
     validate_mv_test_registration(root)
     validate_torii_lifecycle_test_registration(root)
-    started = time.monotonic()
-    print("[taira-check] start source-asset grammar and inventory audit", flush=True)
-    checked = subprocess.run(
-        [sys.executable, "-I", "-B", str(root / "scripts/tests/sumeragi_source_contract_asset_compaction_test.py")],
-        cwd="/", env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True,
-        check=False, pass_fds=lock_fds, timeout=120)
-    if checked.returncode:
-        sys.stderr.write(checked.stdout + checked.stderr)
-        raise CheckError(f"source-asset grammar and inventory audit failed (exit {checked.returncode})")
-    print(f"[taira-check] source-asset grammar and inventory audit passed in {time.monotonic() - started:.1f}s", flush=True)
+    validate_native_consensus_test_registration(root)
+    print("[taira-check] native source ownership and exact test census passed", flush=True)
     checked = subprocess.run(
         [sys.executable, "-I", "-B", str(root / "scripts/check_taira_initial_executor.py"),
          "--repo", str(root), "--self-test"],
@@ -4686,74 +4091,6 @@ def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple
         sys.stderr.write(checked.stdout + checked.stderr)
         raise CheckError(f"native Initial instruction source audit failed (exit {checked.returncode})")
     print("[taira-check] native Initial instruction source audit passed", flush=True)
-    _run_standalone_checks(root, env, lock_fds,
-        source="crates/iroha_core/src/sumeragi/v2_lifecycle_source_contract_harness.rs",
-        output_name="lifecycle-source-tests", label="lifecycle source contracts",
-        description="lifecycle source contracts (shared Core assertions)")
-
-
-def native_linker_rustc_arguments(env: dict[str, str]) -> list[str]:
-    """Forward only the coordinated native linker pair to direct rustc owners."""
-    encoded = env.get("CARGO_ENCODED_RUSTFLAGS")
-    plain = env.get("RUSTFLAGS")
-    if encoded is None and plain is None:
-        return []
-    if encoded is not None and plain is not None:
-        raise CheckError("native linker flags must have one coordinated encoding")
-    arguments = encoded.split("\x1f") if encoded is not None else plain.split()
-    prefixes = ("-Clinker=", "-Clink-arg=-fuse-ld=")
-    if len(arguments) != len(prefixes):
-        raise CheckError("standalone checks accept only the coordinated native linker pair")
-    for argument, prefix in zip(arguments, prefixes):
-        path = argument.removeprefix(prefix)
-        if (not argument.startswith(prefix) or not Path(path).is_absolute()
-                or os.path.abspath(path) != path or any(char in path for char in "\0\r\n\x1f")):
-            raise CheckError("standalone checks require exact absolute native linker paths")
-    return arguments
-
-
-def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...], *,
-                           source: str, output_name: str, label: str, description: str) -> None:
-    compiler = env.get("RUSTC")
-    if not compiler or not Path(compiler).is_absolute():
-        raise CheckError(f"{label} checks require the coordinated pinned RUSTC")
-    linker_arguments = native_linker_rustc_arguments(env)
-    target = Path(env["CARGO_TARGET_DIR"])
-    output = target / "taira-consensus-fsm-check"
-    output.mkdir(mode=0o700, exist_ok=True)
-    if output.is_symlink() or not output.is_dir():
-        raise CheckError(f"{label} output must be a direct directory in the existing target")
-    executable = output / output_name
-    if executable.is_symlink():
-        raise CheckError(f"{label} executable cannot be a symlink")
-    started = time.monotonic()
-    print(f"[taira-check] start {description}", flush=True)
-    common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
-                  capture_output=True, check=False, pass_fds=lock_fds, timeout=120, umask=0o077)
-    compiled = subprocess.run([compiler, *linker_arguments, "--edition=2024", "--test",
-        str(root / source), "-o", str(executable)], **common)
-    if compiled.returncode:
-        sys.stderr.write(compiled.stdout + compiled.stderr)
-        raise CheckError(f"{label} compilation failed (exit {compiled.returncode})")
-    listing = subprocess.run([str(executable), "--list", "--format", "terse"], **common)
-    lines = listing.stdout.splitlines()
-    names = [line.removesuffix(": test") for line in lines if line.endswith(": test")]
-    if (listing.returncode or not names or len(names) != len(set(names))
-            or len(names) != len(lines) or any(not name for name in names)):
-        raise CheckError(f"{label} test census is missing, duplicated, or malformed")
-    result = subprocess.run([str(executable), "--color", "never", "--test-threads=6"], **common)
-    passed = [line.removeprefix("test ").removesuffix(" ... ok")
-              for line in result.stdout.splitlines()
-              if line.startswith("test ") and line.endswith(" ... ok")]
-    summaries = re.findall(
-        r"^test result: ok\. (\d+) passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in [^\n]+$",
-        result.stdout, re.MULTILINE)
-    if (result.returncode or len(passed) != len(names) or set(passed) != set(names)
-            or summaries != [str(len(names))]):
-        sys.stderr.write(result.stdout + result.stderr)
-        raise CheckError(f"{label} suite did not execute every listed test successfully without skips")
-    print(f"[taira-check] {label} PASS: {len(names)} listed, {len(passed)} passed, 0 ignored "
-          f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
 def independent_check_evidence(harnesses: NativeArtifactCopies, stages, *,

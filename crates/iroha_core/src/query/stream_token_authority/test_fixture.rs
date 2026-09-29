@@ -294,7 +294,7 @@ impl StreamTokenRuntimeTestFixtureV1 {
                 start_block_height: height,
                 block_count: self.state.view().height(),
             })?;
-        self.state.kura().force_hash_only_block_for_testing(height)
+        self.state.kura().corrupt_canonical_body_for_testing(height)
     }
 }
 

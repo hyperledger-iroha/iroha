@@ -63,13 +63,8 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
         block_hashes.push(first_hash);
         block_hashes.commit_for_tests();
     }
-    let replacement_header = BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        Some(first_hash),
-        None,
-        0,
-        0,
-    );
+    let replacement_header =
+        BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(first_hash), None, 0, 0);
     let replacement_hash = replacement_header.hash();
     {
         let mut block_hashes = state.block_hashes.block_and_revert();
@@ -83,7 +78,11 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
 }
 #[test]
 fn block_hashes_execution_keeps_no_physical_hash_writer() {
-    let state = State::new(World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
+    let state = State::new(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
     let reader = state.block_hashes.view();
     let block = state.block_hashes.block();
     assert_eq!(block.len(), 0);
@@ -115,14 +114,8 @@ fn block_hashes_committed_height_cache_tracks_commits() {
         state.block_hashes.view().len(),
         "cached committed height must be refreshed after block commit"
     );
-    let replacement_hash = BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        Some(first_hash),
-        None,
-        0,
-        0,
-    )
-    .hash();
+    let replacement_hash =
+        BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(first_hash), None, 0, 0).hash();
     {
         let mut block_hashes = state.block_hashes.block_and_revert();
         block_hashes.push(replacement_hash);
@@ -211,12 +204,12 @@ async fn canonical_history_reports_authenticated_hash_only_body() {
     let _events = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
     kura.store_block(block).expect("store canonical test block");
-    kura.force_hash_only_block_for_testing(nonzero!(1_usize))
+    kura.corrupt_canonical_body_for_testing(nonzero!(1_usize))
         .expect("convert canonical test block to hash-only form");
     let view = state.view();
     assert!(matches!(
         view.canonical_block_by_height(nonzero!(1_usize)),
-        Err(CanonicalHistoryError::HashOnlyBodyUnavailable { height: 1, .. })
+        Err(CanonicalHistoryError::BodyUnavailable { height: 1, .. })
     ));
 }
 #[test]
@@ -478,15 +471,23 @@ fn test_constructors_seed_exact_kura_lane_markers() {
         let incarnation = state
             .lane_incarnation(lane_id)
             .expect("default lane incarnation");
-        let (session, signer_pops) = sample_committed_lane_block_session_for_state_test(
-            lane_id,
-            entry.dataspace_id,
-            incarnation,
-            1,
-            1,
+        let identity = state
+            .lane_storage_identity(lane_id)
+            .expect("exact active physical identity");
+        assert_eq!(
+            identity,
+            crate::kura::LaneStorageIdentity::new(
+                *state.network_id_ref(),
+                lane_id,
+                entry.dataspace_id,
+                incarnation,
+                state.lane_incarnation_activation_heights_snapshot()[&lane_id],
+            )
         );
-        kura.persist_committed_lane_block_session(&session, &signer_pops)
-            .expect("test constructor must install its exact active lane marker");
+        assert!(
+            identity.blocks_dir(kura.store_root()).is_dir(),
+            "constructor provisions the exact physical instance"
+        );
     };
     let kura = Kura::blank_kura_for_testing();
     let state = State::new(
@@ -1076,19 +1077,27 @@ async fn new_for_testing_uses_config_chain_id() {
 
 #[test]
 fn state_and_query_views_retain_original_hash_nodes_across_tip_publication() {
-    let state=State::new_for_testing(World::default(),Kura::blank_kura_for_testing(),LiveQueryStore::start_test());
-    let first=HashOf::from_untyped_unchecked(Hash::new(b"first shared history"));
-    let second=HashOf::from_untyped_unchecked(Hash::new(b"second shared history"));
-    let mut block=state.block_hashes.block();block.push(first);block.commit_for_tests();
-    let original=state.block_hashes.view();
-    let view=state.view();
-    let query=state.query_view();
-    let ptr=std::ptr::from_ref(original.get(0).unwrap());
-    assert_eq!(std::ptr::from_ref(view.block_hashes.get(0).unwrap()),ptr);
-    assert_eq!(std::ptr::from_ref(query.block_hashes.get(0).unwrap()),ptr);
-    let mut block=state.block_hashes.block_and_revert();block.push(second);block.commit_for_tests();
-    assert_eq!(view.block_hashes.last(),Some(&first));
-    assert_eq!(query.block_hashes.last(),Some(&first));
-    assert_eq!(state.block_hashes.view().last(),Some(&second));
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let first = HashOf::from_untyped_unchecked(Hash::new(b"first shared history"));
+    let second = HashOf::from_untyped_unchecked(Hash::new(b"second shared history"));
+    let mut block = state.block_hashes.block();
+    block.push(first);
+    block.commit_for_tests();
+    let original = state.block_hashes.view();
+    let view = state.view();
+    let query = state.query_view();
+    let ptr = std::ptr::from_ref(original.get(0).unwrap());
+    assert_eq!(std::ptr::from_ref(view.block_hashes.get(0).unwrap()), ptr);
+    assert_eq!(std::ptr::from_ref(query.block_hashes.get(0).unwrap()), ptr);
+    let mut block = state.block_hashes.block_and_revert();
+    block.push(second);
+    block.commit_for_tests();
+    assert_eq!(view.block_hashes.last(), Some(&first));
+    assert_eq!(query.block_hashes.last(), Some(&first));
+    assert_eq!(state.block_hashes.view().last(), Some(&second));
     assert!(state.block_hashes.writer_available());
 }

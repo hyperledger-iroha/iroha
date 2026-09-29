@@ -17,11 +17,21 @@ struct NativeValidationFixture {
 }
 impl NativeValidationFixture {
     fn new() -> Self {
+        Self::with_configuration(|_| {})
+    }
+    fn with_configuration(configure: impl FnOnce(&mut TestChainConfig)) -> Self {
         let user = KeyPair::from_seed(vec![0x7A; 32], Algorithm::Ed25519);
         let mut config = TestChainConfig::new(World::new(), 1_000);
         config.genesis_instructions.push(
             Register::account(Account::new(AccountId::new(user.public_key().clone()))).into(),
         );
+        config.world.account_permissions.insert(
+            AccountId::new(user.public_key().clone()),
+            BTreeSet::from([iroha_data_model::permission::Permission::from(
+                iroha_executor_data_model::permission::parameter::CanSetParameters,
+            )]),
+        );
+        configure(&mut config);
         let mut chain = CertifiedTestChain::start(config).unwrap();
         chain.commit_at(2_000, Vec::new());
         Self { chain, user }
@@ -357,7 +367,7 @@ fn native_validation_retains_real_rejected_input_without_phantom_fragment() {
         &absent,
         [InstructionBox::from(Log::new(
             Level::INFO,
-            "absent authority",
+            "absent authority".to_owned(),
         ))],
         2_001,
     );
@@ -384,3 +394,5 @@ include!("native_da_validation_tests.rs");
 include!("native_input_validation_tests.rs");
 
 include!("native_expansion_receiver_tests.rs");
+
+include!("canonical_carrier_source_tests.rs");

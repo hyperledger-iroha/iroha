@@ -9,6 +9,7 @@
 //! custody consumes descriptor 200 only when the exact public provider binding is
 //! configured; the canonical credential is bound to the expected genesis network.
 
+use crate::authenticated_genesis::AuthenticatedGenesis;
 use crate::{
     IrohaRuntimeDeps, IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1,
@@ -30,9 +31,7 @@ use iroha_config::parameters::{
         },
     },
 };
-use iroha_core::{
-    sumeragi::GenesisV2Bootstrap, zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
-};
+use iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{NetworkId, isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1};
 use iroha_model_base::peer::PeerId;
@@ -529,13 +528,13 @@ fn bind_inherited_mint_finality_authority(
 
 pub(crate) fn resolve_inherited_mint_finality_runtime(
     config: &Config,
-    authenticated_genesis: &GenesisV2Bootstrap,
+    authenticated_genesis: &AuthenticatedGenesis,
     dependencies: IrohaRuntimeDeps,
 ) -> Result<IrohaRuntimeDeps, String> {
     if dependencies.kagemusha_mint_finality_authority.is_some() {
         return Err("a second mint-finality runtime authority is forbidden".to_owned());
     }
-    let context = authenticated_genesis.context();
+    let context = authenticated_genesis;
     let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
     if context.network_id != network_id
         || config.common.peer.id.public_key() != config.common.key_pair.public_key()

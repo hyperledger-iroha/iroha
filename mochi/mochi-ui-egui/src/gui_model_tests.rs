@@ -18,19 +18,16 @@ use iroha_data_model::{
             SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
             SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
         },
-        consensus_v2::{
-            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
-        },
     },
     da::commitment::DaProofScheme,
     events::{
         EventBox,
         time::{TimeEvent, TimeInterval},
     },
-    nexus::{LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
+    nexus::{LaneStorageProfile, LaneVisibility},
     prelude::{Hash, HashOf},
     role::RoleId,
+    sumeragi::SumeragiStatus,
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -682,43 +679,32 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
         "snapshot should remain available for future restores"
     );
 }
-fn sample_sumeragi_status_wire() -> SumeragiV2Status {
-    SumeragiV2Status {
-        protocol_version: PROTOCOL_VERSION,
-        node_fingerprint: Hash::new(b"mochi-ui-node"),
-        build_fingerprint: Hash::new(b"mochi-ui-build"),
-        config_fingerprint: Hash::new(b"mochi-ui-config"),
-        restart_required: false,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"mochi-ui-context",
-        ))),
+fn sample_sumeragi_status_wire() -> SumeragiStatus {
+    SumeragiStatus {
+        protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+        config_fingerprint: iroha_crypto::Hash::new(b"mochi-status-config"),
+        beacon_horizon: None,
+        instance: [0x41; 32],
         height: 10,
         view: 4,
-        phase: SumeragiV2StatusPhase::Prepare,
-        leader: 1,
-        locked_prepare_qc: None,
-        highest_prepare_qc: None,
-        last_timeout_certificate: None,
-        body_state: SumeragiV2BodyState::Validated,
-        pending_persistence_id: None,
-        last_committed_height: 9,
-        last_committed_subject: None,
-        height_context: SumeragiV2HeightContextStatus {
-            epoch: 1,
-            epoch_end_height: 100,
-            mode: ConsensusMode::Permissioned,
-            epoch_seed: [0xA5; 32],
-            validator_count: 4,
-            quorum: DualQuorum {
-                min_signers: 3,
-                total_power: 4,
-            },
-        },
-        last_commit_qc: None,
-        liveness: Default::default(),
-        beacon_horizon: None,
+        stage: 0,
+        leader: None,
+        proxy_tail: None,
+        high_qc_view: None,
+        level: 0,
+        start_level: 0,
+        t_retx_ms: 100,
+        committed_height: 9,
+        applied_height: 9,
+        awaiting: false,
+        signer: None,
+        unanchored: false,
+        abstaining: true,
+        halted: None,
+        footprint: Default::default(),
     }
 }
+
 fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
     SumeragiDiagnosticsStatus {
         pipeline_execution: Default::default(),
@@ -755,11 +741,6 @@ fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
                 [0x91; Hash::LENGTH],
             )),
         }],
-        lane_settlement_commitments: Vec::new(),
-        lane_relay_envelopes: Vec::new(),
-        lane_payload_ownerships: Vec::new(),
-        committed_lane_blocks: Vec::new(),
-        lane_block_sessions: Vec::new(),
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: vec![SumeragiLaneGovernance {
@@ -782,8 +763,6 @@ fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
                 allowed_ids: vec!["alpha-upgrade".to_owned()],
             }),
         }],
-        native_amx_participant_applications: Vec::new(),
-        autonomous_lane_executions: Vec::new(),
     }
 }
 #[test]
@@ -1559,7 +1538,7 @@ fn peer_status_view_captures_metrics_and_errors() {
     assert_eq!(color, Color32::from_rgb(80, 160, 80));
     let membership_summary = view.membership_summary().expect("membership summary");
     assert!(membership_summary.contains("h21"));
-    assert!(membership_summary.contains("leader 1"));
+    assert!(membership_summary.contains("leader awaiting"));
     let updated = TelemetryStatus {
         build: Default::default(),
         peers: 3,
@@ -1684,7 +1663,7 @@ fn peer_status_view_surfaces_sealed_lanes() {
     );
 }
 #[test]
-fn lane_status_rows_surface_relay_lag_and_cursor() {
+fn lane_status_rows_surface_native_commitment_and_cursor() {
     let mut view = PeerStatusView::default();
     let now = Instant::now();
     let status = TelemetryStatus {
@@ -1702,34 +1681,16 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     };
     let sumeragi = sample_sumeragi_status_wire();
     let mut diagnostics = sample_sumeragi_diagnostics();
-    let header = BlockHeader::new(NonZeroU64::new(9).expect("height"), None, None, 0, 0);
-    let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
-        block_height: 9,
-        lane_id: LaneId::new(0),
-        lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id: DataSpaceId::new(0),
-        tx_count: 1,
-        total_local_amount: "0".parse().expect("valid settlement quantity"),
-        total_xor_due: "0".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let envelope = LaneRelayEnvelope::new(header, None, settlement, 256).expect("envelope");
-    diagnostics.lane_relay_envelopes = vec![envelope];
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
     let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     assert_eq!(row.lane_id, 0);
     assert_eq!(row.alias, "alpha");
-    assert_eq!(row.relay_lag, Some(1));
+    assert_eq!(row.block_height, Some(10));
     assert_eq!(row.rbc_bytes, Some(384));
     assert_eq!(row.da_cursor_label(), "e2 s7");
-    assert!(matches!(row.relay_state, RelayIngestState::MissingFinality));
+    assert!(matches!(row.manifest_state, LaneManifestState::Ready));
 }
 #[test]
 fn composer_update_success_records_message() {

@@ -2,10 +2,7 @@
 use super::*;
 use base64::Engine as _;
 use iroha::client::ContractCallDraftIntent;
-use iroha::data_model::{
-    smart_contract::manifest::EntryPointKind,
-    transaction::{Executable, TransactionAdmissionIntent},
-};
+use iroha::data_model::{smart_contract::manifest::EntryPointKind, transaction::Executable};
 use iroha_crypto::Signature;
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
 use norito::json::Value;
@@ -556,7 +553,6 @@ fn validate_plan(prepared: &PreparedContractCall, config: &Config) -> Result<()>
         if grant.name != "entrypoint-grant"
             || signed.network_id() != Some(&plan.network_id)
             || signed.authority() != &plan.authority
-            || signed.payload().admission_intent() != TransactionAdmissionIntent::Ordinary
             || signed.instructions() != &expected
             || !signed.metadata().is_empty()
             || !plan
@@ -578,7 +574,6 @@ fn validate_call_transaction(plan: &CallPlan, step: &TransactionRecord) -> Resul
     if step.name != "contract-call"
         || signed.network_id() != Some(&plan.network_id)
         || signed.authority() != &plan.authority
-        || signed.payload().admission_intent() != TransactionAdmissionIntent::Ordinary
         || signed.instructions() != &Executable::ContractCall(plan.intent.invocation.clone())
         || signed.metadata() != &plan.intent.metadata
         || !plan

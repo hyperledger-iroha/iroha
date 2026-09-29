@@ -34,6 +34,11 @@ use std::{
 };
 pub(crate) mod dirty_chunks;
 use dirty_chunks::DirtyChunks;
+pub(crate) mod private_disposal;
+mod private_scrub;
+mod read_log;
+use read_log::ReadLog;
+pub use read_log::ReadLogSnapshot;
 mod write_log;
 use write_log::WriteLog;
 pub use write_log::{WriteLogEntry, WriteLogSnapshot};
@@ -87,7 +92,7 @@ pub struct Memory {
     /// Runtime-template snapshots preserve this identity.
     baseline_lineage: crate::cache_memory::SharedValue<()>,
     /// Addresses read during execution when access tracking is enabled.
-    read_log: Mutex<crate::cache_memory::OwnedVec<AccessRange>>,
+    read_log: Mutex<ReadLog>,
     /// Log of writes performed during execution (byte-accurate).
     write_log: Mutex<WriteLog>,
     /// Attached only for one explicit local diagnostic run; never cloned into a template.
@@ -595,7 +600,9 @@ impl Memory {
             modified_chunks,
             template_generation: 0,
             baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
-            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            read_log: Mutex::new(
+                active_budget.map_or_else(ReadLog::default, ReadLog::with_memory_budget),
+            ),
             write_log: Mutex::new(
                 active_budget.map_or_else(WriteLog::default, WriteLog::with_memory_budget),
             ),
@@ -1159,12 +1166,28 @@ impl Memory {
     }
     /// Clear recorded access information.
     pub fn clear_tracking(&self) {
-        self.read_log.lock().clear();
+        self.with_read_log(ReadLog::clear);
         self.with_write_log(WriteLog::clear);
     }
-    /// Snapshot the set of ranges read since the last clear.
-    pub fn read_set(&self) -> Vec<AccessRange> {
-        self.read_log.lock().to_vec()
+    /// Detach an immutable, independently accounted snapshot of recorded reads.
+    ///
+    /// The snapshot holds no Memory lock across later loads or clears.
+    ///
+    /// # Errors
+    /// Defers locally if original-pool credit or row allocation is unavailable.
+    pub fn try_read_log_snapshot(&self) -> Result<ReadLogSnapshot, VMError> {
+        self.with_read_log(|log| log.try_snapshot())
+    }
+
+    // Replacement and snapshot failures can refund original execution credit.
+    // Waiter callbacks must run after the read-log mutex releases, even on unwind.
+    fn with_read_log<R>(&self, operation: impl FnOnce(&mut ReadLog) -> R) -> R {
+        match self.allocation_budget() {
+            Some(budget) => {
+                budget.with_deferred_refund_notifications(|_| operation(&mut self.read_log.lock()))
+            }
+            None => operation(&mut self.read_log.lock()),
+        }
     }
     /// Detach an immutable, independently accounted snapshot of recorded writes.
     ///
@@ -1246,11 +1269,8 @@ impl Memory {
             .map_err(VMError::AllocationDeferred)?;
         plan.include_child(DirtyChunks::memory_plan(self.modified_chunks.chunks())?)
             .map_err(VMError::AllocationDeferred)?;
-        plan.include_child(
-            ExecutionMemoryPlan::array::<AccessRange>(self.read_log.lock().len())
-                .map_err(VMError::AllocationDeferred)?,
-        )
-        .map_err(VMError::AllocationDeferred)?;
+        plan.include_child(self.read_log.lock().memory_plan()?)
+            .map_err(VMError::AllocationDeferred)?;
         plan.include_child(self.write_log.lock().memory_plan()?)
             .map_err(VMError::AllocationDeferred)?;
         plan.include_child(self.tree.runtime_template_memory_plan()?)
@@ -1281,11 +1301,7 @@ impl Memory {
             copied.copy_from_slice(&self.data);
             MemoryImage::Local(copied)
         };
-        let reads = self
-            .read_log
-            .lock()
-            .try_copy_exact()
-            .map_err(|_| unavailable())?;
+        let reads = self.with_read_log(|log| log.try_copy(lease.as_deref_mut()))?;
         let copied_writes = self.with_write_log(|log| log.try_copy(lease.as_deref_mut()))?;
         let mut copied = Self {
             // An empty frame stack has no nested owned buffers; retain its
@@ -1387,20 +1403,19 @@ impl Memory {
         if REFUSE_NEXT_READ_TRACKING.with(|refuse| refuse.replace(false)) {
             return Err(unavailable());
         }
-        let mut reads = self.read_log.lock();
-        reads.try_reserve_one().map_err(|_| unavailable())?;
-        if let Some(recorder) = &self.diagnostic_access_recorder {
-            let start = usize::try_from(addr).map_err(|_| unavailable())?;
-            let len = usize::try_from(len).map_err(|_| unavailable())?;
-            let end = start.checked_add(len).ok_or_else(unavailable)?;
-            let bytes = self.data.get(start..end).ok_or_else(unavailable)?;
-            recorder.record_read(addr, bytes, kind)?;
-        }
-        // Capacity was charged before the recorder or guest-visible log changes.
-        reads
-            .try_push(AccessRange { addr, len })
-            .map_err(|_| unavailable())?;
-        Ok(())
+        self.with_read_log(|reads| {
+            let replacement = reads.prepare_growth()?;
+            if let Some(recorder) = &self.diagnostic_access_recorder {
+                let start = usize::try_from(addr).map_err(|_| unavailable())?;
+                let len = usize::try_from(len).map_err(|_| unavailable())?;
+                let end = start.checked_add(len).ok_or_else(unavailable)?;
+                let bytes = self.data.get(start..end).ok_or_else(unavailable)?;
+                recorder.record_read(addr, bytes, kind)?;
+            }
+            // Both logs accept the complete access before caller output changes.
+            reads.record_prepared(replacement, AccessRange { addr, len });
+            Ok(())
+        })
     }
     fn prepare_write_tracking(
         &mut self,
@@ -1806,7 +1821,12 @@ mod tests {
                     crate::error::ExecutionDeferral::AllocationUnavailable
                 ))
             ));
-            assert!(memory.read_set().is_empty());
+            assert!(
+                memory
+                    .try_read_log_snapshot()
+                    .expect("allocate read-log snapshot")
+                    .is_empty()
+            );
         }
 
         let mut output = [0xa5, 0xc3];
@@ -1818,7 +1838,12 @@ mod tests {
             ))
         ));
         assert_eq!(output, [0xa5, 0xc3]);
-        assert!(memory.read_set().is_empty());
+        assert!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .is_empty()
+        );
 
         REFUSE_NEXT_READ_TRACKING.set(true);
         assert!(matches!(
@@ -1834,12 +1859,19 @@ mod tests {
                 crate::error::ExecutionDeferral::AllocationUnavailable
             ))
         ));
-        assert!(memory.read_set().is_empty());
+        assert!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .is_empty()
+        );
 
         memory.load_bytes(address, &mut output).unwrap();
         assert_eq!(output, [0, 0]);
         assert_eq!(
-            memory.read_set(),
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")[..],
             vec![AccessRange {
                 addr: address,
                 len: 2
@@ -1857,7 +1889,9 @@ mod tests {
         } {
             memory.load_u8(address).unwrap();
         }
-        let before = memory.read_set();
+        let before = memory
+            .try_read_log_snapshot()
+            .expect("allocate read-log snapshot");
         assert!(memory.read_log.lock().capacity() > 0);
         assert!(memory.prepare_for_cache());
         assert!(memory.write_log.lock().is_empty());
@@ -1869,10 +1903,21 @@ mod tests {
                 crate::error::ExecutionDeferral::AllocationUnavailable
             ))
         ));
-        assert_eq!(memory.read_set(), before);
+        assert_eq!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot"),
+            before
+        );
         assert_eq!(memory.current_root(), before_root);
         memory.load_u8(address).unwrap();
-        assert_eq!(memory.read_set().len(), before.len() + 1);
+        assert_eq!(
+            memory
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .len(),
+            before.len() + 1
+        );
     }
     #[test]
     fn fallible_template_memory_copy_preserves_bytes_root_and_lineage() {
@@ -2069,7 +2114,9 @@ mod tests {
         let worker_dirty = worker.dirty;
         let worker_dirty_chunks = worker.dirty_chunks.try_copy(None).unwrap();
         let worker_modified_chunks = worker.modified_chunks.try_copy(None).unwrap();
-        let worker_reads = worker.read_set();
+        let worker_reads = worker
+            .try_read_log_snapshot()
+            .expect("allocate read-log snapshot");
         let worker_writes = worker
             .try_write_log_snapshot()
             .expect("allocate write-log snapshot");
@@ -2089,7 +2136,12 @@ mod tests {
         assert_eq!(worker.dirty, worker_dirty);
         assert_eq!(worker.dirty_chunks, worker_dirty_chunks);
         assert_eq!(worker.modified_chunks, worker_modified_chunks);
-        assert_eq!(worker.read_set(), worker_reads);
+        assert_eq!(
+            worker
+                .try_read_log_snapshot()
+                .expect("allocate read-log snapshot"),
+            worker_reads
+        );
         assert_eq!(
             worker
                 .try_write_log_snapshot()
@@ -2109,9 +2161,11 @@ mod tests {
         let total_bytes =
             image_bytes + leaf_count * 32 + node_bytes + 2 * leaf_count.div_ceil(64) * 8;
         let row_bytes = 4 * std::mem::size_of::<WriteLogEntry>();
-        let budget = AllocationBudget::new(total_bytes + row_bytes + 1);
+        let read_bytes = 4 * std::mem::size_of::<AccessRange>();
+        let budget = AllocationBudget::new(total_bytes + row_bytes + 1 + read_bytes);
         let mut worker = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
         worker.store_u8(Memory::HEAP_START, 0xB6).unwrap();
+        assert_eq!(worker.load_u8(Memory::HEAP_START), Ok(0xB6));
         worker.commit();
         assert!(worker.dirty_chunks.is_empty());
         assert!(!template.dirty_chunks.is_empty());
@@ -2125,7 +2179,10 @@ mod tests {
             assert_eq!(worker.dirty_chunks.words().as_ptr(), dirty_words);
             assert_eq!(worker.modified_chunks.words().as_ptr(), modified_words);
             assert!(worker.modified_chunks.is_empty());
-            assert_eq!(budget.reserved_bytes(), total_bytes + row_bytes);
+            assert_eq!(
+                budget.reserved_bytes(),
+                total_bytes + row_bytes + read_bytes
+            );
         }
         assert_eq!(worker.root(), template.root());
         drop(worker);
@@ -2196,7 +2253,7 @@ mod tests {
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
             template_generation: 0,
             baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
-            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            read_log: Mutex::new(ReadLog::default()),
             write_log: Mutex::new(WriteLog::default()),
             diagnostic_access_recorder: None,
         };
@@ -2239,7 +2296,7 @@ mod tests {
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
             template_generation: 0,
             baseline_lineage: crate::cache_memory::SharedValue::new((), Some(0)),
-            read_log: Mutex::new(crate::cache_memory::OwnedVec::default()),
+            read_log: Mutex::new(ReadLog::default()),
             write_log: Mutex::new(WriteLog::default()),
             diagnostic_access_recorder: None,
         };
@@ -2388,10 +2445,15 @@ mod tests {
             mem.inspect_region(address, 4).expect("inspect fixture"),
             &[1, 2, 3, 4]
         );
-        assert!(mem.read_set().is_empty());
+        assert!(
+            mem.try_read_log_snapshot()
+                .expect("allocate read-log snapshot")
+                .is_empty()
+        );
         mem.load_region(address, 4).expect("tracked load fixture");
         assert_eq!(
-            mem.read_set(),
+            mem.try_read_log_snapshot()
+                .expect("allocate read-log snapshot")[..],
             vec![AccessRange {
                 addr: address,
                 len: 4

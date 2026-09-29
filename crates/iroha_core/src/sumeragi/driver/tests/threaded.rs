@@ -22,8 +22,8 @@ use iroha_sumeragi::{
 
 use super::{
     super::{
-        Driver, DriverConfig, DriverError, DriverHandle, DriverStart, ExitGuard, Input, Op,
-        RunningDriver, SharedCrypto, Worker, Workers, assemble_init,
+        Driver, DriverConfig, DriverError, DriverHandle, DriverStart, ExitGuard, Input, NodeGate,
+        Op, RunningDriver, SharedCrypto, Worker, Workers, assemble_init,
         exec::ExecOp,
         persist::install_records,
         traits::{BlockStore, Clock, NoObserver, Observer, SystemClock},
@@ -152,6 +152,7 @@ fn spawn_instance<C: Clock + 'static>(
         .spawn(
             DriverConfig::default(),
             DriverStart {
+                node_gate: Arc::new(NodeGate::new()),
                 allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
                 local: LocalParams::default(),
                 init,
@@ -384,6 +385,7 @@ fn frame_limit_below_parameters_is_refused() {
     let refused = driver.spawn(
         config,
         DriverStart {
+            node_gate: Arc::new(NodeGate::new()),
             allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
             local: LocalParams::default(),
             init,
@@ -471,6 +473,7 @@ fn panicking_backends_are_retried() {
     drop(work);
     node.running.shutdown();
     assert!(!handle.ready(), "a shut-down instance is not ready");
+    assert_eq!(*node.fakes.observer.finished.lock(), 1);
 }
 
 /// A worker thread that ends stops the instance: the loop stops, the observer is told, the
@@ -493,6 +496,11 @@ fn a_stopped_worker_stops_the_instance() {
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(node.committed(), height, "the instance no longer runs");
     node.running.shutdown();
+    assert_eq!(
+        *node.fakes.observer.finished.lock(),
+        0,
+        "worker failure is not orderly completion"
+    );
 }
 
 /// A worker thread that ends announces it (however it ends), and a worker that cannot be
@@ -510,6 +518,7 @@ fn worker_exits_and_unreachable_workers_are_detected() {
     let (serve, serve_rx) = mpsc::channel();
     drop(serve_rx);
     let workers = Workers {
+        node_gate: Arc::new(NodeGate::new()),
         net: Arc::new(FakeNet::default()),
         observer: Arc::new(NoObserver),
         persist,
@@ -600,6 +609,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         .spawn(
             DriverConfig::default(),
             DriverStart {
+                node_gate: Arc::new(NodeGate::new()),
                 allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
                 local: LocalParams::default(),
                 init,
@@ -726,4 +736,115 @@ fn frame_limit_follows_committed_configurations() {
     );
     assert_eq!(exceeded.limit, DriverConfig::default().frame_limit);
     node.running.shutdown();
+}
+
+/// A closed storage owner immediately closes the real handle and stops its loop.
+#[test]
+fn storage_closure_stops_native_driver_without_accepting_further_work() {
+    let node = spawn_instance(29, Arc::new(SystemClock::new()), |fakes| {
+        fakes.exec.set_open(false);
+        fakes.exec.add_tx(17);
+    });
+    let handle = node.handle();
+    handle.transactions_available();
+    wait_until(
+        "original worker operation is held",
+        Duration::from_secs(5),
+        || node.fakes.exec.waiting() == 1,
+    );
+    handle.shared.node_gate.close();
+    assert!(!handle.ready());
+    assert_eq!(handle.halted(), Some(HaltReason::DriverAnomaly));
+    handle.transactions_available();
+    assert!(!handle.deliver(&node.key, &[0; 32]));
+    wait_until(
+        "storage closure stops the event loop",
+        Duration::from_secs(5),
+        || {
+            !handle
+                .shared
+                .alive
+                .load(std::sync::atomic::Ordering::Acquire)
+        },
+    );
+    assert_eq!(
+        node.fakes.exec.waiting(),
+        1,
+        "closure never interrupts or replaces the original operation"
+    );
+    node.fakes.exec.set_open(true);
+    node.running.shutdown();
+    assert_eq!(
+        node.fakes.exec.waiting(),
+        0,
+        "shutdown joins the original operation"
+    );
+    let height = node.fakes.blocks.height();
+    let sent = node.fakes.net.sent().len();
+    handle.transactions_available();
+    assert!(!handle.ready());
+    assert_eq!(node.fakes.blocks.height(), height);
+    assert_eq!(node.fakes.net.sent().len(), sent);
+    assert!(
+        node.fakes.exec.state.lock().executions.is_empty(),
+        "a buffered build result cannot start a successor execution after closure"
+    );
+}
+
+/// Buffered operations cannot enter workers after closure, and the physical send wrapper
+/// independently gates serving output that was prepared earlier.
+#[test]
+fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
+    let gate = Arc::new(NodeGate::new());
+    let net = Arc::new(FakeNet::default());
+    let (persist, persist_rx) = mpsc::channel();
+    let (exec, exec_rx) = mpsc::channel();
+    let (serve, serve_rx) = mpsc::channel();
+    let workers = Workers {
+        node_gate: Arc::clone(&gate),
+        net: net.clone(),
+        observer: Arc::new(NoObserver),
+        persist,
+        exec,
+        serve,
+    };
+    let block = block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    let message = WireMessage::Qc(commit_qc(&block, Hash32([3; 32])));
+    let frame = super::super::serve::frame(&message).unwrap();
+    let peer = FakeSigner::from_seed(&[3], None).public_key().clone();
+    let physical = super::super::NodeNet {
+        net: Arc::clone(&net),
+        gate: Arc::clone(&gate),
+    };
+    super::super::traits::Net::send(&physical, &peer, &frame);
+    assert_eq!(
+        net.sent().len(),
+        1,
+        "open native sends reach the original transport"
+    );
+    gate.close();
+    super::super::traits::Net::send(&physical, &peer, &frame);
+    assert_eq!(
+        net.sent().len(),
+        1,
+        "closed serving cannot emit another frame"
+    );
+    assert_eq!(
+        workers.dispatch(vec![Op::Exec(ExecOp::Discard {
+            height: 2,
+            keep: Vec::new()
+        })]),
+        Err(Worker::Loop)
+    );
+    assert_eq!(
+        workers.dispatch(vec![Op::Send {
+            to: vec![peer],
+            msg: message
+        }]),
+        Err(Worker::Loop)
+    );
+    assert!(exec_rx.try_recv().is_err());
+    assert!(persist_rx.try_recv().is_err());
+    assert!(serve_rx.try_recv().is_err());
+    assert_eq!(net.sent().len(), 1);
 }

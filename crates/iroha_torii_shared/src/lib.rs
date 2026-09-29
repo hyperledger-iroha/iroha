@@ -55,6 +55,8 @@ pub mod sorafs_moderation_api;
 pub mod status;
 /// Canonical subscription preparation, query and draft records.
 pub mod subscriptions;
+/// Canonical response envelopes for the Sumeragi evidence audit API.
+pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.
@@ -2578,3 +2580,6 @@ mod captured_frame_identity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod native_page_consumer_tests;

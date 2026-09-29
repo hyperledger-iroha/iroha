@@ -370,7 +370,7 @@ async fn run() -> Result<()> {
     let alias_permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Alias(
             iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                alias.canonical_text().parse()?,
+                alias.to_string().parse()?,
                 DataSpaceId::UNIVERSAL,
             ),
         ),
@@ -401,7 +401,8 @@ async fn run() -> Result<()> {
     let http = integration_tests::http::client();
     let artifact = counter_artifact();
     let parsed = ivm::ProgramMetadata::parse(&artifact)?;
-    let gas_limit = iroha_core::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata)?;
+    let gas_limit = iroha_core::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata)
+        .map_err(|error| eyre!("counter gas limit: {error:?}"))?;
     let fee_payment = FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(gas_limit));
     let (address, _, height) = deploy_contract_artifact(
         &client,

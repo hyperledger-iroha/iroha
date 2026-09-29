@@ -523,8 +523,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer>,
     dispatch_instruction::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
-    dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
-    dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
     dispatch_instruction::<
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation
     >,
@@ -1279,30 +1277,22 @@ mod tests {
         state::{State, World},
         tx::AcceptedTransaction,
     };
-    use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::error::{InstructionExecutionError, InvalidParameterError},
-        nexus::{
-            AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog,
-            DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneRelayEnvelope, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
-            ProofBlob, VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
-        },
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
-    use iroha_model_base::{name::Name, state_path::StatePath};
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_model_base::name::Name;
+
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
     };
-    use std::{num::NonZeroU32, sync::Arc};
+    use std::sync::Arc;
     use tokio::test;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("ISI module fixture key generation should succeed")
@@ -1452,89 +1442,6 @@ mod tests {
                 if message.contains("Custom instructions require an executor upgrade")
         ));
         Ok(())
-    }
-
-    macro_rules! register_verified_lane_relay_rejection_tests {
-        ($($(#[$attr:meta])* $name:ident => $case:ident;)+) => {
-            $(
-                $(#[$attr])*
-                async fn $name() -> Result<()> {
-                    run_lane_relay_rejection_case(LaneRelayRejectionCase::$case)
-                }
-            )+
-        };
-    }
-
-    register_verified_lane_relay_rejection_tests! {
-        #[test]
-        register_verified_lane_relay_rejects_unknown_lane_id => UnknownLaneId;
-        #[test]
-        register_verified_lane_relay_rejects_stale_geometry_lane_id => StaleGeometryLaneId;
-        #[test]
-        register_verified_lane_relay_rejects_lane_dataspace_mismatch => LaneDataspaceMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_unknown_dataspace_id => UnknownDataspaceId;
-        #[test]
-        register_verified_lane_relay_rejects_empty_proof_payload => EmptyProofPayload;
-        #[test]
-        register_verified_lane_relay_rejects_oversized_proof_payload => OversizedProofPayload;
-        #[test]
-        register_verified_lane_relay_rejects_malformed_proof_envelope => MalformedProofEnvelope;
-        #[test]
-        register_verified_lane_relay_rejects_proof_manifest_root_mismatch
-            => ProofManifestRootMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_proof_dataspace_mismatch => ProofDataspaceMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_stale_fastpq_height => StaleFastpqHeight;
-        #[test]
-        register_verified_lane_relay_rejects_zero_like_fastpq_digest => ZeroLikeFastpqDigest;
-        #[test]
-        register_verified_lane_relay_rejects_envelope_block_height_mismatch
-            => EnvelopeBlockHeightMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_settlement_lane_mismatch => SettlementLaneMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_settlement_dataspace_mismatch
-            => SettlementDataspaceMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_settlement_hash_mismatch => SettlementHashMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_settlement_totals_mismatch => SettlementTotalsMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_mismatched_fastpq_digest => MismatchedFastpqDigest;
-        #[test]
-        register_verified_lane_relay_rejects_mismatched_claim_digest => MismatchedClaimDigest;
-        #[test]
-        register_verified_lane_relay_rejects_future_fastpq_height => FutureFastpqHeight;
-        #[test]
-        register_verified_lane_relay_rejects_missing_manifest_root => MissingManifestRoot;
-        #[test]
-        register_verified_lane_relay_rejects_zero_manifest_root => ZeroManifestRoot;
-        #[test]
-        register_verified_lane_relay_rejects_expired_proof_blob => ExpiredProofBlob;
-        #[test]
-        register_verified_lane_relay_rejects_missing_fastpq_binding => MissingFastpqBinding;
-        #[test]
-        register_verified_lane_relay_rejects_source_dsid_mismatch => SourceDsidMismatch;
-        #[test]
-        register_verified_lane_relay_rejects_wrong_effect_type => WrongEffectType;
-        #[test]
-        register_verified_lane_relay_rejects_business_effect_smuggled_in_lane_proof
-            => BusinessEffectSmuggledInLaneProof;
-        #[test]
-        register_verified_lane_relay_rejects_unanchored_business_effect_proof
-            => UnanchoredBusinessEffectProof;
-        #[test]
-        register_verified_lane_relay_rejects_effect_proof_before_proof_verification
-            => EffectProofBeforeProofVerification;
-        #[test]
-        register_verified_lane_relay_rejects_missing_final_qc_before_state_write
-            => MissingFinalQcBeforeStateWrite;
-        #[test]
-        register_verified_lane_relay_rejects_malformed_existing_state => MalformedExistingState;
-        #[test]
-        register_verified_lane_relay_rejects_conflicting_existing_state => ConflictingExistingState;
     }
     #[test]
     async fn nft() -> Result<()> {

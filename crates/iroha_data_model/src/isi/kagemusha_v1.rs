@@ -15,10 +15,6 @@ use crate::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus_v2::{
-        HeightContextId, MAX_VALIDATORS_PER_HEIGHT, finality::V2FinalityArtifact,
-        is_valid_committee_size,
-    },
     kagemusha::{
         KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1,
         KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
@@ -29,6 +25,9 @@ use crate::{
         kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
+    sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+    },
 };
 use iroha_crypto::Hash;
 use iroha_model_base::peer::PeerId;
@@ -39,6 +38,10 @@ use std::{string::String, vec::Vec};
 
 /// Sole chain-facing KAGEMUSHA instruction and operation layout version.
 pub const KAGEMUSHA_CHAIN_VERSION_V1: u16 = 1;
+/// Maximum canonical operation result: one complete native block frame plus bounded
+/// request, ordered committee and fixed-depth witness framing.
+pub const KAGEMUSHA_OPERATION_RESULT_MAX_BYTES_V1: usize =
+    crate::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 /// Stable schema name for the canonical top-up request body.
 pub const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1: &str = "iroha.torii.v1.kagemusha.top_up.request";
 /// Stable schema name for the canonical redemption request body.
@@ -64,8 +67,14 @@ const MINT_FINALITY_PEER_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finalit
 /// Domain for the marked SHA-256 bridge from paired Poseidon roots to `ExecutionCommitment`.
 pub const KAGEMUSHA_MINT_FINALITY_ROOT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-root";
 
-/// Largest exact `2f + 1` mint-finality seal set admitted by the consensus roster bound.
-pub const KAGEMUSHA_MINT_FINALITY_MAX_SEALS_V1: usize = (MAX_VALIDATORS_PER_HEIGHT * 2) / 3 + 1;
+/// Fixed validator-slot capacity of the release-pinned paired-Pasta mint circuits.
+///
+/// Generation admission also requires exact `3f + 1` geometry with at least four seats.
+/// This bound is independent of the lower-level native transport's committee capacity.
+pub const KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1: usize = 31;
+/// Largest exact `2f + 1` mint-finality seal set admitted by the recursive circuit bound.
+pub const KAGEMUSHA_MINT_FINALITY_MAX_SEALS_V1: usize =
+    (KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1 * 2) / 3 + 1;
 /// Depth of the sparse block-local top-up commitment tree.
 ///
 /// The 32-bit index space removes any special KAGEMUSHA admission maximum; ordinary bounded
@@ -258,7 +267,7 @@ impl KagemushaMintFinalityAuthorityGenerationV1 {
                 .map_err(|_| invalid("mint_finality.authority_generation"))?
                 .to_le_bytes(),
         );
-        for slot in 0..MAX_VALIDATORS_PER_HEIGHT {
+        for slot in 0..KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1 {
             if let Some(validator) = self.validators.get(slot) {
                 hasher.update([1]);
                 hasher.update(kagemusha_mint_finality_peer_id_digest_v1(
@@ -1687,14 +1696,19 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     pub network_id: NetworkId,
     /// Finalized block height.
     pub block_height: u64,
-    /// Complete native scheduling context identity governing `block_height`.
-    pub height_context_id: HeightContextId,
-    /// Domain-separated digest of the exact native Commit statement (instance, epoch, height, block and R).
+    /// Exact native network/lane consensus instance from the original Commit statement.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub subject_digest: [u8; 32],
+    pub native_instance: [u8; 32],
+    /// Complete native scheduling context hash, preserved without marked-hash conversion.
+    /// The scheduling epoch number is bound by `epoch_authorization`.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub native_epoch_context: [u8; 32],
+    /// Exact native consensus header hash from the original Commit statement.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub native_block_hash: [u8; 32],
     /// Exact native R digest of the full original execution and schedule result.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub execution_commitment_digest: [u8; 32],
+    pub native_result: [u8; 32],
     /// Marked SHA-256 bridge of the paired Poseidon top-up tree root.
     pub kagemusha_top_up_root: Hash,
     /// Number of real leaves in the sparse depth-32 tree.
@@ -1718,10 +1732,7 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// certify zero leaves; it creates no membership proof and authorizes no mint.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
         self.validate_header()?;
-        if self.block_height == 1
-            && self.kagemusha_top_up_count == 0
-            && self.next_epoch_authorization.is_none()
-        {
+        if self.block_height <= 1 {
             return Err(invalid("mint_finality.header"));
         }
         Ok(())
@@ -1758,28 +1769,24 @@ impl KagemushaMintFinalitySealMessageV1 {
             }
         }
         for (field, value) in [
-            ("mint_finality.subject_digest", self.subject_digest),
+            ("mint_finality.native_instance", self.native_instance),
             (
-                "mint_finality.execution_commitment_digest",
-                self.execution_commitment_digest,
+                "mint_finality.native_epoch_context",
+                self.native_epoch_context,
             ),
+            ("mint_finality.native_block_hash", self.native_block_hash),
+            ("mint_finality.native_result", self.native_result),
         ] {
             require_nonzero(field, value)?;
         }
         let validator_count = usize::try_from(self.validator_count)
             .map_err(|_| invalid("mint_finality.validator_count"))?;
-        if !is_valid_committee_size(validator_count)
+        if !is_valid_mint_finality_committee_size(validator_count)
             || self.network_id.as_bytes() == &[0; 32]
             || self.network_id != self.epoch_authorization.network_id
             || self.block_height < self.epoch_authorization.first_height
             || self.block_height > self.epoch_authorization.last_height
             || self.kagemusha_top_up_root == Hash::prehashed([0; Hash::LENGTH])
-            || self
-                .height_context_id
-                .0
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
         {
             return Err(invalid("mint_finality.header"));
         }
@@ -1821,9 +1828,10 @@ impl KagemushaMintFinalitySealMessageV1 {
         hasher.update(self.validator_count.to_le_bytes());
         hasher.update(self.network_id.as_bytes());
         hasher.update(self.block_height.to_le_bytes());
-        hasher.update(self.height_context_id.0.as_ref());
-        hasher.update(self.subject_digest);
-        hasher.update(self.execution_commitment_digest);
+        hasher.update(self.native_instance);
+        hasher.update(self.native_epoch_context);
+        hasher.update(self.native_block_hash);
+        hasher.update(self.native_result);
         hasher.update(self.kagemusha_top_up_root.as_ref());
         hasher.update(self.kagemusha_top_up_count.to_le_bytes());
         if let Some(next) = self.next_epoch_authorization {
@@ -1970,7 +1978,7 @@ impl KagemushaMintFinalitySeatReadinessContextV1 {
             || self.last_height < self.first_height
             || usize::try_from(self.validator_index)
                 .ok()
-                .is_none_or(|index| index >= MAX_VALIDATORS_PER_HEIGHT)
+                .is_none_or(|index| index >= KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1)
         {
             return Err(invalid("mint_finality.seat_readiness"));
         }
@@ -2085,46 +2093,6 @@ pub struct KagemushaMintFinalityValidatorSealV1 {
     pub eq_proof_signature: KagemushaPastaSchnorrSignatureV1,
     /// Signature checked by the Ep/Fq mint helper using the roster's Vesta key.
     pub ep_proof_signature: KagemushaPastaSchnorrSignatureV1,
-}
-
-/// Canonical auxiliary payload appended to one BLS Commit-vote signature.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct KagemushaMintFinalitySealShareV1 {
-    /// Sole first-release layout version.
-    pub version: u16,
-    /// Common block-level statement signed by every validator.
-    pub message: KagemushaMintFinalitySealMessageV1,
-    /// Paired seal belonging to the enclosing vote's signer index.
-    pub seal: KagemushaMintFinalityValidatorSealV1,
-}
-
-impl KagemushaMintFinalitySealShareV1 {
-    /// Validate the canonical share shape against the message's roster bound.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for a wrong version/message, out-of-range signer, or
-    /// malformed paired signature encoding.
-    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
-        require_chain_version(self.version)?;
-        self.message.validate()?;
-        if self.seal.validator_index >= self.message.validator_count {
-            return Err(invalid("mint_finality.share.validator_index"));
-        }
-        self.seal.eq_proof_signature.validate()?;
-        self.seal.ep_proof_signature.validate()
-    }
 }
 
 /// Exact `2f + 1` paired validator seals for one finalized top-up receipt.
@@ -2274,11 +2242,15 @@ impl KagemushaReserveReceiptWitnessV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaOperationFinalityV1")]
 pub struct KagemushaOperationFinalityV1 {
     /// Finality attachment version.
     pub version: u16,
-    /// Full frozen-roster Sumeragi finality certificate.
-    pub finality_artifact: V2FinalityArtifact,
+    /// Exact signed-genesis network selected independently by the caller.
+    pub network_id: NetworkId,
+    /// Original native carrier and its complete ordered committee.
+    pub finality_proof: SumeragiFinalityProof,
     /// Proof of the operation receipt under the certified ordinary-write root.
     pub reserve_receipt_witness: KagemushaReserveReceiptWitnessV1,
     /// Exact sparse-Poseidon top-up membership, present only for a mint receipt.
@@ -2290,85 +2262,81 @@ pub struct KagemushaOperationFinalityV1 {
     pub top_up_membership_witness: Option<KagemushaTopUpMembershipWitnessV1>,
 }
 
-/// Caller-pinned consensus context for one exact finalized operation block.
+/// Independently selected native checkpoint for one exact finalized operation block.
 ///
-/// This value must come from release-pinned state or an already authenticated
-/// context chain. It is never selected from the untrusted operation response.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
+/// This local argument must come from an already authenticated prefix or an
+/// independently authenticated checkpoint. It is never selected from the untrusted
+/// operation response. Persist the checkpoint with its bounded canonical codec;
+/// this local trust selection is not a transport DTO.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaFinalityTrustAnchorV1 {
-    /// Exact genesis-derived network identity.
+    /// Exact independently selected signed-genesis network identity.
     pub network_id: NetworkId,
-    /// Height governed by the pinned context.
-    pub block_height: u64,
-    /// Externally authenticated context identifier at `block_height`.
-    pub height_context_id: HeightContextId,
+    /// Complete independently authenticated tip and its native schedule provenance.
+    pub checkpoint: SumeragiFinalityCheckpoint,
 }
 
 impl KagemushaFinalityTrustAnchorV1 {
-    /// Validate the externally supplied network, height, and context identity.
+    /// Validate the selected network and the complete native checkpoint.
+    ///
+    /// This checks consistency, not the provenance of the caller's selection.
     ///
     /// # Errors
     ///
-    /// Returns an error if any trust-anchor field is reserved or malformed.
+    /// Returns an error for a foreign network or an invalid checkpoint certificate.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
-        if self.network_id.as_bytes() == &[0; 32]
-            || self.block_height == 0
-            || self
-                .height_context_id
-                .0
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+        self.verifier().map(|_| ())
+    }
+
+    fn verifier(&self) -> Result<SumeragiFinalityVerifier, KagemushaIsiValidationErrorV1> {
+        if self.network_id.as_bytes() == &[0; 32] || self.network_id != self.checkpoint.network_id()
         {
             return Err(invalid("finality_trust_anchor"));
         }
-        Ok(())
+        SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &self.checkpoint,
+            &self.network_id,
+            self.checkpoint.chain_id(),
+        )
+        .map_err(|error| KagemushaIsiValidationErrorV1::InvalidFinality(error.to_string()))
     }
 }
 
 impl KagemushaOperationFinalityV1 {
-    /// Cryptographically verify the block certificate and exact reserve receipt
-    /// against a caller-pinned network context.
+    /// Verify the exact native decision, committee and reserve receipt against an
+    /// independently selected checkpoint.
+    ///
+    /// This verifies consensus finality and membership only. It does not verify
+    /// native paired-Pasta attestations, the Poseidon membership path, the offline
+    /// monetary proof release, or hardware authorization, and cannot itself
+    /// authorize minting. Those checks
+    /// remain mandatory in the monetary verifier. Genesis execution output has
+    /// no signed result certificate and is refused here.
     ///
     /// # Errors
     ///
-    /// Returns an error when the pinned context, frozen-roster finality, network,
-    /// height, or receipt witness fails.
+    /// Returns an error for genesis output, a different network, decision or committee,
+    /// invalid native finality, or a receipt outside the certified ordinary-write root.
     pub fn validate_against(
         &self,
         trust_anchor: &KagemushaFinalityTrustAnchorV1,
     ) -> Result<(), KagemushaIsiValidationErrorV1> {
         require_chain_version(self.version)?;
-        trust_anchor.validate()?;
-        if self.finality_artifact.height != trust_anchor.block_height
-            || self.finality_artifact.height_context.network_id != trust_anchor.network_id
-            || self.finality_artifact.context_id() != trust_anchor.height_context_id
+        if self.finality_proof.height() <= 1
+            || self.finality_proof.height() != trust_anchor.checkpoint.height()
+            || self.network_id != trust_anchor.network_id
             || self.reserve_receipt_witness.receipt.network_id != trust_anchor.network_id
         {
             return Err(KagemushaIsiValidationErrorV1::InvalidFinality(
-                "response finality does not match the caller-pinned network context".into(),
+                "response finality does not match the selected native checkpoint".into(),
             ));
         }
-        self.finality_artifact
-            .verify()
+        let verifier = trust_anchor.verifier()?;
+        let verified = verifier
+            .verify_same_decision(trust_anchor.checkpoint.tip(), &self.finality_proof)
             .map_err(|error| KagemushaIsiValidationErrorV1::InvalidFinality(error.to_string()))?;
-        let expected_root = self
-            .finality_artifact
-            .commit_qc
-            .execution_commitment
-            .ordinary_writes_root;
+        let commitment = verified.execution();
+        let expected_root = commitment.ordinary_writes_root;
         if !self.reserve_receipt_witness.verify(expected_root) {
             return Err(KagemushaIsiValidationErrorV1::InvalidFinality(
                 "reserve receipt is not included in the certified ordinary-write root".into(),
@@ -2377,7 +2345,6 @@ impl KagemushaOperationFinalityV1 {
         let receipt = &self.reserve_receipt_witness.receipt;
         match (receipt.kind, &self.top_up_membership_witness) {
             (KagemushaOperationKindV1::TopUp, Some(witness)) => {
-                let commitment = self.finality_artifact.commit_qc.execution_commitment;
                 witness.validate(commitment.kagemusha_top_up_count)?;
                 let expected_top_up_root = commitment
                     .kagemusha_top_up_root
@@ -2399,8 +2366,8 @@ impl KagemushaOperationFinalityV1 {
 
     /// Return the finalized block height.
     #[must_use]
-    pub const fn finalized_block_height(&self) -> u64 {
-        self.finality_artifact.height
+    pub fn finalized_block_height(&self) -> u64 {
+        self.finality_proof.height()
     }
 }
 
@@ -2754,7 +2721,7 @@ impl KagemushaOperationStatusV1 {
         }
     }
 
-    /// Validate status and authenticate an applied result against an externally pinned context.
+    /// Validate status and authenticate an applied result against an independently selected checkpoint.
     ///
     /// Pending and rejected statuses retain the same structural checks. Applied
     /// status additionally performs full certificate and receipt verification;
@@ -2937,6 +2904,12 @@ fn require_chain_version(version: u16) -> Result<(), KagemushaIsiValidationError
     Ok(())
 }
 
+fn is_valid_mint_finality_committee_size(count: usize) -> bool {
+    count >= 4
+        && count <= KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1
+        && (count - 1).is_multiple_of(3)
+}
+
 fn validate_mint_finality_roster_shape(
     version: u16,
     validators: &[KagemushaMintFinalityValidatorKeysV1],
@@ -2944,8 +2917,8 @@ fn validate_mint_finality_roster_shape(
     keys_field: &'static str,
 ) -> Result<(), KagemushaIsiValidationErrorV1> {
     require_chain_version(version)?;
-    if !is_valid_committee_size(validators.len())
-        || validators.len() > MAX_VALIDATORS_PER_HEIGHT
+    if !is_valid_mint_finality_committee_size(validators.len())
+        || validators.len() > KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1
         || validators
             .windows(2)
             .any(|pair| pair[0].validator >= pair[1].validator)
@@ -3454,11 +3427,10 @@ mod tests {
             validator_count: 4,
             network_id: network(),
             block_height: 1,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"bootstrap context",
-            ))),
-            subject_digest: [1; 32],
-            execution_commitment_digest: [2; 32],
+            native_instance: [1; 32],
+            native_epoch_context: [2; 32],
+            native_block_hash: [3; 32],
+            native_result: [4; 32],
             kagemusha_top_up_root: Hash::new(b"bootstrap empty root shape"),
             kagemusha_top_up_count: 0,
             next_epoch_authorization: None,
@@ -3473,7 +3445,10 @@ mod tests {
         assert!(message.signing_digest().is_err());
         let mut mint = message;
         mint.kagemusha_top_up_count = 1;
-        assert!(mint.validate().is_ok());
+        assert!(
+            mint.validate().is_err(),
+            "genesis has no signed output authority"
+        );
         assert!(mint.validate_bootstrap().is_err());
         assert!(mint.bootstrap_binding_digest().is_err());
         let mut later = message;
@@ -3499,6 +3474,94 @@ mod tests {
             Hash::new(b"foreign bootstrap network"),
         ));
         assert!(foreign.validate_bootstrap().is_err());
+    }
+
+    #[test]
+    fn native_seal_message_roundtrips_and_binds_every_original_commit_coordinate() {
+        let message = KagemushaMintFinalitySealMessageV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch_authorization: genesis_authorization(),
+            validator_count: 4,
+            network_id: network(),
+            block_height: 2,
+            native_instance: [1; 32],
+            native_epoch_context: [2; 32],
+            native_block_hash: [3; 32],
+            native_result: [4; 32],
+            kagemusha_top_up_root: Hash::new(b"native top-up root shape"),
+            kagemusha_top_up_count: 1,
+            next_epoch_authorization: None,
+        };
+        use norito::codec::DecodeAll as _;
+
+        // This nested V1 message uses the fixed V1 bare layout through Encode/DecodeAll.
+        // Its enclosing transport owns framing; no second standalone frame is introduced.
+        let wire = message.encode();
+        let decoded = KagemushaMintFinalitySealMessageV1::decode_all(&mut wire.as_slice()).unwrap();
+        assert_eq!(decoded, message);
+        assert_eq!(decoded.encode(), wire);
+        assert!(
+            KagemushaMintFinalitySealMessageV1::decode_all(&mut &wire[..wire.len() - 1]).is_err()
+        );
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert!(KagemushaMintFinalitySealMessageV1::decode_all(&mut trailing.as_slice()).is_err());
+        assert_eq!(
+            decoded.native_epoch_context[31], 2,
+            "raw native hash must not be marked"
+        );
+        let json = norito::json::to_string(&message).unwrap();
+        assert_eq!(
+            norito::json::from_str::<KagemushaMintFinalitySealMessageV1>(&json).unwrap(),
+            message
+        );
+        for retired in [
+            "height_context_id",
+            "subject_digest",
+            "execution_commitment_digest",
+        ] {
+            let changed = format!("{{\"{retired}\":null,{}", &json[1..]);
+            assert!(
+                norito::json::from_str::<KagemushaMintFinalitySealMessageV1>(&changed).is_err()
+            );
+        }
+        let changes: [fn(&mut KagemushaMintFinalitySealMessageV1); 4] = [
+            |value| value.native_instance[0] ^= 1,
+            |value| value.native_epoch_context[31] ^= 1,
+            |value| value.native_block_hash[0] ^= 1,
+            |value| value.native_result[0] ^= 1,
+        ];
+        for change in changes {
+            let mut changed = message;
+            change(&mut changed);
+            assert_ne!(
+                message.signing_digest().unwrap(),
+                changed.signing_digest().unwrap()
+            );
+        }
+        let zeroes: [fn(&mut KagemushaMintFinalitySealMessageV1); 4] = [
+            |value| value.native_instance = [0; 32],
+            |value| value.native_epoch_context = [0; 32],
+            |value| value.native_block_hash = [0; 32],
+            |value| value.native_result = [0; 32],
+        ];
+        for zero in zeroes {
+            let mut changed = message;
+            zero(&mut changed);
+            assert!(changed.signing_digest().is_err());
+        }
+    }
+
+    #[test]
+    fn native_mint_circuit_geometry_retains_its_exact_release_bound() {
+        for size in 0..=34 {
+            assert_eq!(
+                is_valid_mint_finality_committee_size(size),
+                matches!(size, 4 | 7 | 10 | 13 | 16 | 19 | 22 | 25 | 28 | 31)
+            );
+        }
+        assert_eq!(KAGEMUSHA_MINT_FINALITY_MAX_VALIDATORS_V1, 31);
+        assert_eq!(KAGEMUSHA_MINT_FINALITY_MAX_SEALS_V1, 21);
     }
 
     #[test]
@@ -3964,7 +4027,7 @@ mod tests {
         }
     }
 
-    fn reserve_receipt(kind: KagemushaOperationKindV1) -> KagemushaReserveReceiptV1 {
+    pub(super) fn reserve_receipt(kind: KagemushaOperationKindV1) -> KagemushaReserveReceiptV1 {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);
@@ -4739,3 +4802,7 @@ mod additional_frame_owner_identity_tests {
 #[cfg(test)]
 #[path = "kagemusha_v1_epoch_binding_tests.rs"]
 mod epoch_binding_codec_tests;
+
+#[cfg(all(test, feature = "transparent_api"))]
+#[path = "kagemusha_v1_native_finality_tests.rs"]
+mod native_finality_tests;

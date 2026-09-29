@@ -711,6 +711,36 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         active_lane_config_entry_at_height(self.nexus, lane_id, block_height)
     }
 }
+fn catalog_lane_is_da_active(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    nexus: &Nexus,
+    block_height: Option<u64>,
+) -> bool {
+    let inside_elastic_range = lane_id_inside_enabled_autoscale_range(lane.id, nexus);
+    if lane_uses_reserved_autoscale_metadata(lane) {
+        return inside_elastic_range
+            && lane.is_autoscale_managed_elastic()
+            && lane.dataspace_id == nexus.routing_policy.default_dataspace
+            && block_height.is_none_or(|height| {
+                lane.autoscale_created_height()
+                    .is_some_and(|created| created <= height)
+            })
+            && crate::state::autoscale_lane_accepts_proposal_height(
+                lane,
+                block_height.unwrap_or(u64::MAX),
+            );
+    }
+    !inside_elastic_range
+}
+fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
+    if !nexus.autoscale.enabled {
+        return false;
+    }
+    let min = nexus.autoscale.min_lane_id.get();
+    let max = nexus.autoscale.max_lane_id_exclusive.get();
+    let lane_id = lane_id.as_u32();
+    min < max && lane_id >= min && lane_id < max
+}
 #[cfg(test)]
 /// Return the active DA proof policy for a catalog-backed lane.
 ///
@@ -2226,7 +2256,6 @@ mod tests {
             commitment::RetentionClass,
             types::{BlobDigest, StorageTicketId},
         },
-        merge::{LaneDrainIntentV1, LaneDrainStateV1},
         nexus::{
             DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneCatalogError,
             LaneConfig as ModelLaneConfig, LaneStorageProfile,

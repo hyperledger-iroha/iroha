@@ -180,11 +180,9 @@ impl Kura {
             // pending canonical blocks, terminal outcomes, carrier components
             // or prune recovery. One no-clobber temporary adds the same bytes
             // as the final object; an exact retry adds no physical payload.
-            self.validate_configured_autonomous_mutation_disk_peak_locked(
+            self.validate_publication_disk_peak_locked(
                 pending_canonical_bytes,
                 reference.byte_len,
-                false,
-                false,
                 &path,
             )?;
             if !self.publish_bound_noclobber_file_locked(
@@ -207,7 +205,7 @@ impl Kura {
             KIND,
         )?;
         sync_artifact_file(&file).map_err(|error| Error::IO(error, path.clone()))?;
-        self.sync_native_amx_evidence_namespace(&namespace, KIND)?;
+        self.sync_bound_evidence_namespace(&namespace, KIND)?;
         self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
             &namespace,
             &path,
@@ -439,7 +437,7 @@ impl Kura {
         // based solely on their presence or apparent proof structure.
         Self::remove_bound_progress_file_if_matches(namespace, &path, &file, &metadata)
             .map_err(|error| Error::IO(error, path))?;
-        self.sync_native_amx_evidence_namespace(namespace, KIND)
+        self.sync_bound_evidence_namespace(namespace, KIND)
     }
 }
 
@@ -849,15 +847,13 @@ mod tests {
     }
 
     #[test]
-    fn configured_capacity_reserves_prune_headroom_before_new_artifact_bytes() {
+    fn configured_capacity_refuses_content_exceeding_remaining_disk_budget() {
         let mut kura = configured_fixture(generous());
         let before = kura.refresh_disk_usage_bytes().unwrap();
-        assert!(Kura::canonical_prune_intent_maintenance_headroom_bytes() > 0);
-        // The bytes fit the local artifact policy and physical free budget,
-        // but the configured budget must also retain Kura's recovery reserve.
+        // The artifact policy permits the content, but the disk budget does not.
         std::sync::Arc::get_mut(&mut kura)
             .unwrap()
-            .max_disk_usage_bytes = before.checked_add(3).unwrap();
+            .max_disk_usage_bytes = before.checked_add(2).unwrap();
         let reference = FastpqStoredArtifactReference::for_bytes(b"abc");
         assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert!(!path(&kura, reference).exists());
@@ -869,10 +865,7 @@ mod tests {
     fn configured_capacity_accepts_exact_fit_and_retry_but_rejects_new_content() {
         let mut kura = configured_fixture(generous());
         let before = kura.refresh_disk_usage_bytes().unwrap();
-        let limit = before
-            .checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-            .and_then(|value| value.checked_add(3))
-            .unwrap();
+        let limit = before.checked_add(3).unwrap();
         std::sync::Arc::get_mut(&mut kura)
             .unwrap()
             .max_disk_usage_bytes = limit;
@@ -1028,8 +1021,6 @@ mod tests {
             store_dir: iroha_config::base::WithOrigin::inline(root.to_path_buf()),
             max_disk_usage_bytes: defaults::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::BLOCKS_IN_MEMORY,
-            lane_history_retention: defaults::LANE_HISTORY_RETENTION,
-            replica_advert: defaults::REPLICA_ADVERT_POLICY,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -1039,7 +1030,6 @@ mod tests {
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: policy,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: defaults::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: defaults::FSYNC_MODE,
             fsync_interval: defaults::FSYNC_INTERVAL,
         }

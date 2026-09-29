@@ -109,6 +109,9 @@ fn into(input: BatchInput<'_, '_>, destination: &mut [bool], receipt: Option<Met
                 record_metal_disable("noncanonical Ed25519 kernel result");
                 return None;
             }
+            if !output.usable() {
+                return None;
+            }
             input.publish(native, destination).then_some(())
         })
     })

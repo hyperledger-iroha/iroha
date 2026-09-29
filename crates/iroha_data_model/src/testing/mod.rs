@@ -13,3 +13,7 @@ pub mod kagemusha;
 pub mod kagemusha_release {
     pub use crate::kagemusha::kagemusha_release_v1::fixture_support::KagemushaExperimentalReleaseFixtureV1;
 }
+
+/// Genuine native certificate/checkpoint fixtures; execution outputs remain synthetic test inputs.
+#[cfg(feature = "transparent_api")]
+pub mod native_finality;

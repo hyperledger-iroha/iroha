@@ -16,9 +16,13 @@ What exists so far:
   errors.
 - `verify::finality`: the light finality verifier behind gate G5 (spec §9,
   §11.2 D-7). It is anchored in an authenticated genesis or a stored
-  `checkpoint.norito`, follows exact `3f + 1` committees across epochs by
-  fetching only epoch-terminal proofs, and requires `2f + 1` fresh
-  challenge-bound attestations from committee members. The HTTP transport and
+  complete native `checkpoint.norito`, verifies every contiguous successor under
+  finite proof and peer budgets, and requires `2f + 1` fresh
+  challenge-bound attestations from the authenticated committee. Exact retained
+  predecessor decisions permit one block of lag after checkpoint import. Within an
+  observation, earlier responses count when their exact decisions were verified in
+  its contiguous prefix, including across boundaries. Supplied proofs cannot select
+  their own trust roots. The HTTP transport and
   the other gates come in P2.
 
 The committed definitions are `networks/dev.toml`, `networks/ci.toml` and

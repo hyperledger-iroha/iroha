@@ -107,8 +107,6 @@ pub mod kiso;
 pub mod kura;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
 pub mod musubi_search;
-#[cfg(any(test, feature = "test-network-native-amx-fault-injection"))]
-pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
@@ -249,58 +247,6 @@ fn inbound_owned_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito
     let owned = inbound_enum_field(remaining, flags)?;
     inbound_enum_field(owned, flags)
 }
-fn inbound_sequence_count(bytes: &[u8]) -> Result<(u64, usize), norito::core::Error> {
-    let prefix = bytes
-        .get(..core::mem::size_of::<u64>())
-        .ok_or(norito::core::Error::LengthMismatch)?;
-    let prefix: [u8; core::mem::size_of::<u64>()] = prefix
-        .try_into()
-        .map_err(|_| norito::core::Error::LengthMismatch)?;
-    Ok((u64::from_le_bytes(prefix), core::mem::size_of::<u64>()))
-}
-fn inbound_byte_sequence_wire_len(bytes: &[u8]) -> Result<usize, norito::core::Error> {
-    let (count, prefix_len) = inbound_sequence_count(bytes)?;
-    let count = usize::try_from(count).map_err(|_| norito::core::Error::LengthMismatch)?;
-    prefix_len
-        .checked_add(count)
-        .filter(|len| *len <= bytes.len())
-        .ok_or(norito::core::Error::LengthMismatch)
-}
-/// Borrow field `target` of a derived struct payload with `field_count` fields.
-///
-/// Every v1 struct field is length-prefixed, so the walk validates each
-/// boundary and rejects trailing bytes without decoding any field value.
-fn inbound_struct_field(
-    payload: &[u8],
-    flags: u8,
-    field_count: usize,
-    target: usize,
-) -> Result<&[u8], norito::core::Error> {
-    use norito::core::Error;
-    if target >= field_count {
-        return Err(Error::LengthMismatch);
-    }
-    let mut remaining = payload;
-    let mut selected = None;
-    for index in 0..field_count {
-        let (field_len, prefix_len) =
-            norito::core::read_len_from_slice_with_flags(remaining, flags)?;
-        let field_end = prefix_len
-            .checked_add(field_len)
-            .ok_or(Error::LengthMismatch)?;
-        let field = remaining
-            .get(prefix_len..field_end)
-            .ok_or(Error::LengthMismatch)?;
-        if index == target {
-            selected = Some(field);
-        }
-        remaining = remaining.get(field_end..).ok_or(Error::LengthMismatch)?;
-    }
-    if !remaining.is_empty() {
-        return Err(Error::LengthMismatch);
-    }
-    selected.ok_or(Error::LengthMismatch)
-}
 fn inbound_transaction_gossip_topic(
     payload: &[u8],
     flags: u8,
@@ -431,7 +377,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn progress_reconstruction(&self) -> iroha_p2p::network::message::ProgressReconstruction {
         use iroha_p2p::network::message::ProgressReconstruction;
         match self {
-            // The Sumeragi core retransmits its state ("state, not custody", spec §6.11).
+            // The native core owns retransmission of the exact current instance state.
             Self::Sumeragi(_) => ProgressReconstruction::Retransmit,
             _ => ProgressReconstruction::Exact,
         }
@@ -442,6 +388,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     ) -> Result<Option<iroha_p2p::network::message::Topic>, norito::core::Error> {
         use iroha_p2p::network::message::Topic;
         let (tag, remaining) = inbound_enum_parts(payload)?;
+        if !matches!(tag, 6..=15 | NETWORK_MESSAGE_SUMERAGI_TAG) {
+            return Err(norito::core::Error::Message(
+                "unknown core network-message discriminant".to_owned(),
+            ));
+        }
         if tag == 9 {
             if !remaining.is_empty() {
                 return Err(norito::core::Error::LengthMismatch);
@@ -480,6 +431,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
         discriminant_bytes.copy_from_slice(discriminant);
         match u32::from_le_bytes(discriminant_bytes) {
+            0..=5 | 16..=17 => Err(norito::core::Error::Message(
+                "unknown core network-message discriminant".to_owned(),
+            )),
             NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG => {
                 use torii_proxy::{
                     TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
@@ -525,7 +479,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 let field = inbound_owned_enum_field(remaining, flags)?;
                 sumeragi::net::inbound_decode_limits(field, framed_len, flags).map(Some)
             }
-            _ => Ok(None),
+            6..=15 => Ok(None),
+            _ => Err(norito::core::Error::Message(
+                "unknown core network-message discriminant".to_owned(),
+            )),
         }
     }
     fn is_outbound_allowed(&self) -> bool {
@@ -729,16 +686,11 @@ mod validation_fee_admission_tests;
 #[cfg(test)]
 mod tests {
     use crate::{
-        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
         NetworkMessage, PeerTrustGossip, PeersGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
-        sumeragi::message::{
-            BlockMessage, BlockMessageWire, KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
-        },
         torii_proxy::{
-            QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
             TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
@@ -746,8 +698,7 @@ mod tests {
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
             ToriiFanoutRouteScopeV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
             ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
-            ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadProxyRequestV1,
-            ToriiRouteHintV1, ToriiRoutingPlanHintV1,
+            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -851,7 +802,7 @@ mod tests {
         ));
     }
     #[test]
-    fn first_release_network_tags_are_contiguous() {
+    fn current_network_tags_preserve_distinct_protocol_identity() {
         use iroha_primitives::unique_vec::UniqueVec;
         use iroha_torii_shared::connect::{ConnectP2pMessageV1, ConnectSessionTerminatedV1};
         use norito::streaming::{ControlErrorFrame, ErrorCode};
@@ -927,6 +878,31 @@ mod tests {
         }
     }
     #[test]
+    fn retired_network_tags_are_rejected_before_payload_decode() {
+        for requested in [0, ncore::header_flags::COMPACT_LEN] {
+            let (mut payload, flags) = {
+                let _guard = ncore::DecodeFlagsGuard::enter(requested);
+                norito::codec::encode_with_header_flags(&NetworkMessage::Health)
+            };
+            for tag in [0_u32, 1, 2, 3, 4, 5, 16, 17, 19, u32::MAX] {
+                payload[..4].copy_from_slice(&tag.to_le_bytes());
+                assert!(NetworkMessage::inbound_topic(&payload, flags).is_err());
+                assert!(
+                    NetworkMessage::inbound_decode_limits(&payload, usize::MAX, flags).is_err()
+                );
+                let _guard = ncore::DecodeFlagsGuard::enter(flags);
+                assert!(ncore::decode_field_canonical::<NetworkMessage>(&payload).is_err());
+                // An unbounded dynamic payload cannot turn an unknown tag into a decoder.
+                let mut malicious = payload.clone();
+                malicious.extend_from_slice(&u64::MAX.to_le_bytes());
+                assert!(NetworkMessage::inbound_topic(&malicious, flags).is_err());
+                assert!(
+                    NetworkMessage::inbound_decode_limits(&malicious, usize::MAX, flags).is_err()
+                );
+            }
+        }
+    }
+    #[test]
     fn role_id_with_owner_parse_roundtrip() {
         let (account, _keypair) = gen_account_in("wonderland");
         let role: RoleId = "auditor".parse().expect("valid role id");
@@ -969,11 +945,7 @@ mod tests {
             NetworkTopic::TxGossipRestricted
         );
         for (tag, expected) in [
-            (1_u32, NetworkTopic::Consensus),
-            (2, NetworkTopic::Consensus),
-            (3, NetworkTopic::Consensus),
-            (5, NetworkTopic::Consensus),
-            (7, NetworkTopic::PeerGossip),
+            (7_u32, NetworkTopic::PeerGossip),
             (8, NetworkTopic::TrustGossip),
             (10, NetworkTopic::Health),
             (11, NetworkTopic::Health),
@@ -981,8 +953,6 @@ mod tests {
             (13, NetworkTopic::Control),
             (14, NetworkTopic::Control),
             (15, NetworkTopic::Control),
-            (16, NetworkTopic::Control),
-            (17, NetworkTopic::Consensus),
         ] {
             let (mut payload, flags) =
                 norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
@@ -1047,21 +1017,10 @@ mod tests {
                 body: Vec::new(),
             },
         }));
-        let queue_plan_publication = NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
-            QueuePlanAdmissionPublicationV1 {
-                schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
-                certificate: vec![0x16],
-            },
-        ));
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
-        assert!(queue_plan_publication.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
-        for (message, expected_tag) in [
-            (&torii_request, 13),
-            (&torii_response, 14),
-            (&queue_plan_publication, 16),
-        ] {
+        for (message, expected_tag) in [(&torii_request, 13), (&torii_response, 14)] {
             assert_eq!(raw_network_tag(message), expected_tag);
             assert_eq!(message.topic(), NetworkTopic::Control);
             assert_eq!(raw_network_topic(message), NetworkTopic::Control);
@@ -1261,8 +1220,6 @@ mod tests {
             request: ToriiProxyRequestKindV1::SubmitTransaction {
                 transaction: TransactionEntrypoint::External(transaction),
                 expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
-                admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-                admission_binding: None,
             },
         }));
         let encoded = ncore::to_bytes(&message).expect("encode 10 MiB proxy submission");
@@ -1345,11 +1302,10 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                let (_, wire, certificate) = gossip.txs[0]
+                let (_, wire) = gossip.txs[0]
                     .clone()
                     .into_entrypoint_with_payload()
                     .expect("recover cached entrypoint frame");
-                assert!(certificate.is_none());
                 assert_eq!(wire.as_slice(), payload.as_slice());
                 assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
@@ -1409,11 +1365,10 @@ mod tests {
                 NetworkMessage::TransactionGossiper(gossip) => {
                     assert_eq!(gossip.txs.len(), 1);
                     assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                    let (_, wire, certificate) = gossip.txs[0]
+                    let (_, wire) = gossip.txs[0]
                         .clone()
                         .into_entrypoint_with_payload()
                         .expect("recover context-free cached entrypoint frame");
-                    assert!(certificate.is_none());
                     assert_eq!(wire.as_slice(), canonical_payload.as_slice());
                     assert!(wire.starts_with(&ncore::MAGIC));
                     assert_eq!(gossip.routes.len(), 1);

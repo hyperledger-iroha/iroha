@@ -90,10 +90,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             format: "json".to_string(),
         };
         args.run_with(&mut ctx, |_client, transaction| {
-            assert_eq!(
-                transaction.admission_intent(),
-                TransactionAdmissionIntent::QueuePlanSynced
-            );
+            transaction.verify_signature().expect("canonical signed public transaction");
             assert_eq!(moderation_commit_from_transaction(transaction), commit);
             Ok(transaction.hash())
         })
@@ -2219,10 +2216,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         };
         let mut ctx = TestContext::new();
         args.run_with(&mut ctx, |_client, transaction| {
-            assert_eq!(
-                transaction.admission_intent(),
-                TransactionAdmissionIntent::QueuePlanSynced
-            );
+            transaction.verify_signature().expect("canonical signed public transaction");
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-501");
             assert_eq!(apply.expected_revision, 2);

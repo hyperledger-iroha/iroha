@@ -2677,7 +2677,9 @@ fn decode_snapshot_plaintext(
     let aligned = align_slice(plaintext, align, norito_core::Header::SIZE)?;
     let file = norito_core::with_decode_limits(SNAPSHOT_DECODE_LIMITS_V1, || {
         norito_core::from_bytes_view(aligned.as_slice()).and_then(|view| {
-            view.decode_exact_with(norito_core::decode_field_canonical::<StreamingSnapshotFile>)
+            view.decode_exact_with::<StreamingSnapshotFile, _, _>(
+                norito_core::decode_field_canonical::<StreamingSnapshotFile>,
+            )
         })
     })
     .map_err(StreamingSnapshotError::Codec)?;

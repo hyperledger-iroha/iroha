@@ -8,9 +8,10 @@ use norito::{
 };
 /// One input-ordered result from a dispatched transaction batch.
 ///
-/// Status 202 acknowledges durable admission. Other statuses retain the exact
-/// single-submit HTTP result; `PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN` requires
-/// reconciliation of this signed hash before another submission. A batch is
+/// Status 202 acknowledges local pending admission, not restart durability or finality.
+/// Other statuses retain the exact single-submit HTTP result;
+/// `transaction_dispatch_outcome_unknown` requires reconciliation of this signed hash
+/// before another submission. A batch is
 /// transport aggregation, not an atomic execution or admission protocol.
 #[derive(
     Clone,

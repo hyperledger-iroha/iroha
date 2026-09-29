@@ -1,3 +1,7 @@
+#[path = "deserialize_world_musubi_rejection.rs"]
+pub(in crate::state) mod musubi_rejection;
+use musubi_rejection::{ProjectionCut, ProjectionRejection, ProjectionTable};
+
 #[path = "deserialize_world_musubi_live.rs"]
 mod musubi_live;
 #[path = "deserialize_world_musubi_source_work.rs"]
@@ -7184,6 +7188,7 @@ mod validation_fee_registry_restore_tests {
                 ),
                 lane_manifests: Arc::new(LaneManifestRegistry::empty()),
                 canonical_runtime,
+                native_execution_tip: None,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
                 transactions: TransactionsStorage::try_new(kura.transaction_history_budget())
@@ -7196,7 +7201,6 @@ mod validation_fee_registry_restore_tests {
                     .parse()
                     .expect("validation-fee emergency-fast chain id"),
                 network_id: network_id(),
-                snapshot_v2_bootstrap_candidate: None,
                 nexus_runtime_restored_from_snapshot: false,
                 kura,
                 query_handle: LiveQueryStore::start_test(),
@@ -8156,8 +8160,6 @@ fn decode_world_fields(
             message: format!("invalid Kagemusha V1 reserve custody snapshot: {error}"),
         })?;
     }
-    let lane_relay_emergency_validators =
-        take_required(&mut map, "lane_relay_emergency_validators")?;
     let manifest_aliases = take_required(&mut map, "manifest_aliases")?;
     validate_musubi_location_reverse_indices(
         &musubi_archives,
@@ -8439,7 +8441,6 @@ fn decode_world_fields(
         public_lane_reward_reserves: Storage::default(),
         public_lane_stake_custody: Storage::default(),
         public_lane_stake_reserves: Storage::default(),
-        lane_relay_emergency_validators,
         zk_assets,
         confidential_policy_transition_index: Storage::default(),
         confidential_policy_transition_counts: Storage::default(),
@@ -9001,6 +9002,7 @@ struct BuildStateInputs {
     execution_budget: mv::allocation::AllocationBudget,
     lane_manifests: LaneManifestRegistryHandle,
     canonical_runtime: Cell<SnapshotNexusRuntime>,
+    native_execution_tip: Option<native_execution_tip::TipCell>,
     world: World,
     block_hashes: BlockHashes,
     transactions: TransactionsStorage,
@@ -9010,7 +9012,6 @@ struct BuildStateInputs {
     nexus: iroha_config::parameters::actual::Nexus,
     chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
-    snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     nexus_runtime_restored_from_snapshot: bool,
     kura: Arc<Kura>,
     query_handle: LiveQueryStoreHandle,
@@ -9026,6 +9027,7 @@ fn build_state(
         execution_budget,
         lane_manifests,
         canonical_runtime,
+        native_execution_tip,
         world,
         block_hashes,
         transactions,
@@ -9035,13 +9037,16 @@ fn build_state(
         nexus,
         chain_id,
         network_id,
-        snapshot_v2_bootstrap_candidate,
         nexus_runtime_restored_from_snapshot,
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         telemetry,
     } = inputs;
+    let native_execution_tip = match native_execution_tip {
+        Some(original) => original,
+        None => native_execution_tip::empty_cell(&execution_budget)?,
+    };
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     validate_no_standalone_governance_state_for_typed_proposals_v1(&world).map_err(|error| {
@@ -9057,19 +9062,6 @@ fn build_state(
             "restored committed height does not fit the Parliament height domain: {error}"
         ))
     })?;
-    if !emergency_fast {
-        crate::sumeragi::v2_evidence::validate_persisted_v2_evidence_records(
-            &world.view(),
-            kura.as_ref(),
-            &network_id,
-            restored_height,
-        )
-        .map_err(|error| {
-            MergeLedgerCommitError::ExecutionStatePublication(format!(
-                "restored Sumeragi v2 evidence state is invalid: {error}"
-            ))
-        })?;
-    }
     crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
         &world.view(),
     )
@@ -9172,9 +9164,7 @@ fn build_state(
         world,
         block_hashes,
         latest_block_header: PublicationRwLock::new(latest_block_header),
-        merge_ledger: MergeLedgerStore::with_default_capacity(),
-        merge_admission: PublicationRwLock::new(MergeAdmissionState::default()),
-        replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
+
         transactions,
         commit_topology,
         prev_commit_topology,
@@ -9190,7 +9180,7 @@ fn build_state(
         ),
         query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
         da_pin_intents: PublicationRwLock::new(DaPinStore::default()),
-        lane_relays: PublicationRwLock::new(LaneRelayStore::default()),
+
         lane_manifests: PublicationRwLock::new(lane_manifests),
         provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::new(Arc::new(LanePrivacyRegistry::empty())),
@@ -9227,6 +9217,7 @@ fn build_state(
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
         canonical_runtime,
+        native_execution_tip,
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
         evidence_preparation_budget: mv::allocation::AllocationBudget::new(
@@ -9246,21 +9237,20 @@ fn build_state(
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,
-        snapshot_v2_bootstrap_candidate,
-        authenticated_snapshot_v2_bootstrap: None,
-        authenticated_snapshot_bootstrap_payload: None,
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: PublicationMutex::default(),
         geometry_publication: parking_lot::Mutex::new(None),
         tiered_startup_geometry: None,
-        queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
+
         state_commit_lock: Arc::new(PublicationMutex::default()),
         state_write_lock: PublicationMutex::default(),
         view_generation: AtomicU64::new(0),
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
-        sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
+        native_pending_evidence: parking_lot::Mutex::new(
+            crate::sumeragi::evidence::NativeEvidencePool::default(),
+        ),
     });
     if !emergency_fast {
         // Restore effective manifests from the caller's frozen startup sources before
@@ -9274,6 +9264,11 @@ fn build_state(
         *state.lane_manifests.get_mut() = projection.manifests;
         *state.lane_privacy_registry.get_mut() = projection.privacy;
     }
+    crate::sumeragi::evidence::validate_persisted_records(&state.view()).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored native evidence is invalid: {error}"
+        ))
+    })?;
     crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
         &state.view(),
         restored_height,
@@ -11098,7 +11093,11 @@ mod decode_tests {
         let encoded_prefix = encoded
             .strip_suffix('}')
             .expect("canonical World snapshot is a JSON object");
-        for retired_field in ["council", "parliament_bodies"] {
+        for retired_field in [
+            "council",
+            "parliament_bodies",
+            "lane_relay_emergency_validators",
+        ] {
             let injected = format!("{encoded_prefix},\"{retired_field}\":[]}}");
             let error = SnapshotJsonMap::parse(&injected, "world")
                 .and_then(|map| {

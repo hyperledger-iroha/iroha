@@ -90,22 +90,16 @@ impl<'state> StateBlock<'state> {
     /// Try the sole publication engine while retaining this original allocation.
     /// Only `Deferred` grants another attempt; callers never mutate a pending owner.
     pub(crate) fn try_publish(&mut self) -> StatePublicationOutcome {
-        self.try_publish_inner(None)
+        self.try_publish_inner()
     }
 
     /// Existing consuming callers explicitly abandon their original on any refusal.
     /// This convenience delegates once to the same engine used by native retry.
-    pub(super) fn commit_inner(
-        mut self,
-        veto: Option<&mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_)>,
-    ) -> Result<(), TransactionsBlockError> {
-        self.try_publish_inner(veto).into_result()
+    pub(super) fn commit_inner(mut self) -> Result<(), TransactionsBlockError> {
+        self.try_publish_inner().into_result()
     }
 
-    fn try_publish_inner(
-        &mut self,
-        veto: Option<&mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_)>,
-    ) -> StatePublicationOutcome {
+    fn try_publish_inner(&mut self) -> StatePublicationOutcome {
         let mut original = self
             .publication
             .take()
@@ -130,7 +124,7 @@ impl<'state> StateBlock<'state> {
             execution.with_scope(|_| {
                 membership.with_scope(|_| {
                     hashes.with_scope(|_| {
-                        let result = self.attempt_original_publication(&mut original, veto);
+                        let result = self.attempt_original_publication(&mut original);
                         if original.fields_frozen && !original.irreversible {
                             // The attempt has returned: every State/effect fence is free.
                             // Recover all original cursors before retiring any notice.
@@ -182,9 +176,6 @@ impl<'state> StateBlock<'state> {
     fn attempt_original_publication(
         &mut self,
         original: &mut StatePublication<'state>,
-        mut autoscale_retirement_queue_veto: Option<
-            &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
-        >,
     ) -> Result<(), TransactionsBlockError> {
         self.require_storage_admission()
             .map_err(TransactionsBlockError::LocalStateStorage)?;
@@ -276,13 +267,13 @@ impl<'state> StateBlock<'state> {
             execution_output_plan: _publication_owner,
             runtime_policy,
             canonical_runtime,
+            native_execution_tip,
             world,
             block_hashes,
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             lane_incarnation_activation_heights,
-            verified_lane_relay_records,
             kagemusha_v1_runtime_verifier,
             kagemusha_registry_transition_authorization,
             zk: _,
@@ -308,22 +299,6 @@ impl<'state> StateBlock<'state> {
             u64::try_from(world.citizens.len())
                 .expect("committed Parliament citizen count must fit into u64")
         });
-        let exact_scale_in_binding = match pending_autoscale_lifecycle
-            .as_ref()
-            .map(PendingAutoscaleLaneLifecycle::exact_scale_in_binding)
-            .transpose()
-        {
-            Ok(binding) => binding.flatten(),
-            Err(err) => {
-                error!(
-                    block_height,
-                    block = %block_header_hash,
-                    ?err,
-                    "failed to derive the exact autoscale retirement binding before state commit"
-                );
-                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
-            }
-        };
         let _state_commit_lock = commit_fence.lock();
         let current_generation = state_ref.state_view_generation();
         if current_generation % 2 != 0
@@ -407,35 +382,6 @@ impl<'state> StateBlock<'state> {
                 }
             }
         }
-        if let Some((lane_id, dataspace_id, lane_incarnation)) = exact_scale_in_binding {
-            match autoscale_retirement_queue_veto.as_mut() {
-                Some(veto) => {
-                    if let Err(reason) = veto(lane_id, dataspace_id, lane_incarnation) {
-                        error!(
-                            block_height,
-                            block = %block_header_hash,
-                            lane = lane_id.as_u32(),
-                            dataspace = dataspace_id.as_u64(),
-                            incarnation = %hex::encode(lane_incarnation.as_ref()),
-                            %reason,
-                            "final autoscale retirement Queue veto rejected state commit"
-                        );
-                        return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
-                    }
-                }
-                None => {
-                    error!(
-                        block_height,
-                        block = %block_header_hash,
-                        lane = lane_id.as_u32(),
-                        dataspace = dataspace_id.as_u64(),
-                        incarnation = %hex::encode(lane_incarnation.as_ref()),
-                        "live autoscale retirement has no final Queue veto"
-                    );
-                    return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
-                }
-            }
-        }
         if world_effects.is_none() {
             // Complete every remaining World write before geometry or State publication.
             // The move-only owner exposes only reads until consuming the exact overlay.
@@ -443,10 +389,6 @@ impl<'state> StateBlock<'state> {
                 nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
                 nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
                 nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
-                State::retain_verified_lane_relay_records_outside_lanes(
-                    verified_lane_relay_records,
-                    &pending.catalog_update.lanes_to_reset,
-                );
             }
             *world_effects = Some(
                 world_commit::PreparedWorldCommit::prepare_overlay_mutations(
@@ -479,11 +421,13 @@ impl<'state> StateBlock<'state> {
             // capture slot before releasing any physical execution writer.
             world.begin_freeze();
             canonical_runtime.begin_freeze();
+            native_execution_tip.begin_freeze();
             prev_committed_topology.begin_freeze();
             committed_topology.begin_freeze();
             transactions.finish_freeze()?;
             world.finish_freeze();
             canonical_runtime.finish_freeze();
+            native_execution_tip.finish_freeze();
             prev_committed_topology.finish_freeze();
             committed_topology.finish_freeze();
             *fields_frozen = true;
@@ -617,6 +561,9 @@ impl<'state> StateBlock<'state> {
             canonical_runtime
                 .install_frozen_publication(&state_ref.canonical_runtime, scope)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
+            native_execution_tip
+                .install_frozen_publication(&state_ref.native_execution_tip, scope)
+                .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
             prev_committed_topology
                 .install_frozen_publication(&state_ref.prev_commit_topology, scope)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
@@ -641,6 +588,9 @@ impl<'state> StateBlock<'state> {
             canonical_runtime
                 .try_prepare_frozen_publication()
                 .map_err(original_preparation_error)?;
+            native_execution_tip
+                .try_prepare_frozen_publication()
+                .map_err(original_preparation_error)?;
             prev_committed_topology
                 .try_prepare_frozen_publication()
                 .map_err(original_preparation_error)?;
@@ -659,6 +609,7 @@ impl<'state> StateBlock<'state> {
             // Membership was admitted before every fallible resource step.
             // The exact retained journals now publish under one State writer.
             canonical_runtime.publish_prepared();
+            native_execution_tip.publish_prepared();
             let prev_topology_start = Instant::now();
             prev_committed_topology.publish_prepared();
             let prev_topology_hold = prev_topology_start.elapsed();
@@ -873,14 +824,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(_state_commit_lock);
-        if !verified_lane_relay_records.is_empty() {
-            let hydrated = state_ref
-                .hydrate_verified_lane_relay_records(std::mem::take(verified_lane_relay_records));
-            debug!(
-                block_height,
-                hydrated, "hydrated verified lane relay records after block commit"
-            );
-        }
+
         *published = true;
         Ok(())
     }
@@ -1003,6 +947,9 @@ impl StateBlock<'_> {
             .expect("original retained State fields");
         fields.world.recover_installed_frozen_publication();
         fields
+            .native_execution_tip
+            .recover_installed_frozen_publication();
+        fields
             .canonical_runtime
             .recover_installed_frozen_publication();
         fields
@@ -1022,6 +969,7 @@ impl StateBlock<'_> {
             .expect("original retained State fields");
         fields.world.retire_frozen_cleanup();
         fields.canonical_runtime.retire_frozen_cleanup();
+        fields.native_execution_tip.retire_frozen_cleanup();
         fields.prev_commit_topology.retire_frozen_cleanup();
         fields.commit_topology.retire_frozen_cleanup();
         fields.transactions.retire_frozen_cleanup();

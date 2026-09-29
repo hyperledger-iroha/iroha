@@ -116,15 +116,16 @@ def evidence_record_payload(*, penalty_status: dict[str, Any] | None = None) -> 
     """Return one exact first-release evidence projection."""
 
     return {
-        "kind": "SumeragiV2Equivocation",
+        "kind": "NativeSumeragiEvidence",
         "class": "phase_vote",
         "height": 31,
-        "view": 4,
         "epoch": 2,
-        "signer": 3,
         "context_id": "11" * 32,
-        "artifact_hash_1": "22" * 32,
-        "artifact_hash_2": "33" * 32,
+        "instance": "22" * 32,
+        "authority_generation": "33" * 32,
+        "offenders": [{"signer": 3, "peer_id": "ea013082F39DD89C3AA5C497C7C1843C21C117CF77E7A569E80B827B401A275179DD57F67CA52601BF4C127F848D71740A5D08"}],
+        "safety_violation": False,
+        "native_frame_hash": "44" * 32,
         "recorded_height": 40,
         "recorded_view": 2,
         "recorded_ms": 1_700_000_000_000,
@@ -365,22 +366,18 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
     ("/v1/pipeline/preflight", lambda client: client.get_pipeline_preflight()),
     ("/v1/pipeline/recovery/42", lambda client: client.get_pipeline_recovery(42)),
     ("/v1/sumeragi/status", lambda client: client.get_sumeragi_status()),
-    (
-        "/v1/sumeragi/diagnostics",
-        lambda client: client.get_sumeragi_diagnostics(),
-    ),
-    ("/v1/sumeragi/qc", lambda client: client.get_sumeragi_qc()),
+    ("/v1/sumeragi/status", lambda client: client.get_sumeragi_status_typed()),
     ("/v1/sumeragi/leader", lambda client: client.get_sumeragi_leader()),
     (
         "/v1/sumeragi/evidence/count",
         lambda client: client.get_sumeragi_evidence_count(),
     ),
     (
-        "/v1/sumeragi/evidence?kind=SumeragiV2Equivocation&limit=2&offset=1",
+        "/v1/sumeragi/evidence?kind=NativeSumeragiEvidence&limit=2&offset=1",
         lambda client: client.list_sumeragi_evidence(
             limit=2,
             offset=1,
-            kind="SumeragiV2Equivocation",
+            kind="NativeSumeragiEvidence",
         ),
     ),
     ("/v1/sumeragi/params", lambda client: client.get_sumeragi_params()),
@@ -505,3 +502,45 @@ def test_operator_reads_generate_a_fresh_nonce_for_each_dispatch() -> None:
         session.calls[0]["headers"]["x-iroha-operator-nonce"]
         != session.calls[1]["headers"]["x-iroha-operator-nonce"]
     )
+
+
+@pytest.mark.parametrize("field", list(evidence_record_payload()))
+def test_native_evidence_requires_each_exact_field(field: str) -> None:
+    payload = evidence_record_payload()
+    del payload[field]
+    with pytest.raises((TypeError, ValueError), match=field):
+        SumeragiEvidenceRecord.from_payload(payload)
+
+
+@pytest.mark.parametrize("changes", [
+    {"kind": "SumeragiV2Equivocation"},
+    {"view": 4}, {"signer": 3}, {"artifact_hash_1": "22" * 32},
+    {"offenders": []}, {"offenders": [{}]},
+    {"offenders": [{"signer": 1024, "peer_id": "invalid"}]},
+    {"offenders": [{"signer": 0, "peer_id": "invalid"}]},
+    {"safety_violation": 1},
+    {"authority_generation": "AB" * 32},
+])
+def test_native_evidence_rejects_retired_and_malformed_attribution(changes: dict[str, Any]) -> None:
+    payload = evidence_record_payload()
+    payload.update(changes)
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiEvidenceRecord.from_payload(payload)
+
+
+def test_native_evidence_rejects_duplicate_signers_and_peers() -> None:
+    for duplicate_signer in (True, False):
+        payload = evidence_record_payload()
+        offender = dict(payload["offenders"][0])
+        if not duplicate_signer:
+            offender["signer"] += 1
+        payload["offenders"].append(offender)
+        with pytest.raises(ValueError):
+            SumeragiEvidenceRecord.from_payload(payload)
+
+
+@pytest.mark.parametrize("native_class", ["proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates"])
+def test_native_evidence_accepts_each_native_class(native_class: str) -> None:
+    payload = evidence_record_payload()
+    payload["class"] = native_class
+    assert SumeragiEvidenceRecord.from_payload(payload).class_ == native_class

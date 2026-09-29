@@ -31,6 +31,9 @@ struct CostSample {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CalibrationFailure {
+    /// No attempt began: another pass owns scheduling or its shared budget expired.
+    /// This candidate must retain its prior retry state without a new penalty.
+    Deferred,
     /// Public samples exceeded their bounded wall-time budget.
     Deadline,
     /// Synthetic sample allocation or CPU tree construction failed.
@@ -73,6 +76,7 @@ impl MetalMerkleCostCache {
             return None;
         }
         match run() {
+            Err(CalibrationFailure::Deferred) => None,
             Ok(profile) => {
                 self.profile = Some(profile);
                 self.retry_after = None;
@@ -106,19 +110,24 @@ pub(super) struct MetalMerkleCostProfile {
 }
 
 impl MetalMerkleCostProfile {
-    pub(super) fn prefer_metal(self, work: MetalMerkleWork, leaves: usize) -> bool {
+    pub(super) fn qualified_cost(self, work: MetalMerkleWork, leaves: usize) -> Option<u64> {
         if self.cpu_choice != super::simd_choice() || leaves < SAMPLE_LEAVES[0] {
-            return false;
+            return None;
         }
         let index = self
             .samples
             .partition_point(|sample| sample.leaves <= leaves)
             .saturating_sub(1);
         let sample = self.samples[index];
-        match work {
-            MetalMerkleWork::Leaves => sample.metal_leaves_ns < sample.cpu_leaves_ns,
-            MetalMerkleWork::Root => sample.metal_root_ns < sample.cpu_root_ns,
-        }
+        let (cpu, metal) = match work {
+            MetalMerkleWork::Leaves => (sample.cpu_leaves_ns, sample.metal_leaves_ns),
+            MetalMerkleWork::Root => (sample.cpu_root_ns, sample.metal_root_ns),
+        };
+        (metal < cpu).then_some(metal)
+    }
+    #[cfg(test)]
+    pub(super) fn prefer_metal(self, work: MetalMerkleWork, leaves: usize) -> bool {
+        self.qualified_cost(work, leaves).is_some()
     }
 }
 
@@ -220,9 +229,9 @@ pub(super) struct MetalBatchCostProfile {
 }
 
 impl MetalBatchCostProfile {
-    pub(super) fn prefer_metal(self, items: usize) -> bool {
+    pub(super) fn qualified_cost(self, items: usize) -> Option<u64> {
         if self.cpu_choice != super::simd_choice() || items < self.samples[0].items {
-            return false;
+            return None;
         }
         let upper = self.samples.partition_point(|sample| sample.items < items);
         let (cpu_ns, metal_ns) = if upper == 0 {
@@ -245,7 +254,11 @@ impl MetalBatchCostProfile {
             )
         };
         // Require a clear measured win so close/noisy samples stay on CPU.
-        u128::from(metal_ns) * 10 < u128::from(cpu_ns) * 9
+        (u128::from(metal_ns) * 10 < u128::from(cpu_ns) * 9).then_some(metal_ns)
+    }
+    #[cfg(test)]
+    pub(super) fn prefer_metal(self, items: usize) -> bool {
+        self.qualified_cost(items).is_some()
     }
 }
 
@@ -283,14 +296,16 @@ impl MetalBatchCostCache {
         {
             return None;
         }
-        self.last_calibration = Some(now);
         match run() {
+            Err(CalibrationFailure::Deferred) => None,
             Ok(profile) if profile.work == work && profile.cpu_choice == super::simd_choice() => {
+                self.last_calibration = Some(now);
                 self.profile = Some(profile);
                 self.retry_after = None;
                 Some(profile)
             }
             Ok(_) | Err(CalibrationFailure::ParityMismatch) => {
+                self.last_calibration = Some(now);
                 self.quarantined = true;
                 None
             }
@@ -300,6 +315,7 @@ impl MetalBatchCostCache {
                 | CalibrationFailure::BackendUnavailable
                 | CalibrationFailure::Overloaded,
             ) => {
+                self.last_calibration = Some(now);
                 self.retry_after = Some(now + RETRY_AFTER_TRANSIENT_FAILURE);
                 None
             }
@@ -522,9 +538,12 @@ fn calibrate_ed25519(
 
 pub(super) fn calibrate_batch(
     work: MetalBatchWork,
+    started: Instant,
 ) -> Result<MetalBatchCostProfile, CalibrationFailure> {
+    if started.elapsed() >= MAX_CALIBRATION {
+        return Err(CalibrationFailure::Deadline);
+    }
     let _reservation = MemoryReservation::active(BATCH_CALIBRATION_RESERVATION_BYTES);
-    let started = Instant::now();
     let cpu_choice = super::simd_choice();
     let samples = match work {
         MetalBatchWork::Ed25519 => calibrate_ed25519(started)?,
@@ -540,9 +559,11 @@ pub(super) fn calibrate_batch(
     })
 }
 
-pub(super) fn calibrate() -> Result<MetalMerkleCostProfile, CalibrationFailure> {
+pub(super) fn calibrate(started: Instant) -> Result<MetalMerkleCostProfile, CalibrationFailure> {
+    if started.elapsed() >= MAX_CALIBRATION {
+        return Err(CalibrationFailure::Deadline);
+    }
     let _reservation = MemoryReservation::active(CALIBRATION_RESERVATION_BYTES);
-    let started = Instant::now();
     let mut samples = [CostSample::default(); SAMPLE_LEAVES.len()];
     let cpu_choice = super::simd_choice();
     for (index, leaves) in SAMPLE_LEAVES.into_iter().enumerate() {
@@ -620,6 +641,382 @@ mod tests {
     use super::*;
 
     #[test]
+    fn merkle_scheduler_unwind_keeps_later_calibration_and_original_quarantine() {
+        use super::super::metal_owner::{DeviceRegistry, FairProgress};
+        use std::{
+            panic::{AssertUnwindSafe, catch_unwind},
+            sync::Mutex,
+        };
+
+        let registry = DeviceRegistry::<Mutex<MetalMerkleCostCache>>::new();
+        let credit = mv::allocation::AllocationBudget::new(16384);
+        assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
+        for identity in [11, 22] {
+            let record = registry
+                .observe(identity, 2, |bytes| credit.try_reserve_bytes(bytes).ok())
+                .unwrap();
+            assert!(record.initialize(|| Some(Mutex::new(MetalMerkleCostCache::default()))));
+        }
+        let first = registry.record(0, 2).unwrap();
+        let second = registry.record(1, 2).unwrap();
+        let first_cache = first.value().unwrap();
+        let progress = FairProgress::new();
+        let now = Instant::now();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let mut pass = progress.try_pass(2, now, MAX_CALIBRATION).unwrap();
+                let start = pass.start();
+                let _ = registry.select_costed(2, 2, start, |index, record, cache| {
+                    cache
+                        .try_lock()
+                        .ok()?
+                        .get_or_calibrate(now, || {
+                            pass.begin_attempt(index, now)
+                                .ok_or(CalibrationFailure::Deferred)?;
+                            assert_eq!(record.health().identity(), 11);
+                            record.health().quarantine(true);
+                            panic!("backend unwind through actual cache and family pass")
+                        })?
+                        .qualified_cost(MetalMerkleWork::Leaves, 16_384)
+                });
+            }))
+            .is_err()
+        );
+        assert!(!first.health().usable());
+        assert!(first_cache.is_poisoned());
+        {
+            let untouched = second.value().unwrap().lock().unwrap();
+            assert!(
+                untouched.retry_after.is_none(),
+                "unvisited device receives no panic penalty"
+            );
+        }
+        let later = now + Duration::from_millis(1);
+        let mut pass = progress
+            .try_pass(2, later, MAX_CALIBRATION)
+            .expect("family cursor recovers its scalar state");
+        assert_eq!(
+            pass.start(),
+            1,
+            "recorded progress survives poison recovery"
+        );
+        assert!(
+            progress.try_pass(2, later, MAX_CALIBRATION).is_none(),
+            "WouldBlock remains nonblocking after recovery"
+        );
+        let profile = MetalMerkleCostProfile {
+            samples: SAMPLE_LEAVES.map(|leaves| CostSample {
+                leaves,
+                cpu_leaves_ns: 100,
+                metal_leaves_ns: 20,
+                cpu_root_ns: 100,
+                metal_root_ns: 20,
+            }),
+            cpu_choice: super::super::simd_choice(),
+        };
+        let start = pass.start();
+        let selected = registry
+            .select_costed(2, 1, start, |index, record, cache| {
+                cache
+                    .try_lock()
+                    .ok()?
+                    .get_or_calibrate(later, || {
+                        assert_eq!(record.health().identity(), 22);
+                        pass.begin_attempt(index, later)
+                            .ok_or(CalibrationFailure::Deferred)?;
+                        Ok(profile)
+                    })?
+                    .qualified_cost(MetalMerkleWork::Leaves, 16_384)
+            })
+            .expect("later healthy device calibrates immediately after scheduling recovery");
+        assert_eq!(selected.health().identity(), 22);
+        assert!(
+            !first.health().usable(),
+            "scheduler recovery cannot revive physical health"
+        );
+        assert!(
+            first_cache.is_poisoned(),
+            "coupled profile mutex is never recovered as scalar state"
+        );
+    }
+
+    #[test]
+    fn batch_scheduler_unwind_keeps_later_calibration_and_original_quarantine() {
+        use super::super::metal_owner::{DeviceRegistry, FairProgress};
+        use std::{
+            panic::{AssertUnwindSafe, catch_unwind},
+            sync::Mutex,
+        };
+        for work in [
+            MetalBatchWork::AesEnc,
+            MetalBatchWork::AesDec,
+            MetalBatchWork::AesEncRounds(2),
+            MetalBatchWork::AesDecRounds(2),
+            MetalBatchWork::Ed25519,
+        ] {
+            let registry = DeviceRegistry::<Mutex<MetalBatchCostCache>>::new();
+            let credit = mv::allocation::AllocationBudget::new(16384);
+            assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
+            for identity in [11, 22] {
+                let record = registry
+                    .observe(identity, 2, |bytes| credit.try_reserve_bytes(bytes).ok())
+                    .unwrap();
+                assert!(record.initialize(|| Some(Mutex::new(MetalBatchCostCache::default()))));
+            }
+            let first = registry.record(0, 2).unwrap();
+            let second = registry.record(1, 2).unwrap();
+            let first_cache = first.value().unwrap();
+            let progress = FairProgress::new();
+            let now = Instant::now();
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let mut pass = progress.try_pass(2, now, MAX_CALIBRATION).unwrap();
+                    let start = pass.start();
+                    let _ = registry.select_costed(2, 2, start, |index, record, cache| {
+                        cache
+                            .try_lock()
+                            .ok()?
+                            .get_or_calibrate(now, work, || {
+                                pass.begin_attempt(index, now)
+                                    .ok_or(CalibrationFailure::Deferred)?;
+                                assert_eq!(record.health().identity(), 11);
+                                record.health().quarantine(true);
+                                panic!("backend unwind through actual cache and family pass")
+                            })?
+                            .qualified_cost(128)
+                    });
+                }))
+                .is_err()
+            );
+            assert!(!first.health().usable());
+            assert!(first_cache.is_poisoned());
+            {
+                let untouched = second.value().unwrap().lock().unwrap();
+                assert!(
+                    untouched.retry_after.is_none(),
+                    "unvisited device receives no panic penalty"
+                );
+                assert!(untouched.last_calibration.is_none());
+            }
+            let later = now + Duration::from_millis(1);
+            let mut pass = progress
+                .try_pass(2, later, MAX_CALIBRATION)
+                .expect("family cursor recovers its scalar state");
+            assert_eq!(
+                pass.start(),
+                1,
+                "recorded progress survives poison recovery"
+            );
+            assert!(
+                progress.try_pass(2, later, MAX_CALIBRATION).is_none(),
+                "WouldBlock remains nonblocking after recovery"
+            );
+            let profile = MetalBatchCostProfile {
+                work,
+                samples: AES_BATCH_ITEMS.map(|items| BatchCostSample {
+                    items,
+                    cpu_ns: 100,
+                    metal_ns: 20,
+                }),
+                cpu_choice: super::super::simd_choice(),
+            };
+            let start = pass.start();
+            let selected = registry
+                .select_costed(2, 1, start, |index, record, cache| {
+                    cache
+                        .try_lock()
+                        .ok()?
+                        .get_or_calibrate(later, work, || {
+                            assert_eq!(record.health().identity(), 22);
+                            pass.begin_attempt(index, later)
+                                .ok_or(CalibrationFailure::Deferred)?;
+                            Ok(profile)
+                        })?
+                        .qualified_cost(128)
+                })
+                .expect("later healthy device calibrates immediately after scheduling recovery");
+            assert_eq!(selected.health().identity(), 22);
+            assert!(
+                !first.health().usable(),
+                "scheduler recovery cannot revive physical health"
+            );
+            assert!(
+                first_cache.is_poisoned(),
+                "coupled profile mutex is never recovered as scalar state"
+            );
+        }
+    }
+
+    #[test]
+    fn fair_merkle_sampling_reaches_later_owner_and_keeps_cached_cost_after_deadline() {
+        use super::super::metal_owner::{DeviceRegistry, FairProgress};
+        use std::{cell::Cell, sync::Mutex};
+        let registry = DeviceRegistry::<Mutex<MetalMerkleCostCache>>::new();
+        let credit = mv::allocation::AllocationBudget::new(16384);
+        assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
+        for identity in [11, 22] {
+            let record = registry
+                .observe(identity, 2, |bytes| credit.try_reserve_bytes(bytes).ok())
+                .unwrap();
+            assert!(record.initialize(|| Some(Mutex::new(MetalMerkleCostCache::default()))));
+        }
+        let profile = MetalMerkleCostProfile {
+            samples: SAMPLE_LEAVES.map(|leaves| CostSample {
+                leaves,
+                cpu_leaves_ns: 100,
+                metal_leaves_ns: 20,
+                cpu_root_ns: 100,
+                metal_root_ns: 20,
+            }),
+            cpu_choice: super::super::simd_choice(),
+        };
+        let progress = FairProgress::new();
+        let base = Instant::now();
+        let first_attempts = Cell::new(0);
+        let second_attempts = Cell::new(0);
+        for turn in 0..3 {
+            let now = base + RETRY_AFTER_TRANSIENT_FAILURE * turn;
+            let clock = Cell::new(now);
+            let mut pass = progress.try_pass(2, now, MAX_CALIBRATION).unwrap();
+            let start = pass.start();
+            let selected = registry.select_costed(2, 2, start, |index, record, cache| {
+                let measured = cache.lock().unwrap().get_or_calibrate(clock.get(), || {
+                    let started = pass
+                        .begin_attempt(index, clock.get())
+                        .ok_or(CalibrationFailure::Deferred)?;
+                    if record.health().identity() == 11 {
+                        first_attempts.set(first_attempts.get() + 1);
+                        clock.set(started + MAX_CALIBRATION);
+                        Err(CalibrationFailure::Deadline)
+                    } else {
+                        second_attempts.set(second_attempts.get() + 1);
+                        Ok(profile)
+                    }
+                })?;
+                measured.qualified_cost(MetalMerkleWork::Leaves, 16_384)
+            });
+            if turn == 0 {
+                assert!(selected.is_none());
+                let later = registry.record(1, 2).unwrap();
+                let cache = later.value().unwrap().lock().unwrap();
+                assert!(
+                    cache.retry_after.is_none(),
+                    "unvisited owner receives no cooldown"
+                );
+            } else {
+                assert_eq!(selected.unwrap().health().identity(), 22);
+            }
+        }
+        assert_eq!(first_attempts.get(), 3);
+        assert_eq!(second_attempts.get(), 1);
+        // The pass is deliberately unavailable: cached qualification is still readable.
+        let _busy = progress.try_pass(2, base, MAX_CALIBRATION).unwrap();
+        assert!(progress.try_pass(2, base, MAX_CALIBRATION).is_none());
+        let later = registry.record(1, 2).unwrap();
+        assert!(
+            later
+                .value()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .get_or_calibrate(
+                    base + RETRY_AFTER_TRANSIENT_FAILURE * 3 + MAX_CALIBRATION,
+                    || panic!("cached owner must not request scheduling")
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fair_batch_sampling_defers_without_penalty_for_each_public_family() {
+        use super::super::metal_owner::{DeviceRegistry, FairProgress};
+        use std::{cell::Cell, sync::Mutex};
+        for work in [
+            MetalBatchWork::AesEnc,
+            MetalBatchWork::AesDec,
+            MetalBatchWork::AesEncRounds(2),
+            MetalBatchWork::AesDecRounds(2),
+            MetalBatchWork::Ed25519,
+        ] {
+            let registry = DeviceRegistry::<Mutex<MetalBatchCostCache>>::new();
+            let credit = mv::allocation::AllocationBudget::new(16384);
+            assert!(registry.prepare(2, |layout| credit.try_reserve(layout).ok()));
+            for identity in [11, 22] {
+                let record = registry
+                    .observe(identity, 2, |bytes| credit.try_reserve_bytes(bytes).ok())
+                    .unwrap();
+                assert!(record.initialize(|| Some(Mutex::new(MetalBatchCostCache::default()))));
+            }
+            let profile = MetalBatchCostProfile {
+                work,
+                samples: AES_BATCH_ITEMS.map(|items| BatchCostSample {
+                    items,
+                    cpu_ns: 100,
+                    metal_ns: 20,
+                }),
+                cpu_choice: super::super::simd_choice(),
+            };
+            let progress = FairProgress::new();
+            let base = Instant::now();
+            let first_attempts = Cell::new(0);
+            let second_attempts = Cell::new(0);
+            for turn in 0..3 {
+                let now = base + RETRY_AFTER_TRANSIENT_FAILURE * turn;
+                let clock = Cell::new(now);
+                let mut pass = progress.try_pass(2, now, MAX_CALIBRATION).unwrap();
+                let start = pass.start();
+                let selected = registry.select_costed(2, 2, start, |index, record, cache| {
+                    let measured =
+                        cache
+                            .lock()
+                            .unwrap()
+                            .get_or_calibrate(clock.get(), work, || {
+                                let started = pass
+                                    .begin_attempt(index, clock.get())
+                                    .ok_or(CalibrationFailure::Deferred)?;
+                                if record.health().identity() == 11 {
+                                    first_attempts.set(first_attempts.get() + 1);
+                                    clock.set(started + MAX_CALIBRATION);
+                                    Err(CalibrationFailure::Overloaded)
+                                } else {
+                                    second_attempts.set(second_attempts.get() + 1);
+                                    Ok(profile)
+                                }
+                            })?;
+                    measured.qualified_cost(128)
+                });
+                if turn == 0 {
+                    assert!(selected.is_none());
+                    let later = registry.record(1, 2).unwrap();
+                    let cache = later.value().unwrap().lock().unwrap();
+                    assert!(cache.retry_after.is_none());
+                    assert!(
+                        cache.last_calibration.is_none(),
+                        "deferred work was never attempted"
+                    );
+                } else {
+                    assert_eq!(selected.unwrap().health().identity(), 22);
+                }
+            }
+            assert_eq!(first_attempts.get(), 3);
+            assert_eq!(second_attempts.get(), 1);
+        }
+    }
+
+    #[test]
+    fn shared_calibration_deadline_refuses_later_device_before_allocation() {
+        let expired = Instant::now() - MAX_CALIBRATION;
+        assert!(matches!(
+            calibrate(expired),
+            Err(CalibrationFailure::Deadline)
+        ));
+        assert!(matches!(
+            calibrate_batch(MetalBatchWork::AesEnc, expired),
+            Err(CalibrationFailure::Deadline)
+        ));
+    }
+
+    #[test]
     fn median_uses_bounded_middle_trial() {
         assert_eq!(median([9, 3, 7]), 7);
         assert!(stable_trials([9, 3, 7]));
@@ -645,6 +1042,12 @@ mod tests {
         assert!(!profile.prefer_metal(MetalMerkleWork::Root, 16_384));
         assert!(profile.prefer_metal(MetalMerkleWork::Root, 32_768));
         assert!(profile.prefer_metal(MetalMerkleWork::Root, usize::MAX));
+        assert_eq!(profile.qualified_cost(MetalMerkleWork::Leaves, 8_191), None);
+        assert_eq!(
+            profile.qualified_cost(MetalMerkleWork::Leaves, 16_384),
+            Some(10)
+        );
+        assert_eq!(profile.qualified_cost(MetalMerkleWork::Root, 16_384), None);
     }
 
     #[test]
@@ -655,10 +1058,7 @@ mod tests {
         // Parallel library tests may consume the eight-second public sampling
         // budget. That is a CPU-fallback/retry outcome, not a parity failure.
         if super::super::metal_merkle_cost_profile().is_none() {
-            assert!(!super::super::metal_merkle_prefer_gpu(
-                MetalMerkleWork::Leaves,
-                65_536
-            ));
+            assert!(super::super::select_metal_merkle(MetalMerkleWork::Leaves, 65_536).is_none());
         }
     }
 
@@ -764,6 +1164,24 @@ mod tests {
     }
 
     #[test]
+    fn batch_cost_ranking_uses_the_same_cpu_gate_and_interpolation() {
+        let profile = MetalBatchCostProfile {
+            work: MetalBatchWork::AesEnc,
+            samples: AES_BATCH_ITEMS.map(|items| BatchCostSample {
+                items,
+                cpu_ns: items as u64 * 20,
+                metal_ns: items as u64 * 5,
+            }),
+            cpu_choice: super::super::simd_choice(),
+        };
+        assert_eq!(profile.qualified_cost(31), None);
+        assert_eq!(profile.qualified_cost(32), Some(160));
+        assert_eq!(profile.qualified_cost(80), Some(400));
+        assert_eq!(profile.qualified_cost(512), Some(2560));
+        assert_eq!(profile.qualified_cost(2049), Some(10240));
+    }
+
+    #[test]
     fn batch_profile_retries_transient_failures_without_parity_reuse() {
         let now = Instant::now();
         let work = MetalBatchWork::AesDec;
@@ -831,8 +1249,8 @@ mod tests {
         }
         // A loaded host can miss the bounded deadline; CPU remains the valid
         // path and a later attempt may retry. Parity faults disable Metal.
-        let _ = super::super::metal_batch_prefer_gpu(MetalBatchWork::AesEnc, 2_048);
-        let _ = super::super::metal_batch_prefer_gpu(MetalBatchWork::Ed25519, 512);
+        let _ = super::super::select_metal_batch(MetalBatchWork::AesEnc, 2_048);
+        let _ = super::super::select_metal_batch(MetalBatchWork::Ed25519, 512);
         assert!(super::super::metal_parity_ok());
     }
 }

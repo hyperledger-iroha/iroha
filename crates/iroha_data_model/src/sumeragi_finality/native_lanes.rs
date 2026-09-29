@@ -263,6 +263,28 @@ impl NativeLaneStateProof {
             == SumeragiLaneStateCommitment::from_state_encoding(network, height, contexts)?)
     }
 
+    /// Compare a borrowed canonical lane payload against this proof's complete state commitment.
+    ///
+    /// The payload is the lane field from the sole canonical original execution archive, using
+    /// the canonical layout flags. Its exact canonical frame is hashed without rebuilding lane
+    /// records, public keys or PoPs. This does not decode state or validate an untrusted claim:
+    /// callers must first authenticate this proof with [`Self::verify`] against the independently
+    /// certified native result at the exact network and height. Only then does byte equality
+    /// establish that the payload is the original complete canonical state.
+    ///
+    /// # Errors
+    /// The exact canonical frame cannot be streamed. Foreign network/height or different bytes
+    /// return `false`, including malformed or noncanonical payloads differing from the original.
+    pub fn matches_state_payload(
+        &self,
+        network: NetworkId,
+        height: u64,
+        payload: &[u8],
+    ) -> Result<bool, norito::Error> {
+        self.commitment
+            .matches_state_payload(network, height, payload)
+    }
+
     fn verify_root(&self, expected: Hash) -> bool {
         self.root() == Some(expected)
     }

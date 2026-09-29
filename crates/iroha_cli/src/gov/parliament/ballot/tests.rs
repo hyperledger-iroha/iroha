@@ -6,7 +6,6 @@ use std::{
     collections::BTreeMap,
     io::{Read as _, Write as _},
     net::TcpListener,
-    num::NonZeroU64,
     path::Path,
     sync::mpsc,
     thread,
@@ -21,7 +20,7 @@ use iroha_core::{
     tle_release::ValidatedTleKeySessionV1,
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature,
+    Algorithm, Hash, HashOf, KeyPair, MerkleTree,
     threshold_bls::{
         AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession, TleReleasePurpose,
     },
@@ -29,22 +28,21 @@ use iroha_crypto::{
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding, QuorumCertificate,
-            ValidatorPower, finality::V2FinalityArtifact,
-        },
+        builder::BlockBuilder,
+        consensus::{ExecKv, ExecWitness},
     },
-    bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
     governance::types::{BodyInstanceId, BodyInstanceStatusV1},
     parliament_casting::{
         PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
-        PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1,
         ParliamentTimedOvnCastingContextMembershipProofV1,
         ParliamentTimedOvnCastingSnapshotCommitmentV1, ParliamentTimedOvnCastingWitnessProofV1,
     },
+    sumeragi_finality::{
+        SUMERAGI_LANE_STATE_WITNESS_KEY, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
+        SumeragiLaneStateCommitment,
+    },
+    testing::native_finality::NativeFinalityFixture,
 };
-use iroha_model_base::peer::PeerId;
 use iroha_torii_shared::parliament_api::{
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofRequestV1,
     ParliamentTimedOvnProgressProjectionV1,
@@ -54,7 +52,7 @@ use sha2::{Digest as _, Sha256};
 use url::Url;
 
 use super::{
-    files::{BallotState, TimedOvnSeedV1, TrustedCheckpoint},
+    files::{BallotState, TimedOvnSeedV1},
     *,
 };
 
@@ -77,8 +75,12 @@ fn seed(byte: u8) -> TimedOvnSeedV1 {
 }
 
 fn tle_fixture() -> ValidatedTleKeySessionV1 {
+    tle_fixture_for_network(*fixture_network_id().as_bytes())
+}
+
+fn tle_fixture_for_network(network: [u8; 32]) -> ValidatedTleKeySessionV1 {
     let session =
-        ThresholdBlsSession::<TleReleasePurpose>::new(binding(1), binding(2), binding(3), 4, 2)
+        ThresholdBlsSession::<TleReleasePurpose>::new(network, binding(2), binding(3), 4, 2)
             .expect("threshold session");
     let parameters = AdaptiveThresholdBlsParameters::derive(&session).expect("parameters");
     let mut rng = StdRng::from_seed([31; 32]);
@@ -101,7 +103,7 @@ fn account(byte: u8) -> AccountId {
 
 fn open_lifecycle(tle: &ValidatedTleKeySessionV1) -> TimedOvnLifecycleStateV1 {
     let session = TimedOvnSessionPublicV1 {
-        network_id: binding(1),
+        network_id: tle.public_state().network_id,
         proposal_content_id: binding(10),
         governance_attempt_id: binding(11),
         body_instance_id: binding(12),
@@ -166,10 +168,15 @@ fn fixture_ballot_id() -> BallotAttemptId {
     BallotAttemptId::new(binding(13))
 }
 
+fn native_fixture() -> NativeFinalityFixture {
+    static GENESIS: std::sync::OnceLock<NativeFinalityFixture> = std::sync::OnceLock::new();
+    GENESIS
+        .get_or_init(|| NativeFinalityFixture::start("parliament-ballot-cli-test"))
+        .clone()
+}
+
 fn fixture_network_id() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed(binding(1)),
-    ))
+    native_fixture().network_id()
 }
 
 /// Three jurors registered through the CLI builder and accepted by Core.
@@ -186,7 +193,10 @@ fn register_jurors() -> RegisteredJurors {
 
 /// Register `count` jurors (accounts `0x51..`, seeds `0x61..`) in juror order.
 fn register_juror_count(count: u8) -> RegisteredJurors {
-    let tle = tle_fixture();
+    register_juror_count_with_tle(count, tle_fixture())
+}
+
+fn register_juror_count_with_tle(count: u8, tle: ValidatedTleKeySessionV1) -> RegisteredJurors {
     let mut lifecycle = open_lifecycle(&tle);
     let jurors = (0..count)
         .map(|offset| (account(0x51 + offset), seed(0x61 + offset)))
@@ -260,10 +270,8 @@ fn ballot_commands_parse_their_flags() {
         BALLOT_HEX,
         "--key-file",
         "/keys/juror.key",
-        "--trusted-checkpoint-height",
-        "7",
-        "--trusted-checkpoint-context-id",
-        &"0f".repeat(32),
+        "--trusted-checkpoint-file",
+        "/trust/checkpoint.nrt",
     ])
     .expect("register parses");
     let BallotCommand::Register(register) = register else {
@@ -271,10 +279,9 @@ fn ballot_commands_parse_their_flags() {
     };
     assert_eq!(register.ballot_attempt_id.to_hex(), BALLOT_HEX);
     assert_eq!(register.files.key_file, Path::new("/keys/juror.key"));
-    assert_eq!(register.files.state.trusted_checkpoint_height, Some(7));
     assert_eq!(
-        register.files.state.trusted_checkpoint_context_id,
-        Some([0x0f; 32])
+        register.files.state.trusted_checkpoint_file.as_deref(),
+        Some(Path::new("/trust/checkpoint.nrt"))
     );
     assert_eq!(register.files.state.state_file, None);
 
@@ -326,7 +333,7 @@ fn ballot_commands_parse_their_flags() {
         "--key-file",
         "/keys/juror.key",
         "--state-file",
-        "/keys/juror.state.json",
+        "/keys/juror.state.nrt",
     ]) else {
         panic!("expected a dropout with local files")
     };
@@ -336,7 +343,7 @@ fn ballot_commands_parse_their_flags() {
     );
     assert_eq!(
         dropout.state.state_file.as_deref(),
-        Some(Path::new("/keys/juror.state.json"))
+        Some(Path::new("/keys/juror.state.nrt"))
     );
     let Ok(BallotCommand::Status(by_ballot)) = parse(&[
         "status",
@@ -345,7 +352,7 @@ fn ballot_commands_parse_their_flags() {
         "--key-file",
         "/keys/juror.key",
         "--state-file",
-        "/keys/juror.state.json",
+        "/keys/juror.state.nrt",
     ]) else {
         panic!("expected status by ballot")
     };
@@ -438,7 +445,7 @@ fn ballot_commands_reject_invalid_flags() {
             "5",
         ])
         .is_err(),
-        "checkpoint height and context id go together"
+        "retired scalar checkpoint flags are rejected"
     );
     for invalid_context in [
         "0e".repeat(32),
@@ -481,7 +488,7 @@ fn ballot_commands_reject_invalid_flags() {
             "5",
         ])
         .is_err(),
-        "dropout checkpoint flags go together"
+        "dropout rejects retired scalar checkpoint flags"
     );
     assert!(
         parse(&[
@@ -610,10 +617,16 @@ fn key_file_with_loose_permissions_or_indirection_is_refused() {
     assert!(TimedOvnSeedV1::from_bytes([0; 32]).is_err());
 }
 
-fn checkpoint(height: u64, byte: u8) -> TrustedCheckpoint {
-    let mut context_id = [byte; 32];
-    context_id[31] |= 1;
-    TrustedCheckpoint { height, context_id }
+fn checkpoint(height: u64, branch: u8) -> SumeragiFinalityCheckpoint {
+    let mut fixture = native_fixture();
+    for _ in 2..=height {
+        let mut header = fixture.next_header();
+        header.creation_time_ms += u64::from(branch);
+        let mut block = BlockBuilder::new(header).build(Default::default());
+        NativeFinalityFixture::install_network_results(&mut block, vec![]);
+        fixture.certify(block);
+    }
+    fixture.checkpoint()
 }
 
 #[cfg(unix)]
@@ -622,23 +635,14 @@ fn state_file_pins_network_and_promotes_checkpoints() {
     let directory = tempfile::tempdir().expect("state directory");
     let key = directory.path().join("juror.key");
     let path = files::default_state_path(&key);
-    assert_eq!(path, directory.path().join("juror.key.state.json"));
-    let network = binding(0x21);
+    assert_eq!(path, directory.path().join("juror.key.state.nrt"));
+    let network = *fixture_network_id().as_bytes();
 
     let missing = BallotState::open(&path, network, None).expect_err("uninitialized state");
-    assert!(format!("{missing:#}").contains("--trusted-checkpoint-height"));
-    assert!(BallotState::open(&path, network, Some(checkpoint(0, 5))).is_err());
+    assert!(format!("{missing:#}").contains("--trusted-checkpoint-file"));
     assert!(
-        BallotState::open(
-            &path,
-            network,
-            Some(TrustedCheckpoint {
-                height: 3,
-                context_id: [4; 32]
-            })
-        )
-        .is_err(),
-        "non-canonical context ids are refused"
+        BallotState::open(&path, binding(0x23), Some(checkpoint(3, 5))).is_err(),
+        "an independently selected checkpoint must belong to the configured network"
     );
     assert!(!path.exists(), "invalid anchors create no file");
 
@@ -663,12 +667,12 @@ fn state_file_pins_network_and_promotes_checkpoints() {
         state.promote(checkpoint(3, 7)).is_err(),
         "no fork at one height"
     );
-    state.promote(checkpoint(9, 7)).expect("promote");
+    state.promote(checkpoint(9, 5)).expect("promote");
     let mut reloaded = BallotState::open(&path, network, None).expect("reload");
-    assert_eq!(reloaded.checkpoint(), checkpoint(9, 7));
+    assert_eq!(reloaded.checkpoint(), checkpoint(9, 5));
     assert_eq!(mode_of(&path), 0o600);
     assert_eq!(
-        mode_of(&directory.path().join("juror.key.state.json.lock")),
+        mode_of(&directory.path().join("juror.key.state.nrt.lock")),
         0o600,
         "promotion serializes on an owner-only lock file"
     );
@@ -683,9 +687,121 @@ fn state_file_pins_network_and_promotes_checkpoints() {
         "a state file whose custody changed is not overwritten"
     );
     set_mode(&path, 0o600);
-    std::fs::write(&path, b"{\"version\":1}").expect("corrupt state");
+    std::fs::write(&path, format!("{{\"version\":1,\"network_id\":\"{}\",\"checkpoint_height\":9,\"checkpoint_context_id\":\"{}\"}}", hex::encode(network), "07".repeat(32)))
+        .expect("write retired scalar layout");
     set_mode(&path, 0o600);
     assert!(BallotState::open(&path, network, None).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_input_requires_complete_canonical_authenticated_material_and_private_custody() {
+    let directory = tempfile::tempdir().expect("checkpoint directory");
+    let path = directory.path().join("checkpoint.nrt");
+    let checkpoint = checkpoint(3, 5);
+    let canonical = checkpoint.encode_canonical().expect("canonical checkpoint");
+    std::fs::write(&path, &canonical).expect("checkpoint input");
+    set_mode(&path, 0o600);
+    assert_eq!(files::load_checkpoint(&path).expect("import"), checkpoint);
+
+    let mut trailing = canonical.clone();
+    trailing.push(0);
+    std::fs::write(&path, trailing).expect("noncanonical checkpoint");
+    assert!(files::load_checkpoint(&path).is_err());
+
+    let mut forged = canonical.clone();
+    let wire = &checkpoint.tip().block_wire;
+    let offset = forged
+        .windows(wire.len())
+        .position(|candidate| candidate == wire)
+        .expect("exact tip wire is retained");
+    forged[offset] ^= 1;
+    std::fs::write(&path, forged).expect("forged tip");
+    assert!(files::load_checkpoint(&path).is_err());
+
+    std::fs::write(&path, &canonical).expect("restore input");
+    set_mode(&path, 0o644);
+    assert!(files::load_checkpoint(&path).is_err());
+    set_mode(&path, 0o600);
+    let symlink = directory.path().join("checkpoint-link.nrt");
+    std::os::unix::fs::symlink(&path, &symlink).expect("symlink");
+    assert!(files::load_checkpoint(&symlink).is_err());
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("open input")
+        .set_len(iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES as u64 + 1)
+        .expect("oversized sparse input");
+    assert!(files::load_checkpoint(&path).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn state_promotion_accepts_another_exact_quorum_for_the_same_certified_decision() {
+    use iroha_data_model::{
+        block::{CommitCertificate, decode_versioned_signed_block},
+        sumeragi_finality::SumeragiFinalityVerifier,
+    };
+    use iroha_sumeragi::{
+        message::Qc,
+        types::{AggregateSignature, Bitmap},
+    };
+
+    let checkpoint = checkpoint(3, 5);
+    let mut proof = checkpoint.tip().clone();
+    let mut block = decode_versioned_signed_block(&proof.block_wire).expect("certified block");
+    let certificate = block.commit_certificate().expect("certificate");
+    let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).expect("native QC");
+    let mut keys: Vec<_> = (1..=4)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect();
+    keys.sort_by_key(|key| key.public_key().try_to_bytes().unwrap().1.to_vec());
+    qc.signers = Bitmap::from_indices(4, [1, 2, 3]).expect("another exact quorum");
+    let signatures: Vec<_> = keys[1..]
+        .iter()
+        .map(|key| iroha_crypto::Signature::try_new(key.private_key(), &qc.preimage()).unwrap())
+        .collect();
+    qc.agg_sig = AggregateSignature(
+        iroha_crypto::bls_normal_aggregate_signatures(
+            &signatures
+                .iter()
+                .map(iroha_crypto::Signature::payload)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .try_into()
+        .unwrap(),
+    );
+    let replacement = CommitCertificate::from_untrusted_parts(
+        certificate.consensus_header().to_vec(),
+        norito::encode_canonical(&qc).unwrap(),
+        certificate.result_preimage().to_vec(),
+    );
+    block.set_commit_certificate(Some(replacement));
+    proof.block_wire = block.encode_wire().unwrap();
+    let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &checkpoint,
+        &checkpoint.network_id(),
+        checkpoint.chain_id(),
+    )
+    .unwrap();
+    let alternate = verifier
+        .export_checkpoint(&proof)
+        .expect("equivalent certified tip");
+    assert_ne!(checkpoint, alternate);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("state.nrt");
+    let mut state = BallotState::open(
+        &path,
+        *checkpoint.network_id().as_bytes(),
+        Some(checkpoint.clone()),
+    )
+    .unwrap();
+    state
+        .promote(alternate)
+        .expect("same decision remains trusted");
+    assert_eq!(BallotState::load(&path).unwrap().checkpoint(), checkpoint);
 }
 
 #[test]
@@ -771,7 +887,7 @@ fn seeded_records_match_golden_and_pass_core_validation() {
         lifecycle,
         jurors,
         registration_records,
-    } = register_jurors();
+    } = register_juror_count_with_tle(3, tle_fixture_for_network(binding(1)));
     let registration_digest = digest_hex(&registration_records);
     let lifecycle = lifecycle
         .close_registration(&tle)
@@ -1359,8 +1475,7 @@ fn state_args_resolve_open_and_initialize_state_files() {
     let network = fixture_network_id();
     let none = BallotStateArgs {
         state_file: None,
-        trusted_checkpoint_height: None,
-        trusted_checkpoint_context_id: None,
+        trusted_checkpoint_file: None,
     };
     assert_eq!(none.path(None), None);
     assert_eq!(none.path(Some(&key)), Some(files::default_state_path(&key)));
@@ -1371,13 +1486,12 @@ fn state_args_resolve_open_and_initialize_state_files() {
     let missing = none
         .open(Some(&key), &network)
         .expect_err("a named state file must exist");
-    assert!(format!("{missing:#}").contains("--trusted-checkpoint-height"));
+    assert!(format!("{missing:#}").contains("--trusted-checkpoint-file"));
 
     let anchor = checkpoint(6, 2);
     let init_without_file = BallotStateArgs {
         state_file: None,
-        trusted_checkpoint_height: Some(anchor.height),
-        trusted_checkpoint_context_id: Some(anchor.context_id),
+        trusted_checkpoint_file: Some(checkpoint_file(&anchor)),
     };
     assert!(init_without_file.open(None, &network).is_err());
     let explicit = directory.path().join("explicit.json");
@@ -1396,19 +1510,17 @@ fn state_args_resolve_open_and_initialize_state_files() {
         !files::default_state_path(&key).exists(),
         "--state-file overrides the default path"
     );
-    let half = BallotStateArgs {
+    let missing_input = BallotStateArgs {
         state_file: Some(explicit.clone()),
-        trusted_checkpoint_height: Some(3),
-        trusted_checkpoint_context_id: None,
+        trusted_checkpoint_file: Some(directory.path().join("absent-checkpoint.nrt")),
     };
-    assert!(half.open(None, &network).is_err());
+    assert!(missing_input.open(None, &network).is_err());
 
     let files_args = BallotFilesArgs {
         key_file: key.clone(),
         state: BallotStateArgs {
             state_file: None,
-            trusted_checkpoint_height: Some(anchor.height),
-            trusted_checkpoint_context_id: Some(anchor.context_id),
+            trusted_checkpoint_file: Some(checkpoint_file(&anchor)),
         },
     };
     assert_eq!(
@@ -1442,7 +1554,7 @@ fn read_only_loaders_report_absence_and_enforce_custody() {
     std::os::unix::fs::symlink(&key, &link).expect("symlink");
     assert!(files::load_key_file_if_present(&link).is_err());
 
-    let network = binding(0x21);
+    let network = *fixture_network_id().as_bytes();
     let state_path = directory.path().join("state.json");
     assert!(
         BallotState::load_if_present(&state_path, network)
@@ -1465,212 +1577,123 @@ fn read_only_loaders_report_absence_and_enforce_custody() {
 // Consensus-authenticated casting context
 // ---------------------------------------------------------------------------
 
-fn witness_and_root(
+/// Exact application SMT path alongside the mandatory native lane-state write.
+fn casting_witness(
     snapshot: &ParliamentTimedOvnCastingSnapshotCommitmentV1,
-) -> (ParliamentTimedOvnCastingWitnessProofV1, Hash) {
-    let value = norito::to_bytes(snapshot).expect("canonical casting snapshot");
-    let witness = ParliamentTimedOvnCastingWitnessProofV1 {
-        key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
-        value,
-        siblings: vec![Hash::new([]); PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1],
-    };
-    let path = Hash::new(&witness.key);
-    let value_hash = Hash::new(&witness.value);
-    let mut leaf = Vec::with_capacity(1 + 2 * Hash::LENGTH);
-    leaf.push(0);
-    leaf.extend_from_slice(path.as_ref());
-    leaf.extend_from_slice(value_hash.as_ref());
-    let mut root = Hash::new(leaf);
-    for (level, sibling) in witness.siblings.iter().copied().enumerate() {
-        let path_bit = 255_usize.saturating_sub(level);
-        let right = path.as_ref()[path_bit / 8] & (1_u8 << (path_bit % 8)) != 0;
-        let (left, right) = if right {
-            (sibling, root)
-        } else {
-            (root, sibling)
-        };
-        let mut node = Vec::with_capacity(1 + 2 * Hash::LENGTH);
-        node.push(1);
-        node.extend_from_slice(left.as_ref());
-        node.extend_from_slice(right.as_ref());
-        root = Hash::new(node);
-    }
-    assert!(witness.verify(root));
-    (witness, root)
-}
-
-/// Deterministic four-validator finality chain from height 1 to `tip_height`.
-fn finality_chain(
-    network_id: NetworkId,
-    tip_height: u64,
-    tip_ordinary_writes_root: Hash,
-) -> Vec<BridgeFinalityProof> {
-    let mut keys = (0_u8..4)
-        .map(|index| {
-            KeyPair::try_from_seed(
-                vec![0xD0_u8.saturating_add(index); 32],
-                Algorithm::BlsNormal,
-            )
-            .expect("derive deterministic validator")
-        })
-        .collect::<Vec<_>>();
-    keys.sort_by(|left, right| {
-        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-    });
-    let roster = keys
-        .iter()
-        .map(|key| ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let quorum = DualQuorum::from_roster(&roster).expect("valid validator roster");
-    let kagemusha_mint_finality_authority =
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            generation: 0,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| {
-                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                        &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small roster")); 32],
-                        0,
-                        validator.validator.clone(),
-                    )
-                    .expect("derive mint-finality fixture keys")
-                })
-                .collect(),
-        };
-    let kagemusha_mint_finality_authorization =
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-            &kagemusha_mint_finality_authority,
-            100,
-        )
-        .expect("derive mint-finality fixture roster id");
-    let pops = keys
-        .iter()
-        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("validator PoP"))
-        .collect::<Vec<_>>();
-    let mut proofs = Vec::with_capacity(usize::try_from(tip_height).expect("small test tip"));
-    for height in 1..=tip_height {
-        let parent = proofs
-            .last()
-            .map(|proof: &BridgeFinalityProof| &proof.finality_artifact);
-        let mut timestamp = 1_900_000_000_000_u64 + height;
-        let header = loop {
-            let candidate = BlockHeader::new(
-                NonZeroU64::new(height).expect("nonzero proof height"),
-                parent.map(|artifact| artifact.block_hash),
-                None,
-                timestamp,
-                0,
-            );
-            if candidate.hash().as_ref()[31] & 1 == 1 {
-                break candidate;
-            }
-            timestamp = timestamp.checked_add(1).expect("test timestamp space");
-        };
-        let mut context = HeightContext {
-            network_id,
-            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            height,
-            epoch: 0,
-            epoch_end_height: 100,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Npos,
-            parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
-            snapshot_bootstrap: None,
-            quorum,
-            roster: roster.clone(),
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
-            nexus_amx_context_hash: Hash::new(b"Parliament ballot CLI test nexus"),
-            execution_policy_hash: Hash::new(b"Parliament ballot CLI test policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 4_096,
-                max_chunk_count: 8,
+) -> (ParliamentTimedOvnCastingWitnessProofV1, ExecWitness) {
+    let lane_state = SumeragiLaneStateCommitment::from_state(
+        fixture_network_id(),
+        snapshot.evaluated_height,
+        &Default::default(),
+    )
+    .expect("native lane-state commitment");
+    let witness = ExecWitness {
+        writes: vec![
+            ExecKv {
+                key: PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(snapshot).expect("canonical casting snapshot"),
             },
-            leader_seed: [0x5A; 32],
-        };
-        // Every context id is a canonical hash so any height can be a checkpoint.
-        while context.id().0.as_ref()[31] & 1 == 0 {
-            context.leader_seed[0] = context.leader_seed[0]
-                .checked_add(1)
-                .expect("canonical checkpoint fixture search");
-        }
-        let subject = BlockSubject {
-            parent_block_hash: header.prev_block_hash(),
-            block_hash: header.hash(),
-            payload_hash: Hash::new(b"Parliament ballot CLI test payload"),
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height,
-            view: 0,
-        };
-        let ordinary_writes_root = if height == tip_height {
-            tip_ordinary_writes_root
-        } else {
-            Hash::new(height.to_be_bytes())
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"Parliament ballot CLI parent state"),
-            Hash::new(b"Parliament ballot CLI post state"),
-            ordinary_writes_root,
-            1,
-            Hash::new(b"Parliament ballot CLI executed wire"),
+            ExecKv {
+                key: SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
+                value: norito::encode_canonical(&lane_state).expect("canonical lane state"),
+            },
+        ],
+        ..Default::default()
+    };
+    let mut nodes: BTreeMap<[u8; 32], Hash> = witness
+        .writes
+        .iter()
+        .map(|entry| {
+            let path = Hash::new(&entry.key);
+            let value = Hash::new(&entry.value);
+            (
+                *path.as_ref(),
+                Hash::new_from_chunks(&[&[0], path.as_ref(), value.as_ref()]),
+            )
+        })
+        .collect();
+    let mut target: [u8; 32] = Hash::new(PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1).into();
+    let mut siblings = Vec::new();
+    for bit in (0..256).rev() {
+        let mask = 1 << (bit % 8);
+        let mut sibling = target;
+        sibling[bit / 8] ^= mask;
+        siblings.push(
+            nodes
+                .get(&sibling)
+                .copied()
+                .unwrap_or_else(|| Hash::new([])),
         );
-        let mut commit_qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let preimage = commit_qc
-            .signer_preimage(&context, 0)
-            .expect("valid finality signer preimage");
-        let signatures = commit_qc
-            .signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(
-                    keys[usize::try_from(*index).expect("validator index")].private_key(),
-                    &preimage,
-                )
-                .expect("sign finality vote")
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-        )
-        .expect("aggregate finality votes");
-        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, pops.clone());
-        artifact.verify().expect("finality artifact");
-        proofs.push(BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-            block_header: header,
-            finality_artifact: artifact,
-        });
+        let mut parents = BTreeMap::new();
+        for (path, hash) in &nodes {
+            let mut sibling = *path;
+            sibling[bit / 8] ^= mask;
+            let other = nodes
+                .get(&sibling)
+                .copied()
+                .unwrap_or_else(|| Hash::new([]));
+            let (left, right) = if path[bit / 8] & mask == 0 {
+                (*hash, other)
+            } else {
+                (other, *hash)
+            };
+            let mut parent = *path;
+            parent[bit / 8] &= !mask;
+            parents.insert(
+                parent,
+                Hash::new_from_chunks(&[&[1], left.as_ref(), right.as_ref()]),
+            );
+        }
+        nodes = parents;
+        target[bit / 8] &= !mask;
     }
-    proofs
+    let proof = ParliamentTimedOvnCastingWitnessProofV1 {
+        key: witness.writes[0].key.clone(),
+        value: witness.writes[0].value.clone(),
+        siblings,
+    };
+    assert!(proof.verify(nodes[&[0; 32]]));
+    (proof, witness)
 }
 
-fn checkpoint_of(proof: &BridgeFinalityProof) -> TrustedCheckpoint {
-    TrustedCheckpoint {
-        height: proof.finality_artifact.height,
-        context_id: *proof.finality_artifact.context_id().0.as_ref(),
+#[derive(Clone)]
+struct CertifiedTestDecision {
+    proof: SumeragiFinalityProof,
+    checkpoint: SumeragiFinalityCheckpoint,
+    context_id: Hash,
+}
+
+fn fixture_decision(fixture: &NativeFinalityFixture) -> CertifiedTestDecision {
+    CertifiedTestDecision {
+        proof: fixture.latest().clone(),
+        checkpoint: fixture.checkpoint(),
+        context_id: fixture
+            .verifier()
+            .verify_retained_decision(fixture.latest())
+            .expect("retained native decision")
+            .context_id(),
     }
+}
+
+/// Genuine native certificates over explicit synthetic test results.
+fn finality_chain(tip_height: u64, tip_witness: &ExecWitness) -> Vec<CertifiedTestDecision> {
+    let mut fixture = native_fixture();
+    let mut chain = vec![fixture_decision(&fixture)];
+    for height in 2..=tip_height {
+        let mut block = BlockBuilder::new(fixture.next_header()).build(Default::default());
+        NativeFinalityFixture::install_network_results(&mut block, vec![]);
+        if height == tip_height {
+            fixture.certify_with_witness(block, tip_witness);
+        } else {
+            fixture.certify(block);
+        }
+        chain.push(fixture_decision(&fixture));
+    }
+    chain
+}
+
+fn checkpoint_of(decision: &CertifiedTestDecision) -> SumeragiFinalityCheckpoint {
+    decision.checkpoint.clone()
 }
 
 /// A terminal casting proof for `context` whose chain begins at height 1, plus
@@ -1679,7 +1702,7 @@ fn terminal_page(
     context: &ValidatedParliamentTimedOvnCastingContextArchiveV1,
 ) -> (
     ParliamentTimedOvnCastingProofResponseV1,
-    Vec<BridgeFinalityProof>,
+    Vec<CertifiedTestDecision>,
 ) {
     let binding = context
         .compact_binding_v1(
@@ -1697,12 +1720,8 @@ fn terminal_page(
     let membership = ParliamentTimedOvnCastingContextMembershipProofV1::new(
         tree.get_proof(0).expect("single casting leaf proof"),
     );
-    let (witness, ordinary_writes_root) = witness_and_root(&snapshot);
-    let chain = finality_chain(
-        fixture_network_id(),
-        binding.evaluated_height,
-        ordinary_writes_root,
-    );
+    let (witness, execution_witness) = casting_witness(&snapshot);
+    let chain = finality_chain(binding.evaluated_height, &execution_witness);
     let tip = chain.last().expect("evaluated proof");
     let response = ParliamentTimedOvnCastingProofResponseV1 {
         version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
@@ -1715,10 +1734,13 @@ fn terminal_page(
         casting_context_binding: Some(binding.clone()),
         context_membership_proof: Some(membership),
         casting_witness: Some(witness),
-        finality_chain: chain.clone(),
-        evaluated_context_id: tip.finality_artifact.context_id(),
+        finality_chain: chain
+            .iter()
+            .map(|decision| decision.proof.clone())
+            .collect(),
+        evaluated_context_id: tip.context_id,
         evaluated_block_height: binding.evaluated_height,
-        evaluated_block_hash: hex::encode(tip.finality_artifact.block_hash.as_ref()),
+        evaluated_block_hash: hex::encode(tip.proof.block_header.hash().as_ref()),
         observed_ledger_tip_height: binding.evaluated_height,
         more_available: false,
     };
@@ -1729,7 +1751,7 @@ fn terminal_page(
 /// terminal page that continues from there.
 fn split_pages(
     terminal: &ParliamentTimedOvnCastingProofResponseV1,
-    chain: &[BridgeFinalityProof],
+    chain: &[CertifiedTestDecision],
     split: u64,
 ) -> (
     ParliamentTimedOvnCastingProofResponseV1,
@@ -1743,15 +1765,21 @@ fn split_pages(
         casting_context_binding: None,
         context_membership_proof: None,
         casting_witness: None,
-        finality_chain: chain[..=split_index].to_vec(),
-        evaluated_context_id: middle.finality_artifact.context_id(),
+        finality_chain: chain[..=split_index]
+            .iter()
+            .map(|decision| decision.proof.clone())
+            .collect(),
+        evaluated_context_id: middle.context_id,
         evaluated_block_height: split,
-        evaluated_block_hash: hex::encode(middle.finality_artifact.block_hash.as_ref()),
+        evaluated_block_hash: hex::encode(middle.proof.block_header.hash().as_ref()),
         observed_ledger_tip_height: terminal.evaluated_block_height,
         more_available: true,
     };
     let mut rest = terminal.clone();
-    rest.finality_chain = chain[split_index..].to_vec();
+    rest.finality_chain = chain[split_index..]
+        .iter()
+        .map(|decision| decision.proof.clone())
+        .collect();
     (intermediate, rest)
 }
 
@@ -1768,7 +1796,7 @@ fn casting_pages_authenticate_promote_and_reject_tampering() {
     let network = fixture_network_id();
     let ballot = fixture_ballot_id();
 
-    match authenticate_casting_page(&terminal, network, anchor, ballot).expect("terminal page") {
+    match authenticate_casting_page(&terminal, network, &anchor, ballot).expect("terminal page") {
         CastingPageOutcome::Terminal {
             checkpoint,
             context: authenticated,
@@ -1782,29 +1810,28 @@ fn casting_pages_authenticate_promote_and_reject_tampering() {
     }
 
     let (intermediate, rest) = split_pages(&terminal, &chain, 17);
-    match authenticate_casting_page(&intermediate, network, anchor, ballot)
+    match authenticate_casting_page(&intermediate, network, &anchor, ballot)
         .expect("intermediate page")
     {
         CastingPageOutcome::Promote(next) => assert_eq!(next, checkpoint_of(&chain[16])),
         CastingPageOutcome::Terminal { .. } => panic!("expected a promotion page"),
     }
     assert!(
-        authenticate_casting_page(&rest, network, anchor, ballot).is_err(),
+        authenticate_casting_page(&rest, network, &anchor, ballot).is_err(),
         "the continuation must begin at the promoted checkpoint"
     );
     assert!(matches!(
-        authenticate_casting_page(&rest, network, checkpoint_of(&chain[16]), ballot),
+        authenticate_casting_page(&rest, network, &checkpoint_of(&chain[16]), ballot),
         Ok(CastingPageOutcome::Terminal { .. })
     ));
 
-    let mut wrong_anchor = anchor;
-    wrong_anchor.context_id[0] ^= 0x40;
-    assert!(authenticate_casting_page(&terminal, network, wrong_anchor, ballot).is_err());
+    let wrong_anchor = checkpoint(2, 17);
+    assert!(authenticate_casting_page(&terminal, network, &wrong_anchor, ballot).is_err());
     assert!(
         authenticate_casting_page(
             &terminal,
             network,
-            anchor,
+            &anchor,
             BallotAttemptId::new(binding(0x0e))
         )
         .is_err()
@@ -1812,17 +1839,11 @@ fn casting_pages_authenticate_promote_and_reject_tampering() {
     let other_network = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(binding(3))),
     );
-    assert!(authenticate_casting_page(&terminal, other_network, anchor, ballot).is_err());
+    assert!(authenticate_casting_page(&terminal, other_network, &anchor, ballot).is_err());
 
     let mut forged = terminal.clone();
-    forged
-        .finality_chain
-        .last_mut()
-        .expect("tip")
-        .finality_artifact
-        .commit_qc
-        .aggregate_signature[0] ^= 0x80;
-    assert!(authenticate_casting_page(&forged, network, anchor, ballot).is_err());
+    forged.finality_chain.last_mut().expect("tip").block_wire[0] ^= 0x80;
+    assert!(authenticate_casting_page(&forged, network, &anchor, ballot).is_err());
 
     // A different, individually valid archive does not rederive the binding.
     let registered_context = casting_context(&open_lifecycle(&tle), &tle);
@@ -1833,11 +1854,11 @@ fn casting_pages_authenticate_promote_and_reject_tampering() {
             .to_canonical_bytes_v1()
             .expect("alternate archive"),
     );
-    assert!(authenticate_casting_page(&substituted, network, anchor, ballot).is_err());
+    assert!(authenticate_casting_page(&substituted, network, &anchor, ballot).is_err());
 
     let mut truncated = terminal.clone();
     truncated.casting_context_archive = Some(Vec::new());
-    assert!(authenticate_casting_page(&truncated, network, anchor, ballot).is_err());
+    assert!(authenticate_casting_page(&truncated, network, &anchor, ballot).is_err());
 }
 
 /// One recorded stub-server request: its request line and body.
@@ -1939,10 +1960,14 @@ fn authenticated_fetch_walks_pages_and_persists_the_checkpoint() {
     config.torii_api_url = url;
     let client = Client::builder(config).build().expect("client");
     let directory = tempfile::tempdir().expect("state directory");
-    let state_path = directory.path().join("juror.key.state.json");
+    let state_path = directory.path().join("juror.key.state.nrt");
     let anchor = checkpoint_of(&chain[0]);
-    let mut state = BallotState::open(&state_path, *fixture_network_id().as_bytes(), Some(anchor))
-        .expect("initialize state");
+    let mut state = BallotState::open(
+        &state_path,
+        *fixture_network_id().as_bytes(),
+        Some(anchor.clone()),
+    )
+    .expect("initialize state");
 
     let authenticated = fetch_authenticated_casting_context(
         &client,
@@ -2148,32 +2173,32 @@ fn concurrent_choice_locks_admit_exactly_one_choice() {
 fn state_promotion_never_regresses_a_concurrently_promoted_file() {
     let directory = tempfile::tempdir().expect("state directory");
     let path = directory.path().join("state.json");
-    let network = binding(0x21);
+    let network = *fixture_network_id().as_bytes();
     BallotState::open(&path, network, Some(checkpoint(3, 5))).expect("initialize");
     let mut first = BallotState::open(&path, network, None).expect("first command");
     let mut second = BallotState::open(&path, network, None).expect("second command");
 
-    first.promote(checkpoint(9, 7)).expect("first promotes");
+    first.promote(checkpoint(9, 5)).expect("first promotes");
     second
-        .promote(checkpoint(6, 1))
+        .promote(checkpoint(6, 5))
         .expect("a stale command promotes its own walk");
-    assert_eq!(second.checkpoint(), checkpoint(6, 1));
+    assert_eq!(second.checkpoint(), checkpoint(6, 5));
     assert_eq!(
         BallotState::load(&path).expect("reload").checkpoint(),
-        checkpoint(9, 7),
+        checkpoint(9, 5),
         "the stale command does not regress the file"
     );
     let fork = second
         .promote(checkpoint(9, 8))
         .expect_err("a different checkpoint at the stored height");
     assert!(format!("{fork:#}").contains("disagree"));
-    second.promote(checkpoint(12, 2)).expect("advance past it");
+    second.promote(checkpoint(12, 5)).expect("advance past it");
     assert_eq!(
         BallotState::load(&path).expect("reload").checkpoint(),
-        checkpoint(12, 2)
+        checkpoint(12, 5)
     );
     first
-        .promote(checkpoint(12, 2))
+        .promote(checkpoint(12, 5))
         .expect("the same checkpoint written by another command");
 }
 
@@ -2399,7 +2424,7 @@ use super::super::test_context::CaptureContext;
 struct ScriptedSource {
     proof_pages:
         std::cell::RefCell<std::collections::VecDeque<ParliamentTimedOvnCastingProofResponseV1>>,
-    proof_requests: std::cell::RefCell<Vec<TrustedCheckpoint>>,
+    proof_requests: std::cell::RefCell<Vec<SumeragiFinalityCheckpoint>>,
     public_archives: Vec<(BallotAttemptId, Vec<u8>)>,
     public_requests: std::cell::RefCell<Vec<BallotAttemptId>>,
     attempts: std::cell::RefCell<std::collections::VecDeque<AttemptSnapshot>>,
@@ -2435,10 +2460,10 @@ impl BallotSource for ScriptedSource {
     fn casting_proof_page(
         &self,
         ballot_attempt_id: BallotAttemptId,
-        checkpoint: TrustedCheckpoint,
+        checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<ParliamentTimedOvnCastingProofResponseV1> {
         assert_eq!(ballot_attempt_id, fixture_ballot_id());
-        self.proof_requests.borrow_mut().push(checkpoint);
+        self.proof_requests.borrow_mut().push(checkpoint.clone());
         self.proof_pages
             .borrow_mut()
             .pop_front()
@@ -2481,11 +2506,30 @@ fn capture(byte: u8) -> CaptureContext {
     context
 }
 
-fn state_args(state_file: Option<PathBuf>, init: Option<TrustedCheckpoint>) -> BallotStateArgs {
+fn checkpoint_file(checkpoint: &SumeragiFinalityCheckpoint) -> PathBuf {
+    // Each test thread owns and cleans its independently selected input files.
+    thread_local! {
+        static CHECKPOINT_FILES: tempfile::TempDir = tempfile::tempdir().expect("checkpoint inputs");
+    }
+    CHECKPOINT_FILES.with(|directory| {
+        let bytes = checkpoint.encode_canonical().expect("canonical checkpoint");
+        let path = directory
+            .path()
+            .join(format!("{}.nrt", hex::encode(Hash::new(&bytes).as_ref())));
+        std::fs::write(&path, bytes).expect("write trusted checkpoint");
+        #[cfg(unix)]
+        set_mode(&path, 0o600);
+        path
+    })
+}
+
+fn state_args(
+    state_file: Option<PathBuf>,
+    init: Option<SumeragiFinalityCheckpoint>,
+) -> BallotStateArgs {
     BallotStateArgs {
         state_file,
-        trusted_checkpoint_height: init.map(|anchor| anchor.height),
-        trusted_checkpoint_context_id: init.map(|anchor| anchor.context_id),
+        trusted_checkpoint_file: init.as_ref().map(checkpoint_file),
     }
 }
 
@@ -2514,11 +2558,14 @@ fn attempt_with(
 /// A terminal page for the same context whose chain begins at `chain[start]`.
 fn page_from(
     terminal: &ParliamentTimedOvnCastingProofResponseV1,
-    chain: &[BridgeFinalityProof],
+    chain: &[CertifiedTestDecision],
     start: usize,
 ) -> ParliamentTimedOvnCastingProofResponseV1 {
     let mut page = terminal.clone();
-    page.finality_chain = chain[start..].to_vec();
+    page.finality_chain = chain[start..]
+        .iter()
+        .map(|decision| decision.proof.clone())
+        .collect();
     page
 }
 
@@ -2561,7 +2608,7 @@ fn register_opens_the_trust_anchor_first_and_submits_the_seeded_record() {
     let missing = register(state_args(None, None), &key)
         .execute(&mut capture(newcomer), &source)
         .expect_err("a trust anchor is required");
-    assert!(format!("{missing:#}").contains("--trusted-checkpoint-height"));
+    assert!(format!("{missing:#}").contains("--trusted-checkpoint-file"));
     assert!(
         !key.exists(),
         "no key file is generated without a trust anchor"
@@ -2569,7 +2616,7 @@ fn register_opens_the_trust_anchor_first_and_submits_the_seeded_record() {
     assert!(source.proof_requests.borrow().is_empty());
 
     let mut context = capture(newcomer).text();
-    register(state_args(None, Some(anchor)), &key)
+    register(state_args(None, Some(anchor.clone())), &key)
         .execute(&mut context, &source)
         .expect("register");
     assert_eq!(mode_of(&key), 0o600);
@@ -2614,8 +2661,8 @@ fn register_opens_the_trust_anchor_first_and_submits_the_seeded_record() {
     let mut context = capture(newcomer);
     register(
         state_args(
-            Some(directory.path().join("second.state.json")),
-            Some(committed_anchor),
+            Some(directory.path().join("second.state.nrt")),
+            Some(committed_anchor.clone()),
         ),
         &key,
     )
@@ -2635,7 +2682,7 @@ fn register_opens_the_trust_anchor_first_and_submits_the_seeded_record() {
     files::load_or_create_key_file_with(&other_key, || Ok(seed(0x99))).expect("other key");
     let source = ScriptedSource::with_pages(vec![committed_terminal]);
     let mut context = capture(newcomer);
-    let conflict = register(state_args(None, Some(committed_anchor)), &other_key)
+    let conflict = register(state_args(None, Some(committed_anchor.clone())), &other_key)
         .execute(&mut context, &source)
         .expect_err("conflicting key file");
     assert!(format!("{conflict:#}").contains("key file does not hold the seed"));
@@ -2667,16 +2714,17 @@ fn cast_locks_the_choice_and_submits_one_record_for_the_seat() {
     files::load_or_create_key_file_with(&key, || Ok(seed(0x61 + juror_byte - 0x51)))
         .expect("key file");
     let record_out = directory.path().join("record.hex");
-    let cast = |choice, init: Option<TrustedCheckpoint>, record_out: Option<PathBuf>| CastArgs {
-        ballot_attempt_id: fixture_ballot_id(),
-        choice,
-        files: BallotFilesArgs {
-            key_file: key.clone(),
-            state: state_args(None, init),
-        },
-        record_out,
-        wait_secs: 0,
-    };
+    let cast =
+        |choice, init: Option<SumeragiFinalityCheckpoint>, record_out: Option<PathBuf>| CastArgs {
+            ballot_attempt_id: fixture_ballot_id(),
+            choice,
+            files: BallotFilesArgs {
+                key_file: key.clone(),
+                state: state_args(None, init),
+            },
+            record_out,
+            wait_secs: 0,
+        };
 
     let source = ScriptedSource::with_pages(vec![terminal.clone()]).with_attempt(attempt_with(
         BallotAttemptStatusV1::TimedCommitment,
@@ -2686,7 +2734,7 @@ fn cast_locks_the_choice_and_submits_one_record_for_the_seat() {
     let mut context = capture(juror_byte).text();
     cast(
         BallotChoiceArg::Approve,
-        Some(anchor),
+        Some(anchor.clone()),
         Some(record_out.clone()),
     )
     .execute(&mut context, &source)
@@ -3213,7 +3261,7 @@ fn run_entry_points_reach_the_configured_torii() {
         ballot_attempt_id: fixture_ballot_id(),
         files: BallotFilesArgs {
             key_file: key.clone(),
-            state: state_args(None, Some(anchor)),
+            state: state_args(None, Some(anchor.clone())),
         },
     }
     .run(&mut context)
@@ -3238,7 +3286,7 @@ fn run_entry_points_reach_the_configured_torii() {
         ballot_attempt_id: fixture_ballot_id(),
         key_file: None,
         state: state_args(
-            Some(directory.path().join("dropout.state.json")),
+            Some(directory.path().join("dropout.state.nrt")),
             Some(checkpoint_of(&closed_chain[0])),
         ),
     }
@@ -3266,7 +3314,10 @@ fn run_entry_points_reach_the_configured_torii() {
             choice: BallotChoiceArg::Approve,
             files: BallotFilesArgs {
                 key_file: key.clone(),
-                state: state_args(Some(directory.path().join("cast.state.json")), Some(anchor)),
+                state: state_args(
+                    Some(directory.path().join("cast.state.nrt")),
+                    Some(anchor.clone())
+                ),
             },
             record_out: None,
             wait_secs: 0,

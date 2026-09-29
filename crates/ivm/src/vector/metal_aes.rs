@@ -10,25 +10,35 @@ use objc2_foundation::NSUInteger;
 use objc2_metal::MTLBuffer as _;
 
 struct Output {
+    selection: super::MetalSelection,
     buffer: MetalBuffer,
     blocks: usize,
 }
 
 impl Output {
     fn copy_into(self, destination: &mut [[u8; 16]]) -> bool {
-        if self.blocks != destination.len() {
-            return false;
-        }
-        // SAFETY: the completed kernel initialized exactly `blocks` contiguous
-        // byte arrays. The retained native buffer outlives the entire copy.
-        let completed = unsafe {
-            std::slice::from_raw_parts(
-                self.buffer.contents().as_ptr().cast::<[u8; 16]>(),
-                self.blocks,
-            )
-        };
-        destination.copy_from_slice(completed);
-        true
+        let Self {
+            selection,
+            buffer,
+            blocks,
+        } = self;
+        selection
+            .run(|| {
+                if blocks != destination.len() || !buffer.usable() {
+                    return false;
+                }
+                // SAFETY: the completed kernel initialized exactly `blocks` contiguous
+                // byte arrays. The retained native buffer outlives the entire copy.
+                let completed = unsafe {
+                    std::slice::from_raw_parts(
+                        buffer.contents().as_ptr().cast::<[u8; 16]>(),
+                        blocks,
+                    )
+                };
+                destination.copy_from_slice(completed);
+                true
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -99,6 +109,7 @@ fn attempt(
                 )?;
             }
             Some(Output {
+                selection: super::metal_runtime::current_selection()?,
                 buffer: output,
                 blocks: states.len(),
             })

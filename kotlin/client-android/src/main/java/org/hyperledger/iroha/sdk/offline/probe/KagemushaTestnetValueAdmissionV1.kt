@@ -87,7 +87,7 @@ class KagemushaTestnetValueAdmissionV1 private constructor(
 
 private const val ADMISSION_ARCHIVE_SCHEMA_V1 =
     "connect_norito_bridge::KagemushaTestnetValueAdmissionArchiveV1"
-private const val ADMISSION_PAYLOAD_BYTES_V1 = 432
+private const val ADMISSION_PAYLOAD_BYTES_V1 = 498 // 19 canonical compact fields; native encoder gate required.
 private const val ADMISSION_ALIGNMENT_BYTES_V1 = 16
 private const val ADMISSION_PADDING_BYTES_V1 =
     (ADMISSION_ALIGNMENT_BYTES_V1 - NoritoHeader.HEADER_LENGTH % ADMISSION_ALIGNMENT_BYTES_V1) %
@@ -131,13 +131,15 @@ private fun requireCanonicalAdmissionArchive(archive: ByteArray, requestedOperat
     val successorStateCommitment = decoder.readAdmissionField(32)
     val finalityHeightBits = ByteBuffer.wrap(decoder.readAdmissionField(8))
         .order(ByteOrder.LITTLE_ENDIAN).long
-    val finalityHeightContextId = decoder.readAdmissionField(32)
+    val finalityBlockHash = decoder.readAdmissionField(32)
+    val finalityCoreHash = decoder.readAdmissionField(32)
+    val finalityResult = decoder.readAdmissionField(32)
     require(decoder.remaining() == 0 && version == 1 && hardwareQualified == 0 &&
-        assetScale <= 28L && finalityHeightBits != 0L &&
+        assetScale <= 28L && finalityHeightBits != 0L && finalityHeightBits != 1L &&
         amount.any { it != 0.toByte() } && operationId.contentEquals(requestedOperationId) &&
         listOf(networkId, releaseId, releaseAttestationDigest, assetIdentityDigest,
             assetIncarnation, liabilityPoolId, creditId, mintEnvelopeDigest,
-            candidateEnvelopeDigest, successorStateCommitment, finalityHeightContextId)
+            candidateEnvelopeDigest, successorStateCommitment, finalityBlockHash, finalityCoreHash, finalityResult)
             .all { digest -> digest.any { it != 0.toByte() } } &&
         !networkId.contentEquals(releaseId) &&
         !networkId.contentEquals(releaseAttestationDigest) &&

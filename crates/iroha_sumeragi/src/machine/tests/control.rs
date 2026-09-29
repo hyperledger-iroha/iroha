@@ -114,7 +114,8 @@ fn transaction_timeout_cannot_start_control_or_accept_late_work() {
     let context = h.core.fresh_build.as_ref().unwrap().context;
     // Even a matching unsolicited response cannot substitute for work selection.
     answer(&mut h, req, context);
-    assert!(h.core.fresh_build.as_ref().unwrap().control.is_none());
+    assert!(h.core.fresh_build.as_ref().unwrap().payload.is_none());
+    assert!(h.core.mine.proposal.is_none());
     h.tick(h.local.build_timeout);
     assert!(h.core.mine.proposal.is_none());
     assert!(h.core.fresh_build.is_none());

@@ -1,7 +1,5 @@
 //! Taira public testnet diagnostics and write canaries.
-use crate::{
-    CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_admission_and_expiry,
-};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_expiry};
 use eyre::{Context, Result, eyre};
 use iroha::{
     blocking::Client as BlockingIrohaClient,
@@ -21,7 +19,7 @@ use iroha::{
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         prelude::{SignedTransaction, TransactionEntrypoint},
-        transaction::{Executable, FeePaymentIntent, TransactionAdmissionIntent},
+        transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -1843,7 +1841,7 @@ fn submit_prepared_inrou_until(
                 if observation_transport_unavailable(&error)
                     || error.chain().any(|cause| {
                         cause
-                            .downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
+                            .downcast_ref::<iroha::client::TransactionDispatchOutcomeUnknownError>()
                             .is_some()
                     }) => {}
             Err(error) => return Err(error),
@@ -4407,12 +4405,11 @@ fn prepare_final_canary_operation(
     insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
     let instruction = Log::new(LogLevel::INFO, message);
     let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) = quote_and_sign_transaction_with_admission_and_expiry(
+    let (transaction, fee_quote) = quote_and_sign_transaction_with_expiry(
         &client,
         executable,
         fee_payment.clone(),
         metadata,
-        TransactionAdmissionIntent::Ordinary,
         binding.execution_expires_at_unix_ms,
     )
     .wrap_err("failed to quote and sign exact Taira canary transaction")?;
@@ -4863,9 +4860,6 @@ fn validate_prepared_transaction_closure(
     }
     match operation {
         PreparedTransactionOperationV1::FinalCanary(operation) => {
-            if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
-                eyre::bail!("prepared final canary requires Ordinary admission");
-            }
             let expected_message = prepared_canary_message(&operation.binding)?;
             let expected_semantic = prepared_semantic_sha256(
                 &operation.binding,
@@ -9227,53 +9221,35 @@ mod tests {
         .unwrap();
         insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_hash).unwrap();
 
-        for intent in [
-            TransactionAdmissionIntent::QueuePlanSynced,
-            TransactionAdmissionIntent::Ordinary,
-        ] {
-            let PreparedTransactionOperationV1::FinalCanary(mut operation) =
-                final_canary_envelope_fixture().operation
-            else {
-                unreachable!("final canary fixture")
-            };
-            let transaction = TransactionBuilder::new(
-                network_id,
-                AccountId::new(key_pair.public_key().clone()),
-                operation.fee_payment.clone(),
-            )
-            .with_executable(Executable::Instructions(
-                vec![InstructionBox::from(Log::new(
-                    LogLevel::INFO,
-                    message.clone(),
-                ))]
-                .into(),
-            ))
-            .with_metadata(metadata.clone())
-            .with_admission_intent(intent)
-            .try_sign(key_pair.private_key())
-            .unwrap();
-            let wire = transaction.encode_wire_v1().unwrap();
-            operation.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
-            operation.signed_transaction_wire_hex = hex::encode(&wire);
-            operation.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
-            operation.semantic_hash_hex = semantic_hash.clone();
-            let value = json::to_value(&operation).unwrap();
-            let result = verify_final_canary_prepared_operation_v1(
-                &value,
-                &network_id,
-                transaction.authority(),
-            );
-            if intent == TransactionAdmissionIntent::Ordinary {
-                assert_eq!(result.unwrap(), transaction);
-            } else {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("Ordinary admission")
-                );
-            }
-        }
+        let PreparedTransactionOperationV1::FinalCanary(mut operation) =
+            final_canary_envelope_fixture().operation
+        else {
+            unreachable!("final canary fixture")
+        };
+        let transaction = TransactionBuilder::new(
+            network_id,
+            AccountId::new(key_pair.public_key().clone()),
+            operation.fee_payment.clone(),
+        )
+        .with_executable(Executable::Instructions(
+            vec![InstructionBox::from(Log::new(
+                LogLevel::INFO,
+                message.clone(),
+            ))]
+            .into(),
+        ))
+        .with_metadata(metadata.clone())
+        .try_sign(key_pair.private_key())
+        .unwrap();
+        let wire = transaction.encode_wire_v1().unwrap();
+        operation.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+        operation.signed_transaction_wire_hex = hex::encode(&wire);
+        operation.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+        operation.semantic_hash_hex = semantic_hash.clone();
+        let value = json::to_value(&operation).unwrap();
+        let result =
+            verify_final_canary_prepared_operation_v1(&value, &network_id, transaction.authority());
+        assert_eq!(result.unwrap(), transaction);
     }
 
     #[test]

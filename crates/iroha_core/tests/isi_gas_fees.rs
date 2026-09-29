@@ -593,9 +593,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     setup_state_block
         .commit_world_overlay_for_testing()
         .expect("commit sponsor world fixture");
-    let setup_block_signed = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish authenticated fee-sponsor fixture genesis");
     {
         let check_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut check_block = state.block(check_header);
@@ -631,6 +628,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     }];
     state.set_pipeline(pipeline);
 
+    let mut native_chain = crate::block::tests::component_chain(state);
+    let state = Arc::clone(native_chain.state());
     let fee_payment = FeePaymentIntent::sponsor(
         program_id,
         1,
@@ -648,22 +647,14 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     )
     .with_executable(Executable::from(core::iter::once(instruction)))
     .sign(alice_kp.private_key());
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    // Build a height>1 block so genesis fee bypass never applies in this test.
-    let block = BlockBuilder::new(vec![accepted])
-        .chain(0, Some(&setup_block_signed))
-        .sign(alice_kp.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(block.header());
-    let mut validation_events = Vec::new();
-    let valid = ValidBlock::validate_unchecked(block.into(), &mut state_block)
-        .unpack(|event| validation_events.push(format!("{event:?}")));
-    let committed = valid
-        .commit_unchecked()
-        .unpack(|event| validation_events.push(format!("{event:?}")));
-    state
-        .commit_executed_block_for_testing(state_block, committed)
-        .expect("publish fee-sponsor transaction with exact output ownership");
+    native_chain.commit(vec![tx]);
+    let committed = native_chain.committed(native_chain.height());
+    let validation_events = native_chain.take_events().unwrap();
+    assert!(
+        committed.block().output_error(0).is_none(),
+        "{:?}",
+        committed.block().output_error(0)
+    );
     let inspect_header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
@@ -781,43 +772,16 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         iroha_primitives::json::Json::new("v"),
     )
     .into();
-    let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
-    let tx = TransactionBuilder::new_genesis(alice_id.clone(), fee_payment)
-        .with_executable(Executable::from(core::iter::once(instruction)))
-        .sign(alice_kp.private_key());
-    let creation_time_ms = u64::try_from(tx.creation_time().as_millis())
-        .expect("fixture timestamp")
-        .checked_add(1)
-        .expect("block follows its genesis transaction");
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        creation_time_ms,
-        0,
-    ));
-    builder.push_transaction(tx);
-    builder.set_da_proof_policies(Some(iroha_core::da::proof_policy_bundle(
-        &state.nexus_snapshot().lane_config,
-    )));
-    let block = builder.build_with_signature(0, alice_kp.private_key());
-    let topology = iroha_core::sumeragi::network_topology::Topology::new([
-        iroha_model_base::peer::PeerId::new(alice_kp.public_key().clone()),
-    ]);
-    let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_sumeragi_v2_fixture(
-        block.into(),
-        &topology,
-        &alice_id,
-        &iroha_primitives::time::TimeSource::new_system(),
-        &mut state_block,
-    )
-    .unpack(|_| {})
-    .expect("authenticate the exact genesis transaction authority");
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    state
-        .commit_executed_block_for_testing(state_block, committed)
-        .expect("publish actual genesis output and verified finality");
+    let nexus = state.nexus_snapshot();
+    let pipeline = state.pipeline.clone();
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
+    config.genesis_key = alice_kp;
+    config.genesis_instructions = vec![instruction];
+    config.pipeline = pipeline;
+    config.nexus = Some(nexus);
+    let native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("real signed four-validator genesis retains fee-free execution");
+    let state = native_chain.state();
     let inspect_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
@@ -1097,7 +1061,7 @@ fn legacy_gas_limit_metadata_zero_is_rejected() {
     );
 }
 #[test]
-fn ivm_gas_fees_record_settlement_receipt() {
+fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
     // 1) Minimal world: domains, accounts, asset definition, payer balance, tech account
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
@@ -1172,8 +1136,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     )
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
     .sign(alice_kp.private_key());
-    let tx_hash = tx.hash();
-    // 4) Execute after genesis and verify settlement receipt is recorded.
+    // 4) Execute after genesis and verify exact actual asset effects.
     let executor = Executor::default();
     let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
@@ -1184,15 +1147,22 @@ fn ivm_gas_fees_record_settlement_receipt() {
         .expect("execution");
     assert!(state_tx.last_tx_gas_used > 0);
     let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
-    let mut receipts = state_tx.drain_settlement_records();
-    let record = receipts
-        .remove(&tx_hash)
-        .expect("settlement receipt recorded");
-    assert_eq!(record.asset_definition_id, asset_def_id);
-    assert_eq!(record.local_amount, Quantity::from(fee));
+    assert_eq!(
+        state_tx.world.assets().get(&payer_asset).unwrap().as_ref(),
+        &Quantity::from(init - fee),
+    );
+    assert_eq!(
+        state_tx
+            .world
+            .assets()
+            .get(&AssetId::new(asset_def_id, gas_id))
+            .unwrap()
+            .as_ref(),
+        &Quantity::from(fee),
+    );
 }
 #[test]
-fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded() {
+fn block_gas_rejection_rolls_back_actual_fee_and_business_effects() {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
@@ -1228,7 +1198,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     let fee = u128::from(used) * u128::from(rate);
     let init = fee.saturating_add(100);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-    let payer_balance = Asset::new(payer_asset, Quantity::from(init));
+    let payer_balance = Asset::new(payer_asset.clone(), Quantity::from(init));
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -1265,15 +1235,42 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     block.gas_limit_per_block = used.saturating_sub(1);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, res) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let res = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(matches!(
         res,
         Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(_)
         ))
     ));
-    let receipts = block.drain_settlement_records();
-    assert!(receipts.is_empty(), "rejected tx must not emit receipts");
+    assert_eq!(
+        block.world.assets().get(&payer_asset).unwrap().as_ref(),
+        &Quantity::from(init),
+        "the rejected transaction overlay must not debit its fee payer",
+    );
+    assert!(
+        block
+            .world
+            .assets()
+            .get(&AssetId::new(asset_def_id, gas_id))
+            .is_none(),
+        "the rejected transaction overlay must not credit a fee recipient",
+    );
+    assert!(
+        block
+            .world
+            .map_account(&alice_id, |account| {
+                account
+                    .value()
+                    .metadata()
+                    .get(&"k".parse::<Name>().unwrap())
+                    .is_none()
+            })
+            .unwrap(),
+        "the rejected transaction overlay must not retain business writes"
+    );
 }

@@ -22,13 +22,6 @@ use crate::{
     },
     vault::{SignerVault, SignerVaultError},
 };
-use iroha_config::parameters::{
-    actual::sumeragi_v2_body_ingress_required_byte_capacity,
-    defaults::sumeragi::{
-        QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY, QUEUE_BODY_BYTES,
-        QUEUE_BODY_SOURCE_BYTES,
-    },
-};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
 use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
@@ -1545,79 +1538,6 @@ impl Drop for SecretTomlTable {
         zeroize_toml_table(&mut self.0);
     }
 }
-fn generated_sumeragi_queue_capacity(
-    queues: &toml::Table,
-    field: &'static str,
-    default: usize,
-) -> Result<usize> {
-    let Some(value) = queues.get(field) else {
-        return Ok(default);
-    };
-    let value = value.as_integer().ok_or_else(|| {
-        SupervisorError::Config(format!(
-            "sumeragi.queues.{field} must be a positive integer"
-        ))
-    })?;
-    usize::try_from(value)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| {
-            SupervisorError::Config(format!(
-                "sumeragi.queues.{field} must be a positive integer"
-            ))
-        })
-}
-fn ensure_generated_sumeragi_body_bytes(
-    root: &mut toml::Table,
-    validator_count: usize,
-) -> Result<()> {
-    let sumeragi = root
-        .entry("sumeragi")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| SupervisorError::Config("sumeragi must be a table".to_owned()))?;
-    let queues = sumeragi
-        .entry("queues")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| SupervisorError::Config("sumeragi.queues must be a table".to_owned()))?;
-    let authenticated_non_validator_sources = generated_sumeragi_queue_capacity(
-        queues,
-        "authenticated_non_validator_sources",
-        QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
-    )?;
-    let body_source_bytes = generated_sumeragi_queue_capacity(
-        queues,
-        "body_source_bytes",
-        QUEUE_BODY_SOURCE_BYTES.get(),
-    )?;
-    let configured_body_bytes =
-        generated_sumeragi_queue_capacity(queues, "body_bytes", QUEUE_BODY_BYTES.get())?;
-    let required_body_bytes = sumeragi_v2_body_ingress_required_byte_capacity(
-        validator_count,
-        authenticated_non_validator_sources,
-        body_source_bytes,
-    )
-    .ok_or_else(|| {
-        SupervisorError::Config(format!(
-            "Mochi Sumeragi body-byte capacity overflowed for {validator_count} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
-        ))
-    })?;
-    let effective_body_bytes = configured_body_bytes
-        .max(required_body_bytes)
-        .max(QUEUE_BODY_BYTES.get());
-    if effective_body_bytes != configured_body_bytes || !queues.contains_key("body_bytes") {
-        queues.insert(
-            "body_bytes".into(),
-            toml::Value::Integer(i64::try_from(effective_body_bytes).map_err(|_| {
-                SupervisorError::Config(format!(
-                    "Mochi Sumeragi body-byte capacity {effective_body_bytes} exceeds the TOML integer range"
-                ))
-            })?),
-        );
-    }
-    Ok(())
-}
 fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
     let Some(nexus) = nexus else {
         return BTreeMap::new();
@@ -1762,21 +1682,14 @@ fn normalize_peer_config_overrides(
             }
         }
     }
-    if let Some(table) = sumeragi.as_ref()
-        && let Some(queues) = table.get("queues")
+    if sumeragi
+        .as_ref()
+        .is_some_and(|table| table.contains_key("queues"))
     {
-        let queues = queues
-            .as_table()
-            .ok_or_else(|| SupervisorError::Config("sumeragi.queues must be a table".to_owned()))?;
-        for field in [
-            "authenticated_non_validator_sources",
-            "body_source_bytes",
-            "body_bytes",
-        ] {
-            if queues.contains_key(field) {
-                let _ = generated_sumeragi_queue_capacity(queues, field, 1)?;
-            }
-        }
+        return Err(SupervisorError::Config(
+            "sumeragi.queues is retired; native Sumeragi accepts only node-local configuration"
+                .to_owned(),
+        ));
     }
     if let Some(table) = torii.as_ref()
         && let Some(da_ingest) = table.get("da_ingest")
@@ -3808,10 +3721,16 @@ impl PeerSpec {
                     .to_owned(),
             ));
         }
-        // Apply the generator invariant after the shallow overlays have selected their effective
-        // queue table. This preserves later authored values whenever they already cover the
-        // generated PoP roster while raising only an under-budget aggregate capacity.
-        ensure_generated_sumeragi_body_bytes(&mut root, all_peers.len())?;
+        // Authored overlays cannot restore the retired consensus queue owner.
+        if root
+            .get("sumeragi")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| table.contains_key("queues"))
+        {
+            return Err(SupervisorError::Config(
+                "sumeragi.queues is retired".to_owned(),
+            ));
+        }
         if let Some(expected) = managed_account_onboarding.as_ref() {
             let configured = root
                 .get("torii")

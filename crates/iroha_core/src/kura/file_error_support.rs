@@ -111,26 +111,51 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 fn remove_commit_marker_temp_and_sync(path: &Path) -> Result<()> {
-    std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+    }
     if let Some(parent) = path.parent() {
         sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
     }
     Ok(())
 }
-fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path) -> Result<()> {
-    std::fs::rename(temporary_path, stable_path)
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    let persisted = std::fs::OpenOptions::new()
-        .read(true)
-        .open(stable_path)
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    persisted
-        .sync_all()
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    if let Some(parent) = stable_path.parent() {
-        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected bound progress append-intent sync failure",
+        ));
     }
-    Ok(())
+    file.sync_data()
+}
+fn sync_bound_progress_append_data(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected journaled progress payload sync failure",
+        ));
+    }
+    file.sync_data()
+}
+fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected journaled progress index sync failure",
+        ));
+    }
+    file.sync_data()
+}
+fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected Native AMX latest-index recovery temporary sync failure",
+        ));
+    }
+    file.sync_all()
 }
 fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
@@ -332,22 +357,9 @@ pub enum Error {
         #[source]
         source: Arc<Error>,
     },
-    /// Autonomous payload epoch resolution failed at proposal height `{proposal_height}`: {reason}
-    AutonomousEpochResolution {
-        /// Proposal height whose authenticated consensus epoch could not be resolved.
-        proposal_height: u64,
-        /// Fail-closed epoch-schedule diagnostic.
-        reason: String,
-    },
+
     /// Failed reading/writing {1:?} from disk: {0}
     IO(#[source] std::io::Error, PathBuf),
-    /// QueuePlan admission expected durable height {expected_durable_height}, found {actual_durable_height}
-    QueuePlanAdmissionDurableHeightMismatch {
-        /// Exact State height which the admission attempted to linearize against.
-        expected_durable_height: u64,
-        /// Exact durable Kura height observed under the canonical-chain lock.
-        actual_durable_height: u64,
-    },
     /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
     LaneGeometryPublicationRestoreFailed {
         /// Original catalog-publication error.
@@ -361,51 +373,7 @@ pub enum Error {
     VersionedCodec(#[from] iroha_version::error::Error),
     /// Failed to frame or deframe Norito payload
     NoritoFrame(#[from] norito::core::Error),
-    /// Invalid Sumeragi v2 finality artifact: {0}
-    V2FinalityArtifact(#[from] V2FinalityValidationError),
-    /// Invalid Sumeragi v2 finality cryptography: {0}
-    V2FinalityCryptography(#[from] V2QuorumCertificateVerificationError),
-    /// Encoded Sumeragi v2 finality artifact is {actual} bytes; hard maximum is {max}
-    V2FinalityArtifactTooLarge {
-        /// Encoded artifact size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Encoded Kura Sumeragi v2 finality record is {actual} bytes; hard maximum is {max}
-    V2FinalityRecordTooLarge {
-        /// Encoded private record size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Encoded Kura retained block record is {actual} bytes; hard maximum is {max}
-    RetainedBlockRecordTooLarge {
-        /// Encoded retained block-record size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
-    /// Immutable retained block record at height `{height}` conflicts with canonical data
-    ConflictingRetainedBlockRecord {
-        /// Height whose retained-block path contains different canonical data.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical proposal wire image
-    V2FinalityPayloadHashMismatch {
-        /// Height whose signed subject differs from the retained resultless proposal hash.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire length
-    V2FinalityExecutedBlockWireLengthMismatch {
-        /// Height whose execution commitment differs from the retained result-bearing block length.
-        height: u64,
-    },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire image
-    V2FinalityExecutedBlockWireHashMismatch {
-        /// Height whose execution commitment differs from the retained result-bearing block hash.
-        height: u64,
-    },
+
     /// Submitted block wire at existing canonical height `{height}` differs from durable canonical bytes
     CanonicalBlockWireMismatch {
         /// Existing height whose header matched but complete block bytes differed.
@@ -423,61 +391,12 @@ pub enum Error {
     },
     /// Canonical Kura storage is fail-stop poisoned after an ambiguous rewrite publication
     CanonicalStoragePoisoned,
-    /// Invalid provisional snapshot bootstrap marker at `{path:?}`: {reason}
-    InvalidSnapshotBootstrapMarker {
-        /// Marker path whose bytes or bounds are invalid.
-        path: PathBuf,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Kura hash-only history is provisional until a signed snapshot authenticates its lineage
-    SnapshotBootstrapAuthenticationPending,
     /// Kura auxiliary history `{subsystem}` is unavailable after emergency Fast startup; restart in Strict mode
     EmergencyFastAuxiliaryUnavailable {
         /// Deferred inventory or derived index that cannot safely be represented as empty.
         subsystem: &'static str,
     },
-    /// Kura is already bound to a different authoritative consensus output guard
-    ConsensusOutputGuardAlreadyBound,
-    /// Kura is already bound to a different local peer identity
-    KuraReplicaLocalPeerConflict,
-    /// Kura cannot start its writer before the immutable local peer identity is bound
-    KuraReplicaLocalPeerUnbound,
-    /// Invalid authenticated Kura replica advert: {0}
-    InvalidKuraReplicaAdvert(String),
-    /// Invalid Kura replica-advert runtime configuration: {0}
-    InvalidKuraReplicaAdvertConfiguration(String),
-    /// Canonical block at height `{height}` is missing its required durable retained record
-    MissingRetainedBlockRecord {
-        /// Height whose eviction/finality evidence lacks the required record.
-        height: u64,
-    },
-    /// Evicted canonical block at height `{height}` is missing signed complete-wire finality
-    MissingV2FinalityArtifact {
-        /// Height whose durable eviction marker has no finality artifact.
-        height: u64,
-    },
-    /// Highest retained-block height `{retained_height}` exceeds the canonical durable block height `{durable_height}`
-    RetainedBlockBeyondDurableChain {
-        /// Highest canonical retained-block file discovered in the immutable inventory.
-        retained_height: u64,
-        /// Height published by the durable block-store marker.
-        durable_height: u64,
-    },
-    /// Canonical block header for Sumeragi v2 finality height `{height}` is unavailable
-    V2FinalityCanonicalHeaderUnavailable {
-        /// Height whose complete canonical header could not be loaded.
-        height: u64,
-    },
-    /// Invalid or conflicting Kagemusha V1 finality sidecar: {0}
-    KagemushaFinalitySidecar(String),
-    /// Encoded Kagemusha V1 sidecar is {actual} bytes; hard maximum is {max}
-    KagemushaFinalitySidecarTooLarge {
-        /// Encoded sidecar size.
-        actual: usize,
-        /// Hard persistence/read limit.
-        max: usize,
-    },
+
     /// Invalid or conflicting Kagemusha V1 mint outbox entry: {0}
     KagemushaMintOutbox(String),
     /// Encoded Kagemusha V1 mint outbox entry is {actual} bytes; hard maximum is {max}
@@ -487,35 +406,13 @@ pub enum Error {
         /// Hard persistence/read limit.
         max: usize,
     },
-    /// Conflicting immutable Sumeragi v2 finality artifact at height `{height}`
-    ConflictingV2FinalityArtifact {
-        /// Height whose finality path already contains a different artifact.
-        height: u64,
-    },
+
     /// Retired first-release-incompatible Kura artifact remains at `{path:?}`
     RetiredKuraArtifact {
         /// Exact retired artifact that must be removed by the operator.
         path: PathBuf,
     },
-    /// Canonical-chain mutation from height `{rewrite_from_height}` would rewrite durable Sumeragi-v2 finality at height `{finalized_height}`
-    FinalizedV2BlockMutation {
-        /// First canonical height the requested mutation could replace or remove.
-        rewrite_from_height: u64,
-        /// Highest durable finality artifact that makes the mutation invalid.
-        finalized_height: u64,
-    },
-    /// Canonical block at height `{height}` has committed WSV replay metadata and cannot be replaced
-    CommittedBlockReplacementForbidden {
-        /// State-committed canonical height protected by its checkpoint or commit manifest.
-        height: u64,
-    },
-    /// Highest durable Sumeragi-v2 finality height `{finalized_height}` exceeds the canonical durable block height `{durable_height}`
-    V2FinalityBeyondDurableChain {
-        /// Highest canonical finality sidecar file discovered at startup.
-        finalized_height: u64,
-        /// Height published by the durable block-store marker.
-        durable_height: u64,
-    },
+
     /// Failed to allocate buffer
     Alloc(#[from] std::collections::TryReserveError),
     /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
@@ -535,20 +432,6 @@ pub enum Error {
     IntConversion(#[from] std::num::TryFromIntError),
     /// Blocks count differs hashes file and index file
     HashesFileHeightMismatch,
-    /// Invalid canonical suffix above provisional snapshot prefix at height `{height}`: {reason}
-    InvalidProvisionalSnapshotSuffix {
-        /// One-based suffix height which failed validation.
-        height: u64,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Hard-fork snapshot bootstrap requires Kura hashes height `{hashes_count}` to match index height `{index_count}`
-    HardForkSnapshotBootstrapHashHeightMismatch {
-        /// Number of durable block index entries.
-        index_count: usize,
-        /// Number of block hashes recorded in the hashes journal.
-        hashes_count: usize,
-    },
     /// Block index length {length} exceeds strict-init guard {limit} bytes
     CorruptedBlockLength {
         /// Length of the corrupted block index entry in bytes.
@@ -590,19 +473,9 @@ pub enum Error {
         /// Hash of the incoming block.
         actual: HashOf<BlockHeader>,
     },
-    /// Certified merge sidecar `{entry_hash:?}` is unavailable
-    MissingCertifiedMergeSidecar {
-        /// Hash requested by the compact block reference.
-        entry_hash: HashOf<MergeLedgerEntry>,
-    },
-    /// Certified merge compact reference is inconsistent: {0}
-    MergeReferenceMismatch(String),
-    /// Durable sparse merge carrier is inconsistent: {0}
-    MergeCarrierConflict(String),
+
     /// Kura requires restart to complete an interrupted durable prune transaction
     PruneRecoveryRequired,
-    /// Durable Kura prune intent is inconsistent: {0}
-    PruneIntentConflict(String),
 }
 impl Error {
     /// Return whether this error proves that the canonical publication boundary cannot be

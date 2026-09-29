@@ -346,9 +346,12 @@ mod tests {
 
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use crate::nexus::{
-        FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
-        FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
+    use crate::{
+        block::BlockHeader,
+        nexus::{
+            FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
+            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
+        },
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
@@ -367,6 +370,30 @@ mod tests {
         lease_id: iroha_crypto::Hash,
         manifest_root: [u8; 32],
         proof_blob: ProofBlob,
+    }
+    fn sample_header(height: u64) -> BlockHeader {
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            1_700_000_000_000,
+            0,
+        );
+        // This fixed codec specimen is independent of changing network policy defaults.
+        header.set_confidential_features(Some(
+            crate::confidential::ConfidentialFeatureDigest::new(
+                None,
+                None,
+                None,
+                Some(1),
+                Some([
+                    0x93, 0x76, 0x91, 0x34, 0xd0, 0xa3, 0x4d, 0x4c, 0x93, 0x7a, 0x95, 0xbb, 0xc3,
+                    0x40, 0x05, 0x77, 0x1b, 0x9d, 0x82, 0xef, 0x0f, 0xcf, 0xdf, 0xf0, 0x69, 0x57,
+                    0xf2, 0x07, 0xe2, 0x16, 0x89, 0x6f,
+                ]),
+            ),
+        ));
+        header
     }
     fn sample_proof_blob(seed: u8) -> ProofBlob {
         ProofBlob {

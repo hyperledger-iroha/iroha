@@ -1,15 +1,36 @@
 //! Canonical threshold freshness, native nonce, interval, deployment and retention checks.
 
 use super::*;
-use crate::block::consensus_v2::HeightContextId;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 
 fn network(byte: u8) -> NetworkId {
+    if byte == 3 {
+        return crate::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            &checkpoint_bytes(1),
+        )
+        .unwrap()
+        .network_id();
+    }
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
 }
 
-fn context(byte: u8) -> HeightContextId {
-    HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+// Captured twice from the real signed native fixture. These bytes grant no World or
+// monetary authority; threshold approvals authenticate their selection for this protocol.
+fn checkpoint_bytes(height: u64) -> Vec<u8> {
+    match height {
+        0 => Vec::new(),
+        1 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+        ))
+        .to_vec(),
+        2 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+        ))
+        .to_vec(),
+        _ => panic!("fixture checkpoint height"),
+    }
 }
 
 fn fixture() -> (
@@ -40,7 +61,7 @@ fn fixture() -> (
         },
         release_id: [7; 32],
         release_attestation_digest: [8; 32],
-        first_context_id: context(9),
+        finality_checkpoint: checkpoint_bytes(1),
         sequence: 10,
         issued_at_ms: 1_000,
         expires_at_ms: 300_000,
@@ -247,7 +268,7 @@ fn rejects_substitution_of_every_independent_deployment_pin() {
 fn freshness_digest_binds_every_checkpoint_field() {
     let (_, policy, checkpoint, package) = fixture();
     for index in 0..14 {
-        let mut changed = checkpoint;
+        let mut changed = checkpoint.clone();
         match index {
             0 => changed.version = 2,
             1 => changed.authority_policy_digest[0] ^= 1,
@@ -258,11 +279,11 @@ fn freshness_digest_binds_every_checkpoint_field() {
             6 => changed.scope.liability_pool_id[0] ^= 1,
             7 => changed.release_id[0] ^= 1,
             8 => changed.release_attestation_digest[0] ^= 1,
-            9 => changed.first_context_id = context(13),
+            9 => changed.finality_checkpoint = checkpoint_bytes(2),
             10 => changed.sequence += 1,
             11 => changed.issued_at_ms += 1,
             12 => changed.expires_at_ms += 1,
-            _ => changed.first_context_id = context(0),
+            _ => changed.finality_checkpoint = checkpoint_bytes(0),
         }
         assert!(
             package.authenticate(&pins(&policy, &changed)).is_err(),

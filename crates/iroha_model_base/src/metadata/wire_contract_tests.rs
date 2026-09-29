@@ -31,7 +31,7 @@ mod wire_contract_tests {
         let view = ncore::from_bytes_view(frame)?;
         // The view validates Metadata's actual schema and padding before invoking
         // the decoder. The owning archive safely handles any required alignment.
-        view.decode_exact_with::<Metadata, _>(|payload| {
+        view.decode_exact_with::<Metadata, Metadata, _>(|payload| {
             let archive = ncore::archived_from_slice::<Metadata>(payload)?;
             let _payload = PayloadCtxGuard::enter_with_flags(archive.bytes(), view.flags());
             let decoded = if infallible {

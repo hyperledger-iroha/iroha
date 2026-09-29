@@ -96,13 +96,6 @@ pub struct IzanamiArgs {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub sumeragi_block_max_transactions: u64,
-    /// Proposal queue scan multiplier used to fill each candidate Sumeragi block.
-    #[arg(
-        long,
-        default_value_t = DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub sumeragi_proposal_queue_scan_multiplier: u64,
     /// Workload profile controlling which recipes are scheduled.
     #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
     pub workload_profile: WorkloadProfile,
@@ -365,7 +358,6 @@ pub struct ChaosConfig {
     pub prebuild_tx_buffer: usize,
     pub prebuild_tx_workers: usize,
     pub sumeragi_block_max_transactions: u64,
-    pub sumeragi_proposal_queue_scan_multiplier: u64,
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
@@ -487,12 +479,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.sumeragi_block_max_transactions
             ));
         }
-        if i64::try_from(args.sumeragi_proposal_queue_scan_multiplier).is_err() {
-            return Err(eyre!(
-                "sumeragi_proposal_queue_scan_multiplier ({}) exceeds config-layer limits",
-                args.sumeragi_proposal_queue_scan_multiplier
-            ));
-        }
+
         if args.fault_interval_min > args.fault_interval_max {
             return Err(eyre!(
                 "fault interval min ({:?}) cannot be greater than max ({:?})",
@@ -526,7 +513,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             prebuild_tx_buffer,
             prebuild_tx_workers,
             sumeragi_block_max_transactions,
-            sumeragi_proposal_queue_scan_multiplier,
             workload_profile,
             allow_contract_deploy_in_stable,
             log_filter,
@@ -562,7 +548,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             prebuild_tx_buffer,
             prebuild_tx_workers,
             sumeragi_block_max_transactions,
-            sumeragi_proposal_queue_scan_multiplier,
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
@@ -607,7 +592,6 @@ impl IzanamiArgs {
             prebuild_tx_buffer: cfg.prebuild_tx_buffer,
             prebuild_tx_workers: cfg.prebuild_tx_workers,
             sumeragi_block_max_transactions: cfg.sumeragi_block_max_transactions,
-            sumeragi_proposal_queue_scan_multiplier: cfg.sumeragi_proposal_queue_scan_multiplier,
             workload_profile: cfg.workload_profile,
             allow_contract_deploy_in_stable: cfg.allow_contract_deploy_in_stable,
             log_filter: cfg.log_filter.clone(),
@@ -1111,11 +1095,10 @@ fn build_nexus_layer(
         ["nexus", "da", "rotation", "latency_decay"],
         nexus.da.rotation.latency_decay,
     );
-    write_sumeragi_v2_layer(&mut layer, sumeragi);
+    write_native_sumeragi_layer(&mut layer, sumeragi);
     layer
 }
-fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
-    let usize_value = |value: usize| i64::try_from(value).expect("Sumeragi limit fits i64");
+fn write_native_sumeragi_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
     let role = match sumeragi.role {
         iroha_config::parameters::actual::NodeRole::Validator => "validator",
         iroha_config::parameters::actual::NodeRole::Observer => "observer",
@@ -1128,34 +1111,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
         .collect();
     TomlWriter::new(layer)
         .write(["sumeragi", "role"], role)
-        .write(
-            ["sumeragi", "block", "max_transactions"],
-            usize_value(sumeragi.block.max_transactions.get()),
-        )
-        .write(
-            ["sumeragi", "block", "max_payload_bytes"],
-            usize_value(sumeragi.block.max_payload_bytes.get()),
-        )
-        .write(
-            ["sumeragi", "block", "proposal_queue_scan_multiplier"],
-            usize_value(sumeragi.block.proposal_queue_scan_multiplier.get()),
-        )
-        .write(
-            ["sumeragi", "queues", "commands"],
-            usize_value(sumeragi.queues.commands.get()),
-        )
-        .write(
-            ["sumeragi", "queues", "bodies"],
-            usize_value(sumeragi.queues.bodies.get()),
-        )
-        .write(
-            ["sumeragi", "queues", "chunks"],
-            usize_value(sumeragi.queues.chunks.get()),
-        )
-        .write(
-            ["sumeragi", "queues", "ready_bodies"],
-            usize_value(sumeragi.queues.ready_bodies.get()),
-        )
         .write(
             ["sumeragi", "keys", "activation_lead_blocks"],
             i64::try_from(sumeragi.keys.activation_lead_blocks).expect("key limit fits i64"),
@@ -1172,6 +1127,34 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
             ["sumeragi", "keys", "allowed_algorithms"],
             Value::Array(allowed_algorithms),
         );
+    let local = &sumeragi.local;
+    for (name, value) in [
+        ("t_base_ms", local.t_base),
+        ("t_max_ms", local.t_max),
+        ("rebroadcast_interval_ms", local.rebroadcast_interval),
+        ("status_keepalive_ms", local.status_keepalive),
+        ("build_timeout_ms", local.build_timeout),
+        ("fetch_retry_ms", local.fetch_retry),
+        ("sync_retry_ms", local.sync_retry),
+    ] {
+        if let Some(value) = value {
+            TomlWriter::new(layer).write(
+                ["sumeragi", "local", name],
+                i64::try_from(value.as_millis()).expect("validated local interval fits TOML"),
+            );
+        }
+    }
+    for (name, value) in [
+        ("start_cap", local.start_cap.map(i64::from)),
+        ("decay_after", local.decay_after.map(i64::from)),
+        ("sync_batch", local.sync_batch.map(i64::from)),
+        ("sync_max_bytes", local.sync_max_bytes.map(i64::from)),
+        ("max_observers", local.max_observers.map(i64::from)),
+    ] {
+        if let Some(value) = value {
+            TomlWriter::new(layer).write(["sumeragi", "local", name], value);
+        }
+    }
 }
 fn dataspace_alias_map(
     catalog: &DataSpaceCatalog,
@@ -1259,8 +1242,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1335,8 +1317,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "warn".to_string(),
@@ -1372,8 +1353,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1414,8 +1394,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1454,8 +1433,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1602,8 +1580,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1644,8 +1621,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1686,8 +1662,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1728,8 +1703,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1770,8 +1744,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1811,8 +1784,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1831,15 +1803,30 @@ mod tests {
         );
     }
     #[test]
+    fn native_sumeragi_profile_retains_local_overrides_and_excludes_protocol_knobs() {
+        let mut config = ActualSumeragi::default();
+        config.local.t_base = Some(Duration::from_millis(123));
+        config.local.start_cap = Some(5);
+        config.local.sync_batch = Some(7);
+        let mut layer = Table::new();
+        write_native_sumeragi_layer(&mut layer, &config);
+        let sumeragi = layer["sumeragi"].as_table().unwrap();
+        assert!(!sumeragi.contains_key("block"));
+        assert!(!sumeragi.contains_key("queues"));
+        let local = sumeragi["local"].as_table().unwrap();
+        assert_eq!(local["t_base_ms"].as_integer(), Some(123));
+        assert_eq!(local["start_cap"].as_integer(), Some(5));
+        assert_eq!(local["sync_batch"].as_integer(), Some(7));
+        assert!(!local.contains_key("t_max_ms"));
+    }
+    #[test]
     fn chaos_config_accepts_sumeragi_block_tuning() {
         let mut args = IzanamiArgs::defaults();
         args.allow_net = true;
         args.faulty = 0;
         args.sumeragi_block_max_transactions = 1_536;
-        args.sumeragi_proposal_queue_scan_multiplier = 2;
         let config = ChaosConfig::try_from(args).expect("sumeragi block tuning should be valid");
         assert_eq!(config.sumeragi_block_max_transactions, 1_536);
-        assert_eq!(config.sumeragi_proposal_queue_scan_multiplier, 2);
     }
     #[test]
     fn chaos_config_accepts_bounded_fault_window() {
@@ -1900,8 +1887,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1942,8 +1928,7 @@ mod tests {
             prebuild_tx_buffer: 0,
             prebuild_tx_workers: 0,
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),

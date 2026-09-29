@@ -321,14 +321,6 @@ export {
   validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
 export {
-  laneRelayEnvelopeSample,
-  verifyLaneRelayEnvelope,
-  verifyLaneRelayEnvelopeJson,
-  verifyLaneRelayEnvelopes,
-  decodeLaneRelayEnvelope,
-  laneSettlementHash,
-} from "./nexus.js";
-export {
   NexusAppClient,
   NexusAppError,
   NexusSignatureAlgorithmEd25519,

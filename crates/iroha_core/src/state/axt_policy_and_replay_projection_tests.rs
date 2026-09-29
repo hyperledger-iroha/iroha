@@ -201,13 +201,6 @@ state_test! { sync ordinary_block_seals_axt_replay_pruning_before_atomic_commit
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
     nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query_handle);
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus config for replay ledger pruning test");
-    state.seed_genesis_for_testing().expect("publish actual genesis before replay pruning");
     let key = AxtHandleReplayKey::from_parts(
         dsid,
         axt_replay_incarnation_for_test(0xAB),
@@ -217,22 +210,22 @@ state_test! { sync ordinary_block_seals_axt_replay_pruning_before_atomic_commit
         lane,
     );
     let_row! { stale = axt_replay_record_for_key(&key, 1, 2) };
-    {
-        let mut block = state.world.axt_replay_ledger.block();
-        block.insert(key, stale.clone());
-        block.commit();
-    }
-    let keypair = crate::state::checked_keypair();
-    let_row! { signed: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, state.view().latest_block().as_deref()) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
-    assert!(
-        signed.axt_envelopes().is_none(),
-        "test block must not carry AXT envelopes"
-    );
-    let mut state_block = state.block(signed.header());
-    let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    let mut staged_snapshot = None;
-    state.commit_executed_block_with_precommit_for_testing(state_block, committed, |staged| {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, Signers};
+    let mut world = World::new();
+    world.axt_replay_ledger.insert(key, stale.clone());
+    let mut config = TestChainConfig::new(world, 0);
+    config.nexus = Some(nexus);
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    let state = Arc::clone(chain.state());
+    let proposal = chain.proposal(None, Vec::new());
+    assert!(proposal.axt_envelopes().is_none());
+    let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+    assert!(pending.inspect_prepared(|_| ()).is_err(), "unprepared source is not a publication snapshot");
+    pending.prepare(Signers::Quorum).unwrap();
+    let inspect_state = Arc::clone(&state);
+    let (staged_bytes, staged_hash) = pending.inspect_prepared(move |original| {
+        let staged = original.state;
+        let state = inspect_state;
         assert_eq!(
             state.world.axt_replay_ledger.view().get(&key).cloned(),
             Some(stale),
@@ -244,9 +237,11 @@ state_test! { sync ordinary_block_seals_axt_replay_pruning_before_atomic_commit
         let hash = crate::snapshot::canonical_staged_state_snapshot_hash(staged);
         assert_eq!(hash, iroha_crypto::Hash::new(&bytes),
             "staged checkpoint streaming hash matches its canonical bytes");
-        staged_snapshot = Some((bytes, hash));
-    }).expect("publish actual outputs and commit deferred replay pruning");
-    let (staged_bytes, staged_hash) = staged_snapshot.expect("authorized precommit observation");
+        (bytes, hash)
+    }).expect("read the exact certificate-authorized original overlay");
+    pending.publish(Signers::Quorum).expect("publish actual outputs and commit deferred replay pruning");
+    assert!(pending.inspect_prepared(|_| ()).is_err(), "published source is consumed");
+    drop(pending);
     assert!(
         state.world.axt_replay_ledger.view().get(&key).is_none(),
         "ordinary block commit should prune expired AXT replay entries"
@@ -290,12 +285,9 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
             iroha_data_model::account::AccountDetails::default(),
         ),
     );
-    let state = State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    state.seed_genesis_for_testing().expect("publish genesis before ordinary DA carrier");
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, Signers};
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 0)).unwrap();
+    let state = Arc::clone(chain.state());
     let authorization = crate::da::signed_test_ingest_authorization(
         *state.network_id_ref(), &owner_keypair, LaneId::SINGLE, 1, 0, 1,
     );
@@ -306,16 +298,13 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
         ManifestDigest::new([0xB5; 32]),
         None,
     );
-    let signer = crate::state::checked_keypair();
-    let_row! { signed: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
-        .chain(0, state.view().latest_block().as_deref())
-        .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
-        .sign(signer.private_key()).unpack(|_| {}).into() };
-    let mut block = state.block(signed.header());
-    let valid = ValidBlock::validate_unchecked(signed, &mut block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    let mut observed = None;
-    state.commit_executed_block_with_precommit_for_testing(block, committed, |block| {
+    let transaction = chain.sign(&owner_keypair, [Log::new(iroha_logger::Level::INFO, "ordinary DA source".into()).into()], 1);
+    let mut proposal = chain.proposal(None, vec![transaction]);
+    proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
+    let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+    pending.prepare(Signers::Quorum).unwrap();
+    let (writes, projected_storage, staged_bytes, staged_hash) = pending.inspect_prepared(|original| {
+        let block = original.state;
     let writes = block.pending_da_pin_intents.as_ref()
         .expect("real block application stages its quota bundle").quota_writes.clone();
     assert!(!writes.is_empty(), "signed nonempty DA bundle must charge quota");
@@ -332,10 +321,10 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     assert_eq!(staged_hash, Hash::new(&staged_bytes));
     assert_eq!(norito::json::to_json(&block.world.smart_contract_state)
         .expect("unchanged contract storage"), before_storage);
-        observed = Some((writes, projected_storage, staged_bytes, staged_hash));
-    }).expect("ordinary DA block commits its actual outputs and deferred quota");
-    let (writes, projected_storage, staged_bytes, staged_hash) = observed
-        .expect("authorized precommit quota observation");
+        (writes, projected_storage, staged_bytes, staged_hash)
+    }).expect("immutable original prepared quota observation");
+    pending.publish(Signers::Quorum).expect("ordinary DA block commits actual outputs and quota");
+    drop(pending);
     assert_eq!(projected_storage, norito::json::to_json(&state.world.smart_contract_state)
         .expect("committed contract storage including exact undo"));
     for (key, value) in &writes {
@@ -375,67 +364,14 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
     ));
     drop(unavailable_view);
 
-    let mut anchored = hash_only_state();
-    anchored.nexus.get_mut().axt.slot_length_ms = nonzero!(10_u64);
-    let parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
-    let mut mint_finality_voters = (1_u8..=4)
-        .map(|seed| {
-            let key_pair = iroha_crypto::KeyPair::try_from_seed(
-                vec![seed; 32],
-                iroha_crypto::Algorithm::BlsNormal,
-            )
-            .expect("derive deterministic snapshot mint-finality validator");
-            iroha_data_model::block::consensus_v2::ValidatorPower {
-                validator: iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
-                power: 1,
-            }
-        })
-        .collect::<Vec<_>>();
-    mint_finality_voters.sort_by(|left, right| left.validator.cmp(&right.validator));
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(anchored.network_id, 6, &mint_finality_voters);
-    let snapshot_block_hash = anchored
-        .latest_block_hash_fast()
-        .expect("hash-only fixture has a committed tip");
-    anchored.set_authenticated_snapshot_v2_bootstrap_for_testing(SnapshotV2BootstrapRecord {
-        version: SnapshotV2BootstrapRecord::VERSION,
-        context: HeightContext {
-            network_id: anchored.network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: 6,
-            epoch: 0,
-            epoch_end_height: 6,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: Some(
-                iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
-                    snapshot_height: 5,
-                    snapshot_block_hash,
-                    snapshot_block_creation_time_ms: 10_000,
-                    snapshot_state_hash: Hash::new(b"hash-only-axt-time"),
-                },
-            ),
-            roster: Vec::new(),
-            quorum: DualQuorum {
-                min_signers: 0,
-                total_power: 0,
-            },
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            nexus_amx_context_hash: Hash::prehashed(parameters.nexus_amx_context_hash),
-            execution_policy_hash: Hash::prehashed(parameters.execution_policy_hash),
-            da_layout: parameters.da_layout,
-            leader_seed: [0; 32],
-        },
-        validator_set_pops: Vec::new(),
-    });
-    assert!(
-        anchored
-            .install_provisional_empty_lane_manifests_for_emergency_fast_pre_auth()
-            .is_err(),
-        "authenticated snapshot State must refuse the pre-authentication manifest installer"
-    );
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.axt.slot_length_ms = nonzero!(10_u64);
+    config.nexus = Some(nexus);
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    chain.commit_at(10_000, Vec::new());
+    let anchored = chain.state();
     let stale_prefix_header = BlockHeader::new(nonzero!(1_u64), None, None, 99, 0);
     anchored.update_latest_block_header_cache_for_tests(stale_prefix_header);
     assert_eq!(anchored.latest_block_creation_time_ms_fast(), Some(10_000));
@@ -452,16 +388,12 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
 state_test! { consensus_stack axt_post_validation_envelope_replacement_cannot_publish_world_state
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 
-    let mut state = blank_test_state();
-    let mut nexus = state.nexus_snapshot();
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    state.set_nexus(nexus).expect("install the fixture fee policy");
-    let parent = state
-        .seed_genesis_for_testing()
-        .expect("publish the genuine predecessor");
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    config.genesis_key = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+    let chain = CertifiedTestChain::start(config).unwrap();
+    let state = chain.state();
+    let parent = chain.genesis();
     let retained_hash = state.latest_block_hash_fast();
     let transaction = TransactionBuilder::new(
         *state.network_id_ref(),
@@ -506,19 +438,15 @@ state_test! { consensus_stack axt_post_validation_envelope_replacement_cannot_pu
             vec![envelope],
             snapshot,
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .expect("structurally attach a post-validation envelope");
-    let committed = ValidBlock::new_unverified_for_tests(signed)
-        .commit_unchecked()
-        .unpack(|_| {});
-    let error = state
-        .commit_executed_block_for_testing(staged, committed)
+    let error = staged.verify_execution_output_seal(&signed)
         .expect_err("replacement envelopes cannot reuse the original execution seal");
     assert_eq!(error, "execution output attachment changed after its seal");
+    drop(staged);
     assert_eq!(state.latest_block_hash_fast(), retained_hash);
     assert_eq!(state.committed_height(), 1);
     assert!(state.world.axt_replay_ledger.view().is_empty());
-    assert!(state.kura.v2_finality_artifact(2).unwrap().is_none());
+    assert!(state.kura.get_block_hash(nonzero!(2_usize)).is_none());
 }

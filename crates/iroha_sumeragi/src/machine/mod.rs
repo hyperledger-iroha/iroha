@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use self::{sync::SyncState, votes::Pools};
 use crate::{
     api::{Action, CoreStatus, Event, Footprint, HaltReason, LocalFault, LocalParams},
-    crypto::{Attestation, Crypto, Signer, verify_qc, verify_tc, verify_tc_with_verified_high_qc},
+    crypto::{Attestation, Crypto, Signer, Verifier},
     message::{
         Block, BlockHeader, Evidence, Proposal, Qc, TimeoutCert, TimeoutVote, Vote, VoteKind,
         WireMessage,
@@ -113,7 +113,7 @@ pub struct Core {
     mine: Mine,
     retx: [Option<Retx>; 2],
     build: Build,
-    /// At most one independent control response and one transaction response for a fresh block.
+    /// One payload request followed by its exact source-bound control response.
     fresh_build: Option<FreshBuild>,
     /// Bounded cadence for every member's single application producer.
     control_drive: Option<(crate::api::ApplicationControlContext, Millis)>,
@@ -247,11 +247,9 @@ struct Retx {
     sent: Millis,
 }
 
-/// Original exact source and the two independently completed parts of one fresh proposal.
+/// Original exact source and its payload awaiting the source-bound control response.
 struct FreshBuild {
-    req: u64,
     context: crate::api::ControlWitnessContext,
-    control: Option<(crate::types::ControlWitness, bool)>,
     payload: Option<(Vec<u8>, bool)>,
 }
 
@@ -389,18 +387,16 @@ impl CertCache {
     }
 
     fn insert(&mut self, digest: Hash32) {
-        if self.cap == 0 {
-            return;
-        }
-        if self.hit(&digest) {
+        if self.cap == 0 || self.hit(&digest) {
             return;
         }
         self.set.insert(digest);
         self.order.push_back(digest);
-        while self.order.len() > self.cap {
-            if let Some(old) = self.order.pop_front() {
-                self.set.remove(&old);
-            }
+        // One insertion can exceed the established capacity by at most one entry.
+        if self.order.len() > self.cap
+            && let Some(old) = self.order.pop_front()
+        {
+            self.set.remove(&old);
         }
     }
 
@@ -779,6 +775,16 @@ impl Core {
             .and_then(crate::types::ConfigSlot::ready)
     }
 
+    /// Bind the authenticated configuration selected by the caller, including past heights.
+    fn verifier<'a>(&'a self, config: &'a HeightConfig) -> Verifier<'a> {
+        Verifier::new(
+            &*self.crypto,
+            &self.instance,
+            &config.epoch.id,
+            &config.committee,
+        )
+    }
+
     /// Verify a QC under `C_{qc.height}` (SR15), using and filling the cache.
     fn verify_qc_cached(&mut self, qc: &Qc) -> bool {
         let Some(active) = self.config(qc.height) else {
@@ -801,15 +807,10 @@ impl Core {
         let Some(config) = self.config(config_height) else {
             return false;
         };
-        let ok = verify_qc(
-            &*self.crypto,
-            &*self.attestation.verifier,
-            &self.instance,
-            &config.epoch.id,
-            &config.committee,
-            qc,
-        )
-        .is_ok();
+        let ok = self
+            .verifier(config)
+            .verify_qc(&*self.attestation.verifier, qc)
+            .is_ok();
         if ok {
             self.cert_cache.insert(digest);
         }
@@ -834,26 +835,13 @@ impl Core {
             .high_pqc
             .as_ref()
             .is_some_and(|qc| self.cert_cache.contains(&qc.digest(&*self.crypto)));
-        let committee = &self.cfg.committee;
-        let ok = if high_cached {
-            verify_tc_with_verified_high_qc(
-                &*self.crypto,
-                &self.instance,
-                &self.cfg.epoch.id,
-                committee,
-                tc,
-            )
-            .is_ok()
+        let verifier = self.verifier(&self.cfg);
+        let checked = if high_cached {
+            verifier.verify_tc_with_verified_high_qc(tc)
         } else {
-            verify_tc(
-                &*self.crypto,
-                &self.instance,
-                &self.cfg.epoch.id,
-                committee,
-                tc,
-            )
-            .is_ok()
+            verifier.verify_tc(tc)
         };
+        let ok = checked.is_ok();
         if ok {
             if let Some(qc) = &tc.high_pqc {
                 let qc_digest = qc.digest(&*self.crypto);

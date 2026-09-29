@@ -71,7 +71,8 @@ fn det_s43_every_signature_binds_epoch_and_complete_context() {
         ..epoch
     };
     assert_eq!(
-        crate::crypto::verify_qc_signatures(&h.v.crypto, &I, &other, &h.committee(), &qc),
+        crate::crypto::Verifier::new(&h.v.crypto, &I, &other, &h.committee())
+            .verify_qc_signatures(&qc),
         Err(crate::crypto::CertError::WrongEpoch)
     );
 }

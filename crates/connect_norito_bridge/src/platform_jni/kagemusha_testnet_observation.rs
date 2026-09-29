@@ -120,7 +120,7 @@ const TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1: [jni::sys::jint; 8] = [
     32,
     KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 as jni::sys::jint,
     KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 as jni::sys::jint,
-    KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 as jni::sys::jint,
+    iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES as jni::sys::jint,
     KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1 as jni::sys::jint,
     iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1 as jni::sys::jint,
     KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 as jni::sys::jint,
@@ -272,8 +272,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTes
     operation_id: jni::objects::JByteArray<'_>,
     status_json: jni::objects::JByteArray<'_>,
     anchor_network_id: jni::objects::JByteArray<'_>,
-    anchor_height_bits: jni::sys::jlong,
-    anchor_context_id: jni::objects::JByteArray<'_>,
+    anchor_checkpoint: jni::objects::JByteArray<'_>,
     public_inputs: jni::objects::JByteArray<'_>,
     paired_proof: jni::objects::JByteArray<'_>,
     output: jni::objects::JByteBuffer<'_>,
@@ -302,16 +301,13 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTes
         if anchor_network_id.len() != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 {
             return ERR_KAGEMUSHA_V1;
         }
-        let Some(anchor_context_id) = bounded_java_archive(
+        let Some(anchor_checkpoint) = bounded_java_archive(
             &mut env,
-            &anchor_context_id,
-            KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1,
+            &anchor_checkpoint,
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
         ) else {
             return ERR_KAGEMUSHA_V1;
         };
-        if anchor_context_id.len() != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 {
-            return ERR_KAGEMUSHA_V1;
-        }
         let Some(public_inputs) = bounded_java_archive(
             &mut env,
             &public_inputs,
@@ -347,9 +343,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTes
                 status_json.len(),
                 anchor_network_id.as_ptr(),
                 anchor_network_id.len(),
-                anchor_height_bits as u64,
-                anchor_context_id.as_ptr(),
-                anchor_context_id.len(),
+                anchor_checkpoint.as_ptr(),
+                anchor_checkpoint.len(),
                 public_inputs.as_ptr(),
                 public_inputs.len(),
                 paired_proof.as_ptr(),
@@ -536,7 +531,7 @@ mod tests {
     fn finalized_mint_jni_contract_is_exact_and_has_no_reservation_transport() {
         assert_eq!(
             TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1,
-            [1, 32, 16_777_216, 32, 32, 4096, 6528, 512]
+            [1, 32, 150_995_968, 32, 71_303_168, 4096, 6528, 512]
         );
         assert_eq!(TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1.len(), 8);
     }

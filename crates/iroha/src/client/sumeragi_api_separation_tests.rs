@@ -138,10 +138,12 @@ async fn async_diagnostics_uses_async_transport_and_preserves_strict_evidence_va
         for tampered in [false, true] {
             let mut status = status.clone();
             if tampered {
-                status.npos = Some(iroha_data_model::block::consensus::SumeragiNposDiagnostics {
-                    epoch_length_blocks: std::num::NonZeroU64::new(100).unwrap(),
-                    epoch_seed: [0; 32],
-                });
+                status.npos = Some(
+                    iroha_data_model::block::consensus::SumeragiNposDiagnostics {
+                        epoch_length_blocks: std::num::NonZeroU64::new(100).unwrap(),
+                        epoch_seed: [0; 32],
+                    },
+                );
             }
             let requests = Arc::new(Mutex::new(Vec::new()));
             let transport = Arc::new(DiagnosticsTransport {
@@ -174,5 +176,84 @@ async fn async_diagnostics_uses_async_transport_and_preserves_strict_evidence_va
             assert_eq!(requests[0].method, HttpMethod::GET);
             assert_eq!(requests[0].url.path(), "/v1/sumeragi/diagnostics");
         }
+    }
+}
+
+#[test]
+fn native_status_versions_are_checked_in_every_client_response() {
+    use iroha_data_model::sumeragi_lanes::{
+        SumeragiLaneFrontier, SumeragiLaneRecord, SumeragiLaneStatus,
+    };
+
+    for version in [iroha_data_model::sumeragi::PROTOCOL_VERSION, 0, 2, 4, 8] {
+        let mut status = sample_sumeragi_status();
+        status.protocol_version = version;
+        let accepted = version == iroha_data_model::sumeragi::PROTOCOL_VERSION;
+        let lanes = vec![SumeragiLaneStatus {
+            record: SumeragiLaneRecord {
+                lane: LaneId::new(1),
+                dataspace: DataSpaceId::UNIVERSAL,
+                incarnation: [1; 32],
+                params: iroha_data_model::parameter::system::SumeragiParameters::default(),
+                committee: Vec::new(),
+                created_at: 1,
+                active_from: 3,
+                closing: None,
+                anchor_freshness: 10,
+                merged: SumeragiLaneFrontier::default(),
+                merged_at: 3,
+                rescued: 0,
+            },
+            instance: Some(status.clone()),
+        }];
+        for content_type in [APPLICATION_NORITO, APPLICATION_JSON] {
+            for lane_response in [false, true] {
+                let body = match (content_type, lane_response) {
+                    (APPLICATION_NORITO, false) => norito::to_bytes(&status).unwrap(),
+                    (APPLICATION_NORITO, true) => norito::to_bytes(&lanes).unwrap(),
+                    (_, false) => norito::json::to_vec(&status).unwrap(),
+                    (_, true) => norito::json::to_vec(&lanes).unwrap(),
+                };
+                let result = with_mock_http(
+                    respond_with(
+                        &Arc::new(Mutex::new(Vec::new())),
+                        mk_response(StatusCode::OK, body, Some(content_type)),
+                    ),
+                    |transport| {
+                        let client = client_with_base_url(base_url())
+                            .with_test_http_transport(transport.clone());
+                        if lane_response {
+                            client.get_sumeragi_lanes().map(|_| ())
+                        } else {
+                            client.get_sumeragi_status().map(|_| ())
+                        }
+                    },
+                );
+                assert_eq!(result.is_ok(), accepted, "version {version}: {result:?}");
+                if !accepted {
+                    assert!(result.unwrap_err().to_string().contains("protocol version"));
+                }
+            }
+        }
+        let result = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                mk_response(
+                    StatusCode::OK,
+                    norito::json::to_vec(&status).unwrap(),
+                    Some(APPLICATION_JSON),
+                ),
+            ),
+            |transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(transport.clone())
+                    .get_sumeragi_status_json()
+            },
+        );
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "JSON version {version}: {result:?}"
+        );
     }
 }

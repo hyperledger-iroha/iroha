@@ -115,10 +115,7 @@ use iroha_data_model::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{
-        Executable, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
-        TransactionPayload,
-    },
+    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -11781,14 +11778,7 @@ async fn submit_moderation_signed_transaction(
     if let Err(response) = validate_moderation_signed_transaction(&state, &transaction, route) {
         return response;
     }
-    match crate::submit_signed_transaction_for_ingress_strict_durable(
-        state,
-        headers,
-        accept,
-        transaction,
-    )
-    .await
-    {
+    match crate::submit_signed_transaction_for_ingress(state, headers, accept, transaction).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -11810,12 +11800,7 @@ fn validate_moderation_signed_transaction(
             "SoraFS moderation transaction signature or authority binding is invalid",
         )
     })?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS moderation transaction requires QueuePlanSynced admission",
-        ));
-    }
+
     if transaction.creation_time().is_zero()
         || transaction.time_to_live()
             != Some(Duration::from_millis(
@@ -13158,14 +13143,7 @@ async fn submit_repair_signed_transaction(
     {
         return response;
     }
-    match crate::submit_signed_transaction_for_ingress_strict_durable(
-        state,
-        headers,
-        accept,
-        transaction,
-    )
-    .await
-    {
+    match crate::submit_signed_transaction_for_ingress(state, headers, accept, transaction).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -13187,12 +13165,7 @@ fn validate_repair_signed_transaction(
             "SoraFS repair transaction signature or authority binding is invalid",
         )
     })?;
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS repair transaction requires QueuePlanSynced admission",
-        ));
-    }
+
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -13281,14 +13254,7 @@ async fn submit_orderbook_signed_transaction(
     if let Err(response) = validate_orderbook_signed_transaction(&state, &transaction, route) {
         return response;
     }
-    match crate::submit_signed_transaction_for_ingress_strict_durable(
-        state,
-        headers,
-        accept,
-        transaction,
-    )
-    .await
-    {
+    match crate::submit_signed_transaction_for_ingress(state, headers, accept, transaction).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -14508,9 +14474,6 @@ fn classify_local_appeal_finance_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             AppealFinanceSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-            AppealFinanceSubmissionDispositionV1::Ambiguous
-        }
         iroha_core::queue::Error::Expired => AppealFinanceSubmissionDispositionV1::Rejected,
         _ => AppealFinanceSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
@@ -14555,13 +14518,13 @@ fn classify_exact_appeal_finance_entrypoint_outcome(
     }
 }
 fn inspect_indexed_appeal_finance_transaction(
-    kura: &iroha_core::kura::Kura,
+    state: &iroha_core::state::State,
     transaction_hash: &HashOf<SignedTransaction>,
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> AppealFinanceAuthoritativeTransactionOutcomeV1 {
     let Ok((header, outcome)) = crate::canonical_history::exact_external_outcome(
-        kura,
+        state,
         block_height,
         expected_block_hash,
         transaction_hash,
@@ -14621,7 +14584,7 @@ fn observe_appeal_finance_finalized_state(
             (None, _) => AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
             (Some(_), None) => AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable,
             (Some(_), Some((height, expected))) => {
-                inspect_indexed_appeal_finance_transaction(&state.kura, hash, height, expected)
+                inspect_indexed_appeal_finance_transaction(&state.state, hash, height, expected)
             }
         });
     let current = state.state.view();
@@ -15521,34 +15484,17 @@ async fn submit_sorafs_appeal_finance_delivery(
             };
         }
     };
-    let durable_retry_claim = match state
+    let routing_plan = match state
         .queue
-        .durable_plan_admission_claim_with_state(&accepted, state.state.as_ref())
+        .route_plan_with_state(&accepted, state.state.as_ref())
     {
-        Ok(claim) => claim,
+        Ok(plan) => plan,
         Err(_) => {
             return mark_appeal_finance_retryable_submission_failed(
                 submitter,
                 operation_id,
                 finalized_cursor,
             );
-        }
-    };
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
-        claim.routing_plan.clone()
-    } else {
-        match state
-            .queue
-            .route_plan_with_state(&accepted, state.state.as_ref())
-        {
-            Ok(plan) => plan,
-            Err(_) => {
-                return mark_appeal_finance_retryable_submission_failed(
-                    submitter,
-                    operation_id,
-                    finalized_cursor,
-                );
-            }
         }
     };
     let routing_decision = routing_plan.coordinator_route();
@@ -15561,11 +15507,11 @@ async fn submit_sorafs_appeal_finance_delivery(
         return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
-        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
             state.queue.clone(),
             state.state.clone(),
             accepted,
-            routing_plan,
+            Some(routing_plan),
         ) {
             Ok(_) => AppealFinanceSubmissionDispositionV1::Submitted,
             Err(crate::Error::PushIntoQueue { source, .. }) => {
@@ -15578,7 +15524,6 @@ async fn submit_sorafs_appeal_finance_delivery(
             state,
             accepted,
             routing_plan,
-            durable_retry_claim,
             true,
             crate::utils::ResponseFormat::Norito,
         )
@@ -16011,9 +15956,6 @@ fn classify_local_proof_outcome_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             ProofOutcomeSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-            ProofOutcomeSubmissionDispositionV1::Ambiguous
-        }
         iroha_core::queue::Error::Expired => ProofOutcomeSubmissionDispositionV1::Rejected,
         _ => ProofOutcomeSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
@@ -16022,14 +15964,14 @@ fn classify_local_proof_outcome_submission(
 mod proof_outcome_submission_disposition_tests {
     use super::*;
     #[test]
-    fn local_queue_dispositions_preserve_definite_and_ambiguous_boundaries() {
+    fn local_queue_dispositions_preserve_admission_boundaries() {
         assert_eq!(
             classify_local_proof_outcome_submission(&iroha_core::queue::Error::Full),
             ProofOutcomeSubmissionDispositionV1::DefinitelyNotSubmitted
         );
         assert_eq!(
             classify_local_proof_outcome_submission(
-                &iroha_core::queue::Error::PlanJournalDurabilityRejected {
+                &iroha_core::queue::Error::AdmissionInvariant {
                     reason: "unavailable".to_owned(),
                 }
             ),
@@ -16037,15 +15979,11 @@ mod proof_outcome_submission_disposition_tests {
         );
         assert_eq!(
             classify_local_proof_outcome_submission(
-                &iroha_core::queue::Error::PlanJournalDurabilityIndeterminate {
-                    entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
-                        iroha_crypto::Hash::prehashed([0xA5; 32]),
-                    ),
-                    signed_transaction_hash: None,
-                    reason: "unknown".to_owned(),
+                &iroha_core::queue::Error::AdmissionInvariant {
+                    reason: "admission index unavailable".to_owned()
                 }
             ),
-            ProofOutcomeSubmissionDispositionV1::Ambiguous
+            ProofOutcomeSubmissionDispositionV1::DefinitelyNotSubmitted
         );
         assert_eq!(
             classify_local_proof_outcome_submission(&iroha_core::queue::Error::IsInQueue),
@@ -16430,23 +16368,12 @@ async fn submit_sorafs_proof_outcome_delivery(
             return false;
         }
     };
-    let durable_retry_claim = match state
+    let routing_plan = match state
         .queue
-        .durable_plan_admission_claim_with_state(&accepted, state.state.as_ref())
+        .route_plan_with_state(&accepted, state.state.as_ref())
     {
-        Ok(claim) => claim,
+        Ok(plan) => plan,
         Err(_) => return false,
-    };
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
-        claim.routing_plan.clone()
-    } else {
-        match state
-            .queue
-            .route_plan_with_state(&accepted, state.state.as_ref())
-        {
-            Ok(plan) => plan,
-            Err(_) => return false,
-        }
     };
     let routing_decision = routing_plan.coordinator_route();
     let exact_transaction = match state
@@ -16463,11 +16390,11 @@ async fn submit_sorafs_proof_outcome_delivery(
         return false;
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
-        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
             state.queue.clone(),
             state.state.clone(),
             accepted,
-            routing_plan,
+            Some(routing_plan),
         ) {
             Ok(_) => ProofOutcomeSubmissionDispositionV1::Submitted,
             Err(crate::Error::PushIntoQueue { source, .. }) => {
@@ -16480,7 +16407,6 @@ async fn submit_sorafs_proof_outcome_delivery(
             state,
             accepted,
             routing_plan,
-            durable_retry_claim,
             true,
             crate::utils::ResponseFormat::Norito,
         )
@@ -16609,9 +16535,6 @@ fn classify_local_repair_transaction_submission(
     match error {
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             RepairTransactionSubmissionDispositionV1::Submitted
-        }
-        iroha_core::queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-            RepairTransactionSubmissionDispositionV1::Ambiguous
         }
         iroha_core::queue::Error::Expired => RepairTransactionSubmissionDispositionV1::Rejected,
         _ => RepairTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
@@ -16919,13 +16842,13 @@ fn reconcile_sorafs_repair_transaction(
     reconcile_sorafs_repair_transaction_in_view(&view, request, finalized_cursor)
 }
 fn inspect_indexed_repair_transaction(
-    kura: &iroha_core::kura::Kura,
+    state: &iroha_core::state::State,
     transaction_hash: &HashOf<SignedTransaction>,
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> RepairAuthoritativeTransactionOutcomeV1 {
     let Ok((_header, outcome)) = crate::canonical_history::exact_external_outcome(
-        kura,
+        state,
         block_height,
         expected_block_hash,
         transaction_hash,
@@ -16969,7 +16892,7 @@ fn observe_exact_sorafs_repair_transaction(
         (None, _) => RepairAuthoritativeTransactionOutcomeV1::Absent,
         (Some(_), None) => RepairAuthoritativeTransactionOutcomeV1::Unavailable,
         (Some(_), Some((height, expected))) => {
-            inspect_indexed_repair_transaction(&state.kura, transaction_hash, height, expected)
+            inspect_indexed_repair_transaction(&state.state, transaction_hash, height, expected)
         }
     };
     let current = state.state.view();
@@ -17228,15 +17151,11 @@ mod repair_transaction_forwarder_tests {
         );
         assert_eq!(
             classify_local_repair_transaction_submission(
-                &iroha_core::queue::Error::PlanJournalDurabilityIndeterminate {
-                    entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
-                        iroha_crypto::Hash::prehashed([0x73; 32]),
-                    ),
-                    signed_transaction_hash: None,
-                    reason: "unknown".to_owned(),
+                &iroha_core::queue::Error::AdmissionInvariant {
+                    reason: "admission index unavailable".to_owned()
                 }
             ),
-            RepairTransactionSubmissionDispositionV1::Ambiguous
+            RepairTransactionSubmissionDispositionV1::DefinitelyNotSubmitted
         );
         assert_eq!(
             classify_local_repair_transaction_submission(&iroha_core::queue::Error::IsInQueue),
@@ -18237,23 +18156,12 @@ async fn submit_sorafs_repair_transaction(
             return false;
         }
     };
-    let durable_retry_claim = match state
+    let routing_plan = match state
         .queue
-        .durable_plan_admission_claim_with_state(&accepted, state.state.as_ref())
+        .route_plan_with_state(&accepted, state.state.as_ref())
     {
-        Ok(claim) => claim,
+        Ok(plan) => plan,
         Err(_) => return false,
-    };
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
-        claim.routing_plan.clone()
-    } else {
-        match state
-            .queue
-            .route_plan_with_state(&accepted, state.state.as_ref())
-        {
-            Ok(plan) => plan,
-            Err(_) => return false,
-        }
     };
     let routing_decision = routing_plan.coordinator_route();
     let exact_transaction_bytes = match state
@@ -18270,11 +18178,11 @@ async fn submit_sorafs_repair_transaction(
         return false;
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
-        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
             state.queue.clone(),
             state.state.clone(),
             accepted,
-            routing_plan,
+            Some(routing_plan),
         ) {
             Ok(_) => RepairTransactionSubmissionDispositionV1::Submitted,
             Err(crate::Error::PushIntoQueue { source, .. }) => {
@@ -18287,7 +18195,6 @@ async fn submit_sorafs_repair_transaction(
             state,
             accepted,
             routing_plan,
-            durable_retry_claim,
             true,
             crate::utils::ResponseFormat::Norito,
         )
@@ -34378,8 +34285,7 @@ mod advert_tests {
             *app.state.network_id_ref(),
             signer.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34414,8 +34320,7 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         multiple_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34435,8 +34340,7 @@ mod advert_tests {
             )),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         wrong_network_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34475,8 +34379,7 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         wrong_ttl_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1 + 1,
         ));
@@ -34494,8 +34397,7 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+        );
         nonce_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34520,7 +34422,6 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata);
         metadata_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
@@ -34668,7 +34569,6 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([report.clone(), report])
         .sign(auth.provider.keypair.private_key());
         let response = validate_repair_signed_transaction(
@@ -34692,7 +34592,6 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([claim])
         .sign(auth.provider.keypair.private_key());
         validate_repair_signed_transaction(
@@ -34715,7 +34614,6 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([ApplySorafsRepairTaskAction::new(
             "REP-ROUTE-1".to_owned(),
             1,
@@ -36659,10 +36557,6 @@ mod advert_tests {
             PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000,
             0,
         );
-        let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
-            height: 1,
-            block_hash: *header.hash().as_ref(),
-        };
         let app_inner = Arc::get_mut(&mut app).expect("unique proof-outcome app state");
         let core_state =
             Arc::get_mut(&mut app_inner.state).expect("unique proof-outcome core state");
@@ -36680,9 +36574,14 @@ mod advert_tests {
                 .expect("commit fixture PoTR outcome");
             transaction.apply();
             block
-                .commit_empty_block_for_testing()
-                .expect("commit fixture proof-outcome block");
+                .commit_world_overlay_for_testing()
+                .expect("seed directly verified proof-outcome query fixture");
         }
+        publish_seeded_read_genesis(&mut app, PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000);
+        let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
+            height: 1,
+            block_hash: *app.state.view().latest_block_hash().unwrap().as_ref(),
+        };
         (app, challenge, receipt, finalized_cursor)
     }
     async fn proof_stream_body(response: Response) -> (StatusCode, String) {
@@ -37608,10 +37507,26 @@ mod advert_tests {
         )
     }
 
-    fn push_finalized_block_hash(app: &mut SharedAppState, header: &BlockHeader) {
-        Arc::get_mut(&mut Arc::get_mut(app).expect("unique app state").state)
-            .expect("unique core state")
-            .push_block_hash_for_testing(HashOf::new(header));
+    fn publish_seeded_read_genesis(app: &mut SharedAppState, creation_time_ms: u64) {
+        let inner = Arc::get_mut(app).expect("unique initial read fixture app");
+        let state = Arc::get_mut(&mut inner.state).expect("unique initial read fixture state");
+        assert_eq!(
+            state.committed_height(),
+            0,
+            "query fixture must precede original genesis"
+        );
+        let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+            std::mem::take(&mut state.world),
+            creation_time_ms,
+        );
+        config.chain_id = state.chain_id_ref().clone();
+        config.nexus = Some(state.nexus_snapshot());
+        config.zk = Some(state.zk_snapshot());
+        config.governance = Some(state.governance_snapshot());
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("authenticate original query fixture genesis");
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
     }
 
     fn default_chunker_handle() -> ChunkerProfileHandle {
@@ -38620,7 +38535,7 @@ mod advert_tests {
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
         let mut app = Arc::new(inner);
-        push_finalized_block_hash(&mut app, &default_block_header());
+        publish_seeded_read_genesis(&mut app, 1);
 
         let response = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(None); Some(ExtractAccept(axum::http::HeaderValue::from_static( crate::utils::NORITO_MIME_TYPE, ))));
         assert_eq!(response.status(), StatusCode::OK);
@@ -38639,7 +38554,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let app = mk_app_state_for_tests();
+        let mut app = mk_app_state_for_tests();
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
@@ -38693,8 +38608,9 @@ mod advert_tests {
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
         block
-            .commit_empty_block_for_testing()
-            .expect("commit pin manifest readback seed");
+            .commit_world_overlay_for_testing()
+            .expect("seed pin manifest readback before original genesis");
+        publish_seeded_read_genesis(&mut app, 1);
 
         let response = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(None); None);
         assert_eq!(response.status(), StatusCode::OK);

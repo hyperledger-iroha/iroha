@@ -5,13 +5,11 @@
 use super::*;
 use crate::queue::RoutingDecision;
 
-/// Block validation supplies its checked settlement projection before attachment.
+/// Block validation supplies the actual fragment count before attachment.
 /// Rows, sources, receipts, transcripts and applying policy remain State-owned.
 pub(crate) struct ExecutionOutputSealMetadata {
     /// Actual fragment count after the finalizer's deterministic State changes.
     pub(crate) committed_fragment_count: u64,
-    /// Complete statements derived from actual settlement and frozen source routes.
-    pub(crate) lane_finality_statements: Vec<LaneFinalityStatement>,
 }
 
 /// Keep source-specific validation errors intact across State's consuming seal.
@@ -138,8 +136,10 @@ impl StateBlock<'_> {
         block: &crate::block::CommittedBlock,
         witness: &iroha_data_model::block::consensus::ExecWitness,
         certificate: &iroha_data_model::block::CommitCertificate,
+        native_execution: crate::sumeragi::executor::NativeExecutionAuthorization,
     ) -> Result<(), String> {
         self.verify_sumeragi_execution_witness(block.as_ref(), witness)?;
+        self.validate_native_execution_authorization(&native_execution, block, certificate)?;
         let height = usize::try_from(block.as_ref().header().height().get())
             .ok()
             .and_then(core::num::NonZeroUsize::new)
@@ -164,6 +164,7 @@ impl StateBlock<'_> {
             AuthorizedExecutionOutputs {
                 sealed,
                 finality_hash: HashOf::new(certificate).into(),
+                native_execution,
             },
         ));
         Ok(())
@@ -234,6 +235,9 @@ impl StateBlock<'_> {
             .verify(state)
             .map_err(invalid)?;
         let events = prepare(state)?;
+        state
+            .advance_native_execution_tip(&authorized.native_execution, block)
+            .map_err(invalid)?;
         let surface = state
             .prepare_finalized_publication_surface()
             .map_err(invalid)?;
@@ -329,11 +333,6 @@ impl StateBlock<'_> {
             {
                 return Err("output seal source differs from its actual execution".into());
             }
-            if block.execution_context().is_some_and(|context| {
-                context.native_lane_decisions.is_some() || context.merge_entry.is_some()
-            }) {
-                return Err("retired lane execution attachment".into());
-            }
             let sources = retained
                 .sources
                 .ok_or("output seal requires all actual phases")?;
@@ -400,7 +399,6 @@ impl StateBlock<'_> {
                     envelopes,
                     policy,
                     transitions,
-                    metadata.lane_finality_statements,
                     &limits,
                 )
                 .map_err(|error| error.to_string())?;

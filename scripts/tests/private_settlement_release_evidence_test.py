@@ -496,7 +496,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "validators_per_dataspace": 4,
                 "quorum": "3-of-4",
                 "mandatory_signed_rs16_da_rbc": True,
-                "authenticated_message_control": True,
+                "authenticated_private_settlement_route_control": True,
                 **payload,
             }
 
@@ -987,7 +987,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                                     "da_before_availability_qc",
                                     "prepare_before_complete_barrier",
                                     "commit_before_complete_barrier",
-                                    "carrier_before_global_finality",
+                                    "restart_before_global_finality",
                                 ],
                                 "crash_boundaries": list(
                                     MODULE.REQUIRED_CRASH_BOUNDARIES

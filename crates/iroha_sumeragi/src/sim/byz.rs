@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     api::{Action, ExecOutcome},
-    crypto::{Signer, verify_vote, verify_vote_attestation},
+    crypto::{Signer, verify_vote_attestation},
     message::{
         Block, BlockHeader, BlockResponse, Proposal, Qc, Status, SyncEntry, SyncResponse, TcEntry,
         TimeoutCert, TimeoutVote, Vote, VoteKind, WireMessage,
@@ -1047,7 +1047,9 @@ impl World {
         let genuine = v.kind == VoteKind::Commit
             && v.needs_attestation()
             && v.signer != own
-            && verify_vote(&self.hasher, &instance, &v.epoch, &committee, v).is_ok()
+            && crate::crypto::Verifier::new(&self.hasher, &instance, &v.epoch, &committee)
+                .verify_vote(v)
+                .is_ok()
             && verify_vote_attestation(&FakeVerifier, &committee, v).is_ok();
         if !genuine || self.adv.over_sent.contains(&key) {
             return;

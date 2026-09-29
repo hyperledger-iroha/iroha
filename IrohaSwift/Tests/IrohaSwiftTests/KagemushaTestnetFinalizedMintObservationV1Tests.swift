@@ -8,12 +8,13 @@ final class KagemushaTestnetFinalizedMintObservationV1Tests: XCTestCase {
   private let publicInputs = Data([1])
   private let pairedProof = Data([2])
 
+  private func checkpoint() throws -> Data {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return try Data(contentsOf: root.appendingPathComponent("fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"))
+  }
   private var anchor: KagemushaFinalityTrustAnchorV1 {
-    get throws {
-      try KagemushaFinalityTrustAnchorV1(
-        networkID: Data(repeating: 3, count: 32), blockHeight: 7,
-        heightContextID: Data(repeating: 5, count: 32))
-    }
+    get throws { try KagemushaFinalityTrustAnchorV1(networkID: Data(repeating: 3, count: 32), checkpoint: checkpoint()) }
   }
 
   func testInvalidInputsNeverReachNativeEndpoint() throws {
@@ -25,7 +26,7 @@ final class KagemushaTestnetFinalizedMintObservationV1Tests: XCTestCase {
       (Data(repeating: 7, count: 31), originalStatusJSON, publicInputs, pairedProof),
       (Data(repeating: 7, count: 33), originalStatusJSON, publicInputs, pairedProof),
       (operationID, Data(), publicInputs, pairedProof),
-      (operationID, Data(repeating: 1, count: 16_777_217), publicInputs, pairedProof),
+      (operationID, Data(repeating: 1, count: 150_995_969), publicInputs, pairedProof),
       (operationID, originalStatusJSON, Data(), pairedProof),
       (operationID, originalStatusJSON, Data(repeating: 1, count: 4_097), pairedProof),
       (operationID, originalStatusJSON, publicInputs, Data()),
@@ -42,16 +43,15 @@ final class KagemushaTestnetFinalizedMintObservationV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.calls, 0)
   }
 
-  func testAnchorRequiresExactMarkedHashesAndPositiveHeight() {
-    for (network, height, context) in [
-      (Data(repeating: 3, count: 31), UInt64(7), Data(repeating: 5, count: 32)),
-      (Data(repeating: 2, count: 32), UInt64(7), Data(repeating: 5, count: 32)),
-      (Data(repeating: 3, count: 32), UInt64(0), Data(repeating: 5, count: 32)),
-      (Data(repeating: 3, count: 32), UInt64(7), Data(repeating: 5, count: 31)),
-      (Data(repeating: 3, count: 32), UInt64(7), Data(repeating: 4, count: 32)),
+  func testAnchorRequiresExactNetworkAndBoundedCheckpoint() throws {
+    let genuine = try checkpoint()
+    for (network, checkpoint) in [
+      (Data(repeating: 3, count: 31), genuine),
+      (Data(repeating: 2, count: 32), genuine),
+      (Data(repeating: 3, count: 32), Data()),
+      (Data(repeating: 3, count: 32), Data(repeating: 1, count: KagemushaFinalityTrustAnchorV1.maximumCheckpointBytes + 1)),
     ] {
-      XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(
-        networkID: network, blockHeight: height, heightContextID: context))
+      XCTAssertThrowsError(try KagemushaFinalityTrustAnchorV1(networkID: network, checkpoint: checkpoint))
     }
   }
 

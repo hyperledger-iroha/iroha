@@ -22,21 +22,11 @@ pub use ethereum_native::*;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod ton_native;
-pub use ton_native::{
-    TonBlockIdExtV1, TonBlockSignaturesV1, TonNativeSourceError, TonOrdinaryBlockSignaturesV1,
-    TonSimplexBlockSignaturesV1, TonValidatorConfigV1, TonValidatorSetV1, TonValidatorSignatureV1,
-    TonValidatorV1, ton_boc_single_root_hash_v1, ton_canonical_boc_single_root_hash_v1,
-    ton_canonical_boc_v1, ton_header_key_block_v1, ton_sccp_transfer_payload_v1,
-    ton_validator_list_hash_short_v1, ton_validator_node_id_short_v1,
-};
-#[cfg(any(test, feature = "test-fixtures"))]
-mod test_fixtures;
+pub use ton_native::*;
+#[cfg(test)]
+#[path = "test_fixtures/finality_descendant_tests.rs"]
+mod native_finality_tests;
 use alloc::vec::Vec;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use test_fixtures::{
-    SccpFinalizedBlockTestFixtureV1, sccp_finalize_taira_block_test_fixture_v1,
-    sccp_finalize_taira_native_operation_block_test_fixture_v1,
-};
 
 /// Fixed 256-bit protocol hash or word.
 pub type H256 = [u8; 32];

@@ -9,7 +9,7 @@ use super::*;
 use std::collections::VecDeque;
 
 use iroha_core::{
-    state::NativeLaneStateProjectionV1,
+    state::NativeExecutionProjectionV1,
     sumeragi::lanes::{
         self, AnchorView, LANE_DEDUP_WINDOW, LaneBatch, LaneChainView, evidence::verify_lane_entry,
     },
@@ -33,7 +33,7 @@ pub(crate) struct LaneFrameV1 {
 #[norito_schema(name = "iroha_kagami::scaling_evidence::LaneMergeEvidenceV1")]
 pub(crate) struct LaneMergeEvidenceV1 {
     /// Complete poststate independently bound by the carrier's mandatory R.native_lanes.
-    pub(crate) state: NativeLaneStateProjectionV1,
+    pub(crate) state: NativeExecutionProjectionV1,
     /// One original frame per merged height, in lane, then lane-height order.
     pub(crate) frames: Vec<LaneFrameV1>,
 }

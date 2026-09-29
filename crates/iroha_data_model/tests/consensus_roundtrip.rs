@@ -5,22 +5,24 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            ConsensusGenesisModeParams, ConsensusGenesisParams, ExecKv, ExecWitness,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidenceAttribution,
+            EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord, ExecKv, ExecWitness,
             ExecWitnessMsg, NposGenesisParams,
         },
-        consensus_v2::{
-            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2GenesisContextParameters,
-            ValidatorPower,
-        },
+        consensus_v2::{SumeragiV2GenesisContextParameters, ValidationError, ValidatorPower},
     },
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
+    sumeragi::{
+        BeaconHorizonStatusV1, PROTOCOL_VERSION, SumeragiFootprint, SumeragiHaltReason,
+        SumeragiStatus,
+    },
 };
 use iroha_model_base::peer::PeerId;
-use norito::codec::{Decode, Encode};
+use norito::codec::{Decode, DecodeAll, Encode};
 use std::{convert::TryFrom, fmt::Debug, num::NonZeroU64};
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
@@ -200,6 +202,189 @@ fn rng_exec_witness_msg(rng: &mut DeterministicRng) -> ExecWitnessMsg {
         witness: rng_exec_witness(rng),
     }
 }
+// Codec fixtures carry original signed artifacts; they do not establish chain admission.
+fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
+    use iroha_sumeragi::{
+        message::{Evidence as NativeEvidence, Vote, VoteKind},
+        types::{EpochId, Hash32, SIGNATURE_LEN, Signature as NativeSignature},
+    };
+    let key = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).unwrap();
+    let instance = Hash32(rng.array32());
+    let epoch = EpochId {
+        epoch: rng.next_u64(),
+        context: Hash32(rng.array32()),
+    };
+    let height = rng.next_u64().max(1);
+    let view = rng.next_u64();
+    let result = Hash32(rng.array32());
+    let vote = |subject: u8| {
+        let mut vote = Vote {
+            kind: VoteKind::Prepare,
+            instance,
+            epoch,
+            height,
+            view,
+            block_hash: Hash32([subject; 32]),
+            result,
+            attest: false,
+            signer: 0,
+            sig: NativeSignature([0; SIGNATURE_LEN]),
+            attestation: None,
+        };
+        vote.sig = NativeSignature(
+            iroha_crypto::Signature::new(key.private_key(), &vote.preimage())
+                .payload()
+                .try_into()
+                .unwrap(),
+        );
+        vote
+    };
+    Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0xA2), vote(0xA3))).unwrap()
+}
+fn fixture_attribution(evidence: &Evidence) -> EvidenceAttribution {
+    let iroha_sumeragi::message::Evidence::VoteEquivocation(vote, _) =
+        evidence.decode_native().unwrap()
+    else {
+        panic!("native fixture vote pair")
+    };
+    EvidenceAttribution {
+        instance: vote.instance.0,
+        height: vote.height,
+        epoch: vote.epoch.epoch,
+        context_id: vote.epoch.context.0,
+        authority_generation: [0xA4; 32],
+        offenders: vec![EvidenceOffender {
+            signer: vote.signer,
+            peer_id: checked_bls_peer_id_from_seed(0xA1),
+        }],
+        safety_violation: false,
+    }
+}
+#[test]
+fn authority_generations_and_epoch_authorizations_roundtrip() {
+    let mut rng = DeterministicRng::new(0xE1D3_0031);
+    let rng = &mut rng;
+    let mut roster = [0xA1, 0xA2, 0xA3, 0xA4]
+        .into_iter()
+        .map(|seed| ValidatorPower {
+            validator: checked_bls_peer_id_from_seed(seed),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    roster.sort();
+    for authorization_case in 0..3 {
+        let height = rng.next_u64().max(2);
+        let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
+        let incumbent = mint_finality_authority(network_id, 0, &roster);
+        let (mint_finality_authorization, mint_finality_authority) = if authorization_case == 0 {
+            (
+                mint_finality_genesis_authorization(&incumbent, height),
+                incumbent,
+            )
+        } else {
+            let previous = mint_finality_genesis_authorization(&incumbent, 1);
+            let retained = authorization_case == 1;
+            let authority = if retained {
+                incumbent
+            } else {
+                mint_finality_authority(network_id, 1, &roster)
+            };
+            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 1,
+                first_height: 2,
+                last_height: height,
+                authority_generation: authority.generation,
+                authority_id: authority
+                    .authority_id()
+                    .expect("valid fixture successor authority"),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [0xB1; 32],
+                    transcript_hash: [0xB2; 32],
+                }),
+                previous_authorization_id: previous
+                    .authorization_id()
+                    .expect("valid fixture predecessor"),
+                transition_id: if retained { [0; 32] } else { [0xB3; 32] },
+                decision: if retained {
+                    KagemushaMintFinalityEpochDecisionV1::Retain
+                } else {
+                    KagemushaMintFinalityEpochDecisionV1::Activate
+                },
+            };
+            authorization
+                .validate_against_authority(&authority)
+                .expect("valid successor authority binding");
+            authorization
+                .validate_successor(&previous)
+                .expect("contiguous fixture authorization");
+            (authorization, authority)
+        };
+
+        assert_roundtrip(&mint_finality_authority);
+        assert_roundtrip(&mint_finality_authorization);
+    }
+}
+fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> EvidenceRecord {
+    EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
+        evidence,
+        recorded_at_height: rng.next_u64(),
+        recorded_at_view: rng.next_u64(),
+        recorded_at_ms: rng.next_u64(),
+        penalty_status: EvidencePenaltyStatus::Pending,
+    }
+}
+fn rng_native_status(rng: &mut DeterministicRng) -> SumeragiStatus {
+    let key = checked_bls_peer_id_from_seed(0x71).public_key().clone();
+    SumeragiStatus {
+        protocol_version: PROTOCOL_VERSION,
+        config_fingerprint: rng_hash(rng),
+        beacon_horizon: rng.next_bool().then(|| BeaconHorizonStatusV1 {
+            epoch_length_blocks: rng.next_u64(),
+            next_required_pulse_height: rng.next_bool().then(|| rng.next_u64()),
+            active_session_id: rng.next_bool().then(|| rng.array32()),
+            session_covers_next_pulse: rng.next_bool(),
+            local_provider_ready: rng.next_bool(),
+        }),
+        instance: rng.array32(),
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        stage: (rng.next_u64() % 3) as u8,
+        leader: rng.next_bool().then(|| key.clone()),
+        proxy_tail: rng.next_bool().then(|| key.clone()),
+        high_qc_view: rng.next_bool().then(|| rng.next_u64()),
+        level: rng.next_u32(),
+        start_level: rng.next_u32(),
+        t_retx_ms: rng.next_u64(),
+        committed_height: rng.next_u64(),
+        applied_height: rng.next_u64(),
+        awaiting: rng.next_bool(),
+        signer: rng.next_bool().then_some(key),
+        unanchored: rng.next_bool(),
+        abstaining: rng.next_bool(),
+        halted: rng
+            .next_bool()
+            .then(|| SumeragiHaltReason::SafetyViolation(rng.next_u64())),
+        footprint: SumeragiFootprint {
+            votes: rng.next_u64(),
+            timeouts: rng.next_u64(),
+            blocks: rng.next_u64(),
+            exec_entries: rng.next_u64(),
+            wants: rng.next_u64(),
+            pending_apply: rng.next_u64(),
+            sync_entries: rng.next_u64(),
+            sync_bytes: rng.next_u64(),
+            peers: rng.next_u64(),
+            recent_headers: rng.next_u64(),
+            configs: rng.next_u64(),
+            cert_cache: rng.next_u64(),
+            evidence_keys: rng.next_u64(),
+            probe: rng.next_u64(),
+        },
+    }
+}
 #[test]
 fn consensus_genesis_norito_roundtrip() {
     let npos = NposGenesisParams {
@@ -217,7 +402,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_cadence_ms: NonZeroU64::new(750).unwrap(),
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos.clone()),
-        protocol_version: u32::from(V2_PROTOCOL_VERSION),
+        protocol_version: u32::from(PROTOCOL_VERSION),
         v2_context: recommended_genesis_context(),
     };
     let without_npos = ConsensusGenesisParams {
@@ -266,6 +451,15 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
 }
 #[test]
 fn consensus_persistence_norito_roundtrip() {
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0002));
+    let evidence_record = EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
+        evidence: evidence.clone(),
+        recorded_at_height: 44,
+        recorded_at_view: 8,
+        recorded_at_ms: 1_702_000_123,
+        penalty_status: EvidencePenaltyStatus::Cancelled { height: 45 },
+    };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {
             key: sample_bytes(0x20, 4),
@@ -289,9 +483,95 @@ fn consensus_persistence_norito_roundtrip() {
     assert_roundtrip(&exec_witness_msg);
 }
 #[test]
+fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
+    #[derive(Encode)]
+    struct PreReleaseEvidenceRecord {
+        evidence: Evidence,
+        recorded_at_height: u64,
+        recorded_at_view: u64,
+        recorded_at_ms: u64,
+    }
+    #[derive(Encode)]
+    struct PreReleaseEvidenceRecordWithoutNullableSlots {
+        evidence: Evidence,
+        recorded_at_height: u64,
+        recorded_at_view: u64,
+        recorded_at_ms: u64,
+        penalty_applied: bool,
+        penalty_cancelled: bool,
+    }
+
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0084));
+    let record = EvidenceRecord {
+        attribution: fixture_attribution(&evidence),
+        evidence,
+        recorded_at_height: 84,
+        recorded_at_view: 9,
+        recorded_at_ms: 1_702_000_456,
+        penalty_status: EvidencePenaltyStatus::Applied { height: 85 },
+    };
+    assert_roundtrip(&record);
+    let shortened_record = PreReleaseEvidenceRecord {
+        evidence: record.evidence.clone(),
+        recorded_at_height: record.recorded_at_height,
+        recorded_at_view: record.recorded_at_view,
+        recorded_at_ms: record.recorded_at_ms,
+    }
+    .encode();
+    assert!(
+        EvidenceRecord::decode_all(&mut shortened_record.as_slice()).is_err(),
+        "EvidenceRecord must reject the pre-release layout without penalty state"
+    );
+
+    let pending_record = EvidenceRecord {
+        attribution: record.attribution.clone(),
+        evidence: record.evidence.clone(),
+        recorded_at_height: 86,
+        recorded_at_view: 10,
+        recorded_at_ms: 1_702_000_789,
+        penalty_status: EvidencePenaltyStatus::Pending,
+    };
+    assert_roundtrip(&pending_record);
+    let omitted_nullable_slots = PreReleaseEvidenceRecordWithoutNullableSlots {
+        evidence: pending_record.evidence.clone(),
+        recorded_at_height: pending_record.recorded_at_height,
+        recorded_at_view: pending_record.recorded_at_view,
+        recorded_at_ms: pending_record.recorded_at_ms,
+        penalty_applied: false,
+        penalty_cancelled: false,
+    }
+    .encode();
+    assert!(
+        EvidenceRecord::decode_all(&mut omitted_nullable_slots.as_slice()).is_err(),
+        "EvidenceRecord must reject the retired independent-boolean penalty layout"
+    );
+}
+#[test]
+fn native_evidence_json_is_closed_and_exact() {
+    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0090));
+    let json = norito::json::to_value(&evidence).unwrap();
+    assert_eq!(
+        norito::json::from_value::<Evidence>(json.clone()).unwrap(),
+        evidence
+    );
+    assert_eq!(
+        json.as_object().unwrap().keys().collect::<Vec<_>>(),
+        vec!["native"]
+    );
+    assert!(norito::json::from_value::<Evidence>(norito::json!({})).is_err());
+    let mut unknown = json;
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("equivocation".into(), norito::json::Value::Null);
+    assert!(norito::json::from_value::<Evidence>(unknown).is_err());
+}
+#[test]
 fn consensus_roundtrip_deterministic_fuzz() {
     let mut rng = DeterministicRng::new(0xD4E5_F607_89AB_CDEF);
     for _ in 0..64 {
+        let status = rng_native_status(&mut rng);
+        assert_roundtrip(&status);
         let genesis = rng_consensus_genesis_params(&mut rng);
         if let ConsensusGenesisModeParams::Npos(npos) = &genesis.mode {
             assert_roundtrip(npos);
@@ -316,5 +596,33 @@ fn consensus_roundtrip_deterministic_fuzz() {
         assert_roundtrip(&exec_witness);
         let exec_witness_msg = rng_exec_witness_msg(&mut rng);
         assert_roundtrip(&exec_witness_msg);
+    }
+}
+#[test]
+fn native_status_requires_all_twenty_one_fields_and_explicit_nullable_slots() {
+    let status = rng_native_status(&mut DeterministicRng::new(0xE1D3_0091));
+    let json = norito::json::to_value(&status).unwrap();
+    let object = json.as_object().unwrap();
+    assert_eq!(object.len(), 21);
+    for field in object.keys() {
+        let mut missing = json.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            norito::json::from_value::<SumeragiStatus>(missing).is_err(),
+            "missing {field}"
+        );
+    }
+    for retired in [
+        "highest_prepare_qc",
+        "locked_prepare_qc",
+        "height_context",
+        "phase",
+    ] {
+        let mut unknown = json.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert(retired.into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<SumeragiStatus>(unknown).is_err());
     }
 }

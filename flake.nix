@@ -79,12 +79,22 @@
         target ? system, # target arch to build for
         binaries ? allBinaries, # package/binary targets to build
         name ? "iroha", # resulting derivation name
-        features ? [], # feature list forwarded to cargo
+        features ? [], # additional feature list forwarded to cargo
+        cudaTrustedKeySha256 ? null, # independently reviewed public build input
         ...
       } @ args: let
         systemTriple = (lib.systems.elaborate system).config;
         targetTriple = (lib.systems.elaborate target).config;
         isCross = systemTriple != targetTriple;
+        includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;
+        needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);
+        releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");
+        checkedCudaKey = if !needsCuda then "" else
+          if builtins.isString cudaTrustedKeySha256
+             && builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null
+             && cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"
+          then cudaTrustedKeySha256
+          else throw "Linux shipping requires reviewed cudaTrustedKeySha256; no CUDA private key belongs in Nix";
         toolchainHost = fenix'.stable;
         toolchainTarget =
           fenix'.targets.${targetTriple}.stable;
@@ -145,8 +155,10 @@
             default
             ++ ["--target" targetTriple]
             ++ builtins.concatMap (target: ["-p" target.package "--bin" target.binary]) binaries
-            ++ (if features == [] then [] else ["--features" (builtins.concatStringsSep "," features)]);
+            ++ (if releaseFeatures == [] then [] else ["--features" (builtins.concatStringsSep "," releaseFeatures)]);
 
+          IVM_CUDA_PTX_MODE = "bundled";
+          IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;
           CARGO_BUILD_TARGET = targetTriple;
 
           CC =

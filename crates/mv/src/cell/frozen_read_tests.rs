@@ -153,3 +153,49 @@ fn frozen_replacement_cell_reads_the_original_cut_even_after_target_drops() {
     assert_eq!(original.get(), "base");
     assert!(std::ptr::eq(original.get_before_block(), original.get()));
 }
+
+#[test]
+fn original_and_frozen_charged_cell_owner_checks_never_accept_equal_foreign_values() {
+    use crate::{BlockAcquisition as _, allocation::AllocationBudget};
+    let budget = AllocationBudget::new(64 * 1024);
+    let target = CellInitialization::try_reserve(&budget)
+        .unwrap()
+        .initialize(7_u64, None);
+    let foreign = CellInitialization::try_reserve(&budget)
+        .unwrap()
+        .initialize(7_u64, None);
+    let [current, undo] = Cell::<u64, crate::allocation::AllocationCharge>::allocation_layouts();
+    let successor_layout = CellPublicationSuccessor::allocation_layout();
+    let mut reservation = budget
+        .try_reserve_layouts([current, undo, successor_layout])
+        .unwrap();
+    let charges = CellAllocationCharges::new(
+        reservation.try_split(current).unwrap(),
+        reservation.try_split(undo).unwrap(),
+    );
+    let backing = CellGenerationBacking::try_from_charges(&budget, charges)
+        .unwrap_or_else(|_| panic!("funded original generations"));
+    let successor = CellPublicationSuccessor::try_from_charge(
+        &budget,
+        reservation.try_split(successor_layout).unwrap(),
+    )
+    .unwrap_or_else(|_| panic!("funded original successor"));
+    let mut acquisition = target
+        .try_block_acquisition_with_backing(backing, successor, &budget)
+        .unwrap_or_else(|_| panic!("same original pool"));
+    acquisition.initialize(crate::BlockMode::Ordinary);
+    let mut original = acquisition.into_block();
+    assert!(original.belongs_to(&target));
+    assert!(!original.belongs_to(&foreign));
+    *original.get_mut() = 8;
+    let identity = original.publication_identity();
+    let frozen = original
+        .try_detach(|_| Ok::<_, ()>(()))
+        .unwrap_or_else(|_| panic!("original frozen capture"));
+    assert!(frozen.belongs_to(&target));
+    assert!(!frozen.belongs_to(&foreign));
+    assert_eq!(frozen.publication_identity(), identity);
+    assert_eq!(*frozen.get(), 8);
+    assert_eq!(*frozen.get_before_block(), 7);
+    assert_eq!(*target.view().get(), 7);
+}

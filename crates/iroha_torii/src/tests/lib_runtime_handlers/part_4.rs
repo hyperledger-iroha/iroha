@@ -19,7 +19,6 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
         route,
         request,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
         move |candidate, _request| {
             let first_peer_id = first_peer_id.clone();
             let attempts = attempts_ref.clone();
@@ -87,7 +86,6 @@ async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
         route,
         request,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
         move |_candidate, _request| async move {
             Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
                 ToriiProxyAttemptError::before_dispatch(failure_message),
@@ -132,7 +130,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
         route,
         request,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
         |_candidate, _request| async move {
             Ok(ToriiProxyHttpResponseV1 {
                 status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
@@ -196,7 +193,6 @@ async fn generic_proxy_retries_exact_capacity_429_on_next_candidate() {
         route,
         generic_proxy_request_for_test(Hash::new(b"generic-proxy-capacity-failover")),
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
         move |candidate, _request| {
             let attempts = attempts_ref.clone();
             let first_peer_id = first_peer_id_for_attempt.clone();
@@ -247,7 +243,6 @@ async fn generic_proxy_does_not_retry_an_unstructured_429() {
         route,
         generic_proxy_request_for_test(Hash::new(b"generic-proxy-definitive-429")),
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(20),
         move |_candidate, _request| {
             let attempts = attempts_ref.clone();
             async move {
@@ -347,7 +342,6 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         (request_id, responder_peer_id.clone()),
         tx,
         1024,
-        false,
     );
     super::process_incoming_torii_proxy_response(
         &app,
@@ -1647,30 +1641,6 @@ async fn push_unregister_removes_device() {
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let bridge = app.push.as_ref().expect("push bridge configured");
     assert_eq!(bridge.device_count(), 0);
-}
-fn store_finalized_history_fixture(
-    app: &SharedAppState,
-    block: SignedBlock,
-) -> HashOf<BlockHeader> {
-    let parent = block
-        .header()
-        .height()
-        .get()
-        .checked_sub(1)
-        .filter(|height| *height > 0)
-        .map(|height| {
-            app.kura
-                .v2_finality_artifact(height)
-                .unwrap()
-                .expect("complete fixture finality prefix")
-        });
-    let artifact =
-        crate::test_utils::torii_proof_finality_for_block(&block, *app.state.network_id_ref(), parent.as_ref());
-    let hash = store_block(app, block);
-    let receipt = app.kura.store_v2_finality_artifact(&artifact).unwrap();
-    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
-    assert_eq!(receipt.context_id(), artifact.context_id());
-    hash
 }
 fn make_signed_block(
     height: u64,

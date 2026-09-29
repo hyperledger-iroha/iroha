@@ -14,7 +14,6 @@
 pub mod ceremony;
 /// Runtime credential codec for global-beacon seat shares.
 pub mod credential;
-
 /// Proof-bearing custody of every exact prepared target seat.
 pub mod seat_readiness;
 
@@ -84,6 +83,8 @@ pub use iroha_data_model::sumeragi_finality::global_threshold_beacon_npos_succes
 pub use iroha_data_model::sumeragi_finality::{
     global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
 };
+const GLOBAL_BEACON_LANE_RELAY_SEED_DOMAIN_V1: &[u8] =
+    b"iroha.global-threshold-beacon.lane-relay-seed.v1\0";
 const GLOBAL_BEACON_GOVERNANCE_SEED_DOMAIN_V1: &[u8] =
     b"iroha.global-threshold-beacon.governance-seed.v1\0";
 
@@ -2502,6 +2503,28 @@ pub fn global_threshold_beacon_pulse_signing_slot_v1(
     })
 }
 
+/// Derive one lane-relay committee seed from an already-verified global pulse.
+#[must_use]
+pub fn global_threshold_beacon_lane_relay_seed_v1(
+    pulse: &FinalizedGlobalThresholdBeaconPulseV1,
+    block_height: u64,
+    dataspace_id: u64,
+    lane_id: u32,
+) -> [u8; 32] {
+    *Hash::new_from_chunks(&[
+        GLOBAL_BEACON_LANE_RELAY_SEED_DOMAIN_V1,
+        pulse.network_id.as_bytes(),
+        pulse.session_id.as_slice(),
+        pulse.pulse_id.as_slice(),
+        pulse.seed.as_slice(),
+        pulse.height.to_be_bytes().as_slice(),
+        block_height.to_be_bytes().as_slice(),
+        dataspace_id.to_be_bytes().as_slice(),
+        lane_id.to_be_bytes().as_slice(),
+    ])
+    .as_ref()
+}
+
 /// Derive a governance-sortition seed from an already-verified global pulse.
 #[must_use]
 pub fn global_threshold_beacon_governance_seed_v1(
@@ -2799,13 +2822,14 @@ fn is_zero(bytes: &[u8]) -> bool {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod fixtures;
 #[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use fixtures::prepared_session_and_signers_fixture_for_keys_v1;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::{
     complete_beacon_dkg_fixture_for_exact_session_v1, complete_beacon_dkg_fixture_for_seat_v1,
 };
 #[cfg(test)]
 pub(crate) use fixtures::{
-    prepared_session_and_signers_fixture_for_keys_v1, prepared_session_and_signers_fixture_v1,
-    signed_pulses_fixture_for_roster_and_anchors,
+    prepared_session_and_signers_fixture_v1, signed_pulses_fixture_for_roster_and_anchors,
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::{pulse_context_fixture_v1, signed_persisted_pulse_fixture_for_world};

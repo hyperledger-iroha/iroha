@@ -2,7 +2,7 @@
 //!
 //! The fixture authenticates the complete input/output and committed single route,
 //! then compares each peer's bounded local carrier with the same certified execution.
-//! It makes no Native Decision, RS16 availability, or QueuePlan admission claim.
+//! Payload availability requires its separate signed RS16 evidence.
 
 use super::*;
 use iroha_core::kura::{BlockIndex, BlockStore, Kura};
@@ -48,7 +48,7 @@ pub(super) fn authenticated_native_execution(
             "catalog route committee differs from the independently pinned four validators"
         );
     }
-    let mut blocks = BlockStore::open_read_only(Kura::canonical_storage_paths(store).0)?;
+    let mut blocks = BlockStore::open_read_only(Kura::canonical_storage_path(store))?;
     let mut index = BlockIndex::default();
     blocks.read_block_indices(
         height
@@ -74,9 +74,8 @@ fn verify_ordinary_execution(
     route: RoutingDecision,
 ) -> Result<()> {
     ensure!(
-        transaction.admission_intent() == TransactionAdmissionIntent::Ordinary
-            && committed.entrypoint() == &TransactionEntrypoint::External(transaction.clone()),
-        "catalog execution differs from the exact signed Ordinary transaction"
+        committed.entrypoint() == &TransactionEntrypoint::External(transaction.clone()),
+        "catalog execution differs from the exact signed transaction"
     );
     verified.verify_committed_transaction(network, committed)?;
     let block = verified.block();
@@ -84,10 +83,7 @@ fn verify_ordinary_execution(
         .execution_context()
         .ok_or_else(|| eyre!("missing execution context"))?;
     ensure!(
-        context.merge_entry.is_none()
-            && context.native_lane_decisions.is_none()
-            && context.queue_plan_admissions.is_empty()
-            && context.external.len() == block.network_entrypoint_count(),
+        context.lane_merge.is_none() && context.external.len() == block.network_entrypoint_count(),
         "ordinary catalog carrier has another execution source or incomplete route contexts"
     );
     let index = usize::try_from(committed.entrypoint_proof.leaf_index())?;
@@ -259,14 +255,19 @@ mod tests {
             )
             .is_err()
         );
-        let signer = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
-        let retired = TransactionBuilder::from_payload(transaction.payload().clone())
+        let signer = KeyPair::from_seed(vec![0xCF; 32], Algorithm::Ed25519);
+        let changed_signer = TransactionBuilder::from_payload(transaction.payload().clone())
             .unwrap()
-            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .sign(signer.private_key());
         assert!(
-            verify_ordinary_execution(&verified, &chain.network_id(), &original, &retired, route)
-                .is_err()
+            verify_ordinary_execution(
+                &verified,
+                &chain.network_id(),
+                &original,
+                &changed_signer,
+                route
+            )
+            .is_err()
         );
         assert!(
             verify_ordinary_execution(

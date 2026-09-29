@@ -278,10 +278,10 @@ fn permission_cache_rebuilds_after_restart_impl() {
         ))),
         InstructionBox::from(Grant::account_permission(CanManageRoles, owner.clone())),
     ];
-    let mut fixture =
-        super::strict_replay_tests::StrictReplayFixture::new_with_genesis_instructions(
-            genesis_instructions,
-        );
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    config.genesis_instructions = genesis_instructions;
+    let mut fixture = CertifiedTestChain::start(config).unwrap();
     let permission_register = CanRegisterTrigger {
         authority: owner.clone(),
     };
@@ -339,45 +339,48 @@ fn permission_cache_rebuilds_after_restart_impl() {
         ),
     ];
     assert_replayed_permission_cache(
-        fixture.materialized_state.as_ref(),
+        fixture.state().as_ref(),
         &registrar,
         &owner,
         &trigger_id,
         false,
     );
     for (label, expected, instructions) in rounds {
-        let applied =
-            fixture.append_instructions(&owner, owner_keypair.private_key(), instructions);
-        assert_eq!(applied.block.output_results().len(), 1);
-        assert!(
-            applied
-                .block
-                .output_results()
-                .all(|result| result.as_ref().is_ok()),
-            "{label} must really execute"
+        let transaction = fixture.sign(&owner_keypair, instructions, (fixture.height() + 1) * 1000);
+        assert_eq!(
+            fixture.commit(vec![transaction]),
+            vec![true],
+            "{label} really executes"
         );
         assert_replayed_permission_cache(
-            fixture.materialized_state.as_ref(),
+            fixture.state().as_ref(),
             &registrar,
             &owner,
             &trigger_id,
             expected,
         );
-        // A new State has no warmed permission summaries. Rebuild it solely from the exact
-        // retained body, CommitQC, manifest and checkpoint for every preceding block.
-        let mut restarted = fixture.replay_state(Arc::clone(&fixture.kura));
-        let height = usize::try_from(applied.context.height).expect("replay height");
-        super::replay_blocks_from_kura(&fixture.kura, &mut restarted, height)
-            .unwrap_or_else(|error| panic!("production replay after {label}: {error:#}"));
-        assert_eq!(restarted.committed_height(), height);
+        // Decode the exact native snapshot into a fresh State with no warmed summaries.
+        let live = fixture.state();
+        let captured = crate::snapshot::CapturedStateSnapshot::capture(live).unwrap();
+        let restarted = super::deserialize::KuraSeed {
+            execution_budget: live.ivm_execution_budget(),
+            operation_index_budget: live.world.operation_index_budget().clone(),
+            kura: Arc::clone(fixture.kura()),
+            lane_manifests: live.lane_manifests.read().clone(),
+            query_handle: crate::query::store::LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: Default::default(),
+        }
+        .into_state_from_json_str_with_configured_nexus(captured.as_json(), live.nexus_snapshot())
+        .unwrap_or_else(|error| panic!("native snapshot after {label}: {error}"));
+        assert_eq!(restarted.committed_height(), fixture.height() as usize);
         assert_eq!(
             restarted.latest_block_hash_fast(),
-            Some(applied.block.hash())
+            live.latest_block_hash_fast()
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&restarted)
-                .expect("stable valid fixture snapshot"),
-            applied.checkpoint_hash
+            crate::snapshot::canonical_state_snapshot_hash(&restarted).unwrap(),
+            crate::snapshot::canonical_state_snapshot_hash(live).unwrap()
         );
         assert!(
             restarted.world_view().accounts().get(&registrar).is_some(),

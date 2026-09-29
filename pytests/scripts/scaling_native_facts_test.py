@@ -22,8 +22,7 @@ def plan():
 
 
 def reader():
-    return inputs.ReaderBudget(1000, 8 * 1024 * 1024, 65536, 1024 * 1024, 1000,
-        1024 * 1024, 2 * 1024 * 1024, os.geteuid())
+    return inputs.ReaderBudget(1000, 8 * 1024 * 1024, 65536, 1024 * 1024, 2 * 1024 * 1024, os.geteuid())
 
 
 def budget():
@@ -125,7 +124,7 @@ def test_fixed_native_tip_and_facts_join_original_inputs_vectors_and_deadline(pi
     try:
         tip, receipt = facts(p, value)
         assert tip.reader.block_store == p.c.inputs.roles[3].primary_block_store
-        assert tip.reader.merge_log == p.c.inputs.roles[3].primary_merge_log
+
         assert tip.reader.block_store != p.c.inputs.roles[3].block_store
         assert tip.reader.first_height == 1 and tip.reader.last_height == 100
         assert receipt.facts == p.outputs.artifact('facts') and receipt.journal_sha256 == p.journal.sha256
@@ -206,17 +205,7 @@ def test_invalid_independent_schedule_or_sampling_geometry_is_admitted_early(pip
     assert p.c.commands.calls == []
 
 
-@pytest.mark.parametrize('kind,field,bad', [
-    ('reader', 'max_committed_blocks', 0), ('reader', 'max_store_data_bytes', 2 * 1024 ** 3 + 1),
-    ('reader', 'max_carrier_bytes', 32 * 1024 ** 2 + 1), ('reader', 'max_merge_log_bytes', 0),
-    ('reader', 'max_merge_frames', 1001), ('reader', 'reader_max_output_bytes', 0),
-    ('reader', 'max_decode_allocation_bytes', 512 * 1024 ** 2 + 1), ('reader', 'owner_uid', -1),
-    ('budget', 'source_max_bytes', 1), ('budget', 'facts_max_bytes', 65535),
-    ('budget', 'total_max_bytes', 1), ('budget', 'proof_max_bytes', 1),
-    ('budget', 'max_heights', 65537), ('budget', 'max_requests', 99),
-    ('budget', 'context_max_bytes', 8 * 1024 ** 2 + 1), ('budget', 'peer_config_max_bytes', 1),
-    ('journal', 'bytes', 0), ('journal', 'sha256', 'private'), ('journal', 'max_bytes', 1),
-    ('journal', 'path', Path('relative'))])
+@pytest.mark.parametrize('kind,field,bad', [('reader', 'max_committed_blocks', 0), ('reader', 'max_store_data_bytes', 2 * 1024 ** 3 + 1), ('reader', 'max_carrier_bytes', 32 * 1024 ** 2 + 1), ('reader', 'reader_max_output_bytes', 0), ('reader', 'max_decode_allocation_bytes', 512 * 1024 ** 2 + 1), ('reader', 'owner_uid', -1), ('budget', 'source_max_bytes', 1), ('budget', 'facts_max_bytes', 65535), ('budget', 'total_max_bytes', 1), ('budget', 'proof_max_bytes', 1), ('budget', 'max_heights', 65537), ('budget', 'max_requests', 99), ('budget', 'context_max_bytes', 8 * 1024 ** 2 + 1), ('budget', 'peer_config_max_bytes', 1), ('journal', 'bytes', 0), ('journal', 'sha256', 'private'), ('journal', 'max_bytes', 1), ('journal', 'path', Path('relative'))])
 def test_allocation_and_reader_failures_happen_before_commands(pipeline, kind, field, bad):
     p = pipeline; setattr(p, kind, replace(getattr(p, kind), **{field: bad}))
     with pytest.raises(native.NativeFactsError): owner(p)
@@ -368,7 +357,7 @@ def test_close_keeps_original_journal_until_owned_child_is_reaped(pipeline):
         value.close()
 
 # Exact current native Args + flattened ReaderArgs flag contract, independently captured.
-NATIVE_FACTS_FLAGS = ('--account', '--assembly-decode-max-bytes', '--block-store', '--chain-discriminant', '--chain-id', '--context', '--context-max-bytes', '--context-sha256', '--drain-ns', '--facts-max-bytes', '--facts-output', '--carrier', '--carrier-max-bytes', '--carrier-sha256', '--first-height', '--genesis-public-key', '--invocation-id', '--journal', '--journal-max-bytes', '--journal-max-requests', '--journal-sha256', '--lanes', '--last-height', '--manifest', '--manifest-max-bytes', '--manifest-sha256', '--max-carrier-bytes', '--max-committed-blocks', '--max-decode-allocation-bytes', '--max-heights', '--max-in-flight', '--max-leaves-per-carrier', '--max-merge-frames', '--max-merge-log-bytes', '--max-requests', '--max-status-requests', '--max-store-data-bytes', '--max-submissions', '--measurement-ns', '--merge-log', '--network-id', '--owner-uid', '--pair-index', '--peer-config', '--peer-config-max-bytes', '--peer-config-sha256', '--poll-interval-ns', '--preparation-ahead-ns', '--preparation-concurrency', '--preparation-lookahead', '--proof-max-bytes', '--queries', '--queries-max-bytes', '--queries-sha256', '--rate-denominator', '--rate-numerator', '--reader-max-output-bytes', '--reply-max-bytes', '--resource-interval-ns', '--resource-max-start-lag-ns', '--resource-response-deadline-ns', '--signed-genesis', '--signed-genesis-max-bytes', '--signed-genesis-sha256', '--source-max-bytes', '--submission-lag-bound-ns', '--total-max-bytes', '--validator', '--verification-input-max-bytes', '--verification-output-max-bytes', '--warmup-ns', '--workload-seed')
+NATIVE_FACTS_FLAGS = ('--account', '--assembly-decode-max-bytes', '--block-store', '--chain-discriminant', '--chain-id', '--context', '--context-max-bytes', '--context-sha256', '--drain-ns', '--facts-max-bytes', '--facts-output', '--carrier', '--carrier-max-bytes', '--carrier-sha256', '--first-height', '--genesis-public-key', '--invocation-id', '--journal', '--journal-max-bytes', '--journal-max-requests', '--journal-sha256', '--lanes', '--last-height', '--manifest', '--manifest-max-bytes', '--manifest-sha256', '--max-carrier-bytes', '--max-committed-blocks', '--max-decode-allocation-bytes', '--max-heights', '--max-in-flight', '--max-leaves-per-carrier', '--max-requests', '--max-status-requests', '--max-store-data-bytes', '--max-submissions', '--measurement-ns', '--network-id', '--owner-uid', '--pair-index', '--peer-config', '--peer-config-max-bytes', '--peer-config-sha256', '--poll-interval-ns', '--preparation-ahead-ns', '--preparation-concurrency', '--preparation-lookahead', '--proof-max-bytes', '--queries', '--queries-max-bytes', '--queries-sha256', '--rate-denominator', '--rate-numerator', '--reader-max-output-bytes', '--reply-max-bytes', '--resource-interval-ns', '--resource-max-start-lag-ns', '--resource-response-deadline-ns', '--signed-genesis', '--signed-genesis-max-bytes', '--signed-genesis-sha256', '--source-max-bytes', '--submission-lag-bound-ns', '--total-max-bytes', '--validator', '--verification-input-max-bytes', '--verification-output-max-bytes', '--warmup-ns', '--workload-seed')
 
 
 @pytest.mark.parametrize('wrong_vector_height', [False, True])
@@ -413,7 +402,7 @@ def test_actual_typed_tip_vector_and_facts_owners_share_original_store_and_clock
             assert len(p.c.commands.calls) == 3
             for argv, _ in p.c.commands.calls:
                 assert argv[argv.index('--block-store') + 1] == str(p.c.inputs.roles[3].primary_block_store)
-                assert argv[argv.index('--merge-log') + 1] == str(p.c.inputs.roles[3].primary_merge_log)
+
             value.validate(); collection.validate()
     finally:
         if collection is not None: assert collection.cleanup(p.c.clock.end()) == ()

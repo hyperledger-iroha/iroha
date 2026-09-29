@@ -3,8 +3,9 @@
 Date: 2026-09-29. Status: proposed, not adopted. This record defines a reviewable
 replacement for the programmed backend's private wire-hash bindings. It does not
 change the [current execution contract](ram_lfe_execution_proof.md), enable proof
-mode, or qualify a cryptographic primitive. Production still uses the compiled
-BLAKE3 initializer and canonical Norito/Blake2b bindings recorded there.
+mode, or qualify a cryptographic primitive. The retained diagnostic interpreter
+uses the compiled BLAKE3 initializer and canonical Norito/Blake2b bindings
+recorded there; both insecure BFV backends are unavailable in production.
 
 The proposed first-release cut has one representation and no fallback reader.
 The complete interpreter relation, resource qualification and independent review
@@ -491,11 +492,14 @@ either BN254 construction's cryptographic security.
    Independently check odd/even fixed lengths, domain/length separation and
    strict scalar decode at 0, p - 1, p and p + 1. Compare bytes across the leaf
    and Core field libraries. This first step changes no production contract.
-2. Adapt a private test-only native Poseidon circuit to the same constants and
-   exact sponge. Add arbitrary-field round/input/copy/padding mutations, real
-   proof tampering/wrong-instance controls, clearing controls and measured
-   56-round geometry. Keep existing admitted helpers unchanged until their
-   separately inventoried replacement is complete.
+2. The private test-only circuit candidate uses the same constants and exact
+   sponge. Its [isolated native record](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md)
+   covers arbitrary-field round/input/copy/padding mutations, genuine proof
+   tampering/wrong-instance controls, clearing and measured 56-round geometry.
+   A single maximum record requires test k=17; the production k=16 cap stays
+   unchanged. Qualify a complete bounded layout before adoption, and keep
+   existing admitted helpers unchanged until their separately inventoried
+   replacement is complete.
 3. Review the complete semantic role/key/privacy design. Then implement one
    native RAM path and all policy/config/data-model/Torii/Core/SDK migrations,
    regenerate descriptor/KAT/receipt/opening fixtures, and delete the replaced
@@ -507,8 +511,9 @@ either BN254 construction's cryptographic security.
    evaluation-key coefficient and output ordering with adversarial witnesses.
    Qualify native interpreter/circuit equality over generated valid programs.
 5. Complete the independent cryptographic review, parameter/framing/PRF review,
-   integer-lift argument, BFV security qualification, full native proof and
-   network/SDK execution controls. Only then consider proof-mode admission.
+   integer-lift argument, encryption replacement and qualification, full native
+   proof and network/SDK execution controls. Only then consider proof-mode
+   admission.
 
 Rekey acceptance must include two independently valid BFV encryption and
 relinearization bundles for the same fixed profile. Holding program key, tape,
@@ -524,8 +529,9 @@ the old digest, and replay an old proof against updated public instances. A
 signature from the configured trusted opener remains an attestation, not a
 proof that its claimed plaintext decrypts the ciphertext.
 
-TODO: the native leaf is an unused candidate; the semantic contracts and complete
-relation described here are not implemented. The fixed-length role design needs independent review of
+TODO: the native leaf and test-only circuit are unused candidates; the semantic
+contracts and complete relation described here are not implemented. The
+fixed-length role design needs independent review of
 injectivity, collision and hiding assumptions, key reuse, initialization bias,
 Fiat-Shamir separation, proof soundness and the unchanged disclosure boundary.
 Existing primitive use, upstream naming, mock satisfaction and source estimates

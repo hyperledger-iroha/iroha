@@ -2344,29 +2344,15 @@ where
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
-                let trace = vm.register_trace();
-                if !trace.is_empty() {
-                    let constraints = vm.constraints().to_vec();
-                    let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log();
-                    let step_log = vm.step_log().to_vec();
-                    let code_hash = vm.code_hash();
-                    let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
-                    let job = crate::pipeline::zk_lane::ZkTask {
-                        tx_hash: Some(tx_hash),
-                        code_hash,
-                        program: summary.prepared_contract().shared_artifact(),
-                        header: None,
-                        trace,
-                        constraints,
-                        mem_log,
-                        reg_log,
-                        step_log,
-                        transport_capabilities: transport_caps_snapshot,
-                        negotiated_capabilities: negotiated_caps_snapshot,
-                    };
-                    let _ = crate::pipeline::zk_lane::try_submit(job);
-                }
+                let _ = crate::pipeline::zk_lane::capture_and_submit(
+                    &vm,
+                    state_ro.prepared_contract_cache().execution_budget(),
+                    Some(iroha_crypto::Hash::prehashed(*tx.hash().as_ref())),
+                    summary.prepared_contract().shared_artifact(),
+                    None,
+                    transport_caps_snapshot,
+                    negotiated_caps_snapshot,
+                );
             }
             Ok(tx_overlay_from_host_queued(
                 state_ro,
@@ -2526,29 +2512,15 @@ where
             let completed_axt = host.drain_completed_axt_states();
             // Emit a ZK-lane job with the formal trace (non-forking background verification)
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
-                let trace = vm.register_trace();
-                if !trace.is_empty() {
-                    let constraints = vm.constraints().to_vec();
-                    let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log();
-                    let step_log = vm.step_log().to_vec();
-                    let code_hash = vm.code_hash();
-                    let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
-                    let job = crate::pipeline::zk_lane::ZkTask {
-                        tx_hash: Some(tx_hash),
-                        code_hash,
-                        program: summary.prepared_contract().shared_artifact(),
-                        header: None,
-                        trace,
-                        constraints,
-                        mem_log,
-                        reg_log,
-                        step_log,
-                        transport_capabilities: transport_caps_snapshot,
-                        negotiated_capabilities: negotiated_caps_snapshot,
-                    };
-                    let _ = crate::pipeline::zk_lane::try_submit(job);
-                }
+                let _ = crate::pipeline::zk_lane::capture_and_submit(
+                    &vm,
+                    state_ro.prepared_contract_cache().execution_budget(),
+                    Some(iroha_crypto::Hash::prehashed(*tx.hash().as_ref())),
+                    summary.prepared_contract().shared_artifact(),
+                    None,
+                    transport_caps_snapshot,
+                    negotiated_caps_snapshot,
+                );
             }
             append_verified_contract_metadata_registration_to_queued(
                 state_ro,
@@ -2906,29 +2878,15 @@ where
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
-                let trace = vm.register_trace();
-                if !trace.is_empty() {
-                    let constraints = vm.constraints().to_vec();
-                    let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log();
-                    let step_log = vm.step_log().to_vec();
-                    let code_hash = vm.code_hash();
-                    let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
-                    let job = crate::pipeline::zk_lane::ZkTask {
-                        tx_hash: Some(tx_hash),
-                        code_hash,
-                        program: summary.prepared_contract().shared_artifact(),
-                        header: Some(*header),
-                        trace,
-                        constraints,
-                        mem_log,
-                        reg_log,
-                        step_log,
-                        transport_capabilities: transport_caps_snapshot,
-                        negotiated_capabilities: negotiated_caps_snapshot,
-                    };
-                    let _ = crate::pipeline::zk_lane::try_submit(job);
-                }
+                let _ = crate::pipeline::zk_lane::capture_and_submit(
+                    &vm,
+                    state_ro.prepared_contract_cache().execution_budget(),
+                    Some(iroha_crypto::Hash::prehashed(*tx.hash().as_ref())),
+                    summary.prepared_contract().shared_artifact(),
+                    Some(*header),
+                    transport_caps_snapshot,
+                    negotiated_caps_snapshot,
+                );
             }
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_host_queued(
@@ -3107,29 +3065,15 @@ where
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
-                let trace = vm.register_trace();
-                if !trace.is_empty() {
-                    let constraints = vm.constraints().to_vec();
-                    let mem_log = vm.memory_log().to_vec();
-                    let reg_log = vm.register_log();
-                    let step_log = vm.step_log().to_vec();
-                    let code_hash = vm.code_hash();
-                    let tx_hash = iroha_crypto::Hash::prehashed(*tx.hash().as_ref());
-                    let job = crate::pipeline::zk_lane::ZkTask {
-                        tx_hash: Some(tx_hash),
-                        code_hash,
-                        program: summary.prepared_contract().shared_artifact(),
-                        header: Some(*header),
-                        trace,
-                        constraints,
-                        mem_log,
-                        reg_log,
-                        step_log,
-                        transport_capabilities: transport_caps_snapshot,
-                        negotiated_capabilities: negotiated_caps_snapshot,
-                    };
-                    let _ = crate::pipeline::zk_lane::try_submit(job);
-                }
+                let _ = crate::pipeline::zk_lane::capture_and_submit(
+                    &vm,
+                    state_ro.prepared_contract_cache().execution_budget(),
+                    Some(iroha_crypto::Hash::prehashed(*tx.hash().as_ref())),
+                    summary.prepared_contract().shared_artifact(),
+                    Some(*header),
+                    transport_caps_snapshot,
+                    negotiated_caps_snapshot,
+                );
             }
             append_verified_contract_metadata_registration_to_queued(
                 state_ro,
@@ -6219,7 +6163,8 @@ mod tests {
         configure_zk_lane_trace_collection(&mut vm, true);
         assert!(!vm.zk_trace_enabled());
 
-        vm.set_zk_mode(true);
+        vm.set_zk_mode(true)
+            .expect("private lifecycle cleanup succeeds");
         configure_zk_lane_trace_collection(&mut vm, false);
         assert!(!vm.zk_trace_enabled());
 

@@ -168,13 +168,12 @@ impl LaneTransactions for QueueLaneTransactions {
         skip: &BTreeSet<HashOf<TransactionEntrypoint>>,
     ) -> Vec<SignedTransaction> {
         let view = self.state.view();
-        let Some((pending, lease)) = self
+        let Some(pending) = self
             .queue
             .bounded_pending_snapshot(&view, crate::sumeragi::payload::MAX_QUEUE_SCAN)
         else {
             return Vec::new();
         };
-        drop(lease);
         let routing = RoutingSnapshot::of(&view);
         let inputs = routing.inputs(view.world());
         let mut selected = Vec::new();

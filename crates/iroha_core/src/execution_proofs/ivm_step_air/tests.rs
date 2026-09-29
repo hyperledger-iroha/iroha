@@ -334,7 +334,8 @@ fn diagnostic_step_statement(word: u32) -> AluStepStatement {
     let mut vm = IVM::new(1_000);
     vm.load_code(&code).unwrap();
     vm.set_register(4, u64::MAX);
-    vm.set_zk_mode(true);
+    vm.set_zk_mode(true)
+        .expect("private lifecycle cleanup succeeds");
     // ZK padding is metered, so keep this local diagnostic horizon finite.
     vm.set_max_cycles(8);
     vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder)

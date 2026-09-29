@@ -106,6 +106,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
+mod scaling;
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
@@ -439,17 +440,9 @@ const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-tra
 const STREAMING_IDENTITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:streaming-identity:v1|";
 const MINT_FINALITY_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:mint-finality-private:v1|";
 const MINT_FINALITY_SEED_DIRECTORY: &str = "mint-finality-signers";
-/// Authenticated non-validator fair-ingress lanes for generated localnets.
-const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-        .get();
-/// Total P2P connection bound for generated localnets.
-///
-/// This admits the other thirty validators in the maximum legal committee plus
-/// two authenticated non-validator sources. Lifecycle ownership is bounded
-/// separately by the configured fair-ingress source population.
-const LOCALNET_MAX_TOTAL_CONNECTIONS: usize =
-    MAX_VALIDATORS_PER_HEIGHT - 1 + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
+/// Total P2P connection bound: the other validators in the largest committee
+/// plus two authenticated observer connections.
+const LOCALNET_MAX_TOTAL_CONNECTIONS: usize = MAX_VALIDATORS_PER_HEIGHT - 1 + 2;
 /// Capacity for the inbound P2P subscriber queue in localnet configs.
 const LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP: usize = 16_384;
 /// Delay outbound P2P dials at startup to avoid connection refused spam in localnet.
@@ -1398,7 +1391,6 @@ fn generate_localnet_for_layout<T: Write>(
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
     }
     write_mint_finality_seeds(&out_dir, &peers)?;
-    let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
     tui::status("Generating genesis manifest");
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
     let sora_profile_enabled = opts.sora_profile.is_some();
@@ -1411,8 +1403,6 @@ fn generate_localnet_for_layout<T: Write>(
     };
     let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
     let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
-    let runtime_block_max_transactions =
-        perf_spec.map(|_| LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS);
     // Sora profiles and NPoS bootstrap emit a dataspace catalog. Nexus itself is mandatory.
     let dataspace_fault_tolerance = (opts.sora_profile.is_some() || npos_bootstrap)
         .then(|| localnet_dataspace_fault_tolerance(opts.peers));
@@ -1580,9 +1570,7 @@ fn generate_localnet_for_layout<T: Write>(
         tx_gossip_overrides,
         logger_filter,
         signature_batch_max_ed25519,
-        runtime_block_max_transactions,
         queue_capacity,
-        sumeragi_body_bytes,
     );
     let bootstrap_config = if let Some(layout) = scaling {
         scaling::runtime_paths::bind(
@@ -1692,9 +1680,7 @@ fn generate_localnet_for_layout<T: Write>(
             tx_gossip_overrides,
             logger_filter,
             signature_batch_max_ed25519,
-            runtime_block_max_transactions,
             queue_capacity,
-            sumeragi_body_bytes,
         );
         let rendered = if let Some(layout) = scaling {
             scaling::runtime_paths::bind(
@@ -2504,9 +2490,7 @@ fn render_peer_config(
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
-    runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
-    sumeragi_body_bytes: usize,
 ) -> Zeroizing<String> {
     use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
@@ -2672,55 +2656,6 @@ fn render_peer_config(
     if !taira {
         sumeragi.insert("mint_finality_seed_fd".into(), Value::Integer(199));
     }
-    let mut queues = Table::new();
-    queues.insert(
-        "commands".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_COMMANDS)
-                .expect("localnet command queue fits i64"),
-        ),
-    );
-    queues.insert(
-        "authenticated_non_validator_sources".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-                .expect("localnet authenticated non-validator source count fits i64"),
-        ),
-    );
-    queues.insert(
-        "bodies".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODIES).expect("localnet body queue fits i64"),
-        ),
-    );
-    queues.insert(
-        "body_bytes".into(),
-        Value::Integer(
-            i64::try_from(sumeragi_body_bytes)
-                .expect("localnet aggregate outer-ingress wire-byte budget fits i64"),
-        ),
-    );
-    queues.insert(
-        "body_source_bytes".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
-                .expect("localnet per-source outer-ingress wire-byte budget fits i64"),
-        ),
-    );
-    queues.insert(
-        "chunks".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_CHUNKS).expect("localnet chunk queue fits i64"),
-        ),
-    );
-    queues.insert(
-        "ready_bodies".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_SUMERAGI_QUEUE_READY_BODIES)
-                .expect("localnet ready-body queue fits i64"),
-        ),
-    );
-    sumeragi.insert("queues".into(), Value::Table(queues));
     let mut keys = Table::new();
     keys.insert(
         "allowed_algorithms".into(),
@@ -2850,32 +2785,6 @@ fn render_peer_config(
         nexus.insert("governance".into(), Value::Table(governance));
     }
     root.insert("nexus".into(), Value::Table(nexus));
-    let mut block = Table::new();
-    if let Some(max_transactions) = runtime_block_max_transactions {
-        block.insert(
-            "max_transactions".into(),
-            Value::Integer(
-                i64::try_from(max_transactions).expect("runtime block max transactions fits i64"),
-            ),
-        );
-    }
-    block.insert(
-        "max_payload_bytes".into(),
-        Value::Integer(
-            i64::try_from(
-                iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
-            )
-            .expect("payload limit fits i64"),
-        ),
-    );
-    block.insert(
-        "proposal_queue_scan_multiplier".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER)
-                .expect("LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER fits i64"),
-        ),
-    );
-    sumeragi.insert("block".into(), Value::Table(block));
     // Safety records and the key installation log live beside the peer's state, outside Kura:
     // the start script asserts fresh keys exactly when the records directory does not exist.
     sumeragi.insert(

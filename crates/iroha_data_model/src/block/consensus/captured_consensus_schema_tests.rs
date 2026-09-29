@@ -10,6 +10,21 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::NposGenesisParams>(
         "iroha_data_model::block::consensus::NposGenesisParams",
     ),
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidenceAttribution>(
+        "iroha_data_model::block::consensus::EvidenceAttribution",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidenceOffender>(
+        "iroha_data_model::block::consensus::EvidenceOffender",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::Evidence>(
+        "iroha_data_model::block::consensus::Evidence",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidencePenaltyStatus>(
+        "iroha_data_model::block::consensus::EvidencePenaltyStatus",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::EvidenceRecord>(
+        "iroha_data_model::block::consensus::EvidenceRecord",
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::SumeragiLaneCommitment>(
         "iroha_data_model::block::consensus::SumeragiLaneCommitment",
     ),

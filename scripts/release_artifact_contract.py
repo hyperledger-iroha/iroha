@@ -1251,3 +1251,76 @@ def format_artifact_spec(descriptor: Mapping[str, object]) -> str:
         str(row[field])
         for field in ("profile", "target", "kind", "format", "path")
     )
+
+
+
+def release_ivm_backend(target: str) -> str:
+    """Select the shipping backend from the reviewed target, never the build host."""
+
+    if not isinstance(target, str) or _SAFE_TOKEN_RE.fullmatch(target) is None:
+        raise ReleaseArtifactError("release acceleration target is invalid")
+    if target in {"x86_64-apple-darwin", "aarch64-apple-darwin"}:
+        return "metal"
+    if target in {
+        "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc",
+    }:
+        return "cuda"
+    raise ReleaseArtifactError("release acceleration target OS is unsupported")
+
+
+def release_acceleration_features(target: str, selected: Iterable[str]) -> tuple[str, ...]:
+    """Add the mandatory daemon backend to the exact shipping Cargo selection."""
+
+    features = tuple(selected)
+    if any(
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+/-]{0,127}", value) is None
+        for value in features
+    ) or len(set(features)) != len(features):
+        raise ReleaseArtifactError("release features must be unique Cargo tokens")
+    required = ("irohad/ivm-cuda",) if release_ivm_backend(target) == "cuda" else ()
+    return tuple(sorted(set(features).union(required)))
+
+
+def validate_release_acceleration(
+    target: str,
+    record: object,
+    *,
+    trusted_cuda_key_sha256: str | None,
+    cuda_bundle_sha256: str | None,
+) -> None:
+    """Check authenticated build provenance against independent release inputs.
+
+    This verifies inclusion and exact build-input identity, not physical execution
+    or artifact signing correctness. CUDA build admission verifies the signed
+    bundle; the separately authenticated prebuilt record binds that built result.
+    """
+
+    if not isinstance(record, dict) or set(record) != {
+        "ivm_features", "cuda_trusted_key_sha256", "cuda_bundle_sha256",
+    }:
+        raise ReleaseArtifactError("release acceleration record does not match V1")
+    features = record["ivm_features"]
+    allowed = {"cuda", "default", "metal", "telemetry"}
+    if (not isinstance(features, list)
+        or any(not isinstance(value, str) or value not in allowed for value in features)
+        or features != sorted(set(features))):
+        raise ReleaseArtifactError("release IVM features are noncanonical or nonproduction")
+    backend = release_ivm_backend(target)
+    required = {"default", "metal", backend}
+    if not required.issubset(features):
+        raise ReleaseArtifactError("release IVM features omit a mandatory target backend")
+    if backend == "cuda":
+        for label, value in (("trusted CUDA key", trusted_cuda_key_sha256),
+                             ("CUDA bundle", cuda_bundle_sha256)):
+            if (not isinstance(value, str) or _HEX_SHA256_RE.fullmatch(value) is None
+                or value == "0" * 64):
+                raise ReleaseArtifactError(f"{label} requires an independently reviewed nonzero SHA256")
+    elif trusted_cuda_key_sha256 is not None or cuda_bundle_sha256 is not None or "cuda" in features:
+        raise ReleaseArtifactError("Metal release must not carry a CUDA build input")
+    if record["cuda_trusted_key_sha256"] != trusted_cuda_key_sha256:
+        raise ReleaseArtifactError("release CUDA trust input differs from independent review")
+    if record["cuda_bundle_sha256"] != cuda_bundle_sha256:
+        raise ReleaseArtifactError("release CUDA bundle differs from reviewed source")

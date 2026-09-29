@@ -1,9 +1,9 @@
 //! Timing out, joining and timeout certificates (§6.6, §6.7) and round synchronisation
 //! (`advance_to`, §6.12).
 
-use super::{Build, Core, EvKey, Mine, PqcVia};
+use super::{Core, EvKey, Mine, PqcVia};
 use crate::{
-    crypto::{form_tc, verify_timeout_signature},
+    crypto::form_tc,
     message::{Evidence, TimeoutCert, TimeoutVote, WireMessage},
     preimage,
     safety::RecordedTimeout,
@@ -85,14 +85,10 @@ impl Core {
         {
             return;
         }
-        if verify_timeout_signature(
-            &*self.crypto,
-            &self.instance,
-            &self.cfg.epoch.id,
-            &self.cfg.committee,
-            &t,
-        )
-        .is_err()
+        if self
+            .verifier(&self.cfg)
+            .verify_timeout_signature(&t)
+            .is_err()
         {
             return;
         }
@@ -214,32 +210,17 @@ impl Core {
             return;
         }
         self.view = w;
-        self.t_enter = self.now;
-        self.t_prop = None;
-        self.t_body = None;
+        self.reset_view();
         #[cfg(not(sumeragi_mutation = "MS3"))]
         {
             self.proposal = None;
         }
         self.late_entry = false;
-        self.asked = false;
-        self.stage = self.hint;
-        self.t_ready = None;
-        self.t_pqc = None;
-        self.t_lastvote = None;
         // Recorded votes are never re-sent once the view changed.
         self.mine = Mine {
             timeout: self.mine.timeout.take(),
             ..Mine::default()
         };
-        self.retx = [None, None];
-        self.build = Build::Idle;
-        self.fresh_build = None;
-        self.repropose = false;
-        self.resend_recorded = None;
-        self.proposal_sent_at = None;
-        self.repushed.clear();
-        self.request_pushed.clear();
         let lo = w.saturating_sub(1);
         self.answered.retain(|(view, _)| *view >= lo);
         self.votes.retain_views(lo, w.saturating_add(1));

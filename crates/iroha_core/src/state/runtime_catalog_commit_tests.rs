@@ -472,8 +472,6 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
         let configured = state.nexus_snapshot();
         let baseline_registry = state.lane_manifests.read().clone();
         let execution_before = state.execution_policy_digest_v1().unwrap();
-        let amx_before =
-            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state).unwrap();
         let (after, pending) = staged_catalog_fixture(&state, &keys);
         let runtime = pending.runtime_catalog.clone().unwrap();
         install_fixture_runtime(&state, runtime.clone());
@@ -516,14 +514,6 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
         assert_eq!(
             state.execution_policy_digest_v1().unwrap(),
             execution_before
-        );
-        let retained_amx =
-            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state).unwrap();
-        assert_ne!(retained_amx, amx_before);
-        assert_eq!(
-            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state).unwrap(),
-            retained_amx,
-            "repeated reads of the same retained inputs have the same policy hash"
         );
         assert_eq!(
             runtime_catalog_root_from_world(&state.world.view()).unwrap(),
@@ -578,13 +568,6 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
         let malformed_world = norito::json::to_json(&state.world).unwrap();
         let retained_owner = norito::json::to_json(&state.canonical_runtime).unwrap();
         assert!(state.nexus_with_committed_catalog(configured).is_err());
-        let error = crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state)
-            .expect_err("malformed protected catalog is a typed recovery refusal");
-        assert!(
-            matches!(error, crate::sumeragi::v2_recovery::V2RecoveryError::ExecutionPolicy(ref reason)
-            if reason.contains("Nexus runtime catalog codec")),
-            "{error}"
-        );
         assert_eq!(
             norito::json::to_json(&state.world).unwrap(),
             malformed_world
@@ -699,24 +682,24 @@ fn runtime_catalog_merge_validation_owns_its_captured_policy() {
             .stage_consensus_catalog_transition(&payload)
             .unwrap();
         transaction.apply();
-        block.validate_merge_runtime_catalog_effects().unwrap();
+        block.validate_owned_runtime_catalog_overlay().unwrap();
 
         // These physical caches are no longer this carrier's predecessor.
         state.nexus.write().fees.base_fee = Quantity::from(99_u32);
         *state.lane_manifests.write() = Arc::new(LaneManifestRegistry::empty());
         block
-            .validate_merge_runtime_catalog_effects()
+            .validate_owned_runtime_catalog_overlay()
             .expect("captured policy and original journals own the accepted transition");
         block.nexus.fees.base_fee = Quantity::from(99_u32);
         assert!(
-            block.validate_merge_runtime_catalog_effects().is_err(),
+            block.validate_owned_runtime_catalog_overlay().is_err(),
             "matching a later physical cache cannot authorize policy substitution"
         );
         block.nexus.fees.base_fee = original_nexus.fees.base_fee.clone();
-        block.validate_merge_runtime_catalog_effects().unwrap();
+        block.validate_owned_runtime_catalog_overlay().unwrap();
         block.zk.halo2.enabled = !block.zk.halo2.enabled;
         assert!(
-            block.validate_merge_runtime_catalog_effects().is_err(),
+            block.validate_owned_runtime_catalog_overlay().is_err(),
             "the captured ZK policy still binds the accepted overlay"
         );
         drop(block);
@@ -742,7 +725,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
                 .stage_consensus_catalog_transition(&payload)
                 .unwrap();
             transaction.apply();
-            block.validate_merge_runtime_catalog_effects().unwrap();
+            block.validate_owned_runtime_catalog_overlay().unwrap();
             (
                 runtime_catalog_from_world(&block.world).unwrap().unwrap(),
                 block.canonical_runtime.get().clone(),
@@ -763,7 +746,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
         );
         assert!(!replacement.lane_manifests.has_manifest(LaneId::new(5)));
         replacement
-            .validate_merge_runtime_catalog_effects()
+            .validate_owned_runtime_catalog_overlay()
             .expect("the discarded live catalog is not the replacement's predecessor");
         let mut transaction = replacement.transaction();
         transaction
@@ -771,7 +754,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
             .unwrap();
         transaction.apply();
         replacement
-            .validate_merge_runtime_catalog_effects()
+            .validate_owned_runtime_catalog_overlay()
             .expect("the same addition is valid against the actual pre-catalog undo");
         replacement
             .pending_autoscale_lifecycle
@@ -782,7 +765,7 @@ fn runtime_catalog_merge_replacement_uses_actual_world_and_runtime_undo() {
             .clear();
         assert!(
             replacement
-                .validate_merge_runtime_catalog_effects()
+                .validate_owned_runtime_catalog_overlay()
                 .is_err(),
             "the captured policy does not excuse a forged dynamic predecessor"
         );

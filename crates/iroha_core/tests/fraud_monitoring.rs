@@ -158,9 +158,8 @@ fn admission_allows_when_fraud_disabled() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     assert!(
         result.is_ok(),
         "disabled fraud monitoring should permit tx: {result:?}"
@@ -180,9 +179,8 @@ fn admission_rejects_missing_assessment_when_required() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     let err = result.expect_err("missing assessment must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -216,9 +214,11 @@ fn block_pipeline_rejects_missing_assessment() {
         .chain(0, Some(&genesis_block))
         .sign(key_pair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(new_block.header());
+    let (mut state_block, state_block_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let valid_block = new_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     let signed_block: SignedBlock = valid_block.into();
     let err = signed_block
@@ -255,9 +255,8 @@ fn admission_rejects_when_band_insufficient() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     let err = result.expect_err("insufficient band must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -285,9 +284,8 @@ fn admission_allows_when_band_sufficient() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     assert!(
         result.is_ok(),
         "sufficient band should permit tx: {result:?}"
@@ -315,9 +313,8 @@ fn admission_rejects_missing_attestation_when_required() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     let err = result.expect_err("attestation metadata must be required");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -376,9 +373,8 @@ fn admission_rejects_attestation_signature_mismatch() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     let err = result.expect_err("tampered signature must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
@@ -415,8 +411,7 @@ fn admission_allows_with_valid_attestation() {
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(tx, &mut cache)
-        .expect("local execution completes");
+    let result =
+        iroha_core::tx::execute_component_transaction_for_testing(&mut block, tx, &mut cache, None);
     assert!(result.is_ok(), "valid attestation must be accepted");
 }

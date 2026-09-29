@@ -1198,7 +1198,7 @@ private struct TransactionPayloadSpec: Decodable {
         case timeToLiveMs = "time_to_live_ms"
         case nonce
         case feePayment = "fee_payment"
-        case admissionIntent = "admission_intent"
+
         case metadata
     }
 
@@ -1207,7 +1207,7 @@ private struct TransactionPayloadSpec: Decodable {
             decoder,
             [
                 "authority", "network_id", "creation_time_ms", "executable", "fee_payment",
-                "admission_intent", "metadata", "nonce", "time_to_live_ms",
+                "metadata", "nonce", "time_to_live_ms",
             ],
             context: "Swift parity transaction payload"
         )
@@ -1238,10 +1238,6 @@ private struct TransactionPayloadSpec: Decodable {
         _ = try container.decode(SwiftFixtureFeePayment.self, forKey: .feePayment)
         let feeValue = try container.decode(ToriiJSONValue.self, forKey: .feePayment)
         feePayment = try feeValue.decode(as: FeePaymentIntent.self)
-        _ = try container.decode(
-            SwiftFixtureAdmissionIntent.self,
-            forKey: .admissionIntent
-        )
         metadata = try container.decode([String: ToriiJSONValue].self, forKey: .metadata)
     }
 
@@ -1272,35 +1268,6 @@ private struct TransactionPayloadSpec: Decodable {
     }
 }
 
-private struct SwiftFixtureAdmissionIntent: Decodable {
-    private enum CodingKeys: String, CodingKey {
-        case intent
-        case value
-    }
-
-    init(from decoder: Decoder) throws {
-        try requireExactFixtureKeys(
-            decoder,
-            ["intent", "value"],
-            context: "Swift parity admission intent"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard try container.decode(String.self, forKey: .intent) == "ordinary" else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .intent,
-                in: container,
-                debugDescription: "intent must be the literal 'ordinary'"
-            )
-        }
-        guard try container.decodeNil(forKey: .value) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .value,
-                in: container,
-                debugDescription: "value must be null"
-            )
-        }
-    }
-}
 
 private struct SwiftFixtureFeePayment: Decodable {
     private enum CodingKeys: String, CodingKey {

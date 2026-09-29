@@ -51,11 +51,8 @@ fn enroll_short_record(fixture: &mut Fixture) -> u64 {
 
 fn short_record_attempt(delay_before_provider: bool) {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
-    let (directory, _) = config(&fixture);
+    let (_directory, _) = config(&fixture);
     let queue = queue();
-    queue
-        .install_plan_journal(directory.path().join("expiry-queue.to"), 1024 * 1024, true)
-        .unwrap();
     let expiry = enroll_short_record(&mut fixture);
     // The existing native reservation controls use this same original ten-second timeout.
     // It is fixed before preparing any Check; no deadline or capability is modified.

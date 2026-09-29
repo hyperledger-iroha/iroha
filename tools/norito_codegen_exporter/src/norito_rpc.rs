@@ -21,8 +21,7 @@ use iroha_data_model::{
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionAdmissionIntent, TransactionBuilder, executable::ContractInvocation,
-        signed::TransactionPayload,
+        TransactionBuilder, executable::ContractInvocation, signed::TransactionPayload,
     },
 };
 use iroha_model_base::metadata::Metadata;
@@ -895,7 +894,7 @@ struct RawPayload {
     ttl_ms: u64,
     nonce: Option<u32>,
     fee_payment: FeePaymentIntent,
-    admission_intent: TransactionAdmissionIntent,
+
     metadata: Vec<(Name, Json)>,
 }
 #[derive(Clone)]
@@ -1101,8 +1100,7 @@ impl RawPayload {
         let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
-        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone())
-            .with_admission_intent(self.admission_intent);
+        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
@@ -1264,7 +1262,6 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
             "time_to_live_ms",
             "nonce",
             "fee_payment",
-            "admission_intent",
             "metadata",
         ],
         "payload",
@@ -1288,16 +1285,6 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     fee_payment
         .validate()
         .map_err(|err| eyre!(err.to_string()))?;
-    let admission_intent = obj
-        .get("admission_intent")
-        .ok_or_else(|| eyre!("missing admission_intent"))
-        .and_then(|value| {
-            json::from_value::<TransactionAdmissionIntent>(value.clone())
-                .map_err(|err| eyre!(err.to_string()))
-        })?;
-    if admission_intent != TransactionAdmissionIntent::Ordinary {
-        bail!("canonical Norito RPC fixtures require ordinary admission_intent");
-    }
     if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
         bail!(
             "IVM and contract-call fixture executables require an explicit fee_payment gas_limit"
@@ -1315,7 +1302,6 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         ttl_ms,
         nonce,
         fee_payment,
-        admission_intent,
         metadata,
     })
 }
@@ -4411,7 +4397,7 @@ mod tests {
                 ttl_ms: 60_000,
                 nonce: Some(1),
                 fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-                admission_intent: TransactionAdmissionIntent::Ordinary,
+
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
@@ -4451,7 +4437,7 @@ mod tests {
             ttl_ms: 1,
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
-            admission_intent: TransactionAdmissionIntent::Ordinary,
+
             metadata: Vec::new(),
         };
         let error = payload
@@ -4596,44 +4582,22 @@ mod tests {
                 .to_string()
                 .contains("missing required field 'metadata'")
         );
-        let mut missing_admission_intent = entry
-            .get("payload")
-            .and_then(Value::as_object)
-            .expect("nested payload object")
-            .clone();
-        missing_admission_intent.remove("admission_intent");
-        let Err(error) = parse_payload(&Value::Object(missing_admission_intent)) else {
-            panic!("admission_intent must be explicit");
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("missing required field 'admission_intent'")
-        );
-        let mut queue_plan_payload = entry
-            .get("payload")
-            .and_then(Value::as_object)
-            .expect("nested payload object")
-            .clone();
-        let mut queue_plan_intent = Map::new();
-        queue_plan_intent.insert(
-            "intent".to_owned(),
-            Value::String("queue_plan_synced".to_owned()),
-        );
-        queue_plan_intent.insert("value".to_owned(), Value::Null);
-        queue_plan_payload.insert(
-            "admission_intent".to_owned(),
-            Value::Object(queue_plan_intent),
-        );
-        let Err(error) = parse_payload(&Value::Object(queue_plan_payload)) else {
-            panic!("shared fixtures must not claim queue-plan admission");
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("require ordinary admission_intent"),
-            "unexpected queue-plan admission error: {error}"
-        );
+        for field in ["admission_intent", "admissionIntent"] {
+            for label in ["ordinary", "queue_plan_synced"] {
+                let mut retired = entry
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .expect("nested payload object")
+                    .clone();
+                retired.insert(
+                    field.to_owned(),
+                    norito::json!({"intent": label, "value": null}),
+                );
+                let error = parse_payload(&Value::Object(retired))
+                    .expect_err("retired admission field must fail closed");
+                assert!(error.to_string().contains(field), "{error}");
+            }
+        }
     }
     #[test]
     fn executable_and_instruction_objects_are_closed_and_unambiguous() {

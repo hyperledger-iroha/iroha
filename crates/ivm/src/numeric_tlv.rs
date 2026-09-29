@@ -123,7 +123,12 @@ fn snapshot_metered(
     let header: [u8; OUTER_HEADER_BYTES] = vm
         .memory
         .load_region(pointer, OUTER_HEADER_BYTES as u64)
-        .map_err(|_| pointer_fault(PointerAbiFaultV1::InvalidAddress))?
+        .map_err(|error| {
+            crate::error::preserve_execution_deferral(
+                error,
+                pointer_fault(PointerAbiFaultV1::InvalidAddress),
+            )
+        })?
         .try_into()
         .expect("fixed header range has the requested length");
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
@@ -182,7 +187,12 @@ fn snapshot_metered(
             tail_pointer,
             u64::try_from(tail_len).map_err(|_| VMError::GasCostOverflow)?,
         )
-        .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?
+        .map_err(|error| {
+            crate::error::preserve_execution_deferral(
+                error,
+                pointer_fault(PointerAbiFaultV1::TruncatedEnvelope),
+            )
+        })?
         .to_vec();
     let mut snapshot = Vec::with_capacity(total);
     snapshot.extend_from_slice(&header);

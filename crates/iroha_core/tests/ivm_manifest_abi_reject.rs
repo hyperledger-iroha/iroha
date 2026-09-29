@@ -208,9 +208,12 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
             IvmAdmissionError::ManifestAbiHashMismatch(info),
@@ -308,9 +311,12 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         result.is_ok(),
         "matching manifest abi_hash should allow admission, got {result:?}"
@@ -373,9 +379,12 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         matches!(
             result,
@@ -465,9 +474,12 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         result.is_ok(),
         "v1 abi_hash should allow admission, got {result:?}"
@@ -533,9 +545,12 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         matches!(
             result,

@@ -239,7 +239,6 @@ mod tests {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &ExecutionOutputLimits {
                     max_outputs: 16,
                     max_output_bytes: 1024 * 1024,

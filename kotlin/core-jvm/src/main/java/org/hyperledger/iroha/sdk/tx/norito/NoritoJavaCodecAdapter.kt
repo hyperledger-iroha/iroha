@@ -6,7 +6,6 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.MultisigProposeRequest
 import org.hyperledger.iroha.sdk.core.model.Executable
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.WirePayload
@@ -234,31 +233,14 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             decodeCanonicalTransactionPayload(encoded)
         }
 
-        /** Reject non-canonical payloads and payloads with a different admission intent. */
-        @JvmStatic
-        @Throws(NoritoException::class)
-        fun validateCanonicalTransactionPayload(
-            encoded: ByteArray,
-            expectedAdmissionIntent: TransactionAdmissionIntent,
-        ) {
-            decodeCanonicalTransactionPayload(encoded, expectedAdmissionIntent)
-        }
-
         /** Decode one exact canonical payload so callers can verify signature-bound fields. */
         @JvmStatic
-        @JvmOverloads
         @Throws(NoritoException::class)
         fun decodeCanonicalTransactionPayload(
             encoded: ByteArray,
-            expectedAdmissionIntent: TransactionAdmissionIntent? = null,
         ): TransactionPayload {
             try {
                 val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
-                if (expectedAdmissionIntent != null) {
-                    require(payload.admissionIntent == expectedAdmissionIntent) {
-                        "transaction payload admission intent must be $expectedAdmissionIntent"
-                    }
-                }
                 return payload
             } catch (ex: Exception) {
                 throw NoritoException("Invalid canonical Norito transaction payload", ex)

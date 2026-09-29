@@ -1,3 +1,4 @@
+// Snapshot publication and restore against exact native execution history.
 // Signed snapshot persistence and strict restored-state controls.
 
 use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
@@ -41,6 +42,7 @@ async fn signed_snapshot_restore_keeps_configured_governance_catalog() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -160,6 +162,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
         block_count,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        state.chain_id_ref(),
         state.network_id_ref(),
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -191,6 +194,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
             block_count,
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            state.chain_id_ref(),
             state.network_id_ref(),
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
@@ -224,6 +228,7 @@ async fn can_read_snapshot_after_writing() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -238,6 +243,100 @@ async fn can_read_snapshot_after_writing() {
         canonical_state_snapshot_bytes_for_tests(&state),
         "snapshot roundtrip must preserve canonical WSV bytes"
     );
+}
+#[tokio::test]
+async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
+    let tmp_root = tempdir().expect("snapshot tempdir");
+    let store_dir = tmp_root.path().join("snapshot");
+    use crate::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
+    use iroha_sumeragi::{message::Evidence as NativeEvidence, types::Hash32};
+    let mut config = TestChainConfig::new(crate::state::World::new(), 1_000);
+    config.consensus_mode = SumeragiConsensusMode::Npos;
+    config.genesis_parameters.push(Parameter::Custom(
+        SumeragiNposParameters {
+            slashing_delay_blocks: 2,
+            ..SumeragiNposParameters::default()
+        }
+        .into_custom_parameter(),
+    ));
+    let mut chain = CertifiedTestChain::start(config).expect("actual signed native genesis");
+    chain.commit(Vec::new());
+    let native = NativeEvidence::ConflictingCertificates(
+        chain.commit_qc(
+            2,
+            Hash32([0x31; 32]),
+            Hash32([0x32; 32]),
+            false,
+            Signers::Quorum,
+        ),
+        chain.commit_qc(
+            2,
+            Hash32([0x33; 32]),
+            Hash32([0x34; 32]),
+            false,
+            Signers::LastThree,
+        ),
+    );
+    let evidence = Evidence::from_native(&native).unwrap();
+    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    crate::sumeragi::evidence::observe(chain.state(), &native).unwrap();
+    chain.commit(Vec::new()); // H3 contains the actual original admission.
+    chain.commit(Vec::new());
+    chain.commit(Vec::new()); // H5 contains the actual finality-authorized marker.
+    let state = chain.state();
+    crate::sumeragi::evidence::validate_persisted_records(&state.view())
+        .expect("original authenticated history and lifecycle");
+    let original_tip = *state.view().native_execution_tip.get();
+    {
+        let mut records = state.world.consensus_evidence.block();
+        let mut record = records.get(&evidence_key).unwrap().clone();
+        assert_eq!(record.recorded_at_height, 3);
+        assert_eq!(
+            record.penalty_status,
+            EvidencePenaltyStatus::Applied { height: 5 }
+        );
+        record.penalty_status = EvidencePenaltyStatus::Pending;
+        records.insert(evidence_key, record);
+        records.commit();
+    }
+    assert_eq!(
+        *state.view().native_execution_tip.get(),
+        original_tip,
+        "negative snapshot mutation must not replace original native history"
+    );
+    let invalid_lifecycle = crate::sumeragi::evidence::validate_persisted_records(&state.view())
+        .expect_err("an overdue restored pending penalty must be rejected");
+    assert!(invalid_lifecycle.to_string().contains("restored penalty lifecycle is impossible"));
+    let snapshot_bytes = exact_snapshot_payload_bytes(state);
+    let key_pair = checked_random_snapshot_keypair();
+    write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
+    let kura = chain.kura();
+    let error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        &store_dir,
+        kura,
+        &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        state.chain_id_ref(),
+        state.network_id_ref(),
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
+        Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired),
+        "a local export cannot bypass original replay even before lifecycle validation: {error:?}");
 }
 #[tokio::test]
 async fn generated_snapshot_passes_restart_validation_before_publication() {
@@ -428,6 +527,7 @@ async fn signed_snapshot_restore_preserves_ordered_election_corpus_and_rollback(
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -628,6 +728,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         BlockCount(0),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -688,6 +789,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             "future_snapshot_field",
             "state.future_snapshot_field",
         ),
+        ("world", "sccp_registry", "world.sccp_registry"),
         ("world", "commit_qcs", "world.commit_qcs"),
     ] {
         let tmp_root = tempdir().expect("temporary snapshot root");
@@ -737,6 +839,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             BlockCount(0),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
@@ -757,53 +860,20 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
     }
 }
 #[tokio::test]
-async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint() {
-    let tmp_root = tempdir().expect("temporary snapshot root");
-    let store_dir = tmp_root.path().join("snapshot");
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let block = signed_block_with_transaction(accepted_log_transaction("checkpointed"));
-    let block_hash = block.hash();
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let expected = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
-    kura.store_wsv_checkpoint(1, block_hash, expected)
-        .expect("persist canonical WSV checkpoint");
+async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_replay() {
+    use crate::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     let key_pair = checked_random_snapshot_keypair();
-    let serialized = CapturedStateSnapshot::capture(&state)
-        .expect("stable valid fixture snapshot")
-        .json;
-    write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-    let restored = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(1),
-        TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        &state.network_id,
-        &state.zk_snapshot(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .expect("an exact signed snapshot must match its Kura WSV checkpoint");
-    assert_eq!(
-        canonical_state_snapshot_hash(&restored).expect("stable valid fixture snapshot"),
-        expected
-    );
-    drop(restored);
+    let mut hostile = state_factory();
     let injected_account = AccountId::new(
         checked_seeded_keypair(0xD1, Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
-    state.world.accounts.insert(
+    hostile.world.accounts.insert(
         injected_account,
         AccountValue::new(AccountDetails::new(
             Metadata::default(),
@@ -812,55 +882,84 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
             Vec::new(),
         )),
     );
-    let actual = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
-    assert_ne!(
-        actual, expected,
-        "hostile WSV mutation must affect its checkpoint"
-    );
-    let serialized = CapturedStateSnapshot::capture(&state)
-        .expect("stable valid fixture snapshot")
-        .json;
-    write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-    let error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(1),
-        TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        &state.network_id,
-        &state.zk_snapshot(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("a signature cannot replace the canonical Kura WSV checkpoint"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        TryReadError::WsvCheckpointMismatch {
-            height: 1,
-            expected: observed_expected,
-            actual: observed_actual,
-        } if observed_expected == expected && observed_actual == actual
-    ));
-    assert_eq!(kura.blocks_count(), 1);
-    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
-    assert_eq!(
-        kura.wsv_checkpoint(1)
-            .expect("read checkpoint after rejection")
-            .expect("checkpoint remains present")
-            .state_hash(),
-        expected,
-        "rejected snapshot must not replace the durable WSV checkpoint"
-    );
+    let hostile_json: json::Value =
+        json::from_slice(&exact_snapshot_payload_bytes(&hostile)).unwrap();
+    let hostile_accounts = hostile_json
+        .as_object()
+        .unwrap()
+        .get("world")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .get("accounts")
+        .unwrap()
+        .clone();
+    for height in [1, 2] {
+        if height == 2 {
+            chain.commit(Vec::new());
+        }
+        let state = chain.state();
+        let kura = chain.kura();
+        let captured = CapturedStateSnapshot::capture(state).unwrap();
+        let mut mutated: json::Value = json::from_str(&captured.json).unwrap();
+        mutated
+            .as_object_mut()
+            .unwrap()
+            .get_mut("world")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("accounts".into(), hostile_accounts.clone());
+        let mutated = json::to_json(&mutated).unwrap();
+        assert_ne!(
+            canonical_snapshot_wsv_hash(captured.json.as_bytes()).unwrap(),
+            canonical_snapshot_wsv_hash(mutated.as_bytes()).unwrap()
+        );
+        let original_hash = kura.block_hash_at_height(NonZeroUsize::new(height).unwrap());
+        let original_body =
+            std::fs::read(Kura::canonical_storage_path(&kura.store_root()).join("blocks.data"))
+                .unwrap();
+        for serialized in [&captured.json, &mutated] {
+            let tmp_root = tempdir().unwrap();
+            let store_dir = tmp_root.path().join("snapshot");
+            write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
+            let result = try_read_snapshot(
+                &mv::allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
+                &store_dir,
+                kura,
+                &state.lane_manifests.read().clone(),
+                &state.nexus_snapshot(),
+                LiveQueryStore::start_test,
+                BlockCount(height),
+                TEST_CHUNK_SIZE,
+                key_pair.public_key(),
+                &state.chain_id,
+                &state.network_id,
+                &state.zk_snapshot(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::new(<_>::default(), true),
+                &snapshot_read_budget_for_testing(),
+                &crate::state::kagemusha_operation_indexes::default_budget(),
+            );
+            assert!(matches!(
+                result,
+                Err(TryReadError::NativeExecutionReplayRequired)
+            ));
+            assert_eq!(kura.blocks_count(), height);
+            assert_eq!(kura.exact_durable_blocks_count().unwrap(), height);
+            assert_eq!(
+                kura.block_hash_at_height(NonZeroUsize::new(height).unwrap()),
+                original_hash
+            );
+            assert_eq!(
+                std::fs::read(Kura::canonical_storage_path(&kura.store_root()).join("blocks.data"))
+                    .unwrap(),
+                original_body
+            );
+        }
+    }
 }
 #[tokio::test]
 async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest() {
@@ -908,6 +1007,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -942,6 +1042,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -977,6 +1078,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1024,6 +1126,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
@@ -1081,6 +1184,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
@@ -1124,6 +1228,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1175,6 +1280,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1213,6 +1319,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1258,6 +1365,7 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &state.chain_id,
         &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
@@ -1282,7 +1390,6 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     assert_eq!(world.sccp_bridge_keys().len(), 2);
     assert_eq!(world.sccp_rosters().len(), 2);
     assert_eq!(world.sccp_block_leaves().len(), 2);
-    assert_eq!(world.sccp_light_client_checkpoints().len(), 2);
     assert_eq!(*world.sccp_roster_current(), 2);
     assert!(world.sccp_parameters().is_some());
 }
@@ -1315,6 +1422,7 @@ async fn signed_snapshot_without_the_sccp_envelope_is_rejected() {
             BlockCount(0),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]

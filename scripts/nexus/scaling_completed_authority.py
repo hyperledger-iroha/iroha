@@ -316,7 +316,6 @@ def _source(trial):
              and gen.accounts == native.generation.accounts and gen.artifacts == native.generation.artifacts
              and tuple(peer.role for peer in gen.peers) == native.roles
              and tip.reader.block_store == native.roles[3].primary_block_store
-             and tip.reader.merge_log == native.roles[3].primary_merge_log
              and tip.reader.first_height == 1
              and tip.reader.last_height == vectors.stopped_height == facts.stopped_height == proof[5])
     _require(type(loaded.peers) is tuple and len(loaded.peers) == 4

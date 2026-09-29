@@ -33,7 +33,6 @@ impl State {
         let mut kagemusha_v1_runtime_verifier;
         let mut settlement_engine;
         let mut chain_id;
-        let mut settlement_accumulator;
         let mut fastpq_transcripts;
         let mut fastpq_quantity_candidate;
         let mut fastpq_entry_dataspaces;
@@ -42,7 +41,6 @@ impl State {
         let mut axt_next_handle_counters;
         let mut axt_authorization_transitioned;
         let mut batch_transfer_outcomes;
-        let mut verified_lane_relay_records;
         let mut touched_lanes;
         let mut pending_nexus_fee_receipt_source_ids;
         #[cfg(feature = "telemetry")]
@@ -91,7 +89,6 @@ impl State {
         kagemusha_v1_runtime_verifier = Some(self.kagemusha_v1_runtime_verifier());
         settlement_engine = Some(self.settlement_engine.clone());
         chain_id = Some(self.chain_id.clone());
-        settlement_accumulator = Some(crate::settlement::SettlementAccumulator::default());
         fastpq_transcripts = Some(BTreeMap::new());
         fastpq_quantity_candidate =
             Some(fastpq_quantity_capture::QuantityCandidateArchive::default());
@@ -101,7 +98,6 @@ impl State {
         axt_next_handle_counters = Some(BTreeMap::new());
         axt_authorization_transitioned = Some(BTreeSet::new());
         batch_transfer_outcomes = Some(BTreeMap::new());
-        verified_lane_relay_records = Some(Vec::new());
         touched_lanes = Some(BTreeSet::new());
         pending_nexus_fee_receipt_source_ids = Some(BTreeSet::new());
         #[cfg(feature = "telemetry")]
@@ -138,7 +134,6 @@ impl State {
         assert!(kagemusha_v1_runtime_verifier.is_some());
         assert!(settlement_engine.is_some());
         assert!(chain_id.is_some());
-        assert!(settlement_accumulator.is_some());
         assert!(fastpq_transcripts.is_some());
         assert!(fastpq_quantity_candidate.is_some());
         assert!(fastpq_entry_dataspaces.is_some());
@@ -147,7 +142,6 @@ impl State {
         assert!(axt_next_handle_counters.is_some());
         assert!(axt_authorization_transitioned.is_some());
         assert!(batch_transfer_outcomes.is_some());
-        assert!(verified_lane_relay_records.is_some());
         assert!(touched_lanes.is_some());
         assert!(pending_nexus_fee_receipt_source_ids.is_some());
         #[cfg(feature = "telemetry")]
@@ -164,6 +158,7 @@ impl State {
                 commit_topology,
                 prev_commit_topology,
                 canonical_runtime,
+                native_execution_tip,
                 projection,
                 block_hashes,
                 da_rewind_releases,
@@ -182,9 +177,9 @@ impl State {
                 read_releases: StateViewReleases::new(self),
                 da_rewind_releases,
                 canonical_runtime: block_field::BlockField::new(canonical_runtime),
+                native_execution_tip: block_field::BlockField::new(native_execution_tip),
                 block_hashes: block_hash_field::BlockHashField::new(block_hashes),
                 world,
-                merge_ledger: &self.merge_ledger,
                 transactions: storage_transactions::TransactionsBlockField::new(transactions),
                 ordinary_carrier_membership_source: None,
                 commit_topology: block_field::BlockField::new(commit_topology),
@@ -224,9 +219,6 @@ impl State {
                 settlement_engine: settlement_engine.take().expect("prepared State input"),
                 chain_id: chain_id.take().expect("prepared State input"),
                 network_id: self.network_id,
-                settlement_accumulator: settlement_accumulator
-                    .take()
-                    .expect("prepared State input"),
                 fastpq_transcripts: fastpq_transcripts.take().expect("prepared State input"),
                 fastpq_quantity_candidate: fastpq_quantity_candidate
                     .take()
@@ -252,9 +244,6 @@ impl State {
                     .take()
                     .expect("prepared State input"),
                 batch_transfer_outcomes: batch_transfer_outcomes
-                    .take()
-                    .expect("prepared State input"),
-                verified_lane_relay_records: verified_lane_relay_records
                     .take()
                     .expect("prepared State input"),
                 touched_lanes: touched_lanes.take().expect("prepared State input"),

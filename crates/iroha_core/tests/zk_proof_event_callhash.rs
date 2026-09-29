@@ -55,8 +55,10 @@ fn proof_event_includes_call_hash() {
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
+    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb, sb_recorder).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
     // Find a Proof::Rejected event and assert call_hash was set

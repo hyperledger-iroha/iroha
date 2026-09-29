@@ -116,12 +116,15 @@ on 23 pre-existing unfinished Sumeragi migration errors; eight native controls
 and six four-validator scenarios remain unexecuted. See the
 [current network record](../docs/history/2026-09-29/zk-current-network-qualification.md).
 
-RAM-LFE registration, activation, receipt entry and the internal proof helper
-reject unavailable proof mode before decoding or private work. An unrelated
-generic proof can no longer satisfy the helper. Thirteen helper, four identifier
-and five typed-verifier controls pass on the frozen Core candidate.
+RAM-LFE registration, activation, restoration and receipts now reject both signed
+and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
+Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
+An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
+complete relation and current Core/Torii qualification remain open. The execute API's
+false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
+records 63 schema controls and compiled-but-fixture-blocked Kotlin/Java tests.
 
-The current native RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
+The retained diagnostic RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
 modulo-257 reduction, distinct canonical policy/tape commitments and a mandatory
 `initializer_descriptor_hash`. Tracing observes the sole eleven-operation
 interpreter and owns clearing private cells; it is not a proof. The first normal
@@ -139,7 +142,8 @@ and [initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.
 The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace
 costly private wire hashing and separate stable function identity from key rotation.
 The unused pinned Pasta leaf passes [18 ordinary native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md);
-the circuit adapter, full relation and coherent production migration remain open.
+the [unused circuit experiment](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes eight
+isolated controls. Full relation and coherent production migration remain open.
 
 ### ZK04 — FASTPQ
 
@@ -270,8 +274,8 @@ native, integrated workspace or network runs.
 
 ## Remaining execution sequence
 
-1. Finish RAM-LFE native known answers, trace controls and typed SDK profile tests;
-   then complete private tape/config ownership and the specified semantic relation.
+1. Replace the insecure RAM-LFE encryption construction, retire diagnostic public
+   surfaces, and complete its semantic relation and current SDK/consumer controls.
 2. Produce maximum-occupancy ordinary/AXT FASTPQ artifacts through current facade
    fixtures and independently verify them under unchanged resource limits.
 3. Pass the amended X509 focused suite on a normal optimized binary, then produce

@@ -33,7 +33,7 @@ fn loads_stores_alignment_semantics() {
     let load64 = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 0);
     let halt = encoding::wide::encode_halt();
     let mut vm = run_prog(&[addi_base, store64, load64, halt]);
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     vm.set_register(2, ivm::Memory::HEAP_START);
     vm.set_register(3, 0x42);
     vm.run().expect("aligned run");
@@ -96,7 +96,7 @@ fn branches_randomized_consistency() {
     vm.load_program(&bytes).unwrap();
     for a in [0, 1, 7, 42, 255, 1024] {
         for b in [0, 1, 7, 41, 255, 2048] {
-            vm.reset();
+            vm.reset().expect("private lifecycle cleanup succeeds");
             vm.set_register(3, 0);
             vm.set_register(5, a as u64);
             vm.set_register(6, b as u64);

@@ -1,23 +1,16 @@
 // Included at Kura module scope. Preparation/re-audit only; never a scrape path.
 
-const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 10] = [
+const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 4] = [
     "blocks",
     "retired/blocks",
-    "merge_ledger",
-    "retired/merge_ledger",
     "retired/lane_geometry",
-    MERGE_CARRIERS_DIR,
-    PENDING_MERGE_ENTRIES_DIR,
-    PENDING_QUEUE_PLAN_ADMISSIONS_DIR,
-    NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY,
     fastpq_artifact_store::DIRECTORY,
 ];
 
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
-/// The total-byte owner enumerates these declared trees, twelve fixed root files,
-/// and bounded process-generation publication residue. In particular,
-/// `sumeragi_v2` WAL/body/certificate-serve files have independent writers and
+/// The total-byte owner enumerates these declared trees, eight fixed root files. In particular,
+/// Consensus WAL/body/certificate files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
 /// is also excluded; it is not a retained data-budget artifact. No entire-store-root
 /// traversal is permitted.
@@ -66,10 +59,7 @@ impl KuraPhysicalResourceScope {
         store_root: &Path,
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::Unavailable as Missing;
-        if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len()
-            || self.files.len() < 12
-            || self.files.len() > 12 + AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT
-        {
+        if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len() || self.files.len() != 8 {
             return Err(Missing::OwnerMismatch);
         }
         let canonical = |path: &Path| {
@@ -140,7 +130,7 @@ impl Kura {
         PHYSICAL_RESOURCE_OWNED_TREE_NAMES.map(|name| self.store_root.join(name))
     }
 
-    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 12] {
+    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 8] {
         let root = &self.store_root;
         let query = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let projection = root.join(crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE);
@@ -153,10 +143,6 @@ impl Kura {
             geometry.with_extension("norito.tmp"),
             geometry.with_extension("norito.restore.tmp"),
             geometry,
-            Self::prune_intent_path_for(root),
-            Self::prune_intent_temp_path_for(root),
-            Self::autonomous_lifecycle_process_generation_path_for(root),
-            Self::autonomous_lifecycle_process_generation_temp_path_for(root),
             root.join(membership_storage::SEGMENT_NAME),
         ]
     }
@@ -195,7 +181,6 @@ impl Kura {
         if [
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
-            PRUNE_INTENT_FILE_NAME, AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE,
             membership_storage::SEGMENT_NAME,
         ].contains(&stable)
             || (name.starts_with("lane_geometry_journal.norito")
@@ -203,17 +188,7 @@ impl Kura {
         {
             return true;
         }
-        let Some(suffix) =
-            name.strip_prefix(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX)
-        else {
-            return false;
-        };
-        !suffix.is_empty()
-            && (!suffix.starts_with("quarantine-")
-                || Self::is_autonomous_publication_quarantine_name(
-                    name,
-                    AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
-                ))
+        false
     }
 
     fn physical_resource_scope(
@@ -221,6 +196,8 @@ impl Kura {
     ) -> std::result::Result<KuraPhysicalResourceScope, resource_inventory::Unavailable> {
         use resource_inventory::Unavailable as Missing;
         self.validate_physical_resource_owner_identity()?;
+        Self::reject_retired_merge_storage(&self.store_root)
+            .map_err(|_| Missing::InvalidInventory)?;
         let root = &self.store_root;
         let mut scope = KuraPhysicalResourceScope {
             trees: self.physical_resource_owned_trees().into(),
@@ -231,13 +208,12 @@ impl Kura {
             root.clone(),
             secure_file_metadata::from_path(root).map_err(|_| Missing::InvalidInventory)?,
         )?;
-        // Only discover the exact variable root-file namespace already owned by
-        // process-generation recovery. Other root entries are not traversed.
+        // Reject unrecognized journal temporaries without decoding retired protocol records.
         for (index, entry) in std::fs::read_dir(root)
             .map_err(|_| Missing::InvalidInventory)?
             .enumerate()
         {
-            if index >= AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT {
+            if index >= 4_096 {
                 return Err(Missing::InvalidInventory);
             }
             let entry = entry.map_err(|_| Missing::InvalidInventory)?;
@@ -245,28 +221,13 @@ impl Kura {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if name.starts_with(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX) {
-                if !Self::validate_autonomous_publication_quarantine(
-                    root,
-                    &entry.path(),
-                    AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES,
-                    AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
-                    "physical inventory process-generation quarantine",
-                )
-                .map_err(|_| Missing::InvalidInventory)?
-                {
-                    return Err(Missing::InvalidInventory);
-                }
-                scope.files.push(entry.path());
-            } else if (name.starts_with("autonomous_lifecycle_process_generation_")
-                && name != AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE
-                && name != AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_TEMP_FILE)
-                || (name.starts_with(PRUNE_INTENT_FILE_NAME)
-                    && name != PRUNE_INTENT_FILE_NAME
-                    && name != PRUNE_INTENT_TEMP_FILE_NAME)
+            if (name.starts_with("prune_intent.")
+                || matches!(name, "pending_merge_entries" | "merge_carriers"))
                 || (name.starts_with("lane_geometry_journal.")
                     && !scope.files.contains(&entry.path()))
-                || name.starts_with(FORBIDDEN_ROOT_ATOMIC_TEMP_PREFIX)
+                || name.starts_with(".kura-sidecar-")
+                || name.starts_with("autonomous_")
+                || name.starts_with("native_amx_")
             {
                 return Err(Missing::OwnerMismatch);
             }
@@ -306,7 +267,6 @@ impl Kura {
     fn physical_resource_reconciliation_allowed(&self) -> bool {
         !self.emergency_fast_startup_enabled()
             && !self.auxiliary_history_deferred
-            && !self.provisional_snapshot_bootstrap_pending()
             && !self.canonical_storage_poisoned.load(Ordering::Acquire)
             && !self.prune_recovery_is_required()
     }

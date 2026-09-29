@@ -28,12 +28,12 @@ RUST_TERMINAL_FIELDS = frozenset({
 SUCCESS_RESULT_FIELDS = frozenset({
     "version", "protocol", "request_id", "invocation_nonce", "request_sha256",
     "commit", "participants", "mandatory_signed_rs16_da_rbc",
-    "signed_rs16_da_observations", "authenticated_message_control",
+    "signed_rs16_da_observations", "authenticated_private_settlement_route_control",
     "process_inventory", "payload",
 })
 DEADLINE_STAGES = frozenset({
     "coordinator_ack", "state_convergence", "transparent_consents",
-    "transparent_balances", "native_amx_receipt", "canonical_carrier",
+    "transparent_balances", "settlement_finality", "canonical_carrier",
     "private_receipt",
 })
 WORKER_FAILURE_REASONS = frozenset({

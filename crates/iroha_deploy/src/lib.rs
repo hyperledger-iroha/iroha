@@ -15,9 +15,8 @@
 //! verification gates.
 // TODO: P2 adds `plan`, `converge`, the local driver and gates G0-G8/G11; P3 adds
 // the SSH driver and edge renderers (specs/network_deployment.md §13).
-// TODO(sumeragi): gate G5, the light finality verifier, is rebuilt on the certified
-// chain (`iroha_data_model::sumeragi_finality`: `SumeragiFinalityProof` and the
-// challenge-bound `SumeragiFinalityAttestation`); the retired verifier checked only
-// artifacts of the removed consensus runtime.
 
 pub mod definition;
+
+/// Verification gates over authenticated native protocol evidence.
+pub mod verify;

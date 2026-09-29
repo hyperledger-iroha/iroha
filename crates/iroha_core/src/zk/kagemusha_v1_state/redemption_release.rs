@@ -5,7 +5,7 @@
 //! projection below is hardware selector material only; it never authorizes release of a durable
 //! redemption outbox entry, and Core exposes no redemption release path in this release.
 
-use iroha_data_model::{NetworkId, block::consensus_v2::HeightContextId};
+use iroha_data_model::NetworkId;
 use norito::codec::{Decode, Encode};
 
 use super::{DigestV1, KAGEMUSHA_STATE_VERSION_V1, KagemushaStateErrorV1, canonical_sha256_digest};
@@ -42,8 +42,12 @@ pub struct KagemushaRedemptionTerminalReceiptV1 {
     pub authenticated_status_digest: DigestV1,
     /// Finalized block height pinned by the caller.
     pub finalized_block_height: u64,
-    /// Exact externally authenticated consensus context at that height.
-    pub height_context_id: HeightContextId,
+    /// Original finalized Iroha block hash; selector bytes alone are not authority.
+    pub finalized_block_hash: DigestV1,
+    /// Original native consensus header hash certified at this height.
+    pub finalized_core_hash: DigestV1,
+    /// Original native execution result commitment certified at this height.
+    pub finalized_result: DigestV1,
 }
 
 impl KagemushaRedemptionTerminalReceiptV1 {
@@ -57,13 +61,7 @@ impl KagemushaRedemptionTerminalReceiptV1 {
     pub fn validate_shape(&self) -> Result<(), KagemushaStateErrorV1> {
         if self.version != KAGEMUSHA_STATE_VERSION_V1
             || self.network_id.as_bytes() == &[0; 32]
-            || self.finalized_block_height == 0
-            || self
-                .height_context_id
-                .0
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+            || self.finalized_block_height <= 1
             || [
                 self.operation_id,
                 self.redemption_id,
@@ -71,6 +69,9 @@ impl KagemushaRedemptionTerminalReceiptV1 {
                 self.envelope_digest,
                 self.reserve_receipt_digest,
                 self.authenticated_status_digest,
+                self.finalized_block_hash,
+                self.finalized_core_hash,
+                self.finalized_result,
             ]
             .contains(&[0; 32])
         {
@@ -93,7 +94,6 @@ impl KagemushaRedemptionTerminalReceiptV1 {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::consensus_v2::HeightContext;
 
     use super::*;
 
@@ -110,9 +110,9 @@ mod tests {
             reserve_receipt_digest: [0x15; 32],
             authenticated_status_digest: [0x16; 32],
             finalized_block_height: 7,
-            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-                Hash::new(b"kagemusha-redemption-terminal-receipt-context"),
-            )),
+            finalized_block_hash: [0x17; 32],
+            finalized_core_hash: [0x18; 32],
+            finalized_result: [0x19; 32],
         }
     }
 
@@ -121,6 +121,10 @@ mod tests {
         let value = receipt();
         value.validate_shape().unwrap();
         let digest = value.canonical_digest().unwrap();
+        println!(
+            "NATIVE_KAGEMUSHA_REDEMPTION_SELECTOR_HEX={}",
+            hex::encode(norito::encode_canonical(&value).unwrap())
+        );
         super::super::outgoing_operation_index::frame_identity_tests::check(
             "KagemushaRedemptionTerminalReceiptV1",
             &value,
@@ -129,6 +133,30 @@ mod tests {
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
         );
         assert_eq!(value.canonical_digest().unwrap(), digest);
+    }
+
+    #[test]
+    fn selector_requires_all_native_facts_and_refuses_unsigned_genesis_output() {
+        let valid = receipt();
+        for height in [0, 1] {
+            let mut invalid = valid;
+            invalid.finalized_block_height = height;
+            assert!(invalid.validate_shape().is_err());
+            assert!(invalid.canonical_digest().is_err());
+        }
+        let mutations: [fn(&mut KagemushaRedemptionTerminalReceiptV1); 3] = [
+            |value| value.finalized_block_hash = [0; 32],
+            |value| value.finalized_core_hash = [0; 32],
+            |value| value.finalized_result = [0; 32],
+        ];
+        for mutate in mutations {
+            let mut invalid = valid;
+            mutate(&mut invalid);
+            assert!(invalid.validate_shape().is_err());
+        }
+        let mut maximum_height = valid;
+        maximum_height.finalized_block_height = u64::MAX;
+        maximum_height.validate_shape().unwrap();
     }
 
     #[test]
@@ -146,5 +174,18 @@ mod tests {
             receipt.canonical_digest().expect("valid receipt"),
             conflict.canonical_digest().expect("valid conflict shape")
         );
+        let mutations: [fn(&mut KagemushaRedemptionTerminalReceiptV1); 3] = [
+            |value| value.finalized_block_hash[0] ^= 1,
+            |value| value.finalized_core_hash[0] ^= 1,
+            |value| value.finalized_result[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut conflict = receipt;
+            mutate(&mut conflict);
+            assert_ne!(
+                receipt.canonical_digest().unwrap(),
+                conflict.canonical_digest().unwrap()
+            );
+        }
     }
 }

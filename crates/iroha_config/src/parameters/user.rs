@@ -1042,7 +1042,7 @@ pub enum ParseError {
     /// Private Musubi publication listener settings were invalid.
     #[error("Invalid Musubi publication configuration")]
     InvalidMusubiPublicationConfig,
-    /// Snapshot configuration contained an invalid audited-bootstrap policy.
+    /// Snapshot configuration contained invalid resource budgets.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
     /// Network Time Service configuration contained invalid or unsafe values.
@@ -1404,9 +1404,6 @@ impl Root {
         let settlement = self.settlement.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
-        }
-        if let Err(message) = snapshot.bootstrap.validate() {
-            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
         if let Err(message) = snapshot.resources.validate(snapshot.max_payload_bytes) {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
@@ -8708,9 +8705,6 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
-    /// Maximum queue-plan journal size before atomic compaction is considered.
-    #[config(default = "defaults::queue::PLAN_JOURNAL_MAX_BYTES")]
-    pub plan_journal_max_bytes: u64,
 }
 impl Queue {
     /// Convert this user configuration into the runtime representation.
@@ -8722,7 +8716,6 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
-            plan_journal_max_bytes,
         } = self;
         actual::Queue {
             capacity,
@@ -8731,7 +8724,6 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
-            plan_journal_max_bytes,
         }
     }
 }
@@ -9752,9 +9744,6 @@ pub struct Nexus {
     /// Governed atomic private cross-dataspace settlement policy.
     #[config(nested)]
     pub atomic_private_settlement: NexusAtomicPrivateSettlement,
-    /// Lane-relay emergency override configuration.
-    #[config(nested)]
-    pub lane_relay_emergency: LaneRelayEmergency,
     /// Lane routing policy configuration.
     #[config(default)]
     pub routing_policy: RoutingPolicy,
@@ -9809,7 +9798,6 @@ impl_default!(Nexus {
     endorsement: NexusEndorsement::default(),
     axt: NexusAxt::default(),
     atomic_private_settlement: NexusAtomicPrivateSettlement::default(),
-    lane_relay_emergency: LaneRelayEmergency::default(),
     routing_policy: RoutingPolicy::default(),
     registry: LaneRegistryConfig::default(),
     governance: GovernanceCatalogConfig::default(),
@@ -10322,7 +10310,7 @@ pub struct NexusFees {
     /// Protocol account that physically custodies isolated sponsor-program vault assets.
     #[config(default = "defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID.to_string()")]
     pub sponsor_vault_custody_account_id: String,
-    /// Fee settlement mode: `direct` or `lane_relay_burn`.
+    /// Fee settlement mode: `direct`; receipt-only relay settlement is retired.
     #[config(default = "defaults::nexus::fees::SETTLEMENT_MODE.to_string()")]
     pub settlement_mode: String,
     /// Canonical I105 authorities allowed to submit fee-free successful SORA v2 XOR claim mint
@@ -10458,10 +10446,9 @@ impl NexusFees {
         }
         let settlement_mode = match self.settlement_mode.as_str() {
             "direct" => actual::NexusFeeSettlementMode::Direct,
-            "lane_relay_burn" => actual::NexusFeeSettlementMode::LaneRelayBurn,
             other => {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "invalid nexus.fees.settlement_mode `{other}`: expected `direct` or `lane_relay_burn`"
+                    "invalid nexus.fees.settlement_mode `{other}`: expected `direct`"
                 )));
                 return None;
             }
@@ -11537,74 +11524,6 @@ impl_default!(NexusAtomicPrivateSettlement {
     permitted_policy_versions:
         defaults::nexus::atomic_private_settlement::permitted_policy_versions(),
 });
-/// Lane-relay emergency override configuration.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct LaneRelayEmergency {
-    /// Whether emergency validator overrides are enabled.
-    #[config(default = "defaults::nexus::lane_relay_emergency::ENABLED")]
-    pub enabled: bool,
-    /// Minimum multisig threshold required for override transactions.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD")]
-    pub multisig_threshold: u16,
-    /// Minimum multisig member count required for override transactions.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS")]
-    pub multisig_members: u16,
-    /// Maximum number of blocks an emergency override may remain active.
-    #[config(default = "defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS")]
-    pub max_ttl_blocks: u32,
-}
-impl_default!(LaneRelayEmergency {
-    enabled: defaults::nexus::lane_relay_emergency::ENABLED,
-    multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
-    multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
-    max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
-});
-impl LaneRelayEmergency {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::LaneRelayEmergency> {
-        let mut invalid = false;
-        let threshold = NonZeroU16::new(self.multisig_threshold).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.multisig_threshold must be > 0"),
-            );
-            None
-        });
-        let members = NonZeroU16::new(self.multisig_members).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.multisig_members must be > 0"),
-            );
-            None
-        });
-        let max_ttl_blocks = NonZeroU32::new(self.max_ttl_blocks).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.max_ttl_blocks must be > 0"),
-            );
-            None
-        });
-        if let (Some(threshold), Some(members)) = (threshold, members)
-            && threshold.get() > members.get()
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.lane_relay_emergency.multisig_threshold {threshold} must be <= multisig_members {members}"
-            )));
-        }
-        if invalid || threshold.is_none() || members.is_none() || max_ttl_blocks.is_none() {
-            return None;
-        }
-        Some(actual::LaneRelayEmergency {
-            enabled: self.enabled,
-            multisig_threshold: threshold.expect("validated"),
-            multisig_members: members.expect("validated"),
-            max_ttl_blocks: max_ttl_blocks.expect("validated"),
-        })
-    }
-}
 impl NexusAtomicPrivateSettlement {
     fn parse(
         self,
@@ -11982,7 +11901,6 @@ impl Nexus {
             endorsement: endorsement_cfg,
             axt,
             atomic_private_settlement,
-            lane_relay_emergency,
             routing_policy,
             registry,
             governance,
@@ -12009,7 +11927,6 @@ impl Nexus {
         let storage = storage.parse(emitter)?;
         let axt_cfg = axt.parse(emitter)?;
         let atomic_private_settlement = atomic_private_settlement.parse(emitter)?;
-        let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
         let relay_worker = relay_worker.parse(emitter)?;
@@ -12075,7 +11992,6 @@ impl Nexus {
             da,
             axt: axt_cfg,
             atomic_private_settlement,
-            lane_relay_emergency,
         })
     }
     fn normalize_opt(value: Option<String>) -> Option<String> {
@@ -13482,9 +13398,6 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
-    /// Explicit authorization for a one-time audited hash-only snapshot boundary.
-    #[config(nested)]
-    pub bootstrap: SnapshotBootstrapPolicy,
 }
 impl Snapshot {
     fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {
@@ -13561,73 +13474,6 @@ impl SnapshotResourcePolicy {
             );
         }
         Ok(())
-    }
-}
-/// Fail-closed authorization for importing one audited hash-only snapshot boundary.
-#[derive(Debug, Clone, Default, ReadConfig)]
-pub struct SnapshotBootstrapPolicy {
-    /// Whether the audited bootstrap path is enabled.
-    #[config(default = "false")]
-    pub enabled: bool,
-    /// Exact SHA-256 digest of the authorized snapshot payload.
-    pub audited_sha256: Option<String>,
-    /// Exact terminal height committed by the authorized snapshot.
-    pub audited_height: Option<u64>,
-}
-impl SnapshotBootstrapPolicy {
-    /// Validate that the policy is either fully disabled or fully and canonically specified.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when disabled bootstrap retains an audit anchor, or
-    /// when enabled bootstrap lacks a canonical lowercase SHA-256 digest or a
-    /// non-zero audited height.
-    pub fn validate(&self) -> core::result::Result<(), String> {
-        if !self.enabled {
-            if self.audited_sha256.is_some() || self.audited_height.is_some() {
-                return Err(
-                    "snapshot.bootstrap digest/height require snapshot.bootstrap.enabled=true"
-                        .to_owned(),
-                );
-            }
-            return Ok(());
-        }
-        let digest = self
-            .audited_sha256
-            .as_deref()
-            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_sha256".to_owned())?;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(
-                "snapshot.bootstrap.audited_sha256 must contain exactly 64 lowercase hexadecimal digits"
-                    .to_owned(),
-            );
-        }
-        let height = self
-            .audited_height
-            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_height".to_owned())?;
-        if height == 0 {
-            return Err("snapshot.bootstrap.audited_height must be non-zero".to_owned());
-        }
-        Ok(())
-    }
-    /// Return whether this policy authorizes the exact payload digest.
-    #[must_use]
-    pub fn authorizes_digest(&self, actual_sha256: &str) -> bool {
-        self.validate().is_ok()
-            && self.enabled
-            && self
-                .audited_sha256
-                .as_deref()
-                .is_some_and(|expected| expected == actual_sha256)
-    }
-    /// Return whether this policy authorizes the exact payload digest and terminal height.
-    #[must_use]
-    pub fn authorizes(&self, actual_sha256: &str, height: u64) -> bool {
-        self.authorizes_digest(actual_sha256) && self.audited_height == Some(height)
     }
 }
 /// User-level non-secret custody and private TLS listener settings for Musubi publication.
@@ -18866,7 +18712,6 @@ impl AccountOnboarding {
         const UNSCOPED_DEFAULT_PERMISSIONS: &[&str] = &[
             "DpnUser",
             "CanManagePeers",
-            "CanManageLaneRelayEmergency",
             "CanResolveEscrowDispute",
             "CanManageKagemushaReserve",
             "CanSetParameters",
@@ -35284,5 +35129,21 @@ mod merge_authority_geometry_tests {
                 assert!(format!("{diagnostics:?}").contains("merge authority geometry reserves"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod native_fee_mode_tests {
+    use super::*;
+
+    #[test]
+    fn retired_lane_relay_burn_mode_is_a_configuration_error() {
+        let mut emitter = Emitter::new();
+        let fees = NexusFees {
+            settlement_mode: "lane_relay_burn".to_owned(),
+            ..NexusFees::default()
+        };
+        assert!(fees.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }

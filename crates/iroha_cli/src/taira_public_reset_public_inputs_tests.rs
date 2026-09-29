@@ -327,8 +327,6 @@ fn execute_fixture_genesis(
         store_dir: iroha_config::base::WithOrigin::inline(PathBuf::new()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
@@ -338,7 +336,6 @@ fn execute_fixture_genesis(
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: defaults::kura::FSYNC_MODE,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
     };

@@ -7,16 +7,12 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
 };
 use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::consensus_v2::HeightContextId,
-    kagemusha::{
-        KagemushaAcknowledgementV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,
-        KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
-        KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
-        KagemushaMonotonicLeaseV1, KagemushaOperationKindV1, KagemushaRedemptionProofV1,
-        KagemushaRedemptionStatementV1, KagemushaTrustedCommitTimeV1,
-        kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
-    },
+use iroha_data_model::kagemusha::{
+    KagemushaAcknowledgementV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,
+    KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
+    KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1, KagemushaMonotonicLeaseV1,
+    KagemushaOperationKindV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+    KagemushaTrustedCommitTimeV1, kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
 };
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
@@ -352,9 +348,9 @@ fn fixture(
                 reserve_receipt_digest: [0x84; 32],
                 authenticated_status_digest: [0x85; 32],
                 finalized_block_height: 17,
-                height_context_id: HeightContextId(HashOf::from_untyped_unchecked(
-                    Hash::prehashed([0x86; 32]),
-                )),
+                finalized_block_hash: [0x86; 32],
+                finalized_core_hash: [0x87; 32],
+                finalized_result: [0x88; 32],
             };
             let digest = receipt.canonical_digest().unwrap();
             (

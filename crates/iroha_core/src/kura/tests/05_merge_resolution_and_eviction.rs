@@ -1,122 +1,4 @@
 #[test]
-fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
-    for new_marker_won in [false, true] {
-        let temp_dir = TempDir::new().expect("create Kura root");
-        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.fsync_mode = FsyncMode::Batched;
-        config.fsync_interval = Duration::from_secs(60);
-        let expected_entry = {
-            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-                &config,
-                &RuntimeLaneConfig::default(),
-            )
-            .expect("open Kura");
-            // Bind the configured initial incarnation before this fixture writes
-            // durable blocks or recovery sidecars into the primary store.
-            publish_initial_configured_lane_geometry_for_test(
-                &kura,
-                &RuntimeLaneConfig::default(),
-                &BTreeMap::new(),
-            );
-            let mut blocks = DummyBlocks::new();
-            kura.store_block(blocks.next()).expect("store merge parent");
-            let mut entry = sample_merge_entry(1);
-            let carrier = next_merge_carrier(&mut blocks, &mut entry);
-            let store = kura.block_store.lock();
-            if new_marker_won {
-                store
-                    .fail_next_commit_marker_ack_and_readback
-                    .store(true, Ordering::Release);
-            } else {
-                store
-                    .fail_next_commit_marker_write_and_readback
-                    .store(true, Ordering::Release);
-            }
-            drop(store);
-            assert!(matches!(
-                kura.store_block_with_merge_entry(carrier, &entry),
-                Err(Error::DaBlockRewriteCommitStateUnknown { .. })
-            ));
-            assert!(kura.canonical_association_stage_path().is_file());
-            assert!(kura.merge_ledger_snapshot().is_empty());
-            entry
-        };
-        let (reopened, count) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("startup resolves merge association stage by marker");
-        assert_eq!(count.0, if new_marker_won { 2 } else { 1 });
-        assert_eq!(
-            reopened.merge_ledger_snapshot(),
-            if new_marker_won {
-                vec![expected_entry]
-            } else {
-                Vec::new()
-            }
-        );
-        assert!(!reopened.canonical_association_stage_path().exists());
-    }
-}
-#[test]
-fn replace_top_block_does_not_depend_on_writer_channel() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
-    let block_hash = block.hash();
-    kura.store_block(block).expect("store block");
-    kura.block_notify_rx.lock().take();
-    let replacement: SignedBlock =
-        ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-            header.set_height(nonzero!(1_u64));
-            header.set_prev_block_hash(None);
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into();
-    let replacement_hash = replacement.hash();
-    assert_ne!(block_hash, replacement_hash);
-    kura.replace_top_block(replacement)
-        .expect("replace top block");
-    assert_eq!(kura.blocks_count(), 1);
-    let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
-    assert_eq!(top_hash, Some(replacement_hash));
-}
-#[test]
-fn replace_top_block_does_not_depend_on_writer_fault() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
-    let block_hash = block.hash();
-    kura.store_block(block).expect("store block");
-    kura.record_writer_fault("test", &Error::BlockWriterUnavailable);
-    let replacement: SignedBlock =
-        ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-            header.set_height(nonzero!(1_u64));
-            header.set_prev_block_hash(None);
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into();
-    let replacement_hash = replacement.hash();
-    assert_ne!(block_hash, replacement_hash);
-    kura.replace_top_block(replacement)
-        .expect("replace top block");
-    assert_eq!(kura.blocks_count(), 1);
-    let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
-    assert_eq!(top_hash, Some(replacement_hash));
-}
-#[test]
-fn store_block_with_merge_entry_does_not_depend_on_writer_channel() {
-    let kura = Kura::blank_kura_for_testing();
-    kura.block_notify_rx.lock().take();
-    let mut blocks = DummyBlocks::new();
-    let parent = blocks.next();
-    let mut entry = sample_merge_entry(1);
-    let block = next_merge_carrier(&mut blocks, &mut entry);
-    kura.store_block(parent).expect("store carrier parent");
-    kura.store_block_with_merge_entry(block, &entry)
-        .expect("store block with merge entry");
-    assert_eq!(kura.blocks_count(), 2);
-    assert_eq!(kura.merge_ledger_snapshot().len(), 1);
-}
-#[test]
 fn read_and_write_to_blockchain_data_store() {
     let dir = tempfile::tempdir().unwrap();
     let mut block_store = BlockStore::new(dir.path());
@@ -218,7 +100,7 @@ fn append_block_to_chain_roundtrip_decodes() {
     let dir = tempfile::tempdir().unwrap();
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();
-    let block = DummyBlocks::new().next();
+    let block = NativeBlocks::new().next();
     block_store.append_block_to_chain(&block).unwrap();
     let BlockIndex { start, length } = block_store.read_block_index(0).unwrap();
     let len: usize = length.try_into().expect("block length fits in usize");
@@ -534,105 +416,6 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
     );
 }
 
-#[test]
-fn carrier_pins_reject_da_rewrite_recovery_before_mutation() {
-    for new_marker_won in [false, true] {
-        let dir = tempfile::tempdir().expect("create pinned DA rewrite root");
-        let mut block_store = BlockStore::new(dir.path());
-        block_store
-            .create_files_if_they_do_not_exist()
-            .expect("create canonical files");
-        let leader = checked_keypair();
-        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
-        let block2: Arc<SignedBlock> = Arc::new(
-            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                header.set_prev_block_hash(Some(block1.hash()));
-            })
-            .into(),
-        );
-        let replacement: Arc<SignedBlock> = Arc::new(
-            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                header.set_prev_block_hash(Some(block1.hash()));
-                header.set_view_change_index(header.view_change_index().saturating_add(1));
-            })
-            .into(),
-        );
-        let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
-        let inline_budget = u64::try_from(block1_frame.len())
-            .expect("block one length")
-            .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
-        block_store
-            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
-            .expect("append first block");
-        block_store
-            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
-            .expect("append original evicted block");
-        let sidecar_path = block_store.da_block_path(2);
-        let original_sidecar = std::fs::read(&sidecar_path).expect("read original sidecar");
-        if new_marker_won {
-            block_store
-                .crash_next_da_rewrite_after_marker
-                .store(true, Ordering::Release);
-        } else {
-            block_store
-                .crash_next_da_rewrite_before_marker
-                .store(true, Ordering::Release);
-        }
-        block_store
-            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
-            .expect_err("leave a durable DA rewrite stage at the selected crash boundary");
-        let selected_marker = block_store
-            .read_commit_marker()
-            .expect("read selected marker")
-            .expect("selected marker exists");
-        let stage_path = block_store.da_block_rewrite_stage_path();
-        let stage_bytes = std::fs::read(&stage_path).expect("read staged rewrite");
-        let hashes_before = block_store
-            .read_block_hashes(1, 1)
-            .expect("read staged hash journal");
-        let conflicting_pin = if new_marker_won {
-            block2.hash()
-        } else {
-            replacement.hash()
-        };
-        let pins = BTreeMap::from([(2_u64, conflicting_pin)]);
-
-        let error = block_store
-            .recover_canonical_storage_stages_with_carrier_pins(&pins)
-            .expect_err("a carrier pin must reject the conflicting selected rewrite state");
-        assert!(
-            error
-                .to_string()
-                .contains("pinned canonical replica terminal carrier"),
-            "unexpected pin-recovery error: {error}",
-        );
-        assert_eq!(
-            block_store
-                .read_commit_marker()
-                .expect("reread selected marker")
-                .expect("selected marker remains"),
-            selected_marker,
-            "pin rejection must not change the publication marker",
-        );
-        assert_eq!(
-            block_store
-                .read_block_hashes(1, 1)
-                .expect("reread staged hash journal"),
-            hashes_before,
-            "pin rejection must not rewrite the hash journal",
-        );
-        assert_eq!(
-            std::fs::read(&sidecar_path).expect("reread original sidecar"),
-            original_sidecar,
-            "pin rejection must not replace the selected carrier sidecar",
-        );
-        assert_eq!(
-            std::fs::read(&stage_path).expect("reread staged rewrite"),
-            stage_bytes,
-            "pin rejection must leave the recovery transaction available for diagnosis",
-        );
-    }
-}
 
 #[test]
 fn append_block_batch_at_rewrites_tail() {
@@ -684,12 +467,8 @@ fn strict_init_kura() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -698,75 +477,13 @@ fn strict_init_kura() {
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
     .unwrap();
 }
 #[test]
-fn kura_not_miss_replace_block() {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_time()
-        .build()
-        .unwrap();
-    {
-        let _rt_guard = rt.enter();
-        let _logger = iroha_logger::test_logger();
-    }
-    // Create kura and write some blocks
-    let temp_dir = TempDir::new().unwrap();
-    let [block_genesis, _block, block_soft_fork, block_next] =
-        create_blocks(&rt, &temp_dir).try_into().unwrap();
-    // Reinitialize kura and check that correct blocks are loaded
-    {
-        let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
-            &Config {
-                init_mode: iroha_config::kura::InitMode::Strict,
-                store_dir: iroha_config::base::WithOrigin::inline(
-                    temp_dir.path().to_str().unwrap().into(),
-                ),
-                max_disk_usage_bytes:
-                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-                blocks_in_memory: BLOCKS_IN_MEMORY,
-                debug_output_new_blocks: false,
-                merge_ledger_cache_capacity:
-                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-                fsync_mode: iroha_config::kura::FsyncMode::Batched,
-                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-                lane_history_retention:
-                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-                native_context_archive_max_bytes:
-                    iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
-                block_hash_history_bytes:
-                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-                transaction_history_bytes:
-                    iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
-                membership_storage:
-                    iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
-                fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-            },
-            &RuntimeLaneConfig::default(),
-        )
-        .unwrap();
-        assert_eq!(block_count.0, 3);
-        assert_eq!(
-            kura.get_block(nonzero!(1_usize)).unwrap().hash(),
-            block_genesis.as_ref().hash()
-        );
-        assert_eq!(
-            kura.get_block(nonzero!(2_usize)).unwrap().hash(),
-            block_soft_fork.as_ref().hash()
-        );
-        assert_eq!(
-            kura.get_block(nonzero!(3_usize)).unwrap().hash(),
-            block_next.as_ref().hash()
-        );
-    }
-}
-#[test]
-fn get_block_caches_loaded_block() {
+fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
     let temp_dir = TempDir::new().unwrap();
     let block_count = 3usize;
     populate_store(&temp_dir, block_count);
@@ -779,12 +496,8 @@ fn get_block_caches_loaded_block() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -793,7 +506,6 @@ fn get_block_caches_loaded_block() {
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -804,25 +516,20 @@ fn get_block_caches_loaded_block() {
         block_count,
         "strict init should load all appended blocks"
     );
-    // Loaded bytes become reusable cache entries only after exact complete-wire
-    // finality authenticates them. Sign the retained chain before testing reuse.
-    finalize_chain_through_for_eviction(&kura, height);
     let first = kura.get_block(height).expect("block available");
-    let second = kura.get_block(height).expect("cached block");
-    assert!(Arc::ptr_eq(&first, &second));
+    let second = kura.get_block(height).expect("same original wire available");
+    assert_eq!(first.encode_wire().unwrap(), second.encode_wire().unwrap());
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(kura.block_data.lock().cached_body(height.get() - 1).is_none());
+    assert!(!kura.transaction_entrypoint_index.lock().complete);
 }
 #[test]
-fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_time()
-        .build()
-        .unwrap();
-    {
-        let _rt_guard = rt.enter();
-        let _logger = iroha_logger::test_logger();
-    }
+fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
     let temp_dir = TempDir::new().unwrap();
-    let blocks = create_blocks(&rt, &temp_dir);
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (original, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    let blocks = store_dummy_block_arcs(&original, 3);
+    drop(original);
     let entrypoint_hash = blocks[2]
         .as_ref()
         .network_input_hashes()
@@ -837,12 +544,8 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -851,16 +554,12 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
     .expect("reopen Kura");
     assert_eq!(block_count.0, 3);
-    // Startup authenticates every durable body while reconciling sparse
-    // merge carriers, which also eagerly rebuilds the transaction index.
-    // Recreate the retained-body cache index so this test continues to
-    // exercise completion by ordinary lazy block reads.
+    // A structural read does not authenticate execution or complete query joins.
     let retained_body_index = {
         let block_data = kura.block_data.lock();
         Kura::build_transaction_entrypoint_index(&block_data)
@@ -879,15 +578,12 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
         let height = NonZeroUsize::new(height).expect("non-zero height");
         kura.get_block(height).expect("block loads from disk");
     }
-    assert_eq!(
-        kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
-            .expect("all reopened blocks have been indexed"),
-        BTreeSet::from([nonzero!(2_usize)])
-    );
+    assert!(kura.get_block_heights_by_entrypoint_hash(entrypoint_hash).is_none());
+    assert!(!kura.transaction_entrypoint_index.lock().complete);
 }
 #[test]
 fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let mut block_data: BlockData = (0..4)
         .map(|_| {
             let block = generator.next();
@@ -915,7 +611,7 @@ fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
 }
 #[test]
 fn drop_persisted_blocks_keeps_unpersisted_blocks() {
-    let mut generator = DummyBlocks::new();
+    let mut generator = NativeBlocks::new();
     let mut block_data: BlockData = (0..6)
         .map(|_| {
             let block = generator.next();
@@ -955,12 +651,8 @@ fn get_block_returns_none_when_data_missing() {
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
             debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -969,7 +661,6 @@ fn get_block_returns_none_when_data_missing() {
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
     )
@@ -980,290 +671,6 @@ fn get_block_returns_none_when_data_missing() {
         kura.get_block(nonzero!(2_usize)).is_none(),
         "expected missing block to yield None"
     );
-}
-#[test]
-fn eviction_requires_remote_replicas() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 4);
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &KuraConfig {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::Batched,
-            fsync_interval: FSYNC_INTERVAL,
-            lane_history_retention: LANE_HISTORY_RETENTION,
-            native_context_archive_max_bytes:
-                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
-            block_hash_history_bytes:
-                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-            transaction_history_bytes:
-                iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
-            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
-            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("kura init");
-    let evict_len = {
-        let mut store = kura.block_store.lock();
-        store.read_block_index(1).expect("block index").length
-    };
-    let freed = kura
-        .evict_block_bodies(evict_len)
-        .expect("evict block bodies");
-    assert_eq!(freed, 0, "eviction must wait for remote replicas");
-    let index = {
-        let mut store = kura.block_store.lock();
-        store.read_block_index(1).expect("block index")
-    };
-    assert!(
-        !index.is_evicted(),
-        "block body should remain inline without replica adverts"
-    );
-}
-fn open_eviction_compaction_fixture(
-    temp_dir: &TempDir,
-    block_count: usize,
-) -> (KuraConfig, Arc<Kura>, Vec<Arc<SignedBlock>>) {
-    let config = kura_config_for_dir(temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("open empty Kura");
-    let blocks = store_dummy_block_arcs(&kura, block_count);
-    for artifact in v2_finality_artifacts_for_chain(&blocks) {
-        let _ = kura
-            .store_v2_finality_artifact(&artifact)
-            .expect("persist signed complete-wire finality before eviction");
-    }
-    (config, kura, blocks)
-}
-fn assert_eviction_compaction_restart_rolls_forward(boundary: u8) {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, blocks) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let expected = Arc::clone(&blocks[1]);
-    for artifact in v2_finality_artifacts_for_chain(&blocks) {
-        let _ = kura
-            .store_v2_finality_artifact(&artifact)
-            .expect("persist exact finality before eviction");
-    }
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    {
-        let store = kura.block_store.lock();
-        match boundary {
-            0 => store
-                .crash_next_eviction_after_stage
-                .store(true, Ordering::Release),
-            1 => store
-                .crash_next_eviction_after_data_promotion
-                .store(true, Ordering::Release),
-            2 => store
-                .crash_next_eviction_after_index_promotion
-                .store(true, Ordering::Release),
-            _ => panic!("unsupported eviction crash boundary"),
-        }
-    }
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    assert!(
-        blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists(),
-        "the durable roll-forward stage must survive the injected stop"
-    );
-    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    drop(kura);
-    let (reopened, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("recover staged compaction");
-    assert!(
-        !blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists()
-    );
-    assert!(!blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME).exists());
-    assert!(
-        !blocks_dir
-            .join(EVICTION_COMPACTION_INDEX_FILE_NAME)
-            .exists()
-    );
-    let index = reopened
-        .block_store
-        .lock()
-        .read_block_index(1)
-        .expect("read recovered eviction index");
-    assert!(index.is_evicted());
-    let recovered = reopened
-        .get_block(nonzero!(2_usize))
-        .expect("rehydrate recovered evicted block");
-    let recovered_wire = recovered
-        .canonical_wire()
-        .expect("encode recovered canonical block wire");
-    let expected_wire = expected
-        .canonical_wire()
-        .expect("encode expected canonical block wire");
-    assert_eq!(
-        recovered_wire.as_framed(),
-        expected_wire.as_framed(),
-        "recovered block wire must match the pre-compaction canonical bytes"
-    );
-    assert!(
-        reopened
-            .v2_finality_artifact(2)
-            .expect("read preserved finality")
-            .is_some(),
-        "compaction recovery must preserve finalized history"
-    );
-}
-#[test]
-fn eviction_compaction_restart_rolls_forward_after_stage_publication() {
-    assert_eviction_compaction_restart_rolls_forward(0);
-}
-#[test]
-fn eviction_compaction_restart_rolls_forward_after_data_promotion() {
-    assert_eviction_compaction_restart_rolls_forward(1);
-}
-#[test]
-fn eviction_compaction_restart_rolls_forward_after_pair_promotion() {
-    assert_eviction_compaction_restart_rolls_forward(2);
-}
-#[test]
-fn eviction_compaction_restart_rejects_missing_staged_replacement() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.block_store
-        .lock()
-        .crash_next_eviction_after_stage
-        .store(true, Ordering::Release);
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    std::fs::remove_file(blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME))
-        .expect("remove staged replacement data");
-    drop(kura);
-    let error =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect_err("missing staged compaction data must fail closed");
-    assert!(
-        error
-            .to_string()
-            .contains("neither live nor temporary eviction file"),
-        "unexpected recovery error: {error}"
-    );
-    assert!(
-        blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists(),
-        "failed recovery must retain its durable decision record"
-    );
-}
-#[test]
-fn eviction_compaction_restart_rejects_tampered_staged_replacement() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.block_store
-        .lock()
-        .crash_next_eviction_after_stage
-        .store(true, Ordering::Release);
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let replacement = blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME);
-    let mut bytes = std::fs::read(&replacement).expect("read staged replacement data");
-    let first = bytes
-        .first_mut()
-        .expect("four-block compaction replacement is non-empty");
-    *first ^= 0x80;
-    std::fs::write(&replacement, bytes).expect("tamper staged replacement data");
-    drop(kura);
-    let error =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect_err("tampered staged compaction data must fail closed");
-    assert!(
-        error
-            .to_string()
-            .contains("neither live nor temporary eviction file"),
-        "unexpected recovery error: {error}"
-    );
-    assert!(
-        blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists(),
-        "failed authentication must retain its durable decision record"
-    );
-}
-#[test]
-fn eviction_compaction_restart_rejects_tampered_retained_wire_binding() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.block_store
-        .lock()
-        .crash_next_eviction_after_stage
-        .store(true, Ordering::Release);
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    let retained_path = kura.retained_block_record_path(2);
-    let retained_bytes = std::fs::read(&retained_path).expect("read retained wire binding");
-    let mut input = retained_bytes.as_slice();
-    let mut retained =
-        KuraRetainedBlockRecord::decode_all(&mut input).expect("decode retained wire binding");
-    retained.executed_block_wire_hash = Hash::new(b"hostile compaction retained executed wire");
-    std::fs::write(&retained_path, retained.encode())
-        .expect("tamper retained wire binding before restart");
-    let stage = primary_blocks_dir(&temp_dir).join(EVICTION_COMPACTION_STAGE_FILE_NAME);
-    drop(kura);
-    assert!(matches!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-        Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
-    ));
-    assert!(
-        stage.exists(),
-        "rejected recovery must retain the durable compaction decision for diagnosis"
-    );
-}
-#[cfg(unix)]
-#[test]
-fn eviction_compaction_restart_rejects_hardlinked_stage_record() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.block_store
-        .lock()
-        .crash_next_eviction_after_stage
-        .store(true, Ordering::Release);
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let stage = blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME);
-    let alias = blocks_dir.join("eviction-compaction-stage.attacker-link");
-    std::fs::hard_link(&stage, &alias).expect("create attacker-controlled stage hardlink");
-    drop(kura);
-    let error =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect_err("hard-linked compaction stage must fail closed");
-    assert!(
-        error.to_string().contains("single-link regular file"),
-        "unexpected recovery error: {error}"
-    );
-    assert!(stage.exists(), "rejected stage record must remain in place");
 }
 #[test]
 fn eviction_compaction_restart_removes_unpublished_orphan_replacements() {
@@ -1283,163 +690,6 @@ fn eviction_compaction_restart_removes_unpublished_orphan_replacements() {
     assert_eq!(count.0, 2);
     assert!(!data_orphan.exists());
     assert!(!index_orphan.exists());
-}
-#[test]
-fn eviction_compaction_does_not_promote_after_stage_dirsync_failure() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let data_path = blocks_dir.join(DATA_FILE_NAME);
-    let index_path = blocks_dir.join(INDEX_FILE_NAME);
-    let data_before = std::fs::read(&data_path).expect("read original data file");
-    let index_before = std::fs::read(&index_path).expect("read original index file");
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.block_store
-        .lock()
-        .fail_eviction_stage_syncs_remaining
-        .store(2, Ordering::Release);
-    assert!(matches!(
-        kura.evict_block_bodies(payload_len),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    assert_eq!(std::fs::read(&data_path).unwrap(), data_before);
-    assert_eq!(std::fs::read(&index_path).unwrap(), index_before);
-    assert!(
-        blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists(),
-        "the visible but unacknowledged decision record remains until crash loss"
-    );
-    drop(kura);
-    std::fs::remove_file(blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME))
-        .expect("simulate loss of the directory-unsynchronized stage after a crash");
-    let (reopened, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("reopen original store");
-    assert!(
-        !reopened
-            .block_store
-            .lock()
-            .read_block_index(1)
-            .expect("original index")
-            .is_evicted()
-    );
-}
-#[test]
-fn eviction_compaction_preserves_remote_only_prior_body() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, blocks) = open_eviction_compaction_fixture(&temp_dir, 5);
-    let prior_hash = blocks[1].hash();
-    let (_, first_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    assert_eq!(
-        kura.evict_block_bodies(first_len)
-            .expect("evict first canonical body"),
-        first_len
-    );
-    kura.remove_evicted_block_sidecar_for_testing(nonzero!(2_usize))
-        .expect("make prior eviction remote-only");
-    let (_, second_len) = advertise_required_replicas(&kura, nonzero!(3_usize));
-    assert_eq!(
-        kura.evict_block_bodies(second_len)
-            .expect("compact around remote-only history"),
-        second_len
-    );
-    assert_eq!(
-        kura.get_durable_block_hash(nonzero!(2_usize)),
-        Some(prior_hash)
-    );
-    assert!(kura.get_block(nonzero!(2_usize)).is_none());
-    drop(kura);
-    let (reopened, count) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("reopen compacted history");
-    assert_eq!(count.0, 5);
-    assert_eq!(
-        reopened.get_durable_block_hash(nonzero!(2_usize)),
-        Some(prior_hash)
-    );
-}
-#[test]
-fn eviction_compaction_preserves_verified_hash_only_tail() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (config, kura, blocks) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let mut snapshot_hashes = blocks.iter().map(|block| block.hash()).collect::<Vec<_>>();
-    let tail_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
-    snapshot_hashes.push(tail_hash);
-    assert_eq!(
-        kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
-            .expect("append authenticated hash-only tail"),
-        1
-    );
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    assert_eq!(
-        kura.evict_block_bodies(payload_len)
-            .expect("compact with hash-only tail"),
-        payload_len
-    );
-    assert_eq!(
-        kura.block_store
-            .lock()
-            .read_block_index(4)
-            .expect("hash-only index"),
-        (EVICTED_BLOCK_START, 0)
-    );
-    drop(kura);
-    assert!(matches!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-        Err(Error::InvalidSnapshotBootstrapMarker { .. })
-    ));
-    let (reopened, count) = Kura::new_inner(
-        &config,
-        &RuntimeLaneConfig::default(),
-        None,
-        Some(5),
-        false,
-        PendingControlSidecarLimits::default(),
-    )
-    .expect("open hash-only history provisionally for signed-lineage reauthentication");
-    assert_eq!(count.0, 5);
-    assert!(reopened.provisional_snapshot_bootstrap_pending());
-    assert_eq!(
-        reopened.block_hash_at_height(nonzero!(5_usize)),
-        Some(tail_hash)
-    );
-    assert!(reopened.get_block(nonzero!(5_usize)).is_none());
-}
-#[test]
-fn eviction_rejects_oversized_index_before_allocation() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (_, kura, _) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let oversized = STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1);
-    {
-        let mut store = kura.block_store.lock();
-        let original = store.read_block_index(1).expect("original index");
-        store
-            .write_block_index(1, original.start, oversized)
-            .expect("inject oversized index");
-    }
-    let (hash, _) = advertised_block_metadata(&kura, nonzero!(2_usize));
-    for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-        kura.record_block_replica_advert(checked_peer_id(), 2, hash, oversized);
-    }
-    assert!(matches!(
-        kura.evict_block_bodies(oversized),
-        Err(Error::CorruptedBlockLength { length, limit })
-            if length == oversized && limit == STRICT_INIT_MAX_BLOCK_BYTES
-    ));
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    assert!(
-        !blocks_dir
-            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
-            .exists()
-    );
-    assert!(!blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME).exists());
-    assert!(
-        !blocks_dir
-            .join(EVICTION_COMPACTION_INDEX_FILE_NAME)
-            .exists()
-    );
 }
 #[test]
 fn eviction_digest_is_independent_of_short_reads() {
@@ -1471,139 +721,50 @@ fn eviction_digest_is_independent_of_short_reads() {
     assert_eq!(actual, expected);
 }
 #[test]
-fn eviction_prior_cache_wire_must_match_retained_record() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (_, kura, _) = open_eviction_compaction_fixture(&temp_dir, 5);
-    let (_, first_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.evict_block_bodies(first_len)
-        .expect("evict first body");
-    let cache_path = kura.block_store.lock().da_block_path(2);
-    let mut tampered = std::fs::read(&cache_path).expect("read canonical DA cache");
-    *tampered.last_mut().expect("non-empty canonical cache") ^= 0x80;
-    std::fs::write(&cache_path, &tampered).expect("tamper complete block wire");
-    kura.block_data.lock()[1].1 = None;
-    assert!(
-        kura.get_block(nonzero!(2_usize)).is_none(),
-        "a header-preserving complete-wire substitution must be a cache miss"
-    );
-    let (_, second_len) = advertise_required_replicas(&kura, nonzero!(3_usize));
-    assert_eq!(
-        kura.evict_block_bodies(second_len)
-            .expect("later compaction treats malformed prior cache as a miss"),
-        second_len
-    );
-    assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
-}
-#[test]
-fn eviction_accounting_handles_sidecar_shrink() {
-    let temp_dir = TempDir::new().expect("create temp Kura directory");
-    let (_, kura, blocks) = open_eviction_compaction_fixture(&temp_dir, 4);
-    let canonical = blocks[1]
-        .canonical_wire()
-        .expect("canonical block wire")
-        .into_vec();
-    let mut oversized = canonical.clone();
-    oversized.extend(std::iter::repeat_n(0xA5, 4096));
-    let cache_path = {
-        let store = kura.block_store.lock();
-        store
-            .ensure_da_blocks_dir()
-            .expect("create authenticated DA cache directory");
-        store.da_block_path(2)
-    };
-    std::fs::write(&cache_path, &oversized)
-        .expect("inject an oversized pre-existing corrupt sidecar");
-    let _ = kura
-        .refresh_total_disk_usage_bytes()
-        .expect("refresh baseline total usage");
-    let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    assert_eq!(
-        kura.evict_block_bodies(payload_len)
-            .expect("replace stale sidecar with canonical bytes"),
-        payload_len
-    );
-    let snapshot = kura
-        .disk_usage_accounting_snapshot_for_tests()
-        .expect("read exact accounting snapshot");
-    assert!(snapshot.total_initialized);
-    assert_eq!(snapshot.cached_total_bytes, snapshot.exact_total_bytes);
-    assert_eq!(
-        std::fs::read(kura.block_store.lock().da_block_path(2)).unwrap(),
-        canonical
-    );
-}
-#[test]
-fn merge_reads_reject_canonical_storage_poison() {
+fn canonical_poison_closes_every_handle_of_its_permanent_native_gate() {
+    let unrelated = Kura::blank_kura_for_testing();
     let kura = Kura::blank_kura_for_testing();
-    let entry = sample_merge_entry(1);
-    kura.merge_log
-        .lock()
-        .append(&entry)
-        .expect("append test merge entry");
-    assert_eq!(kura.merge_ledger_snapshot(), vec![entry.clone()]);
-    let poison = Error::CanonicalStoragePoisoned;
-    kura.poison_canonical_storage("test canonical poison", &poison);
-    assert!(kura.merge_ledger_snapshot().is_empty());
-    assert!(matches!(
-        kura.merge_ledger_all_entries(),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-    assert!(matches!(
-        kura.merge_entry_by_hash(entry.canonical_hash()),
-        Err(Error::CanonicalStoragePoisoned)
-    ));
-}
-#[test]
-fn canonical_bind_before_poison_closes_the_consensus_guard_immediately() {
-    let unbound = Kura::blank_kura_for_testing();
-    let unrelated_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    assert!(unbound.ensure_canonical_storage_not_poisoned().is_ok());
-    assert!(unrelated_guard.acquire().is_some());
-    let kura = Kura::blank_kura_for_testing();
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    kura.bind_consensus_output_guard(Arc::clone(&output_guard))
-        .expect("bind authoritative output guard");
-    assert!(output_guard.acquire().is_some());
-    let poison = Error::CanonicalStoragePoisoned;
-    kura.poison_canonical_storage("injected canonical poison", &poison);
-    assert!(output_guard.restart_required());
-    assert!(
-        output_guard.acquire().is_none(),
-        "Kura poison must close consensus admission before returning"
+    let global = kura.native_consensus_gate();
+    let lane = kura.native_consensus_gate();
+    assert!(Arc::ptr_eq(&global, &lane));
+    assert!(global.enter().is_some());
+    kura.poison_canonical_storage(
+        "injected canonical poison",
+        &Error::CanonicalStoragePoisoned,
     );
-    kura.poison_canonical_storage("duplicate canonical poison", &poison);
-    assert!(output_guard.acquire().is_none());
-    assert!(matches!(
-        kura.bind_consensus_output_guard(
-            crate::sumeragi::output_guard::ConsensusOutputGuard::isolated()
-        ),
-        Err(Error::ConsensusOutputGuardAlreadyBound)
-    ));
-}
-#[test]
-fn canonical_poison_before_bind_closes_the_new_consensus_guard() {
-    let kura = Kura::blank_kura_for_testing();
-    let poison = Error::CanonicalStoragePoisoned;
-    kura.poison_canonical_storage("poison before guard binding", &poison);
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    assert!(output_guard.acquire().is_some());
-    kura.bind_consensus_output_guard(Arc::clone(&output_guard))
-        .expect("bind authoritative output guard after poison");
-    assert!(output_guard.restart_required());
-    assert!(
-        output_guard.acquire().is_none(),
-        "binding after poison must not return with consensus admission open"
+    assert!(global.is_closed());
+    assert!(global.enter().is_none());
+    assert!(lane.enter().is_none());
+    assert!(unrelated.native_consensus_gate().enter().is_some());
+    kura.poison_canonical_storage(
+        "duplicate canonical poison",
+        &Error::CanonicalStoragePoisoned,
     );
+    assert!(global.enter().is_none());
 }
+
 #[test]
-fn canonical_poison_bind_interleaving_cannot_leave_admission_open() {
+fn native_gate_obtained_after_canonical_poison_cannot_open_admission() {
+    let kura = Kura::blank_kura_for_testing();
+    kura.poison_canonical_storage(
+        "poison before instance startup",
+        &Error::CanonicalStoragePoisoned,
+    );
+    let later = kura.native_consensus_gate();
+    assert!(later.is_closed());
+    assert!(later.enter().is_none());
+    assert!(Arc::ptr_eq(&later, &kura.native_consensus_gate()));
+}
+
+#[test]
+fn published_canonical_poison_already_closes_native_admission() {
     let kura = Kura::blank_kura_for_testing();
     kura.pause_canonical_poison_after_latch
         .store(true, Ordering::Release);
     let poison_kura = Arc::clone(&kura);
     let poisoner = thread::spawn(move || {
         poison_kura.poison_canonical_storage(
-            "poison racing guard binding",
+            "poison racing native startup",
             &Error::CanonicalStoragePoisoned,
         );
     });
@@ -1614,24 +775,20 @@ fn canonical_poison_bind_interleaving_cannot_leave_admission_open() {
     {
         assert!(
             Instant::now() < deadline,
-            "canonical poison did not reach the post-latch race barrier"
+            "canonical poison missed the post-latch barrier"
         );
         thread::yield_now();
     }
-    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    assert!(kura.consensus_output_guard.get().is_none());
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    let bind_result = kura.bind_consensus_output_guard(Arc::clone(&output_guard));
-    let restart_required_before_poison_resumes = output_guard.restart_required();
-    let admission_closed_before_poison_resumes = output_guard.acquire().is_none();
+    let published = kura.canonical_storage_poisoned.load(Ordering::Acquire);
+    let late = kura.native_consensus_gate();
+    let closed_before_resume = late.is_closed() && late.enter().is_none();
     kura.canonical_poison_paused_after_latch
         .store(false, Ordering::Release);
     poisoner.join().expect("canonical poison thread completes");
-    bind_result.expect("bind while poison is paused before guard lookup");
-    assert!(restart_required_before_poison_resumes);
+    assert!(published);
     assert!(
-        admission_closed_before_poison_resumes,
-        "the bind-side latch recheck must close admission before returning"
+        closed_before_resume,
+        "no late binding can reopen the storage owner's gate"
     );
-    assert!(output_guard.acquire().is_none());
+    assert!(late.enter().is_none());
 }

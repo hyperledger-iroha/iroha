@@ -1,20 +1,11 @@
-//! Unified XOR settlement helpers used by block production.
+//! Deterministic settlement pricing helpers.
 //!
 //! The implementation here wraps the primitives provided by the
 //! `settlement_router` crate so the rest of `iroha_core` interacts with a
 //! single façade.  The façade keeps the logic deterministic and hides
-//! serialization details (Norito receipts, decimal arithmetic) from the rest of
-//! the code base.  Integration with Kura buffers and swap execution will be
-//! layered on top in follow-up patches.
+//! decimal arithmetic from the rest of the code base. Pricing results are not
+//! execution receipts and never authorize an XOR balance or reserve change.
 use iroha_config::parameters::actual as config;
-use iroha_crypto::HashOf;
-use iroha_data_model::{
-    asset::AssetDefinitionId,
-    block::consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
-    nexus::FeeDebitSource,
-    transaction::SignedTransaction,
-};
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(any(feature = "telemetry", test))]
 use iroha_primitives::bigint::BigInt;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -27,7 +18,6 @@ use settlement_router::{
     policy::{BufferPolicy, BufferStatus},
     receipt::SettlementReceipt,
 };
-use std::collections::BTreeMap;
 use time::Duration as TimeDuration;
 #[cfg(any(feature = "telemetry", test))]
 const SETTLEMENT_MICRO_SCALE: u32 = 6;
@@ -201,137 +191,9 @@ impl SettlementEngine {
         })
     }
 }
-/// Pending settlement record keyed by transaction hash.
-#[derive(Debug, Clone)]
-pub struct PendingSettlement {
-    /// Caller-specified source identifier (typically transaction hash bytes).
-    pub source_id: [u8; 32],
-    /// Asset definition backing the local gas token.
-    pub asset_definition_id: AssetDefinitionId,
-    /// Exact local gas-token amount debited.
-    pub local_amount: Quantity,
-    /// Exact XOR amount booked immediately.
-    pub xor_due: Quantity,
-    /// Exact XOR amount expected after haircuts.
-    pub xor_after_haircut: Quantity,
-    /// Exact variance between due and post-haircut XOR.
-    pub xor_variance: Quantity,
-    /// UTC timestamp associated with the transaction (milliseconds).
-    pub timestamp_ms: u64,
-    /// Liquidity profile applied during settlement.
-    pub liquidity_profile: LiquidityProfile,
-    /// Volatility bucket applied when computing the safety margin.
-    pub volatility_bucket: VolatilityBucket,
-    /// TWAP value used when quoting the settlement.
-    pub twap_local_per_xor: Numeric,
-    /// Basis-point safety margin applied when quoting.
-    pub epsilon_bps: u16,
-    /// TWAP window length (seconds) used when computing the quote.
-    pub twap_window_seconds: u32,
-    /// UTC timestamp for the oracle price sample used during quoting (milliseconds).
-    pub oracle_timestamp_ms: u64,
-}
-/// Nexus fee receipt staged during transaction execution before lane routing is known.
-#[derive(Debug, Clone)]
-pub struct PendingNexusFeeReceipt {
-    /// Source transaction hash/id.
-    pub source_id: [u8; 32],
-    /// Exact account or sponsor-program vault charged by settlement.
-    pub debit_source: FeeDebitSource,
-    /// Canonical fee asset definition charged by settlement.
-    pub fee_asset_id: AssetDefinitionId,
-    /// Immutable sponsor-program revision charged by this receipt, when sponsored.
-    pub program_revision: Option<u64>,
-    /// Proof-bound cross-lane spend lease, when relay settlement is used.
-    pub lease_id: Option<iroha_crypto::Hash>,
-    /// Computed Nexus fee amount.
-    pub fee_amount: Quantity,
-    /// Fee schedule inputs used to compute [`Self::fee_amount`].
-    pub schedule: NexusFeeScheduleInputs,
-}
-impl PendingNexusFeeReceipt {
-    /// Bind the pending receipt to the finalized lane block coordinates.
-    #[must_use]
-    pub fn into_lane_receipt(
-        self,
-        block_height: u64,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-    ) -> NexusFeeReceipt {
-        NexusFeeReceipt {
-            version: NexusFeeReceipt::VERSION,
-            source_id: self.source_id,
-            dataspace_id,
-            lane_id,
-            block_height,
-            debit_source: self.debit_source,
-            fee_asset_id: self.fee_asset_id,
-            program_revision: self.program_revision,
-            lease_id: self.lease_id,
-            fee_amount: self.fee_amount,
-            schedule: self.schedule,
-        }
-    }
-}
-impl PendingSettlement {
-    /// Convert the pending record into a lane-level settlement receipt.
-    #[must_use]
-    pub fn into_lane_receipt(self) -> LaneSettlementReceipt {
-        LaneSettlementReceipt {
-            source_id: self.source_id,
-            local_amount: self.local_amount,
-            xor_due: self.xor_due,
-            xor_after_haircut: self.xor_after_haircut,
-            xor_variance: self.xor_variance,
-            timestamp_ms: self.timestamp_ms,
-        }
-    }
-}
-/// Accumulates settlement receipts for transactions processed in the current block.
-#[derive(Debug, Default, Clone)]
-pub struct SettlementAccumulator {
-    records: BTreeMap<HashOf<SignedTransaction>, PendingSettlement>,
-    nexus_fee_records: BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt>,
-}
-impl SettlementAccumulator {
-    /// Record a settlement receipt for the given transaction hash.
-    pub fn record(&mut self, tx_hash: HashOf<SignedTransaction>, record: PendingSettlement) {
-        self.records.insert(tx_hash, record);
-    }
-    /// Record a Nexus fee receipt for the given transaction hash.
-    pub fn record_nexus_fee(
-        &mut self,
-        tx_hash: HashOf<SignedTransaction>,
-        record: PendingNexusFeeReceipt,
-    ) {
-        self.nexus_fee_records.insert(tx_hash, record);
-    }
-    /// Iterate accumulated Nexus fee receipts without draining them.
-    pub fn nexus_fee_records(
-        &self,
-    ) -> impl Iterator<Item = (&HashOf<SignedTransaction>, &PendingNexusFeeReceipt)> {
-        self.nexus_fee_records.iter()
-    }
-    /// Drain the accumulated receipts, returning ownership of the internal map.
-    pub fn drain(&mut self) -> BTreeMap<HashOf<SignedTransaction>, PendingSettlement> {
-        core::mem::take(&mut self.records)
-    }
-    /// Drain accumulated Nexus fee receipts.
-    pub fn drain_nexus_fees(
-        &mut self,
-    ) -> BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt> {
-        core::mem::take(&mut self.nexus_fee_records)
-    }
-    /// Whether the accumulator currently stores no receipts.
-    pub fn is_empty(&self) -> bool {
-        self.records.is_empty() && self.nexus_fee_records.is_empty()
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::Hash;
-    use iroha_model_base::domain::DomainId;
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
@@ -407,43 +269,6 @@ mod tests {
                 Err(QuoteError::Price(ShadowPriceError::NonPositiveTwap))
             );
         }
-    }
-    #[test]
-    fn accumulator_records_and_drains() {
-        let mut accumulator = SettlementAccumulator::default();
-        let tx_hash: HashOf<SignedTransaction> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-        let record = PendingSettlement {
-            source_id: [0x22; 32],
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("sora", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            ),
-            local_amount: Quantity::from(10_u32),
-            xor_due: Quantity::from(7_u32),
-            xor_after_haircut: Quantity::from(6_u32),
-            xor_variance: Quantity::from(1_u32),
-            timestamp_ms: 42,
-            liquidity_profile: LiquidityProfile::Tier1,
-            volatility_bucket: VolatilityBucket::Stable,
-            twap_local_per_xor: Numeric::one(),
-            epsilon_bps: 25,
-            twap_window_seconds: 60,
-            oracle_timestamp_ms: 40,
-        };
-        let record_copy = record.clone();
-        accumulator.record(tx_hash, record);
-        let drained = accumulator.drain();
-        assert!(accumulator.is_empty());
-        let entry = drained.get(&tx_hash).expect("record present");
-        assert_eq!(entry.local_amount, record_copy.local_amount);
-        assert_eq!(entry.xor_due, record_copy.xor_due);
-        assert_eq!(entry.xor_after_haircut, record_copy.xor_after_haircut);
-        assert_eq!(entry.xor_variance, record_copy.xor_variance);
-        assert_eq!(entry.timestamp_ms, record_copy.timestamp_ms);
-        let receipt = entry.clone().into_lane_receipt();
-        assert_eq!(receipt.source_id, record_copy.source_id);
-        assert_eq!(receipt.xor_variance, record_copy.xor_variance);
     }
     #[test]
     fn evaluate_buffer_matches_policy_thresholds() {

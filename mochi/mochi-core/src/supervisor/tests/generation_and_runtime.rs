@@ -1279,42 +1279,17 @@ fn generated_peer_config_rejects_a_duplicate_inline_genesis_identity() {
     );
 }
 #[test]
-fn generated_sumeragi_capacity_contract_matches_config_defaults() {
-    for validator_count in [4_usize, 7, 31] {
-        for body_source_bytes in [
-            QUEUE_BODY_SOURCE_BYTES.get(),
-            2 * QUEUE_BODY_SOURCE_BYTES.get(),
-        ] {
-            let mut root = toml::Table::new();
-            let mut queues = toml::Table::new();
-            queues.insert(
-                "body_source_bytes".into(),
-                toml::Value::Integer(i64::try_from(body_source_bytes).unwrap()),
-            );
-            let mut sumeragi = toml::Table::new();
-            sumeragi.insert("queues".into(), toml::Value::Table(queues));
-            root.insert("sumeragi".into(), toml::Value::Table(sumeragi));
-            ensure_generated_sumeragi_body_bytes(&mut root, validator_count)
-                .expect("canonical generated capacity");
-            let expected = sumeragi_v2_body_ingress_required_byte_capacity(
-                validator_count,
-                QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
-                body_source_bytes,
-            )
-            .expect("representable roster")
-            .max(QUEUE_BODY_BYTES.get());
-            assert_eq!(
-                root["sumeragi"]["queues"]["body_bytes"].as_integer(),
-                Some(i64::try_from(expected).unwrap())
-            );
-        }
-    }
-    let error = ensure_generated_sumeragi_body_bytes(&mut toml::Table::new(), usize::MAX)
-        .expect_err("generator arithmetic must fail closed on roster overflow");
-    assert!(matches!(error, SupervisorError::Config(message) if message.contains("overflowed")));
+fn generated_sumeragi_rejects_retired_queue_controls() {
+    let mut native = toml::Table::new();
+    native.insert("queues".into(), toml::Value::Table(toml::Table::new()));
+    let error = normalize_peer_config_overrides(&mut None, &mut Some(native), &mut None)
+        .expect_err("retired queues must not become generated node configuration");
+    assert!(
+        matches!(error, SupervisorError::Config(message) if message.contains("sumeragi.queues is retired"))
+    );
 }
 #[test]
-fn generated_peer_configs_scale_sumeragi_body_bytes_for_legal_rosters() {
+fn generated_peer_configs_use_native_defaults_for_legal_rosters() {
     for validator_count in [4_usize, 7, 31] {
         let temp = tempfile::tempdir().expect("tempdir");
         let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
@@ -1338,110 +1313,17 @@ fn generated_peer_configs_scale_sumeragi_body_bytes_for_legal_rosters() {
             .expect("write generated peer config");
         let contents = fs::read_to_string(&specs[0].config_path).expect("read peer config");
         let config: toml::Table = toml::from_str(&contents).expect("parse peer config TOML");
-        let body_bytes = config
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("queues"))
-            .and_then(toml::Value::as_table)
-            .and_then(|queues| queues.get("body_bytes"))
-            .and_then(toml::Value::as_integer)
-            .expect("generated aggregate body-byte capacity");
-        let required = sumeragi_v2_body_ingress_required_byte_capacity(
-            validator_count,
-            QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
-            QUEUE_BODY_SOURCE_BYTES.get(),
-        )
-        .expect("fixture byte geometry is representable")
-        .max(QUEUE_BODY_BYTES.get());
-        assert_eq!(
-            body_bytes,
-            i64::try_from(required).expect("fixture capacity fits TOML"),
-            "Mochi must allocate one isolated ingress partition per validator and configured source"
+        assert!(
+            config
+                .get("sumeragi")
+                .and_then(toml::Value::as_table)
+                .and_then(|sumeragi| sumeragi.get("queues"))
+                .is_none(),
+            "retired per-source body queues must not be generated"
         );
         ManagedNodeConfig::from_path(&specs[0].config_path)
             .expect("the canonical parser must accept the generated roster capacity");
     }
-}
-#[test]
-fn generated_peer_config_preserves_larger_authored_sumeragi_body_bytes() {
-    let validator_count = 7_usize;
-    let temp = tempfile::tempdir().expect("tempdir");
-    let profile = NetworkProfile::custom(validator_count, SumeragiConsensusMode::Permissioned)
-        .expect("seven-peer profile");
-    let paths = NetworkPaths::from_root(temp.path(), &profile);
-    paths.ensure().expect("paths");
-    let specs = (0..validator_count)
-        .map(|index| {
-            let index = u16::try_from(index).expect("fixture peer index fits u16");
-            test_peer_spec(&paths, format!("peer{index}"), 8_080 + index, 1_337 + index)
-                .expect("peer spec")
-        })
-        .collect::<Vec<_>>();
-    let genesis = test_genesis_material(&paths);
-    let authenticated_non_validator_sources = 5_usize;
-    let body_source_bytes = QUEUE_BODY_SOURCE_BYTES.get() + 1024 * 1024;
-    let required = sumeragi_v2_body_ingress_required_byte_capacity(
-        validator_count,
-        authenticated_non_validator_sources,
-        body_source_bytes,
-    )
-    .expect("fixture byte geometry is representable");
-    let authored_body_bytes = required.max(QUEUE_BODY_BYTES.get()) + body_source_bytes;
-    let overlay_body_bytes = authored_body_bytes + body_source_bytes;
-    let sumeragi_layer = |body_bytes: usize| {
-        let mut queues = toml::Table::new();
-        queues.insert(
-            "authenticated_non_validator_sources".into(),
-            toml::Value::Integer(
-                i64::try_from(authenticated_non_validator_sources).expect("fixture fits TOML"),
-            ),
-        );
-        queues.insert(
-            "body_source_bytes".into(),
-            toml::Value::Integer(i64::try_from(body_source_bytes).expect("fixture fits TOML")),
-        );
-        queues.insert(
-            "body_bytes".into(),
-            toml::Value::Integer(i64::try_from(body_bytes).expect("fixture fits TOML")),
-        );
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("queues".into(), toml::Value::Table(queues));
-        sumeragi
-    };
-    let overrides = PeerConfigOverrides {
-        nexus: None,
-        sumeragi: Some(sumeragi_layer(authored_body_bytes)),
-        torii: None,
-    };
-    let mut overlay = toml::Table::new();
-    overlay.insert(
-        "sumeragi".into(),
-        toml::Value::Table(sumeragi_layer(overlay_body_bytes)),
-    );
-    specs[0]
-        .write_config(
-            "authored-capacity-chain",
-            &genesis,
-            &specs,
-            &overrides,
-            &[overlay],
-        )
-        .expect("write peer config with authored capacity");
-    let contents = fs::read_to_string(&specs[0].config_path).expect("read peer config");
-    let config: toml::Table = toml::from_str(&contents).expect("parse peer config TOML");
-    assert_eq!(
-        config
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("queues"))
-            .and_then(toml::Value::as_table)
-            .and_then(|queues| queues.get("body_bytes"))
-            .and_then(toml::Value::as_integer),
-        Some(i64::try_from(overlay_body_bytes).expect("fixture fits TOML")),
-        "the later authored layer must keep its larger aggregate capacity"
-    );
-    ManagedNodeConfig::from_path(&specs[0].config_path)
-        .expect("the canonical parser must accept the larger authored capacity");
 }
 #[test]
 fn managed_peer_path_validation_rejects_runtime_root_redirects() {

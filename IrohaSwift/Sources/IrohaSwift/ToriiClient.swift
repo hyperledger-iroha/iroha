@@ -2803,9 +2803,8 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
     public let backend: String
     public let verificationMode: String
     public let receipt: ToriiRamLfeExecutionReceipt
-    public let outputOpening: ToriiRamLfeOutputOpening
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case programId = "program_id"
         case opaqueHash = "opaque_hash"
         case receiptHash = "receipt_hash"
@@ -2817,10 +2816,14 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
         case backend
         case verificationMode = "verification_mode"
         case receipt
-        case outputOpening = "output_opening"
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            debugName: "ram-lfe execute response"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         programId = try ToriiIdentifierReceiptWireValue.exactString(
             from: container,
@@ -2865,7 +2868,6 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
             debugName: "ram-lfe execute response.verification_mode"
         )
         receipt = try container.decode(ToriiRamLfeExecutionReceipt.self, forKey: .receipt)
-        outputOpening = try container.decode(ToriiRamLfeOutputOpening.self, forKey: .outputOpening)
     }
 }
 
@@ -10399,7 +10401,7 @@ fileprivate struct ToriiVerifyingKeyTransactionDraftEnvelope: Decodable {
             decoded = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: transactionPayloadB64,
                 signingMessageB64: signingMessageB64,
-                expectedAdmissionIntent: .ordinary,
+
                 context: "verifying-key transaction draft"
             )
         } catch {
@@ -10682,12 +10684,12 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
         let timeToLive = try transaction.takeField("time_to_live_ms")
         let nonce = try transaction.takeField("nonce")
         let feePayment = try transaction.takeField("fee_payment")
-        let admissionIntent = try transaction.takeField("admission_intent")
+
         let metadata = try transaction.takeField("metadata")
         let attachments = try transaction.takeField("attachments")
         guard transaction.isFinished,
               creationTime.count == MemoryLayout<UInt64>.size else {
-            throw invalid("transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload")
+            throw invalid("transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload")
         }
 
         let decodedNetworkId = try decodeNetworkDomain(domain)
@@ -10716,9 +10718,6 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
             try TransactionFeePaymentValidation.requireEmptyTransactionMetadata(metadata)
         } catch {
             throw invalid("verifying-key transaction fee payment or metadata is not canonical")
-        }
-        guard admissionIntent == TransactionAdmissionIntentV1.ordinary.norito else {
-            throw invalid("verifying-key transaction admission intent is not Ordinary")
         }
         try requireAbsentOption(attachments, field: "attachments")
         try requireRequestedInstruction(
@@ -15322,7 +15321,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
                 _ = try ToriiCanonicalTransactionDraft.decode(
                     transactionPayloadB64: transactionPayloadB64,
                     signingMessageB64: signingMessageB64,
-                    expectedAdmissionIntent: .ordinary,
+
                     context: "contract call response"
                 )
             } catch {
@@ -15426,7 +15425,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
             draft = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: transactionPayloadB64,
                 signingMessageB64: signingMessageB64,
-                expectedAdmissionIntent: .ordinary,
+
                 context: "contract call response"
             )
             try Self.validateTransactionPayloadBindings(
@@ -16267,7 +16266,7 @@ public struct ToriiAssetTransferResponse: Decodable, Sendable {
                 let draft = try ToriiCanonicalTransactionDraft.decode(
                     transactionPayloadB64: transactionPayloadB64,
                     signingMessageB64: signingMessageB64,
-                    expectedAdmissionIntent: .ordinary,
+
                     context: "asset transfer response"
                 )
                 guard receipt.payloadSigningHashHex == draft.signingMessage.hexLowercased() else {
@@ -16337,7 +16336,7 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
             draft = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: transactionPayloadB64,
                 signingMessageB64: signingMessageB64,
-                expectedAdmissionIntent: .ordinary,
+
                 context: "asset transfer response"
             )
             try Self.validateTransactionPayloadBindings(
@@ -16818,7 +16817,7 @@ public struct ToriiDetachedAssetTransferSubmissionEvidence: Codable, Sendable, E
         )
         let transactionPayload = try ToriiCanonicalTransactionDraft.transactionPayload(
             fromVersionedSignedTransaction: signedTransaction,
-            expectedAdmissionIntent: .ordinary,
+
             context: "detached asset-transfer evidence"
         )
         let reproduced = try ToriiCanonicalTransactionDraft.finalize(
@@ -16836,7 +16835,7 @@ public struct ToriiDetachedAssetTransferSubmissionEvidence: Codable, Sendable, E
         let draft = try ToriiCanonicalTransactionDraft.decode(
             transactionPayloadB64: transactionPayload.base64EncodedString(),
             signingMessageB64: finalization.payloadSigningHash.base64EncodedString(),
-            expectedAdmissionIntent: .ordinary,
+
             context: "detached asset-transfer evidence"
         )
         try ToriiAssetTransferDraft.validateTransactionPayloadBindings(
@@ -17652,7 +17651,7 @@ public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
                 let draft = try ToriiCanonicalTransactionDraft.decode(
                     transactionPayloadB64: transactionPayloadB64,
                     signingMessageB64: signingMessageB64,
-                    expectedAdmissionIntent: .ordinary,
+
                     context: "multisig response"
                 )
                 guard draft.payload.feePayment == (try feePayment.compactNorito()),
@@ -17758,7 +17757,7 @@ public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
         let draft = try ToriiCanonicalTransactionDraft.decode(
             transactionPayloadB64: transactionPayloadB64,
             signingMessageB64: signingMessageB64,
-            expectedAdmissionIntent: .ordinary,
+
             context: "multisig response"
         )
         try ToriiCanonicalTransactionDraft.requireAuthority(
@@ -20220,7 +20219,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let feeQuoteResponseMaximumBytes = 64 * 1024
     private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
     private static let kagemushaCapabilityResponseMaximumBytes = 4 * 1024
-    private static let kagemushaOperationStatusResponseMaximumBytes = 16 * 1024 * 1024
+    private static let kagemushaOperationStatusResponseMaximumBytes = 4 * (36 * 1024 * 1024 + 256)
     private static let contractCallResponseMaximumBytes = 32 * 1_024 * 1_024
     private static let assetTransferResponseMaximumBytes = 32 * 1_024 * 1_024
     private static let accountOnboardingCurrentStateResponseMaximumBytes = 4 * 1_024
@@ -23661,14 +23660,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         "A nonterminal casting-proof page did not advance its checkpoint."
                     )
                 }
-            } else if pageAdvance == 0 {
-                guard verification.evaluatedContextID ==
-                        currentAnchor.trustedCheckpointContextID else {
-                    throw ToriiClientError.invalidPayload(
-                        "A terminal casting-proof page changed context without advancing height."
-                    )
-                }
             }
+            // Native verification compares the complete retained decision. A valid alternate
+            // certificate may produce different checkpoint bytes at the same height.
             let promotedAnchor = try currentAnchor.promoted(by: verification)
             try await persistCheckpoint(promotedAnchor)
             verifiedPageCount += 1
@@ -24837,11 +24831,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         let allowedFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "nonce", "fee_payment", "admission_intent", "metadata", "attachments",
+            "time_to_live_ms", "nonce", "fee_payment", "metadata", "attachments",
         ]
         let requiredFields: Set<String> = [
             "domain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "fee_payment", "admission_intent", "metadata", "attachments",
+            "time_to_live_ms", "fee_payment", "metadata", "attachments",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
@@ -24904,15 +24898,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         let draftIntent = try feeValue.decode(as: FeePaymentIntent.self)
-        guard case let .object(admissionIntent)? = unsignedPayload["admission_intent"],
-              Set(admissionIntent.keys) == Set(["intent", "value"]),
-              case let .string(intent)? = admissionIntent["intent"],
-              intent == "ordinary" || intent == "queue_plan_synced",
-              case .null? = admissionIntent["value"] else {
-            throw ToriiClientError.invalidPayload(
-                "unsignedPayload.admission_intent must be an exact TransactionAdmissionIntent object."
-            )
-        }
         guard case let .number(timeToLiveMs)? = unsignedPayload["time_to_live_ms"],
               timeToLiveMs.isFinite,
               timeToLiveMs > 0,
@@ -26238,7 +26223,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// canonical Norito bytes selected by the server.
     ///
     /// This authority-bearing route is deliberately unavailable over HTTP,
-    /// JSON, redirects, mock catalogs, or without the loaded exact ABI24
+    /// JSON, redirects, mock catalogs, or without the loaded exact ABI25
     /// artifact. The returned model retains the response bytes and binds every
     /// compiled row to that artifact's natively validated local catalog and the
     /// expected network from `localSigningContext`.
@@ -26258,7 +26243,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact six privacy ABI24 symbols.
+        // any of the exact six privacy ABI25 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedResponse(

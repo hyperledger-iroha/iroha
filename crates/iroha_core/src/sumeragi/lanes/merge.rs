@@ -18,7 +18,7 @@ use std::{borrow::Cow, collections::BTreeMap, time::Duration};
 use iroha_data_model::{
     block::{ExternalExecutionContext, SignedBlock},
     sumeragi_lanes::{SumeragiLaneMerge, SumeragiLanePolicy, SumeragiLaneState},
-    transaction::{SignedTransaction, TransactionAdmissionIntent, TransactionEntrypoint},
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::types::Hash32;
@@ -529,8 +529,7 @@ impl Admissibility {
 
     fn admits(&self, tx: &SignedTransaction, block: &SignedBlock) -> bool {
         let now = block.header().creation_time();
-        tx.admission_intent() == TransactionAdmissionIntent::Ordinary
-            && tx.creation_time() < now
+        tx.creation_time() < now
             && AcceptedTransaction::validate_with_now(
                 tx,
                 &self.network,

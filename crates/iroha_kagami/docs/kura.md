@@ -21,6 +21,7 @@ kagami advanced kura <SUBCOMMAND> [OPTIONS]
 |      Command        |                             Description                              |
 | ------------------- | --------------------------------------------------------------------- |
 | [`print`](#print)   | Print the contents of a specified number of blocks                     |
+| [`finality`](#finality) | Verify native certificates over a complete locally anchored prefix |
 | [`sidecar`](#sidecar) | Print the pipeline recovery sidecar JSON for a given block height       |
 | `help`              | Print the help message for the tool or a subcommand                    |
 
@@ -46,6 +47,17 @@ An error in `print` occurs if one the following happens:
 - `kura` fails to read `block_store`
 - `kura` fails to print the `output`
 - `kura` tries to print the latest block and there is none
+
+## `finality`
+
+`kagami advanced kura finality <path> --chain-id <chain> --height <height>`
+checks the signed genesis and every native certificate through the selected
+height (1–4096), then emits the exact current `SumeragiFinalityProof`. Reads and
+JSON output are bounded; verification failure emits no partial report. The
+selected store supplies the genesis trust root, so `external_trust_anchor` is
+false. A height-one report sets `genesis_execution_authenticated` to false:
+only a verified successor authenticates the genesis execution result. Optional
+`--output` uses atomic publication outside the store.
 
 ## `sidecar`
 
@@ -244,12 +256,12 @@ The fixed localnet generator emits `genesis-anchors.json` and identical bounded 
 
 Fixed scaling output has one mutable `storage/` tree with exactly four original role directories and initially empty `kura/` and `state/` children. Every resolved writable config path is bound to the role before final genesis authority is frozen. Snapshot and discovery replay paths are explicit; PoR VRF/drand files follow the canonical config-owned derivation from the role PoR state directory. The producer retains this initial namespace and seals the exact census through receipt flush. The caller independently owns mutable runtime verification after generation.
 
-Fixed scaling anchor peer rows also require `primary_block_store` and `primary_merge_log`.
-Kagami derives both bounded absolute paths with the final effective primary lane's native
-`blocks_dir` and `merge_log_path` helpers, under that peer's original Kura root. They are
-absent at generation and created by the daemon. Stopped-tip, canonical vector collection,
-facts and proof export consume these retained native projections; the Kura runtime root
-itself is not the canonical block-journal directory.
+Fixed scaling anchor peer rows require `primary_block_store`. Kagami derives this
+bounded absolute path from the final effective primary lane under the original peer's
+Kura root. It is absent at generation and created by the daemon. Stopped-tip, canonical
+vector collection, facts and proof export consume its four native journals: block
+data, index, hashes and count. The Kura runtime root itself is not the canonical
+block-journal directory.
 The same receipt requires typed public `genesis_public_key` and effective u16
 `chain_discriminant`, derived and matched across all four final authenticated configs.
 Callers retain these values directly without inferring omitted TOML defaults.

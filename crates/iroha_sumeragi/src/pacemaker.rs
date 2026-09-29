@@ -44,52 +44,32 @@ pub const MAX_VIEW_TIMEOUT: Millis = 1 << 40;
 /// exactly with integers (`t_base · 3^L / 2^L`; exact for `t_max_eff ≤ MAX_VIEW_TIMEOUT`,
 /// saturating to `t_max_eff` beyond).
 pub fn view_timeout(t_base: Millis, t_max_eff: Millis, level: u32) -> Millis {
-    let cap = u128::from(t_max_eff);
-    let mut num = u128::from(t_base);
-    let mut den: u128 = 1;
-    for _ in 0..level {
-        match (num.checked_mul(3), den.checked_mul(2)) {
-            (Some(n), Some(d)) => {
-                num = n;
-                den = d;
-            }
-            // The value only grows; overflow means it is astronomically above any cap.
-            _ => return t_max_eff,
-        }
-        if num / den >= cap {
-            return t_max_eff;
-        }
-    }
-    let value = (num / den).min(cap);
-    Millis::try_from(value).unwrap_or(t_max_eff)
+    uncapped_timeouts(t_base, t_max_eff)
+        .nth(usize::try_from(level).unwrap_or(usize::MAX))
+        .unwrap_or(t_max_eff)
 }
 
-/// `level_cap = ceil(log_1.5(t_max_eff / t_base))`: the smallest `L` with
-/// `t_base · 1.5^L ≥ t_max_eff` (exact integer comparison `t_base · 3^L ≥ t_max_eff · 2^L`).
+/// `level_cap = ceil(log_1.5(t_max_eff / t_base))`, with exact integer progression.
 pub fn level_cap(t_base: Millis, t_max_eff: Millis) -> u32 {
-    let mut lhs = u128::from(t_base);
-    let mut rhs = u128::from(t_max_eff);
-    let mut level = 0u32;
-    while lhs < rhs {
-        match (lhs.checked_mul(3), rhs.checked_mul(2)) {
-            (Some(l), Some(r)) if lhs > 0 => {
-                lhs = l;
-                rhs = r;
-                level += 1;
-            }
-            _ => break,
-        }
+    if t_base == 0 {
+        return 0;
     }
-    level
+    u32::try_from(uncapped_timeouts(t_base, t_max_eff).count()).expect("u128 growth is bounded")
+}
+
+/// Exact rational growth before the cap; numerator/denominator overflow saturates callers.
+fn uncapped_timeouts(t_base: Millis, cap: Millis) -> impl Iterator<Item = Millis> {
+    std::iter::successors(Some((u128::from(t_base), 1_u128)), |(num, den)| {
+        Some((num.checked_mul(3)?, den.checked_mul(2)?))
+    })
+    .map(|(num, den)| num / den)
+    .take_while(move |value| *value < u128::from(cap))
+    .map(|value| Millis::try_from(value).expect("below the Millis cap"))
 }
 
 /// `⌈log2(x)⌉` for `x ≥ 1` (`0` for `x ≤ 1`).
 pub fn ceil_log2(x: u64) -> u32 {
-    if x <= 1 {
-        0
-    } else {
-        u64::BITS - (x - 1).leading_zeros()
-    }
+    u64::BITS - x.saturating_sub(1).leading_zeros()
 }
 
 /// `T_req(nominal)` (§8.2 L3, §9.4) for a committee of `n` members:
@@ -222,11 +202,7 @@ pub fn ewma(prev: Millis, sample: Millis) -> Millis {
 /// Backoff before the `attempt`-th (0-based) execution retry after `Failed`/`Cancelled`:
 /// 100 ms, doubling, capped at `cap` (`rebroadcast_interval`, §4.2).
 pub fn exec_retry_delay(attempt: u32, cap: Millis) -> Millis {
-    EXEC_RETRY_INITIAL
-        .checked_shl(attempt)
-        .filter(|delay| *delay >> attempt == EXEC_RETRY_INITIAL)
-        .unwrap_or(Millis::MAX)
-        .min(cap)
+    retransmit_spacing(attempt.saturating_add(1), EXEC_RETRY_INITIAL, cap)
 }
 
 /// Spacing before the `k`-th (1-based) retransmission of a vote: `t_retx · 2^(k−1)`, capped at
@@ -312,11 +288,6 @@ impl Pacemaker {
     /// `start(h)`.
     pub fn start_level(&self) -> u32 {
         self.start_level
-    }
-
-    /// Consecutive fast commits counted towards decay.
-    pub fn fast_streak(&self) -> u32 {
-        self.fast_streak
     }
 
     /// `level(h, v) = min(level_cap, start(h) + v)`.
@@ -406,22 +377,12 @@ impl Pacemaker {
         self.latency_ewma = Some(self.latency_ewma.map_or(sample, |prev| ewma(prev, sample)));
     }
 
-    /// `latency_ewma` (`None` before the first sample).
-    pub fn latency_ewma(&self) -> Option<Millis> {
-        self.latency_ewma
-    }
-
     /// Record a vote-to-QC latency sample (every own vote whose phase QC arrives, §9.1), capped
     /// at `2 × qc_lat_ewma` so one slow or adversarially delayed round moves the estimate by at
     /// most 1/8.
     pub fn record_qc_latency(&mut self, sample: Millis) {
         let capped = sample.min(self.qc_lat_ewma.saturating_mul(2));
         self.qc_lat_ewma = ewma(self.qc_lat_ewma, capped);
-    }
-
-    /// `qc_lat_ewma`.
-    pub fn qc_lat_ewma(&self) -> Millis {
-        self.qc_lat_ewma
     }
 
     /// Record the duration of an execution at the current height, or a lower bound of it for
@@ -457,28 +418,23 @@ impl Pacemaker {
         let failed = false;
         #[cfg(sumeragi_mutation = "ML25")]
         let failed = std::mem::take(&mut self.failed_with_proposal);
-        let change = if slow_exec || slow_view || failed {
+        self.last_exec_ms = None;
+        if slow_exec || slow_view || failed {
             self.start_level = self.start_level.saturating_add(1).min(self.start_cap);
             self.fast_streak = 0;
-            StartChange::Raised
-        } else if commit_view == 0 {
+            return StartChange::Raised;
+        }
+        if commit_view == 0 {
             self.fast_streak = self.fast_streak.saturating_add(1);
             if self.fast_streak >= self.decay_after {
                 self.fast_streak = 0;
                 if self.start_level > 0 && !cfg!(sumeragi_mutation = "ML6") {
                     self.start_level -= 1;
-                    StartChange::Decayed
-                } else {
-                    StartChange::Unchanged
+                    return StartChange::Decayed;
                 }
-            } else {
-                StartChange::Unchanged
             }
-        } else {
-            StartChange::Unchanged
-        };
-        self.last_exec_ms = None;
-        change
+        }
+        StartChange::Unchanged
     }
 }
 
@@ -594,10 +550,10 @@ mod tests {
                     StartChange::Unchanged,
                     "{round}/{i}"
                 );
-                assert_eq!(pm.fast_streak(), i + 1);
+                assert_eq!(pm.fast_streak, i + 1);
             }
             assert_eq!(pm.on_commit(0, None), StartChange::Decayed);
-            assert_eq!(pm.fast_streak(), 0);
+            assert_eq!(pm.fast_streak, 0);
         }
         assert_eq!(pm.start_level(), 0);
         // At level 0 the streak resets without a change.
@@ -620,9 +576,9 @@ mod tests {
         // itself fast, changes nothing.
         let mut pm = Pacemaker::new(&local, 30_000);
         pm.on_commit(0, Some(100));
-        assert_eq!(pm.fast_streak(), 1);
+        assert_eq!(pm.fast_streak, 1);
         assert_eq!(pm.on_commit(2, Some(900)), StartChange::Unchanged);
-        assert_eq!((pm.start_level(), pm.fast_streak()), (0, 1));
+        assert_eq!((pm.start_level(), pm.fast_streak), (0, 1));
         // Neither does a commit in a view this node did not measure.
         assert_eq!(pm.on_commit(3, None), StartChange::Unchanged);
         // Fast execution and a view of exactly T(start)/2 do not raise; one more millisecond
@@ -657,7 +613,7 @@ mod tests {
     fn retx_and_stage_deadlines() {
         let local = LocalParams::default();
         let mut pm = Pacemaker::new(&local, 30_000);
-        assert_eq!(pm.qc_lat_ewma(), 250);
+        assert_eq!(pm.qc_lat_ewma, 250);
         // 3 · 250 = 750 > T(0)/4 = 500 → 500.
         assert_eq!(pm.t_retx(0), 500);
         // Level 3: T = 6750 → upper 1687; 750.
@@ -688,14 +644,14 @@ mod tests {
     fn pace_budget_and_latency() {
         let local = LocalParams::default();
         let mut pm = Pacemaker::new(&local, 30_000);
-        assert_eq!(pm.latency_ewma(), None);
+        assert_eq!(pm.latency_ewma, None);
         assert_eq!(pm.pace(1_000), 1_000);
         assert_eq!(pm.propose_time(5, 1_000), 1_005);
         pm.record_commit_latency(400);
-        assert_eq!(pm.latency_ewma(), Some(400));
+        assert_eq!(pm.latency_ewma, Some(400));
         assert_eq!(pm.pace(1_000), 600);
         pm.record_commit_latency(1_200);
-        assert_eq!(pm.latency_ewma(), Some(500));
+        assert_eq!(pm.latency_ewma, Some(500));
         pm.record_commit_latency(5_000);
         assert_eq!(pm.pace(1_000), 0);
         // exec_budget = min(e_max, T_base/4), whatever the level.
@@ -712,12 +668,12 @@ mod tests {
         let mut pm = Pacemaker::new(&local, 30_000);
         // One huge sample moves the estimate by at most (2·250 − 250)/8.
         pm.record_qc_latency(1_000_000);
-        assert_eq!(pm.qc_lat_ewma(), 250 + 250 / 8);
+        assert_eq!(pm.qc_lat_ewma, 250 + 250 / 8);
         // A persistent change is still learned within a few rounds.
         for _ in 0..40 {
             pm.record_qc_latency(2_000);
         }
-        assert!(pm.qc_lat_ewma() > 1_500, "{}", pm.qc_lat_ewma());
+        assert!(pm.qc_lat_ewma > 1_500, "{}", pm.qc_lat_ewma);
     }
 
     #[test]

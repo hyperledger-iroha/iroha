@@ -151,7 +151,7 @@ class Fixture:
             if kind == 'succeeded':
                 result = {**{key: native[key] for key in native if key != 'elapsed_ms'},
                     'mandatory_signed_rs16_da_rbc': True, 'signed_rs16_da_observations': [],
-                    'authenticated_message_control': {}, 'process_inventory': [],
+                    'authenticated_private_settlement_route_control': {}, 'process_inventory': [],
                     'payload': {'fixture_value': index + 1.25}}
                 native['outcome'] = {'kind': kind, 'result': result}
             elif kind == 'failed':

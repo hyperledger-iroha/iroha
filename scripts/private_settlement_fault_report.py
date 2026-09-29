@@ -23,19 +23,9 @@ REQUIRED_PHASE_CUTS = (
     "da_before_availability_qc",
     "prepare_before_complete_barrier",
     "commit_before_complete_barrier",
-    "carrier_before_global_finality",
+    "restart_before_global_finality",
 )
-REQUIRED_CRASH_BOUNDARIES = (
-    "sidecar_fsync",
-    "staged_delta_fsync",
-    "prepare_qc",
-    "prepare_registration_kura_append",
-    "prepare_registration_wsv_application",
-    "commit_qc",
-    "finalization_kura_append",
-    "finalization_wsv_application",
-    "receipt_publication",
-)
+REQUIRED_CRASH_BOUNDARIES: tuple[str, ...] = ()
 _GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _EVIDENCE_RECORD = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
@@ -229,11 +219,13 @@ def _parse_phase_cuts(
         evidence_pairs.add(evidence)
         for field in (
             "control_acknowledged",
-            "delayed_delivery",
             "healed",
             "converged",
         ):
             _require_true(cut[field], f"{label}[{index}].{field}")
+        expected_delay = name != "restart_before_global_finality"
+        if cut["delayed_delivery"] is not expected_delay:
+            raise FaultEvidenceError(f"{label}[{index}] misclassifies HTTP delivery versus restart recovery")
         if cut["partial_visibility_observed"] is not False:
             raise FaultEvidenceError(
                 f"{label}[{index}].partial_visibility_observed must be false"
@@ -245,62 +237,10 @@ def _parse_phase_cuts(
 def _parse_crash_recoveries(
     value: Any, label: str, evidence_pairs: set[tuple[str, str, str, str]]
 ) -> None:
-    if not isinstance(value, list):
-        raise FaultEvidenceError(f"{label} must be a list")
-    names: list[str] = []
-    for index, item in enumerate(value):
-        recovery = _exact_fields(
-            item,
-            {
-                "boundary",
-                "process_restarted",
-                "durable_state_reconciled",
-                "converged",
-                "partial_visibility_observed",
-                "control_transcript_sha256",
-                "control_transcript_record",
-                "observation_capture_sha256",
-                "observation_capture_record",
-            },
-            f"{label}[{index}]",
-        )
-        boundary = recovery["boundary"]
-        if not isinstance(boundary, str):
-            raise FaultEvidenceError(f"{label}[{index}].boundary must be a string")
-        names.append(boundary)
-        evidence = (
-            _evidence_binding(
-                recovery["control_transcript_sha256"],
-                f"{label}[{index}].control_transcript_sha256",
-            ),
-            _evidence_record(
-                recovery["control_transcript_record"],
-                f"{label}[{index}].control_transcript_record",
-            ),
-            _evidence_binding(
-                recovery["observation_capture_sha256"],
-                f"{label}[{index}].observation_capture_sha256",
-            ),
-            _evidence_record(
-                recovery["observation_capture_record"],
-                f"{label}[{index}].observation_capture_record",
-            ),
-        )
-        if evidence in evidence_pairs:
-            raise FaultEvidenceError(
-                f"{label}[{index}] reuses another fault trial's evidence"
-            )
-        evidence_pairs.add(evidence)
-        for field in ("process_restarted", "durable_state_reconciled", "converged"):
-            _require_true(recovery[field], f"{label}[{index}].{field}")
-        if recovery["partial_visibility_observed"] is not False:
-            raise FaultEvidenceError(
-                f"{label}[{index}].partial_visibility_observed must be false"
-            )
-    if names != list(REQUIRED_CRASH_BOUNDARIES):
-        raise FaultEvidenceError(
-            f"{label} must cover the exact ordered persistence boundaries"
-        )
+    # Node-local persistence fault injection is outside the first-release contract.
+    # Keep the empty inventory explicit so reports cannot claim those trials.
+    if value != []:
+        raise FaultEvidenceError(f"{label} must be empty; persistence-cut injection is retired")
 
 
 def _parse_atomicity(value: Any, participants: int, label: str) -> None:
@@ -359,7 +299,7 @@ def parse_run(value: Any, source: str) -> tuple[int, int, int, str, str, str]:
             "validators_per_dataspace",
             "quorum",
             "mandatory_signed_rs16_da_rbc",
-            "authenticated_message_control",
+            "authenticated_private_settlement_route_control",
             "committee_validator_restarts",
             "maximum_simultaneously_unavailable_per_committee",
             "quorum_progress_with_one_unavailable",
@@ -403,8 +343,8 @@ def parse_run(value: Any, source: str) -> tuple[int, int, int, str, str, str]:
         f"{source}.mandatory_signed_rs16_da_rbc",
     )
     _require_true(
-        record["authenticated_message_control"],
-        f"{source}.authenticated_message_control",
+        record["authenticated_private_settlement_route_control"],
+        f"{source}.authenticated_private_settlement_route_control",
     )
     expected_restarts = list(range(participants))
     if record["committee_validator_restarts"] != expected_restarts:

@@ -179,7 +179,7 @@ pub use crate::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },
     kotodama::compiler::Compiler as KotodamaCompiler,
-    memory::{AccessRange, Memory, WriteLogEntry, WriteLogSnapshot},
+    memory::{AccessRange, Memory, ReadLogSnapshot, WriteLogEntry, WriteLogSnapshot},
     pedersen::pedersen_commit,
     pointer_abi::{
         PointerType, Tlv, is_type_allowed_for_policy, render_pointer_types_markdown_table,

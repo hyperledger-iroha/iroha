@@ -37,7 +37,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let mut core_state = CoreState::new_for_testing(World::new(), kura, query);
     core_state.zk.halo2.enabled = true;
     core_state.zk.verify_timeout = Duration::ZERO;
-    let state = Arc::new(core_state);
+    let mut state = Arc::new(core_state);
     // Seed one finalized election via ISIs
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
@@ -172,8 +172,17 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap();
     stx.apply();
     block
-        .commit_empty_block_for_testing()
-        .expect("commit block");
+        .commit_world_overlay_for_testing()
+        .expect("seed directly verified tally query fixture");
+    let source = Arc::get_mut(&mut state).expect("unique tally fixture state");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        std::mem::take(&mut source.world),
+        1,
+    );
+    config.zk = Some(source.zk_snapshot());
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original tally query genesis");
+    let state = chain.state().clone();
     let expected_view = state.view();
     let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
     let expected_hash = expected_view

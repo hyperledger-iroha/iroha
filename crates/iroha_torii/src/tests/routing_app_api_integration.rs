@@ -295,11 +295,12 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
+        let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
+        )
+        .expect("original sorted transaction fixture genesis");
+        let state = Arc::clone(native_chain.state());
+        let kura = Arc::clone(native_chain.kura());
         // Build three transactions with distinct timestamps
         let network_id = *state.network_id_ref();
         let kp_a = checked_app_api_keypair(
@@ -357,16 +358,7 @@ mod app_api_integration_tests {
             "derive sorted transaction count block leader fixture key",
         );
         let _topo = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![tx1, tx2, tx3])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut st_block = state.block(unverified.header());
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut st_block)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+        crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2, tx3]);
         // Sorted by timestamp, request middle page (offset=1, limit=1)
         let env = crate::filter::QueryEnvelope {
             query: None,

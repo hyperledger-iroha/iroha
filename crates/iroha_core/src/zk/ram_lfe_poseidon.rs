@@ -5,8 +5,9 @@
 //! from the shared leaf tables. No host hash callback supplies the relation.
 //! Owned input bytes and working field cells clear on drop; Halo2 assignments,
 //! arithmetic temporaries and compiler copies remain outside that claim.
-//! TODO: Qualify a bounded multi-lane layout and complete semantic/BFV relation
-//! before any production caller, relation identifier or proof-mode admission.
+//! TODO: Qualify a bounded multi-lane layout and complete semantic execution
+//! relation before any production caller, relation identifier or admission.
+//! The insecure diagnostic BFV encryption profile requires separate replacement.
 
 use ff::{Field, FromUniformBytes, PrimeField};
 use halo2_proofs::{
@@ -205,7 +206,7 @@ impl<F: PastaField> Drop for Working<F> {
 // These mutation hooks exist only in this test-only module. Mutated values are
 // propagated through later assignments so downstream output checks cannot mask
 // a missing local transition, padding or source-copy constraint.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Fault<F> {
     State { row: usize, column: usize, value: F },
     Input { index: usize, value: F },
@@ -226,10 +227,9 @@ fn assign_state<F: PastaField>(
             column,
             value,
         } = *fault
+            && at == row
         {
-            if at == row {
-                work.0.state[column] = value;
-            }
+            work.0.state[column] = value;
         }
     }
     std::array::from_fn(|column| {

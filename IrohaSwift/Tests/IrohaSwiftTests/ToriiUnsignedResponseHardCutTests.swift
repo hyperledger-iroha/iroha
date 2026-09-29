@@ -169,7 +169,7 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
       metadata actualMetadata: [String: ToriiJSONValue]? = nil,
       feePayment actualFeePayment: FeePaymentIntent? = nil,
       instructionsHash actualInstructionsHash: String? = nil,
-      admissionIntent: TransactionAdmissionIntentV1 = .ordinary
+      retiredAdmissionTag: UInt32? = nil
     ) throws -> ToriiMultisigContractCallResponse {
       let responseFeePayment = actualFeePayment ?? feePayment
       let responseInstructionsHash = actualInstructionsHash ?? hash
@@ -181,7 +181,7 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
         timeToLiveMs: timeToLiveMs,
         nonce: nonce,
         feePayment: responseFeePayment,
-        admissionIntent: admissionIntent,
+        retiredAdmissionTag: retiredAdmissionTag,
         metadata: actualMetadata ?? metadata
       )
       return try decodeMultisigResponse([
@@ -240,7 +240,9 @@ final class ToriiUnsignedResponseHardCutTests: XCTestCase {
         "rehash substitution \(index) must not reach a signer"
       )
     }
-    XCTAssertThrowsError(try response(admissionIntent: .queuePlanSynced))
+    for tag: UInt32 in [0, 1, 2] {
+      XCTAssertThrowsError(try response(retiredAdmissionTag: tag))
+    }
     XCTAssertThrowsError(
       try response().validatingRequestBindings(
         signerAccountId: signerAccount,

@@ -126,6 +126,12 @@ impl Ingress {
         }
     }
 
+    /// Release every retained frame when its instance stops, preserving drop diagnostics.
+    pub(super) fn clear(&mut self) {
+        self.lanes = Default::default();
+        self.since_bulk = 0;
+    }
+
     /// Queue a message of class `class` from the authenticated peer `from` (O6: the oldest
     /// message of that peer and class is dropped when its queue is full).
     pub fn push(&mut self, from: PublicKey, msg: WireMessage, class: TrafficClass) {

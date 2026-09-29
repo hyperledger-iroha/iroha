@@ -1385,9 +1385,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,
-        iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
-        iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
     ) {
         return true;
     }
@@ -2541,7 +2539,6 @@ fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bo
 }
 const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
-    "CanManageLaneRelayEmergency",
     "CanRegisterDomain",
     "CanUnregisterDomain",
     "CanModifyDomainMetadata",

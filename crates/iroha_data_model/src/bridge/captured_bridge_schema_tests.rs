@@ -28,15 +28,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::BridgeProofRecord>(
         "iroha_data_model::bridge::BridgeProofRecord",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeFinalityProof>(
-        "iroha_data_model::bridge::BridgeFinalityProof",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeCommitment>(
-        "iroha_data_model::bridge::BridgeCommitment",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeFinalityBundle>(
-        "iroha_data_model::bridge::BridgeFinalityBundle",
-    ),
 ];
 
 #[test]

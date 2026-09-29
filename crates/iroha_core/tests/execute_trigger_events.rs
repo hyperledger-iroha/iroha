@@ -1,5 +1,6 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+use iroha_core::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -16,7 +17,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc};
-fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
+fn build_state_and_ids() -> (CertifiedTestChain, NetworkId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -59,15 +60,10 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
         [fee_asset],
         [],
     );
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
-    let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
+    let chain =
+        CertifiedTestChain::start(TestChainConfig::new(world, 0)).expect("native trigger genesis");
+    let network_id = chain.network_id();
+    let state = chain.state();
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(stored_asset_definition_id, ALICE_ID.clone());
     state
@@ -75,17 +71,14 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
         .world()
         .asset_definition(asset_id.definition())
         .expect("seeded asset definition must be resolvable");
-    (state, network_id, trigger_id, asset_id)
+    (chain, network_id, trigger_id, asset_id)
 }
 fn register_trigger(
-    state: &State,
+    chain: &mut CertifiedTestChain,
     network_id: &NetworkId,
     trigger_id: &TriggerId,
     asset_id: &AssetId,
-) -> (iroha_core::block::CommittedBlock, usize) {
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
+) -> usize {
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(
@@ -108,35 +101,29 @@ fn register_trigger(
     )
     .with_instructions([register_trigger])
     .sign(ALICE_KEYPAIR.private_key());
-    let register_block =
-        BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
-            Cow::Owned(register_tx),
-        )])
-        .chain(0, Some(&genesis))
-        .sign(ALICE_KEYPAIR.private_key())
-        .unpack(|_| {});
-    let mut register_state_block = state.block(register_block.header());
-    let valid_register =
-        ValidBlock::validate_unchecked(register_block.into(), &mut register_state_block)
-            .unpack(|_| {});
-    let committed_register = valid_register.commit_unchecked().unpack(|_| {});
+    let proposal = chain.proposal(None, vec![register_tx]);
+    let mut pending = chain
+        .begin_proposal(proposal, Default::default())
+        .expect("native registration executes");
+    let fragments = pending
+        .inspect(|execution| execution.state.committed_fragment_count())
+        .unwrap();
+    let committed = pending
+        .publish(Signers::Quorum)
+        .expect("native registration publishes");
     assert!(
-        committed_register.as_ref().output_error(0).is_none(),
-        "register trigger transaction rejected during execution: {:?}",
-        committed_register.as_ref().output_error(0)
+        committed.block().output_error(0).is_none(),
+        "{:?}",
+        committed.block().output_error(0)
     );
-    let fragment_count = register_state_block.committed_fragment_count();
-    state
-        .commit_executed_block_for_testing(register_state_block, committed_register.clone())
-        .expect("register block commits");
-    (committed_register, fragment_count)
+    fragments
 }
+
 fn execute_trigger(
-    state: &State,
+    chain: &mut CertifiedTestChain,
     network_id: &NetworkId,
     trigger_id: &TriggerId,
     asset_id: &AssetId,
-    parent: &iroha_core::block::CommittedBlock,
 ) -> (Vec<EventBox>, usize, Option<String>) {
     let exec_tx = TransactionBuilder::new(
         *network_id,
@@ -147,32 +134,31 @@ fn execute_trigger(
         trigger_id.clone(),
     ))])
     .sign(ALICE_KEYPAIR.private_key());
-    let execute_block =
-        BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
-            Cow::Owned(exec_tx),
-        )])
-        .chain(0, Some(parent.as_ref()))
-        .sign(ALICE_KEYPAIR.private_key())
-        .unpack(|_| {});
-    let mut execute_state_block = state.block(execute_block.header());
-    execute_state_block
+    chain
+        .state()
+        .view()
         .world()
         .asset_definition(asset_id.definition())
-        .expect("execute block must see seeded asset definition");
-    let valid_execute =
-        ValidBlock::validate_unchecked(execute_block.into(), &mut execute_state_block)
-            .unpack(|_| {});
-    let committed_execute = valid_execute.commit_unchecked().unpack(|_| {});
-    let execute_error = committed_execute
-        .as_ref()
+        .expect("seeded asset remains");
+    chain.take_events().unwrap();
+    let proposal = chain.proposal(None, vec![exec_tx]);
+    let mut pending = chain
+        .begin_proposal(proposal, Default::default())
+        .expect("native trigger executes");
+    let fragments = pending
+        .inspect(|execution| execution.state.committed_fragment_count())
+        .unwrap();
+    let committed = pending
+        .publish(Signers::Quorum)
+        .expect("native trigger publishes");
+    let execute_error = committed
+        .block()
         .output_error(0)
         .map(|error| format!("{error:?}"));
-    let fragment_count = execute_state_block.committed_fragment_count();
-    let events = state
-        .commit_executed_block_for_testing(execute_state_block, committed_execute)
-        .expect("execute block commits");
-    (events, fragment_count, execute_error)
+    drop(pending);
+    (chain.take_events().unwrap(), fragments, execute_error)
 }
+
 fn assert_trigger_registered(state: &State, trigger_id: &TriggerId, asset_id: &AssetId) {
     let view = state.view();
     let action = view
@@ -236,10 +222,10 @@ fn assert_trigger_events(
 }
 #[test]
 fn execute_trigger_emits_execute_and_data_events() {
-    let (state, chain_id, trigger_id, asset_id) = build_state_and_ids();
+    let (mut chain, chain_id, trigger_id, asset_id) = build_state_and_ids();
     let alice_id = ALICE_ID.clone();
-    let (committed_register, register_fragments) =
-        register_trigger(&state, &chain_id, &trigger_id, &asset_id);
+    let register_fragments = register_trigger(&mut chain, &chain_id, &trigger_id, &asset_id);
+    let state = Arc::clone(chain.state());
     assert!(
         register_fragments > 0,
         "register transaction should be applied"
@@ -250,13 +236,8 @@ fn execute_trigger_emits_execute_and_data_events() {
         .world()
         .asset_definition(asset_id.definition())
         .expect("asset definition must survive trigger registration");
-    let (events, fragment_count, execute_error) = execute_trigger(
-        &state,
-        &chain_id,
-        &trigger_id,
-        &asset_id,
-        &committed_register,
-    );
+    let (events, fragment_count, execute_error) =
+        execute_trigger(&mut chain, &chain_id, &trigger_id, &asset_id);
     assert!(
         execute_error.is_none(),
         "ExecuteTrigger transaction rejected: {execute_error:?}"

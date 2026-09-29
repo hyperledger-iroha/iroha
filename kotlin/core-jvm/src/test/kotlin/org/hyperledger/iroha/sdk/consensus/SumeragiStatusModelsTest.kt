@@ -14,7 +14,7 @@ class SumeragiStatusModelsTest {
         assertEquals(8, NativeStatusFixtures.rows().size)
         for ((name, row) in NativeStatusFixtures.rows()) {
             val status = SumeragiStatus.parseJson(row.first)
-            assertEquals(8, status.protocolVersion)
+            assertEquals(1, status.protocolVersion)
             assertEquals(BigInteger("18446744073709551615"), status.view)
             assertEquals(BigInteger("4294967295"), status.level)
             assertEquals(BigInteger("18446744073709551615"), status.footprint.votes)
@@ -49,7 +49,7 @@ class SumeragiStatusModelsTest {
     }
     @Test fun `malformed scalars duplicate keys and retired versions never alias canonical values`() {
         val payload = NativeStatusFixtures.json()
-        for (version in listOf(0L, 4L, 6L, 7L, 9L)) assertFails { SumeragiStatus.parseJson(changed { it["protocol_version"] = version }) }
+        for (version in listOf(0L, 2L, 4L, 6L, 7L, 8L, 9L)) assertFails { SumeragiStatus.parseJson(changed { it["protocol_version"] = version }) }
         for (bad in listOf<Any?>(-1L, "15", 1.5, BigInteger.ONE.shiftLeft(64), null, true)) {
             assertFails { SumeragiStatus.parseJson(changed { it["height"] = bad }) }
         }

@@ -46,10 +46,7 @@ final class HttpClientTransportRamLfeTestSupport {
         + "\"signature\":\""
         + "aa".repeat(64)
         + "\""
-        + "},"
-        + "\"output_opening\":"
-        + HttpClientTransportTests.identifierOpeningJson(
-            HttpClientTransportTests.sampleOpening("identifier_lookup_retail"))
+        + "}"
         + "}";
   }
 

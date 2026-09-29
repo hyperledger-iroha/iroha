@@ -497,7 +497,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
         let data_path = sidecar_dir.join("absent.data");
         let index_path = sidecar_dir.join("absent.index");
@@ -521,7 +521,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
         .store_root()
         .join("blocks")
         .join("lane")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
     let data_path = sidecar_dir.join("absent.data");
     let index_path = sidecar_dir.join("absent.index");
@@ -548,7 +548,7 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
         let data_path = sidecar_dir.join("prepend.data");
         let index_path = sidecar_dir.join("prepend.index");
@@ -674,7 +674,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create bound recovery namespace");
         let data_path = sidecar_dir.join("bound-recovery.norito");
         let index_path = sidecar_dir.join("bound-recovery.index");
@@ -1738,10 +1738,10 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     {
         let (_temp_dir, kura, _data_path, _index_path) = fixture();
         let lane_root = kura.store_root().join("blocks").join("lane");
-        let source_dir = lane_root.join("lane_001").join(LANE_ARTIFACTS_DIR_NAME);
+        let source_dir = lane_root.join("lane_001").join(PIPELINE_DIR_NAME);
         let target_dir = lane_root
             .join("lane_001_copy")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&source_dir).expect("create source lane directory");
         fs::create_dir_all(&target_dir).expect("create target lane directory");
         let source_data = source_dir.join("matching-progress.norito");
@@ -1885,14 +1885,14 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .join("blocks")
             .join("lane")
             .join("lane_0000000001")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         let archive_dir = kura
             .store_root()
             .join("retired")
             .join("lane_geometry")
             .join("transition_fixture")
             .join("lane_0000000001")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&active_dir).expect("create active lane directory");
         fs::create_dir_all(&archive_dir).expect("create retired lane archive directory");
         let active_data = active_dir.join("matching-progress.norito");
@@ -1988,7 +1988,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let source_root = source_kura.store_root();
         let relative_sidecar_dir = PathBuf::from("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         let source_sidecar_dir = source_root.join(&relative_sidecar_dir);
         fs::create_dir_all(&source_sidecar_dir).expect("create relocated sidecar directory");
         let source_data = source_sidecar_dir.join("relocated-progress.norito");
@@ -2207,193 +2207,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
     }
 }
-fn application_receipt_snapshot_preserves_sparse_entries() {
-    for include_current_receipt in [false, true] {
-        let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
-        let lane_config = two_lane_runtime_config();
-        let lane_id = LaneId::from(1);
-        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
-        let mut generator = DummyBlocks::new();
-        let mut first = dummy_block_with_lane_payload_ownership_from_generator(
-            &mut generator,
-            lane_id,
-            lane_entry.dataspace_id,
-            1,
-        )
-        .as_ref()
-        .clone();
-        attach_ok_results_to_block(&mut first);
-        let signature = SignatureOf::try_from_hash(
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            first.header().hash(),
-        )
-        .expect("sign the complete result-bearing fixture header");
-        first
-            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
-            .expect("install the final fixture header signature");
-        let first = Arc::new(first);
-        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&first);
-        let mut second = dummy_block_with_lane_payload_ownership_from_generator(
-            &mut generator,
-            lane_id,
-            lane_entry.dataspace_id,
-            2,
-        )
-        .as_ref()
-        .clone();
-        attach_ok_results_to_block(&mut second);
-        let signature = SignatureOf::try_from_hash(
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            second.header().hash(),
-        )
-        .expect("sign the complete result-bearing fixture header");
-        second
-            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
-            .expect("install the final fixture header signature");
-        let second = Arc::new(second);
-        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&second);
-        let mut third = dummy_block_with_lane_payload_ownership_from_generator(
-            &mut generator,
-            lane_id,
-            lane_entry.dataspace_id,
-            3,
-        )
-        .as_ref()
-        .clone();
-        attach_ok_results_to_block(&mut third);
-        let signature = SignatureOf::try_from_hash(
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            third.header().hash(),
-        )
-        .expect("sign the complete result-bearing fixture header");
-        third
-            .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
-            .expect("install the final fixture header signature");
-        let third = Arc::new(third);
-        *generator.blocks.last_mut().expect("generated parent") = Arc::clone(&third);
-        let proposal = |block: &SignedBlock| {
-            lane_block_proposal_from_ownership(
-                block
-                    .execution_context()
-                    .expect("lane execution context")
-                    .lane_payload_ownerships
-                    .first()
-                    .expect("lane ownership"),
-            )
-        };
-        let first_proposal = proposal(&first);
-        let second_proposal = proposal(&second);
-        let third_proposal = proposal(&third);
-        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-        kura.store_block(Arc::clone(&first))
-            .expect("store first lane block");
-        kura.store_block(Arc::clone(&second))
-            .expect("store second lane block");
-        kura.store_block(Arc::clone(&third))
-            .expect("store third lane block");
-        for height in 1..=3 {
-            finalize_chain_through_for_eviction(
-                &kura,
-                NonZeroUsize::new(height).expect("positive height"),
-            );
-        }
-        kura.persist_lane_block_application_receipt(&first_proposal)
-            .expect("persist first canonical receipt");
-        if include_current_receipt {
-            kura.persist_lane_block_application_receipt(&second_proposal)
-                .expect("persist intervening current-format receipt");
-        }
-        kura.persist_lane_block_application_receipt(&third_proposal)
-            .expect("persist third canonical receipt");
-        for entry in kura
-            .lane_storage_entries
-            .lock()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>()
-        {
-            let (data_path, index_path) =
-                Kura::lane_block_application_receipt_paths_for_entry(&entry, &kura.store_root);
-            let mut pair = kura
-                .open_bound_progress_pair(&data_path, &index_path)
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "lane {} receipt pair must bind: {error:?}",
-                        entry.lane_id.as_u32()
-                    )
-                });
-            match &mut pair {
-                BoundProgressPair::Absent(namespace) => assert!(
-                    kura.sync_bound_progress_absence(namespace, "receipt snapshot fixture absence"),
-                    "lane {} absent receipt namespace must attest",
-                    entry.lane_id.as_u32()
-                ),
-                BoundProgressPair::Present(bound) => {
-                    let heights = kura
-                        .bound_indexed_sidecar_payload_heights(
-                            bound,
-                            "receipt snapshot fixture",
-                            usize::MAX,
-                        )
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "lane {} receipt heights must enumerate: {error:?}",
-                                entry.lane_id.as_u32()
-                            )
-                        });
-                    for height in heights {
-                        assert!(
-                            kura.read_lane_block_application_receipt_from_bound_locked(
-                                entry.lane_id,
-                                height,
-                                bound,
-                            )
-                            .is_some(),
-                            "lane {} height {height} receipt must decode",
-                            entry.lane_id.as_u32()
-                        );
-                    }
-                    assert!(
-                        kura.sync_bound_progress_sidecar(bound, "receipt snapshot fixture"),
-                        "lane {} receipt pair must attest",
-                        entry.lane_id.as_u32()
-                    );
-                }
-            }
-        }
-        let structural = kura
-            .active_lane_block_application_receipts_structural_snapshot()
-            .expect("mixed/sparse structural snapshot must be readable");
-        assert_eq!(
-            structural
-                .iter()
-                .map(|receipt| receipt.proposal.descriptor.lane_block_height)
-                .collect::<Vec<_>>(),
-            if include_current_receipt {
-                vec![1, 2, 3]
-            } else {
-                vec![1, 3]
-            },
-            "occupied-entry enumeration must ignore sparse holes without dropping receipts"
-        );
-        assert!(
-            structural
-                .iter()
-                .filter(
-                    |receipt| receipt.format == LaneBlockApplicationReceiptArtifactFormat::Current
-                )
-                .all(|receipt| kura
-                    .lane_block_application_receipt_matches_available_evidence(receipt, true)),
-            "every structurally captured receipt must retain its canonical evidence"
-        );
-        assert_eq!(
-            kura.active_lane_block_application_receipts_structural_snapshot(),
-            Some(structural),
-            "a second full occupied-entry scan must match exactly"
-        );
-    }
-}
-
 /// Run a focused metadata check against one actual indexed Norito sidecar pair.
 #[cfg(unix)]
 fn with_bound_progress_pair_fixture(check: impl FnOnce(&Kura, BoundProgressSidecar)) {
@@ -3006,18 +2819,6 @@ mod progress_witness_durability {
         super::absent_progress_namespace_requires_every_directory_barrier();
     }
     #[test]
-    fn certified_lane_block_strict_retry_reissues_every_barrier() {
-        super::certified_lane_block_strict_retry_reissues_every_barrier();
-    }
-    #[test]
-    fn application_receipt_snapshot_preserves_sparse_entries() {
-        super::application_receipt_snapshot_preserves_sparse_entries();
-    }
-    #[test]
-    fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
-        super::lane_block_application_receipt_strict_retry_reissues_every_barrier();
-    }
-    #[test]
     fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         super::initial_preindex_data_sync_failure_rolls_back_payload_before_retry();
     }
@@ -3052,10 +2853,6 @@ mod progress_witness_durability {
         super::progress_prepend_directory_failure_retries_without_corruption();
     }
     #[test]
-    fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
-        super::predecessor_application_receipt_fails_closed_while_durability_barrier_fails();
-    }
-    #[test]
     fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         super::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload();
     }
@@ -3088,8 +2885,8 @@ fn sidecar_append_rejects_zero_height() {
 #[test]
 fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let high_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 1_000 + 37;
     let payload = norito::to_bytes(&DummySidecar {
         height: high_height,
@@ -3205,8 +3002,8 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
 #[test]
 fn based_sidecar_index_pruning_preserves_base_height() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let base_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 2 + 11;
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     for height in base_height..=base_height + 2 {
@@ -3390,8 +3187,8 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
 #[test]
 fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 3 + 17;
     let first_payload = norito::to_bytes(&DummySidecar {
         height: first_height,
@@ -3434,8 +3231,8 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
 #[test]
 fn sidecar_append_rejects_max_height_before_creating_files() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: u64::MAX }).expect("encode max sidecar");
     assert!(!Kura::append_indexed_sidecar(
         &data_path,
@@ -3501,7 +3298,7 @@ fn bound_prepend_intent_sizes_match_canonical_frames_at_the_full_window_bound() 
         .store_root()
         .join("blocks")
         .join("sizing")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&parent).unwrap();
     let data = parent.join("window.data");
     let index = parent.join("window.index");
@@ -3621,7 +3418,7 @@ fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
         .store_root()
         .join("blocks")
         .join("marker")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&parent).unwrap();
     let data = parent.join("window.data");
     let index = parent.join("window.index");

@@ -2209,14 +2209,11 @@ impl Client {
         let transaction = {
             let account = self.account_client()?;
             account
-                .prepare_transaction(
-                    crate::client::AccountTransactionDraft::new(
-                        [InstructionBox::from(instruction)],
-                        expected_manifest.public_fee_intent.clone(),
-                        Metadata::default(),
-                    )
-                    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-                )
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(instruction)],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
                 .and_then(|payload| account.sign_transaction(payload))
         }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
@@ -2334,14 +2331,11 @@ impl Client {
         let transaction = {
             let account = self.account_client()?;
             account
-                .prepare_transaction(
-                    crate::client::AccountTransactionDraft::new(
-                        [boxed_instruction],
-                        expected_manifest.public_fee_intent.clone(),
-                        Metadata::default(),
-                    )
-                    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-                )
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [boxed_instruction],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
                 .and_then(|payload| account.sign_transaction(payload))
         }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
@@ -2420,16 +2414,13 @@ impl Client {
         let transaction = {
             let account = self.account_client()?;
             account
-                .prepare_transaction(
-                    crate::client::AccountTransactionDraft::new(
-                        [InstructionBox::from(
-                            FinalizeAtomicPrivateSettlementV1::new(bundle),
-                        )],
-                        expected_manifest.public_fee_intent.clone(),
-                        Metadata::default(),
-                    )
-                    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-                )
+                .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                    [InstructionBox::from(
+                        FinalizeAtomicPrivateSettlementV1::new(bundle),
+                    )],
+                    expected_manifest.public_fee_intent.clone(),
+                    Metadata::default(),
+                ))
                 .and_then(|payload| account.sign_transaction(payload))
         }?;
         let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;

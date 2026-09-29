@@ -5,7 +5,6 @@
 use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
-    settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
         ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
@@ -34,7 +33,7 @@ use iroha_data_model::{
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
-    block::{BlockHeader, consensus::NexusFeeScheduleInputs},
+    block::BlockHeader,
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, Grant, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
@@ -85,7 +84,6 @@ use norito::{
     json::{self, JsonDeserialize as JsonDeserializeTrait, JsonSerialize as JsonSerializeTrait},
     to_bytes,
 };
-use settlement_router::haircut::LiquidityProfile;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
@@ -340,7 +338,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindDaPinIntentByManifest(_)
         | SingularQueryBox::FindDaPinIntentByAlias(_)
         | SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_)
-        | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindSettlementReceiptById(_)
@@ -907,32 +904,39 @@ fn executor_output_payload<'ivm>(
     ivm: &'ivm IVM,
     ret_ptr: u64,
     output_kind: &str,
-) -> Result<&'ivm [u8], ValidationFail> {
+) -> Result<&'ivm [u8], crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let returned_len = ivm.memory.load_u64(ret_ptr).map_err(|error| {
-        ValidationFail::InternalError(format!(
-            "executor {output_kind} length prefix is not readable: {error}"
-        ))
+        crate::execution_attempt::vm_attempt_error(error, |error| {
+            ValidationFail::InternalError(format!(
+                "executor {output_kind} length prefix is not readable: {error}"
+            ))
+        })
     })?;
     if returned_len < EXECUTOR_LENGTH_PREFIX_BYTES_U64 {
         return Err(ValidationFail::InternalError(format!(
             "executor {output_kind} is shorter than its fixed u64 length prefix"
-        )));
+        ))
+        .into());
     }
     if returned_len > MAX_EXECUTOR_OUTPUT_BYTES {
         return Err(ValidationFail::InternalError(format!(
             "executor {output_kind} length exceeds the {MAX_EXECUTOR_OUTPUT_BYTES}-byte limit"
-        )));
+        ))
+        .into());
     }
     let framed = ivm
         .memory
         .load_region(ret_ptr, returned_len)
         .map_err(|error| {
-            ValidationFail::InternalError(format!(
-                "executor {output_kind} is not fully readable: {error}"
-            ))
+            crate::execution_attempt::vm_attempt_error(error, |error| {
+                ValidationFail::InternalError(format!(
+                    "executor {output_kind} is not fully readable: {error}"
+                ))
+            })
         })?;
     Ok(&framed[EXECUTOR_LENGTH_PREFIX_BYTES..])
 }
+
 #[cfg(test)]
 pub(crate) fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
     ivm::prebuilt_fixtures::build_encoded_result_program(result_bytes)
@@ -1203,13 +1207,6 @@ fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, j
         }),
     }
 }
-fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
-    match volatility {
-        GasVolatility::Stable => VolatilityBucket::Stable,
-        GasVolatility::Elevated => VolatilityBucket::Elevated,
-        GasVolatility::Dislocated => VolatilityBucket::Dislocated,
-    }
-}
 fn execute_system_fee_instruction(
     instr: DMInstructionBox,
     authority: &AccountId,
@@ -1343,13 +1340,8 @@ fn successful_claim_fee_exempt_payload(
 }
 fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
-    any.downcast_ref::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>()
+    any.downcast_ref::<iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation>()
         .is_some()
-        || any
-            .downcast_ref::<
-                iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
-            >()
-            .is_some()
 }
 fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     nexus_protocol_fee_exempt_instruction(instruction)
@@ -1779,6 +1771,7 @@ fn fee_sponsor_vault_allocation_spent(
     let settled = fee_sponsor_vault_allocation_quantity_at(world, &settled_key)?;
     Ok(core::cmp::max(executed, settled))
 }
+#[cfg(test)]
 fn select_fee_sponsor_relay_lease(
     world: &impl WorldReadOnly,
     program_id: &FeeSponsorProgramId,
@@ -1844,6 +1837,7 @@ fn select_fee_sponsor_relay_lease(
         )
     })
 }
+#[cfg(test)]
 fn select_fee_sponsor_relay_leases(
     world: &impl WorldReadOnly,
     program_id: &FeeSponsorProgramId,
@@ -1883,20 +1877,6 @@ fn select_fee_sponsor_relay_leases(
         );
     }
     Ok(selections)
-}
-/// Reject account-paid receipt settlement until authority balances have an
-/// authenticated source-lock protocol equivalent to sponsor spend leases.
-///
-/// TODO: Enable authority-paid receipt settlement only after introducing a
-/// proof-bound authority spend lease that admission, reservations, execution,
-/// and merge settlement all consume atomically.
-fn reject_authority_lane_relay_burn_fee(payer: &AccountId) -> Result<(), NexusFeeAdmissionError> {
-    Err(NexusFeeAdmissionError::rejected(
-        FeeRejectionCode::RelayCapacityUnavailable,
-        format!(
-            "receipt-settled Nexus fees cannot charge authority payer `{payer}` without an authenticated authority spend lease; select one exact active fee sponsor program and sign its exact active revision"
-        ),
-    ))
 }
 fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFeeAdmissionError {
     match err {
@@ -4042,6 +4022,19 @@ fn authority_fee_asset_id(
         scope,
     ))
 }
+/// Refuse the retired receipt settlement mode before any monetary effect or plan.
+fn require_direct_fee_settlement(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Result<(), NexusFeeAdmissionError> {
+    if nexus.fees.settlement_mode
+        != iroha_config::parameters::actual::NexusFeeSettlementMode::Direct
+    {
+        return Err(NexusFeeAdmissionError::ConfigInvalid(
+            "retired lane-relay-burn fee settlement is not admitted by native execution".to_owned(),
+        ));
+    }
+    Ok(())
+}
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4052,17 +4045,11 @@ fn evaluate_nexus_fee_admission_payload(
     route_dataspace_id: Option<DataSpaceId>,
     validate_charge_limits: bool,
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
+    require_direct_fee_settlement(nexus)?;
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
     let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
-    if !fee.is_zero()
-        && nexus.fees.settlement_mode
-            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-        && payload.fee_payment.sponsor_program().is_none()
-    {
-        reject_authority_lane_relay_burn_fee(&payload.authority)?;
-    }
     let asset_definition_id = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
@@ -4159,25 +4146,11 @@ fn evaluate_nexus_fee_admission_payload(
                 next_block_height,
                 &charges,
             )?;
-            let relay_leases = if nexus.fees.settlement_mode
-                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-            {
-                select_fee_sponsor_relay_leases(
-                    world,
-                    program_id,
-                    program_revision,
-                    route_dataspace_id,
-                    next_block_height,
-                    &charges,
-                )?
-            } else {
-                BTreeMap::new()
-            };
             Ok(FeeAdmissionQuote {
                 charges,
                 debit_source: FeeDebitSource::SponsorProgram(program_id.clone()),
                 program_revision: Some(program_revision),
-                relay_leases,
+                relay_leases: BTreeMap::new(),
                 capacities,
                 authority_balances: BTreeMap::new(),
                 authority_charge_assets: BTreeMap::new(),
@@ -4200,6 +4173,7 @@ pub fn quote_nexus_fee_admission_payload(
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
+    require_direct_fee_settlement(nexus)?;
     if fee_exempt_payload(world, nexus, payload, observation_time_ms) {
         return Ok(fee_exempt_admission_quote(payload));
     }
@@ -4275,6 +4249,7 @@ pub fn quote_nexus_fee_admission_draft(
     next_block_height: u64,
     route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<FeeAdmissionDraftQuote, NexusFeeAdmissionError> {
+    require_direct_fee_settlement(nexus)?;
     if fee_exempt_payload(world, nexus, payload, observation_time_ms) {
         return Ok(FeeAdmissionDraftQuote {
             quote: fee_exempt_admission_quote(payload),
@@ -4547,12 +4522,6 @@ fn charge_fees_for_applied_overlay_inner(
         state_transaction,
         state_transaction.last_tx_gas_used,
     )?;
-    let tx_hash = transaction.hash();
-    let settlement_source_id = {
-        let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
-        bytes.copy_from_slice(tx_hash.as_ref());
-        bytes
-    };
     if should_charge_pipeline_gas_asset(
         skip_nexus_fee,
         &state_transaction.nexus.fees,
@@ -4563,8 +4532,6 @@ fn charge_fees_for_applied_overlay_inner(
             state_transaction,
             authority,
             transaction,
-            tx_hash,
-            settlement_source_id,
             &gas_asset_id_str,
             gas_used,
             fee_sponsor.as_ref(),
@@ -4575,7 +4542,6 @@ fn charge_fees_for_applied_overlay_inner(
             state_transaction,
             authority,
             transaction,
-            tx_hash,
             fee_sponsor,
             tx_bytes_len,
             instruction_count,
@@ -4649,60 +4615,8 @@ impl Executor {
         }
         Ok(())
     }
-    #[allow(clippy::too_many_arguments)]
-    fn record_pipeline_gas_settlement_receipt(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
-        source_id: [u8; iroha_crypto::Hash::LENGTH],
-        asset_definition_id: AssetDefinitionId,
-        local_amount: Quantity,
-        twap_local_per_xor: Numeric,
-        liquidity_profile: LiquidityProfile,
-        volatility_bucket: VolatilityBucket,
-    ) -> Result<(), ValidationFail> {
-        let block_timestamp_ms_u128 = state_transaction._curr_block.creation_time().as_millis();
-        let block_timestamp_ms = u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-        let quote = state_transaction
-            .settlement_engine()
-            .quote(
-                source_id,
-                local_amount,
-                twap_local_per_xor.clone(),
-                liquidity_profile,
-                volatility_bucket,
-                block_timestamp_ms,
-            )
-            .map_err(|err| {
-                ValidationFail::NotPermitted(format!("gas settlement quote failed: {err}"))
-            })?;
-        let config_snapshot = state_transaction.settlement_engine().config();
-        let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
-        let twap_window_seconds = u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-        let xor_due = quote.xor_due.into_quantity();
-        let xor_after_haircut = quote.xor_after_haircut.into_quantity();
-        let xor_variance = xor_due.checked_sub(&xor_after_haircut).map_err(|err| {
-            ValidationFail::NotPermitted(format!(
-                "settlement haircut exceeds XOR due or cannot be represented: {err}"
-            ))
-        })?;
-        let pending = PendingSettlement {
-            source_id,
-            asset_definition_id,
-            local_amount: quote.receipt.local_amount,
-            xor_due,
-            xor_after_haircut,
-            xor_variance,
-            timestamp_ms: block_timestamp_ms,
-            liquidity_profile,
-            volatility_bucket,
-            twap_local_per_xor,
-            epsilon_bps: quote.effective_epsilon_bps,
-            twap_window_seconds,
-            oracle_timestamp_ms: block_timestamp_ms,
-        };
-        state_transaction.record_settlement_receipt(tx_hash, pending);
-        Ok(())
-    }
+
+    #[cfg(test)]
     fn consume_fee_sponsor_relay_lease(
         state_transaction: &mut StateTransaction<'_, '_>,
         program_id: &FeeSponsorProgramId,
@@ -4904,12 +4818,12 @@ impl Executor {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
-        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
         gas_asset_id_str: &str,
         gas_used: u64,
         fee_sponsor: Option<&FeeSponsorProgramId>,
     ) -> Result<(), ValidationFail> {
+        require_direct_fee_settlement(&state_transaction.nexus)
+            .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let gas_rate = state_transaction
             .pipeline
             .gas
@@ -4922,13 +4836,6 @@ impl Executor {
                 ))
             })?;
         let units_per_gas = gas_rate.units_per_gas;
-        let twap_local_per_xor = gas_rate.twap_local_per_xor.clone();
-        let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-        let liquidity_profile = match gas_rate.liquidity {
-            GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-            GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-            GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-        };
         if gas_used == 0 || units_per_gas == 0 {
             return Ok(());
         }
@@ -4966,33 +4873,6 @@ impl Executor {
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let payer = if let Some(program_id) = fee_sponsor {
-            let relay_program_revision = (state_transaction.nexus.fees.settlement_mode
-                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn)
-                .then(|| {
-                    transaction
-                        .fee_payment_intent()
-                        .sponsor_program()
-                        .map(|(_, revision)| revision)
-                        .ok_or_else(|| {
-                            ValidationFail::InternalError(
-                                "sponsored PipelineGas charge is missing its signed program revision"
-                                    .to_owned(),
-                            )
-                        })
-                })
-                .transpose()?;
-            if let Some(program_revision) = relay_program_revision {
-                select_fee_sponsor_relay_lease(
-                    &state_transaction.world,
-                    program_id,
-                    program_revision,
-                    &asset_definition_id,
-                    state_transaction.current_dataspace_id,
-                    state_transaction.block_height(),
-                    &qty,
-                )
-                .map_err(nexus_fee_admission_error_to_validation_fail)?;
-            }
             Self::debit_fee_sponsor_program(
                 state_transaction,
                 authority,
@@ -5002,16 +4882,6 @@ impl Executor {
                 &asset_definition_id,
                 &qty,
             )?;
-            if let Some(program_revision) = relay_program_revision {
-                Self::consume_fee_sponsor_relay_lease(
-                    state_transaction,
-                    program_id,
-                    program_revision,
-                    &asset_definition_id,
-                    &qty,
-                    true,
-                )?;
-            }
             state_transaction
                 .nexus
                 .fees
@@ -5070,39 +4940,26 @@ impl Executor {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
             state_transaction.stage_block_fee_amount(Quantity::from(delta));
         }
-        Self::record_pipeline_gas_settlement_receipt(
-            state_transaction,
-            tx_hash,
-            settlement_source_id,
-            asset_definition_id,
-            qty,
-            twap_local_per_xor,
-            liquidity_profile,
-            volatility_bucket,
-        )
+        // This actual scoped transfer is the fee settlement. No synthetic XOR
+        // conversion quote or lane-relay receipt can stand in for a balance effect.
+        Ok(())
     }
     #[allow(clippy::too_many_lines)]
     fn charge_nexus_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         sponsor: Option<FeeSponsorProgramId>,
         tx_bytes_len: usize,
         instruction_count: usize,
         gas_used: u64,
     ) -> Result<(), ValidationFail> {
+        require_direct_fee_settlement(&state_transaction.nexus)
+            .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
-        }
-        if cfg.settlement_mode
-            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-            && sponsor.is_none()
-        {
-            reject_authority_lane_relay_burn_fee(authority)
-                .map_err(nexus_fee_admission_error_to_validation_fail)?;
         }
         let payer_kind = if sponsor.is_some() {
             NexusFeePayer::Sponsor
@@ -5134,101 +4991,41 @@ impl Executor {
             core::slice::from_ref(&actual_charge),
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        let (payer, payer_id, program_revision, relay_lease_id) =
-            if let Some(program_id) = sponsor.as_ref() {
-                let program_revision = transaction
-                    .fee_payment_intent()
-                    .sponsor_program()
-                    .map(|(_, revision)| revision)
-                    .ok_or_else(|| {
-                        ValidationFail::InternalError(
-                            "sponsored Nexus fee is missing its signed program revision".to_owned(),
-                        )
-                    })?;
-                Self::debit_fee_sponsor_program(
-                    state_transaction,
-                    authority,
-                    transaction,
-                    program_id,
-                    FeeChargeKind::Nexus,
-                    &asset_def,
-                    &fee,
-                )?;
-                let relay_lease_id = (cfg.settlement_mode
-                    == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn)
-                    .then(|| {
-                        Self::consume_fee_sponsor_relay_lease(
-                            state_transaction,
-                            program_id,
-                            program_revision,
-                            &asset_def,
-                            &fee,
-                            false,
-                        )
-                    })
-                    .transpose()?;
-                (
-                    state_transaction
-                        .nexus
-                        .fees
-                        .sponsor_vault_custody_account_id
-                        .clone(),
-                    program_id.to_string(),
-                    Some(program_revision),
-                    relay_lease_id,
-                )
-            } else {
-                (authority.clone(), authority.to_string(), None, None)
-            };
+        let (payer, payer_id, program_revision) = if let Some(program_id) = sponsor.as_ref() {
+            let program_revision = transaction
+                .fee_payment_intent()
+                .sponsor_program()
+                .map(|(_, revision)| revision)
+                .ok_or_else(|| {
+                    ValidationFail::InternalError(
+                        "sponsored Nexus fee is missing its signed program revision".to_owned(),
+                    )
+                })?;
+            Self::debit_fee_sponsor_program(
+                state_transaction,
+                authority,
+                transaction,
+                program_id,
+                FeeChargeKind::Nexus,
+                &asset_def,
+                &fee,
+            )?;
+            (
+                state_transaction
+                    .nexus
+                    .fees
+                    .sponsor_vault_custody_account_id
+                    .clone(),
+                program_id.to_string(),
+                Some(program_revision),
+            )
+        } else {
+            (authority.clone(), authority.to_string(), None)
+        };
         let payer_kind_label = match payer_kind {
             NexusFeePayer::Payer => "payer",
             NexusFeePayer::Sponsor => "sponsor",
         };
-        if cfg.settlement_mode
-            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-        {
-            let asset_label = cfg.fee_asset_id.clone();
-            let sponsor_program_id = sponsor.clone().ok_or_else(|| {
-                ValidationFail::InternalError(
-                    "receipt-settled Nexus fee passed the sponsor-only execution guard".to_owned(),
-                )
-            })?;
-            debug_assert!(
-                relay_lease_id.is_some(),
-                "sponsored receipt-lane charge must consume an exact verified spend lease"
-            );
-            let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-            source_id.copy_from_slice(tx_hash.as_ref());
-            let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
-            let instruction_count = u64::try_from(instruction_count).unwrap_or(u64::MAX);
-            state_transaction.record_nexus_fee_receipt(
-                tx_hash,
-                PendingNexusFeeReceipt {
-                    source_id,
-                    debit_source: FeeDebitSource::SponsorProgram(sponsor_program_id),
-                    fee_asset_id: asset_def,
-                    program_revision,
-                    lease_id: relay_lease_id,
-                    fee_amount: fee.clone(),
-                    schedule: NexusFeeScheduleInputs {
-                        tx_bytes_len,
-                        instruction_count,
-                        gas_used,
-                        base_fee: cfg.base_fee.clone(),
-                        per_byte_fee: cfg.per_byte_fee.clone(),
-                        per_instruction_fee: cfg.per_instruction_fee.clone(),
-                        per_gas_unit_fee: cfg.per_gas_unit_fee.clone(),
-                    },
-                },
-            );
-            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
-                payer_kind,
-                payer_id,
-                amount: fee,
-                asset_id: asset_label,
-            });
-            return Ok(());
-        }
         let payer_asset = AssetId::new(asset_def, payer.clone());
         let asset_label = payer_asset.definition().to_string();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
@@ -5539,8 +5336,6 @@ impl Executor {
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
         entrypoint_authorization: Option<&ContractEntrypointAuthorizationSnapshot>,
         tx_bytes_len: usize,
-        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
-        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
         gas_asset_opt: Option<String>,
@@ -5829,8 +5624,6 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                tx_hash,
-                settlement_source_id,
                 &gas_asset_id_str,
                 used,
                 fee_sponsor.as_ref(),
@@ -5841,7 +5634,6 @@ impl Executor {
                 state_transaction,
                 authority,
                 &transaction,
-                tx_hash,
                 fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
@@ -6154,8 +5946,6 @@ impl Executor {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         transaction: &SignedTransaction,
-        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
-        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
         direct_gas_used: u64,
         instruction_count: usize,
         tx_bytes_len: usize,
@@ -6180,8 +5970,6 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                tx_hash.clone(),
-                settlement_source_id,
                 &gas_asset_id_str,
                 direct_gas_used,
                 fee_sponsor.as_ref(),
@@ -6192,7 +5980,6 @@ impl Executor {
                 state_transaction,
                 authority,
                 transaction,
-                tx_hash,
                 fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
@@ -6308,11 +6095,6 @@ impl Executor {
             governance_ballot_binding.as_ref(),
         )?;
         state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
-        let settlement_source_id = {
-            let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
-            bytes.copy_from_slice(tx_hash.as_ref());
-            bytes
-        };
         state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, skip_nexus_fee)?;
         state_transaction.begin_execution_effect_budget(&transaction)?;
         // Disallow direct signing with multisig accounts; only explicit multisig
@@ -6680,8 +6462,6 @@ impl Executor {
                     None,
                     None,
                     tx_bytes_len,
-                    settlement_source_id,
-                    tx_hash,
                     gas_limit_md,
                     false,
                     gas_asset_opt,
@@ -6705,8 +6485,6 @@ impl Executor {
                     proved_contract_runtime_context.as_ref(),
                     proved_entrypoint_authorization.as_ref(),
                     tx_bytes_len,
-                    settlement_source_id,
-                    tx_hash,
                     gas_limit_md,
                     true,
                     gas_asset_opt,
@@ -6741,8 +6519,6 @@ impl Executor {
                     state_transaction,
                     authority,
                     &transaction_for_fee,
-                    tx_hash,
-                    settlement_source_id,
                     outcome.gas_used,
                     0,
                     tx_bytes_len,
@@ -6863,8 +6639,6 @@ impl Executor {
                     state_transaction,
                     authority,
                     &transaction_for_fee,
-                    tx_hash,
-                    settlement_source_id,
                     gas_used,
                     explicit_instructions.len(),
                     tx_bytes_len,
@@ -7027,8 +6801,6 @@ impl Executor {
                                 state_transaction,
                                 authority,
                                 &transaction_for_fee,
-                                tx_hash,
-                                settlement_source_id,
                                 &gas_asset_id_str,
                                 gas_used,
                                 fee_sponsor.as_ref(),
@@ -7039,7 +6811,6 @@ impl Executor {
                                 state_transaction,
                                 authority,
                                 &transaction_for_fee,
-                                tx_hash,
                                 fee_sponsor,
                                 tx_bytes_len,
                                 0,
@@ -7232,8 +7003,6 @@ impl Executor {
                         state_transaction,
                         authority,
                         &transaction_for_fee,
-                        tx_hash,
-                        settlement_source_id,
                         &gas_asset_id_str,
                         gas_used,
                         fee_sponsor.as_ref(),
@@ -7244,7 +7013,6 @@ impl Executor {
                         state_transaction,
                         authority,
                         &transaction_for_fee,
-                        tx_hash,
                         fee_sponsor,
                         tx_bytes_len,
                         0,
@@ -8507,7 +8275,6 @@ fn authority_has_role(world: &impl WorldReadOnly, authority: &AccountId, role_id
 }
 const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
-    "CanManageLaneRelayEmergency",
     "CanRegisterDomain",
     "CanManageRoles",
     "CanUpgradeExecutor",
@@ -12776,7 +12543,6 @@ mod tests {
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
-        let tx_hash = tx.hash();
         super::Executor::Initial
             .execute_metered_instructions(
                 &mut state_tx,
@@ -12787,8 +12553,6 @@ mod tests {
                 None,
                 None,
                 0,
-                [0_u8; Hash::LENGTH],
-                tx_hash,
                 Some(50_000),
                 true,
                 None,
@@ -12867,7 +12631,6 @@ mod tests {
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
-        let tx_hash = tx.hash();
         super::Executor::Initial
             .execute_metered_instructions(
                 &mut state_tx,
@@ -12878,8 +12641,6 @@ mod tests {
                 Some(&runtime_context),
                 Some(&authorization),
                 0,
-                [0_u8; Hash::LENGTH],
-                tx_hash,
                 Some(50_000),
                 true,
                 None,
@@ -12918,8 +12679,6 @@ mod tests {
                 Some(&runtime_context),
                 Some(&authorization),
                 0,
-                [0_u8; Hash::LENGTH],
-                tx_hash,
                 Some(50_000),
                 true,
                 None,
@@ -12974,8 +12733,6 @@ mod tests {
                 Some(&runtime_context),
                 Some(&authorization),
                 0,
-                [0_u8; Hash::LENGTH],
-                tx_hash,
                 Some(50_000),
                 true,
                 None,
@@ -13023,7 +12780,6 @@ mod tests {
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
-        let tx_hash = tx.hash();
         let error = super::Executor::Initial
             .execute_metered_instructions(
                 &mut state_tx,
@@ -13034,8 +12790,6 @@ mod tests {
                 None,
                 None,
                 0,
-                [0_u8; Hash::LENGTH],
-                tx_hash,
                 Some(50_000),
                 true,
                 None,
@@ -13131,8 +12885,6 @@ mod tests {
                 None,
                 None,
                 0,
-                [0_u8; Hash::LENGTH],
-                signed.hash(),
                 Some(50_000),
                 true,
                 None,
@@ -13975,7 +13727,6 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "bounded".to_owned())])
         .sign(keypair.private_key());
-        let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 2);
@@ -13983,8 +13734,6 @@ mod tests {
             &mut state_transaction,
             &authority,
             &transaction,
-            tx_hash,
-            [7; Hash::LENGTH],
             &gas_asset.canonical_address(),
             1,
             None,
@@ -14013,7 +13762,7 @@ mod tests {
         );
     }
     #[test]
-    fn sponsored_pipeline_gas_consumes_and_settles_lane_spend_lease() {
+    fn sponsored_pipeline_gas_direct_fee_preserves_unrelated_lease() {
         let (
             state,
             transaction,
@@ -14031,19 +13780,17 @@ mod tests {
             &custody,
             &tech_account,
             &asset_definition_id,
-            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct,
         );
         super::Executor::charge_pipeline_gas_asset_fee(
             &mut state_transaction,
             &beneficiary,
             &transaction,
-            transaction.hash(),
-            [9; Hash::LENGTH],
             &asset_definition_id.canonical_address(),
             2,
             Some(&program_id),
         )
-        .expect("sponsored PipelineGas charge has exact lane spend capacity");
+        .expect("sponsored direct PipelineGas settles actual custody");
         let executed_key =
             fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
         let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
@@ -14051,12 +13798,12 @@ mod tests {
         assert_eq!(
             fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
                 .expect("executed usage"),
-            Quantity::from(2_u32)
+            Quantity::zero()
         );
         assert_eq!(
             fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
                 .expect("settled usage"),
-            Quantity::from(2_u32)
+            Quantity::zero()
         );
         let vault_key = FeeSponsorVaultKey {
             program_id,
@@ -14115,8 +13862,6 @@ mod tests {
             &mut state_transaction,
             &beneficiary,
             &transaction,
-            transaction.hash(),
-            [10; Hash::LENGTH],
             &asset_definition_id.canonical_address(),
             2,
             Some(&program_id),
@@ -14136,40 +13881,6 @@ mod tests {
                 .expect("settled usage"),
             Quantity::zero()
         );
-    }
-    #[test]
-    fn sponsored_pipeline_gas_insufficient_lease_fails_before_debit_or_transfer() {
-        let (
-            state,
-            transaction,
-            beneficiary,
-            custody,
-            tech_account,
-            asset_definition_id,
-            program_id,
-            lease_id,
-        ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(1_u32)));
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
-        configure_sponsored_pipeline_fee_transaction(
-            &mut state_transaction,
-            &custody,
-            &tech_account,
-            &asset_definition_id,
-            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
-        );
-        let error = super::Executor::charge_pipeline_gas_asset_fee(
-            &mut state_transaction,
-            &beneficiary,
-            &transaction,
-            transaction.hash(),
-            [11; Hash::LENGTH],
-            &asset_definition_id.canonical_address(),
-            2,
-            Some(&program_id),
-        )
-        .expect_err("insufficient spend lease must reject the PipelineGas charge");
-        assert!(matches!(error, ValidationFail::NotPermitted(_)));
         let vault_key = FeeSponsorVaultKey {
             program_id,
             asset_definition_id: asset_definition_id.clone(),
@@ -14179,40 +13890,103 @@ mod tests {
                 .world
                 .fee_sponsor_vaults
                 .get(&vault_key)
-                .expect("sponsor vault")
+                .unwrap()
                 .balance,
-            Quantity::from(10_u32)
+            Quantity::from(8_u32)
         );
         assert_eq!(
-            state_transaction
-                .world
-                .assets()
-                .get(&AssetId::new(asset_definition_id.clone(), custody))
-                .expect("custody balance")
-                .as_ref(),
-            &Quantity::from(10_u32)
-        );
-        assert!(
-            state_transaction
-                .world
-                .assets()
-                .get(&AssetId::new(asset_definition_id.clone(), tech_account))
-                .is_none()
-        );
-        let executed_key =
-            fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
-        let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
-            .expect("settled usage key");
-        assert_eq!(
-            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
-                .expect("executed usage"),
-            Quantity::zero()
+            test_asset_balance(
+                &state_transaction,
+                &AssetId::new(asset_definition_id.clone(), custody)
+            ),
+            Quantity::from(8_u32)
         );
         assert_eq!(
-            fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
-                .expect("settled usage"),
-            Quantity::zero()
+            test_asset_balance(
+                &state_transaction,
+                &AssetId::new(asset_definition_id, tech_account)
+            ),
+            Quantity::from(2_u32)
         );
+    }
+    #[test]
+    fn retired_sponsored_pipeline_mode_fails_before_debit_or_transfer() {
+        for allocation in [1_u32, 10_u32] {
+            let (
+                state,
+                transaction,
+                beneficiary,
+                custody,
+                tech_account,
+                asset_definition_id,
+                program_id,
+                lease_id,
+            ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(allocation)));
+            let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
+            let mut state_transaction = block.transaction();
+            configure_sponsored_pipeline_fee_transaction(
+                &mut state_transaction,
+                &custody,
+                &tech_account,
+                &asset_definition_id,
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
+            );
+            let error = super::Executor::charge_pipeline_gas_asset_fee(
+                &mut state_transaction,
+                &beneficiary,
+                &transaction,
+                &asset_definition_id.canonical_address(),
+                2,
+                Some(&program_id),
+            )
+            .expect_err("retired receipt mode rejects even a fully funded spend lease");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(reason) if reason.contains("retired lane-relay-burn fee settlement"))
+            );
+            let vault_key = FeeSponsorVaultKey {
+                program_id,
+                asset_definition_id: asset_definition_id.clone(),
+            };
+            assert_eq!(
+                state_transaction
+                    .world
+                    .fee_sponsor_vaults
+                    .get(&vault_key)
+                    .expect("sponsor vault")
+                    .balance,
+                Quantity::from(10_u32)
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .assets()
+                    .get(&AssetId::new(asset_definition_id.clone(), custody))
+                    .expect("custody balance")
+                    .as_ref(),
+                &Quantity::from(10_u32)
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .assets()
+                    .get(&AssetId::new(asset_definition_id.clone(), tech_account))
+                    .is_none()
+            );
+            let executed_key = fee_sponsor_vault_allocation_usage_state_key(&lease_id)
+                .expect("executed usage key");
+            let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
+                .expect("settled usage key");
+            assert_eq!(
+                fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &executed_key)
+                    .expect("executed usage"),
+                Quantity::zero()
+            );
+            assert_eq!(
+                fee_sponsor_vault_allocation_quantity_at(&state_transaction.world, &settled_key)
+                    .expect("settled usage"),
+                Quantity::zero()
+            );
+        }
     }
     #[test]
     fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() {
@@ -14600,7 +14374,7 @@ mod tests {
         .expect("canonical unsigned payload");
         (world, nexus, pipeline, payload)
     }
-    fn assert_receipt_mode_fee_exempt_draft(
+    fn assert_direct_fee_exempt_draft(
         world: World,
         nexus: &iroha_config::parameters::actual::Nexus,
         pipeline: &Pipeline,
@@ -14617,7 +14391,7 @@ mod tests {
             1,
             Some(DataSpaceId::UNIVERSAL),
         )
-        .expect("fee-exempt draft must bypass receipt-mode payer requirements");
+        .expect("fee-exempt draft must retain its zero direct fee plan");
         assert!(draft.quote.charges.is_empty());
         assert!(draft.quote.capacities.is_empty());
         assert!(draft.quote.authority_balances.is_empty());
@@ -14643,7 +14417,7 @@ mod tests {
         assert_eq!(strict, draft.quote);
     }
     #[test]
-    fn protocol_fee_exempt_draft_returns_zero_quote_in_receipt_mode() {
+    fn protocol_fee_exempt_draft_returns_zero_quote_in_direct_mode() {
         let (world, mut nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
         let fee_asset = AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id)
             .expect("fixture fee asset address");
@@ -14678,12 +14452,12 @@ mod tests {
         )]
         .into();
         nexus.fees.settlement_mode =
-            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-        assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+        assert_direct_fee_exempt_draft(world, &nexus, &pipeline, payload);
     }
     include!("executor_fee_quote_tests.rs");
     #[test]
-    fn receipt_settled_quote_rejects_authority_payer_with_sponsor_remediation() {
+    fn retired_receipt_mode_rejects_quotes_before_signing() {
         let (world, mut nexus, pipeline, payload) = multi_component_fee_quote_fixture();
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
@@ -14698,12 +14472,13 @@ mod tests {
             Some(DataSpaceId::UNIVERSAL),
         )
         .expect_err("receipt-settled quotes must require an exact sponsor program");
-        assert_eq!(error.code(), FeeRejectionCode::RelayCapacityUnavailable);
-        assert!(error.reason().contains("active fee sponsor program"));
-        assert!(error.reason().contains("exact active revision"));
+        assert!(
+            matches!(error, NexusFeeAdmissionError::ConfigInvalid(reason)
+            if reason.contains("retired lane-relay-burn fee settlement"))
+        );
     }
     #[test]
-    fn receipt_settled_execution_rejects_authority_before_recording_receipt() {
+    fn retired_receipt_mode_rejects_execution_before_actual_fee_debit() {
         let authority = ALICE_ID.clone();
         let domain_id = DomainId::try_new("receipt_execution", "universal").expect("fee domain id");
         let fee_asset = AssetDefinitionId::derive_from_components(
@@ -14735,7 +14510,6 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "receipt guard".to_owned())])
         .sign(ALICE_KEYPAIR.private_key());
-        let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         state_tx.nexus.fees.settlement_mode =
@@ -14750,7 +14524,6 @@ mod tests {
             &mut state_tx,
             &authority,
             &transaction,
-            tx_hash,
             None,
             1,
             1,
@@ -14760,13 +14533,8 @@ mod tests {
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(reason)
-                if reason.contains("active fee sponsor program")
-                    && reason.contains("exact active revision")
+                if reason.contains("retired lane-relay-burn fee settlement")
         ));
-        assert!(
-            state_tx.drain_nexus_fee_records().is_empty(),
-            "the sponsor-only guard must run before receipt recording"
-        );
         assert_eq!(
             state_tx
                 .world
@@ -14819,7 +14587,6 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "bounded Nexus fee".to_owned())])
         .sign(keypair.private_key());
-        let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
@@ -14832,7 +14599,6 @@ mod tests {
             &mut state_transaction,
             &authority,
             &transaction,
-            tx_hash,
             None,
             1,
             1,
@@ -19934,3 +19700,6 @@ seiyaku ReviewedValue {
     }
     include!("executor_contract_dispatch_tests.rs");
 }
+
+#[cfg(test)]
+mod resource_return_tests;

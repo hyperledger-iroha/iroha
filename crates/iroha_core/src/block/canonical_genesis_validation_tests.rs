@@ -29,7 +29,6 @@ fn install_genesis_outputs(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &limits,
         )
         .expect("structural genesis outputs must fit their explicit finite fixture policy");

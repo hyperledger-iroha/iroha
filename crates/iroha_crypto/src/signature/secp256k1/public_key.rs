@@ -24,7 +24,7 @@ impl KeyRejection {
     }
 }
 
-pub(super) fn parse(payload: &[u8]) -> Result<PublicKey, KeyRejection> {
+pub(crate) fn parse(payload: &[u8]) -> Result<PublicKey, KeyRejection> {
     if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
         return Err(KeyRejection::AllZero);
     }

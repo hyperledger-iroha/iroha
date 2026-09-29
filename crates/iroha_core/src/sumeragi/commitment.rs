@@ -34,17 +34,12 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    block::{
-        SignedBlock,
-        consensus::ExecWitness,
-        consensus_v2::{
-            ExecutionCommitment as V2ExecutionCommitment, MAX_EXECUTED_BLOCK_WIRE_BYTES,
-        },
-    },
+    block::{SignedBlock, consensus::ExecWitness},
     execution_witness::KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
     isi::kagemusha_v1::{
         KagemushaOperationKindV1, KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
     },
+    sumeragi_finality::MAX_EXECUTED_BLOCK_WIRE_BYTES,
 };
 #[cfg(test)]
 use iroha_data_model::{
@@ -112,11 +107,7 @@ pub fn execution_commitment(
         match kagemusha_top_ups(witness)? {
             None => (witnessed_root, None, 0),
             Some((root, count)) => (
-                V2ExecutionCommitment::kagemusha_post_state_root_v1(
-                    count,
-                    ordinary_writes_root,
-                    root,
-                ),
+                ExecutionCommitment::kagemusha_post_state_root(count, ordinary_writes_root, root),
                 Some(root),
                 count,
             ),
@@ -590,7 +581,6 @@ mod tests {
                 Vec::new(),
                 Default::default(),
                 Default::default(),
-                Vec::new(),
                 &crate::execution_output_test_support::structural_output_limits(),
             )
             .unwrap();
@@ -1097,6 +1087,7 @@ mod tests {
             payload_len: 0,
             proposer: 2,
             skipped_leaders: Vec::new(),
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             attest: true,
         };
         let qc = Qc {

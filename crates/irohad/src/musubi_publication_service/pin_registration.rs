@@ -167,17 +167,12 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
             .copied()
             .ok_or(Invalid)?;
         let block = view.kura().get_block(height).ok_or(Invalid)?;
-        let finality = view
-            .kura()
-            .v2_finality_artifact(query.finalized_height)
-            .map_err(|_| Invalid)?
-            .ok_or(Invalid)?;
         if !validate_finalized_block_wire(
+            &view,
             &self.network_id,
             query.finalized_height,
             canonical_hash,
             &block,
-            &finality,
         ) || block.validate_output_merkle_cache().is_err()
             || !exact_successful_pin_transaction(&query.transaction, &block)
         {
@@ -468,7 +463,6 @@ mod tests {
                     .axt_transitioned_dataspaces()
                     .cloned()
                     .unwrap_or_default(),
-                block.lane_finality_statements().to_vec(),
                 &ExecutionOutputPolicyV1::bootstrap().limits(),
             )
             .expect("fixture output matches immutable input");

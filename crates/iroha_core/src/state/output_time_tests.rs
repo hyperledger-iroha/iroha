@@ -862,23 +862,7 @@ mod retry_and_periodic {
     // source for create_time_event. These historical fixture outputs are not a
     // claim of prior economic execution or replay of this independently seeded WSV.
     fn periodic_fixture() -> (State, SignedBlock, CommittedNetworkProofFixture) {
-        let history = CommittedNetworkProofFixture::new(
-            |parent| {
-                let timestamp =
-                    u64::try_from(parent.header().creation_time().as_millis()).unwrap() + 1;
-                let mut prior = BlockBuilder::new(BlockHeader::new(
-                    NonZeroU64::new(2).unwrap(),
-                    Some(parent.hash()),
-                    None,
-                    timestamp,
-                    0,
-                ))
-                .build_with_signature(0, ALICE_KEYPAIR.private_key());
-                crate::kura::tests::install_network_index_test_outputs(&mut prior, Vec::new());
-                prior
-            },
-            true,
-        );
+        let history = CommittedNetworkProofFixture::ordinary();
         // This configured Kura already owns its authenticated physical primary.
         // Use the same fallible reader construction as the committed-proof
         // fixtures; a fresh-State test constructor would provision another H0.
@@ -890,8 +874,8 @@ mod retry_and_periodic {
             World::default(),
             Arc::clone(&history.kura),
             LiveQueryStore::start_test(),
-            (*crate::state::DEFAULT_TEST_CHAIN_ID).clone(),
-            history.artifacts[0].height_context.network_id,
+            history.state.chain_id.clone(),
+            *history.state.network_id_ref(),
             #[cfg(feature = "telemetry")]
             Default::default(),
         )

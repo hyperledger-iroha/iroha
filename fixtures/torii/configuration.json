@@ -84,7 +84,7 @@
     "max_retained_bytes": 123456789
   },
   "consensus": {
-    "protocol_version": 4,
+    "protocol_version": 1,
     "role": "validator"
   },
   "confidential_gas": {

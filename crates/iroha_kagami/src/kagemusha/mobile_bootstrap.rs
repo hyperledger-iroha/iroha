@@ -3,11 +3,13 @@
 use super::*;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::consensus_v2::HeightContextId,
     kagemusha::{
         KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapApprovalV1,
         KagemushaMobileBootstrapCheckpointV1, KagemushaMobileBootstrapPackageV1,
         KagemushaMobileBootstrapPinsV1, KagemushaMobileBootstrapScopeV1,
+    },
+    sumeragi_finality::{
+        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
     },
 };
 
@@ -15,9 +17,9 @@ use iroha_data_model::{
 pub(super) struct PrepareArgs {
     #[command(flatten)]
     release: AuthenticateExperimentalReleaseV1Args,
-    /// Independently verified first consensus height-context identity as lowercase hex.
-    #[arg(long, value_name = "LOWER_HEX")]
-    first_context_id: String,
+    /// Independently authenticated complete native finality checkpoint.
+    #[arg(long, value_name = "PATH")]
+    finality_checkpoint: PathBuf,
     /// New monotonically increasing deployment checkpoint sequence; nonzero.
     #[arg(long)]
     sequence: u64,
@@ -48,9 +50,9 @@ struct CheckpointInputs {
     /// Independently authenticated exact release-attestation digest.
     #[arg(long, value_name = "LOWER_HEX")]
     expected_release_attestation_digest: String,
-    /// Independently verified first consensus height-context identity.
-    #[arg(long, value_name = "LOWER_HEX")]
-    expected_first_context_id: String,
+    /// Independently selected exact canonical native finality checkpoint.
+    #[arg(long, value_name = "PATH")]
+    expected_finality_checkpoint: PathBuf,
     /// Exact reviewed deployment checkpoint sequence, not a downloaded sequence floor.
     #[arg(long)]
     expected_sequence: u64,
@@ -89,14 +91,20 @@ pub(super) struct AssembleArgs {
     package_output: PathBuf,
 }
 
-fn height_context(value: &str) -> color_eyre::Result<HeightContextId> {
-    let bytes = parse_lower_sha256(value, "first height-context identity")?;
-    // Hash::prehashed normalizes a reserved bit. Reject rather than silently changing input.
-    let hash = Hash::prehashed(bytes);
-    if hash.as_ref() != &bytes || hash == Hash::prehashed([0; 32]) {
-        bail!("first height-context identity is not a canonical nonzero hash");
-    }
-    Ok(HeightContextId(HashOf::from_untyped_unchecked(hash)))
+/// Read the independently selected native trust root, never infer it from the subject package.
+fn read_finality_checkpoint(path: &Path, network: NetworkId) -> color_eyre::Result<Vec<u8>> {
+    let bytes = read_bounded_immutable_file(
+        path,
+        MAX_FINALITY_CHECKPOINT_BYTES.min(KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1),
+        "native finality checkpoint",
+    )?;
+    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes)
+        .map_err(|_| eyre!("invalid canonical native finality checkpoint"))?;
+    SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &network, checkpoint.chain_id())
+        .map_err(|_| {
+            eyre!("native finality checkpoint differs from the selected network or is invalid")
+        })?;
+    Ok(bytes)
 }
 
 impl CheckpointInputs {
@@ -178,13 +186,14 @@ impl CheckpointInputs {
         checkpoint
             .validate_pins(&self.pins(policy)?)
             .map_err(|error| eyre!(error))?;
-        if checkpoint.first_context_id != height_context(&self.expected_first_context_id)?
+        if checkpoint.finality_checkpoint
+            != read_finality_checkpoint(&self.expected_finality_checkpoint, checkpoint.network_id)?
             || checkpoint.sequence != self.expected_sequence
             || checkpoint.issued_at_ms != self.expected_issued_at_ms
             || checkpoint.expires_at_ms != self.expected_expires_at_ms
         {
             bail!(
-                "mobile checkpoint differs from the exact independently reviewed context, sequence or lifetime"
+                "mobile checkpoint differs from the exact independently reviewed finality checkpoint, sequence or lifetime"
             );
         }
         Ok(())
@@ -208,13 +217,16 @@ pub(super) fn prepare<T: Write>(args: &PrepareArgs, writer: &mut std::io::BufWri
         },
         release_id: authenticated.release_id(),
         release_attestation_digest: authenticated.attestation_digest(),
-        first_context_id: height_context(&args.first_context_id)?,
+        finality_checkpoint: read_finality_checkpoint(
+            &args.finality_checkpoint,
+            authenticated.network_id(),
+        )?,
         sequence: args.sequence,
         issued_at_ms: args.issued_at_ms,
         expires_at_ms: args.expires_at_ms,
     };
     // Release/scope fields above come from an authenticated release matched to operator pins;
-    // the authority explicitly selects context, sequence, time and lifetime before signing.
+    // the authority independently selects the complete native checkpoint, sequence and lifetime.
     let digest = checkpoint
         .validate_pins(&KagemushaMobileBootstrapPinsV1 {
             authority_policy: &policy,
@@ -319,7 +331,12 @@ pub(super) fn assemble<T: Write>(
         })
         .map_err(|error| eyre!(error))?;
     crate::secure_fs::write_private_file_atomic(&args.package_output, &encoded)?;
-    write_report(writer, "assembled_mobile_bootstrap", &checkpoint, &digest)
+    write_report(
+        writer,
+        "assembled_mobile_bootstrap",
+        &package.checkpoint,
+        &digest,
+    )
 }
 
 fn write_report<T: Write>(

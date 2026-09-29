@@ -773,10 +773,12 @@ mod tests {
             query::store::LiveQueryStore,
             state::{State, World},
         };
-        use iroha_data_model::{asset::AssetId, block::BlockHeader};
+        use iroha_data_model::{
+            asset::AssetId,
+            block::{BlockHeader, builder::BlockBuilder},
+        };
         use iroha_primitives::numeric::Quantity;
 
-        let _guard = recorder::exec_witness_guard();
         let receipts = [sample_receipt([0x61; 32]), sample_receipt([0x62; 32])];
         for include_receipts in [false, true] {
             let state = State::new(
@@ -791,8 +793,17 @@ mod tests {
                 0,
                 0,
             );
-            let mut state_block = state.block(header);
-            recorder::start_block();
+            let carrier = BlockBuilder::new(header).build_with_signature(
+                0,
+                iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            );
+            let (mut state_block, _recording) = state
+                .block_with_recorded_pristine_carrier_stage(
+                    &carrier,
+                    |_| Ok::<(), String>(()),
+                    |error| error,
+                )
+                .expect("original recorder owned before block effects");
             recorder::record_write_asset(
                 &AssetId::new(
                     receipts[0].asset.clone(),
@@ -834,9 +845,12 @@ mod tests {
             let decoded: ExecWitness = norito::decode_canonical(&encoded).expect("decode witness");
             assert_eq!(decoded, witness);
             assert_eq!(witness.writes.len(), if include_receipts { 6 } else { 4 });
-            let (lane_contexts, lane_root) =
-                crate::state::LaneConsensusContextsWitnessV1::from_witness(&decoded)
-                    .expect("actual complete lane-context proof");
+            let native_lanes =
+                iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
+                    &decoded,
+                    &mv::allocation::AllocationBudget::new(64 * 1024),
+                )
+                .expect("actual complete native lane state proof");
             let (fee, fee_root) =
                 validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
             let (casting, casting_root) = parliament_timed_ovn_casting_witness_proof_v1(&decoded)
@@ -845,8 +859,7 @@ mod tests {
                 .expect("casting writes must not be decoded as receipts");
             assert_eq!(fee_root, casting_root);
             assert_eq!(fee_root, receipt_root);
-            assert_eq!(fee_root, lane_root);
-            assert!(lane_contexts.verify(*state.network_id_ref(), 1, fee_root));
+            assert!(native_lanes.verify(*state.network_id_ref(), header.height().get(), fee_root));
             assert!(fee.verify(fee_root));
             assert!(casting.verify(fee_root));
             assert_eq!(proofs.len(), if include_receipts { 2 } else { 0 });

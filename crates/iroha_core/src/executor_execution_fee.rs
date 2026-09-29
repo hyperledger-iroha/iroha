@@ -193,8 +193,6 @@ impl ExecutionFeeSettlement {
             .fee_payment_intent()
             .sponsor_program()
             .map(|(id, _)| id.clone());
-        let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(meter.source.as_ref());
         if should_charge_pipeline_gas_asset(false, &state.nexus.fees, &gas_asset)
             && let Some(asset) = gas_asset
         {
@@ -202,8 +200,6 @@ impl ExecutionFeeSettlement {
                 state,
                 transaction.authority(),
                 transaction,
-                meter.source,
-                source_id,
                 &asset,
                 work.gas,
                 sponsor.as_ref(),
@@ -214,7 +210,6 @@ impl ExecutionFeeSettlement {
             state,
             transaction.authority(),
             transaction,
-            meter.source,
             sponsor,
             meter.tx_bytes_len,
             work.instructions,

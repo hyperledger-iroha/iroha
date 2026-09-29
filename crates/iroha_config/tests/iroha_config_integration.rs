@@ -37,6 +37,8 @@ mod pipeline_cycle_ceiling;
 mod pipeline_signature_batch_alias_hard_cut;
 #[path = "push_provider_credentials.rs"]
 mod push_provider_credentials;
+#[path = "queue_plan_retirement.rs"]
+mod queue_plan_retirement;
 #[path = "sorafs_gateway_runtime_providers.rs"]
 mod sorafs_gateway_runtime_providers;
 #[path = "sorafs_governance_dag_runtime_signer.rs"]

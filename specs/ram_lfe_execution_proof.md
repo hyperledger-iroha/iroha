@@ -2,12 +2,13 @@
 
 Status: unimplemented. This is an implementation contract for the remaining
 [ZK03 work](zk_first_release_goals.md), not a new proof format or an activation
-decision. Proof-mode policy registration, activation, restored-state validation
-and stateless receipts reject until a complete relation is compiled and qualified.
+decision. Encrypted policy registration, activation, restored-state validation
+and receipts reject in both signed and proof modes. A secure encryption
+replacement and complete, qualified relation are required before activation.
 
 ## Current implementation and trust boundary
 
-The [crypto interpreter](../crates/iroha_crypto/src/ram_lfe.rs) validates the
+The retained diagnostic [crypto interpreter](../crates/iroha_crypto/src/ram_lfe.rs) validates the
 secret-bound policy, hidden program, registered parameters and encrypted input,
 then executes the branchless tape. The closed
 [BFV profile](../crates/iroha_crypto/src/fhe_bfv.rs) bounds it to 64 encrypted input
@@ -18,11 +19,18 @@ The public backend tags are `bfv-affine-v1` and `bfv-programmed-v1`; they identi
 the evaluator's semantics. Retired `sha3-256` tags are rejected. Exact hash and
 initializer choices are specified by the compiled protocol and profile descriptor.
 
-The [Torii runtime](../crates/iroha_torii/src/identifier_resolution.rs) evaluates
-this interpreter and issues **signed** receipts. These attestations trust the
-configured resolver. The separate signed output opening trusts its configured
-opening authority. Neither signature establishes a zero-knowledge execution
-relation, and signed mode is not a fallback for proof mode.
+The exact-lift profile is insecure: reducing its public-key equation modulo 257
+removes its plaintext-multiple noise. Signatures and execution proofs cannot
+repair this encryption defect. Public evaluators and Core/Torii boundaries now
+reject both BFV tags before private work; the HKDF PRF remains available.
+Arithmetic regression tests use private diagnostic dispatch. Remaining exported
+low-level BFV utilities still require retirement or a secure replacement.
+
+Execution produces ciphertext. The former execute response incorrectly signed a
+ciphertext hash as an opened-plaintext hash; that issuer and response field are
+removed. An identifier's independent plaintext opening must come from its pinned
+opening authority and bind the exact execution. This remains a trusted attestation,
+not a decryption proof. See the [boundary repair](../docs/history/2026-09-29/ram-lfe-production-boundary.md).
 
 The [Core receipt helper](../crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs)
 refuses the unavailable relation before parsing any proof or key. The former
@@ -66,7 +74,7 @@ enum-sequence frames. The relation must constrain every tag, operand, reserved
 word and bound in this exact encoding. Generic archive decoding is deliberately
 unavailable for this secret owner.
 
-The current first-release initializer uses a fixed BLAKE3 derive-key XOF schedule.
+The retained diagnostic initializer uses a fixed BLAKE3 derive-key XOF schedule.
 A borrowed canonical Norito frame binds the initializer descriptor, policy hash,
 secret and associated data. Exactly 1,024 bytes become 32 consecutive big-endian
 256-bit values, each reduced modulo 257 by 32 fixed byte folds. No library range
@@ -84,7 +92,7 @@ The outer policy commits the canonical `PolicyCommitmentInputV1` frame, in field
 order: backend, normalized public-parameter bytes and secret commitment. The PRF
 uses the canonical `HkdfRequestInputV1` frame: policy hash, public parameters,
 associated data and normalized input. These explicit first-release identities
-replace ambient-layout tuples. Borrowed production fields and owned reference
+replace ambient-layout tuples. Borrowed interpreter fields and owned reference
 fixtures must produce identical frames; no reference-schema alias is introduced.
 Torii hashes the canonical ciphertext frame independently of ambient decoder
 flags. See the [canonical-transcript repair](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md)
@@ -96,8 +104,9 @@ machine transitions; arbitrary initialized-state witnesses remain unacceptable.
 
 ## Implementation and acceptance criteria
 
-1. Define the exact statement, witness and bounded derivation; retain canonical
-   Norito encoding and no legacy decoder or alternative relation selection.
+1. Replace the insecure exact-lift encryption profile and independently qualify
+   its security. Define the replacement statement, witness and bounded derivation;
+   retain canonical Norito encoding without a legacy decoder or alternate relation.
 2. Emit an owned, clearing execution trace from the existing interpreter. Cover
    all eleven instructions and maximum shapes with independent reference vectors
    before circuit synthesis. Trace generation alone is not proof completion.

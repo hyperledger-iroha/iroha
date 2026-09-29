@@ -659,6 +659,7 @@ pub use view::TransactionsView;
 /// Module for [`TransactionsBlock`] and it's related impls
 mod block {
     use super::*;
+    use crate::state::LaneLifecycleError;
     /// Batched update to the storage that can be reverted later.
     ///
     /// The block aggregates transaction hashes for a particular block height. Call [`insert_block`]

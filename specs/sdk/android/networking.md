@@ -234,7 +234,6 @@ TransactionPayload payload = TransactionPayload.builder()
     .setAuthority("<i105-account-id>")
     .setInstructionBytes(KotodamaCompiler.compile(contract))
     .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-    .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
     .build();
 
 TransactionPayload decoded =

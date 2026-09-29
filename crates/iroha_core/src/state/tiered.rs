@@ -2622,7 +2622,6 @@ mod measured_bytes_impls {
         AccountRekeyTransitionProvenance,
         BackendTag,
         BridgeHashFunction,
-        CertPhase,
         ConfidentialPolicyMode,
         ConfidentialPolicyTransition,
         ConfidentialStatus,

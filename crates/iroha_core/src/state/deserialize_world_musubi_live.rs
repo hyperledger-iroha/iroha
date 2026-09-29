@@ -1,15 +1,15 @@
 //! Existing live Musubi projection validation over one immutable World borrow.
 //!
 //! Archive-local provider and location-directory scratch uses fixed V1 capacities.
-//! The availability
-//! pass consumes one ordered location cursor, including all retained retired
-//! rows, rather than scanning the complete location table once per archive.
+//! The availability pass consumes one ordered location cursor, including all
+//! retained retired rows, rather than scanning the complete location table once
+//! per archive.
 //! The separate attestation pass still visits every stored attestation/location.
-//! TODO: the shared capture owner must admit total visited rows and codec/crypto
-//! work before invoking these validators. Directory/resolver revision validation
-//! uses one caller-funded borrowed index and one ordered resolver cursor. The
-//! universal package accumulator and signature backend allocations remain
-//! separate funding obligations.
+//! Source capture separately admits complete borrowed geometry and invocation
+//! work before these validators. Directory/revision and universal package scratch
+//! use the original execution pool. Static rejection descriptors do not allocate.
+//! TODO: retain typed original-pool custody through semantic Unicode scratch,
+//! codec failures, provider instruction errors, and signature backend workspaces.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
@@ -43,13 +43,13 @@ impl CurrentProviderSet {
         }
     }
 
-    fn insert(&mut self, provider: ProviderId) -> Result<(), json::Error> {
+    fn insert(&mut self, provider: ProviderId) -> Result<(), ProjectionRejection> {
         if self.values[..self.len].contains(&provider) {
             return Ok(());
         }
         let Some(slot) = self.values.get_mut(self.len) else {
-            return Err(invalid_musubi_state(
-                "musubi_archive_availability",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ArchiveAvailability,
                 "healthy provider count exceeds the V1 location capacity",
             ));
         };
@@ -63,22 +63,16 @@ pub(super) fn validate_musubi_live_projections(
     world: &World,
     execution_budget: &AllocationBudget,
 ) -> Result<(), StateRestoreError> {
-    fn with_cut(error: json::Error, cut: &str) -> json::Error {
-        match error {
-            json::Error::InvalidField { field, message } => json::Error::InvalidField {
-                field,
-                message: format!("{cut} World cut: {message}"),
-            },
-            other => other,
-        }
-    }
-    validate_musubi_live_projection_cut(&world.view(), execution_budget)
-        .map_err(|error| error.map_rejection(|error| with_cut(error, "current")))?;
+    validate_musubi_live_projection_cut(&world.view(), execution_budget).map_err(|error| {
+        error.map_rejection(|error| error.with_cut(ProjectionCut::Current).into_json())
+    })?;
     validate_musubi_live_projection_cut(
         &world.try_block_and_revert(execution_budget)?,
         execution_budget,
     )
-    .map_err(|error| error.map_rejection(|error| with_cut(error, "predecessor")))
+    .map_err(|error| {
+        error.map_rejection(|error| error.with_cut(ProjectionCut::Predecessor).into_json())
+    })
     .map_err(Into::into)
 }
 
@@ -89,7 +83,7 @@ pub(super) fn validate_musubi_live_projections(
 pub(in crate::state) fn validate_musubi_live_projection_cut(
     world: &impl WorldReadOnly,
     execution_budget: &AllocationBudget,
-) -> Result<(), ExecutionAttemptError<json::Error>> {
+) -> Result<(), ExecutionAttemptError<ProjectionRejection>> {
     validate_musubi_live_attestation_cut(world)?;
     // Storage iterators expose canonical archive/location key order and retain
     // their cursor inline. The prior exact-source check covers every location,
@@ -98,10 +92,10 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
     for (archive_id, archive) in world.musubi_archives().iter() {
         archive
             .validate()
-            .map_err(|error| invalid_musubi_state("musubi_archives", error.to_string()))?;
+            .map_err(|error| ProjectionRejection::new(ProjectionTable::Archives, error.reason()))?;
         if archive_id != &archive.archive_id {
-            return Err(invalid_musubi_state(
-                "musubi_archives",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::Archives,
                 "archive lookup key differs from its canonical identity",
             )
             .into());
@@ -122,8 +116,8 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
                 .binary_search(&key.location_id)
                 .is_err()
             {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_locations",
+                return Err(ProjectionRejection::new(
+                    ProjectionTable::ArchiveLocations,
                     "non-retired location is absent from its archive directory",
                 )
                 .into());
@@ -140,16 +134,16 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
                 MusubiArchiveLocationStateV1::Degraded
             };
             if location.state != expected_state {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_locations",
+                return Err(ProjectionRejection::new(
+                    ProjectionTable::ArchiveLocations,
                     "archive-location lifecycle state disagrees with current SoraFS evidence",
                 )
                 .into());
             }
             if let Some(providers) = current {
                 active_locations = active_locations.checked_add(1).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_availability",
+                    ProjectionRejection::new(
+                        ProjectionTable::ArchiveAvailability,
                         "active archive-location count overflows usize",
                     )
                 })?;
@@ -164,28 +158,28 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
         // equal cardinality sufficient for exact directory equality. Retired
         // rows contribute to revision checks but not this current set.
         if current_location_count != archive.location_ids.len() {
-            return Err(invalid_musubi_state(
-                "musubi_archives",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::Archives,
                 "archive directory is not the exact non-retired location set",
             )
             .into());
         }
         if archive.location_revision != maximum_location_revision {
-            return Err(invalid_musubi_state(
-                "musubi_archives",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::Archives,
                 "archive location revision is not the exact maximum retained location revision",
             )
             .into());
         }
         let active_locations = u8::try_from(active_locations).map_err(|_| {
-            invalid_musubi_state(
-                "musubi_archive_availability",
+            ProjectionRejection::new(
+                ProjectionTable::ArchiveAvailability,
                 "active archive-location count overflows u8",
             )
         })?;
         let healthy_replicas = u16::try_from(healthy_providers.len).map_err(|_| {
-            invalid_musubi_state(
-                "musubi_archive_availability",
+            ProjectionRejection::new(
+                ProjectionTable::ArchiveAvailability,
                 "healthy provider count overflows u16",
             )
         })?;
@@ -201,8 +195,8 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
             .musubi_archive_availability()
             .get(archive_id)
             .ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_archive_availability",
+                ProjectionRejection::new(
+                    ProjectionTable::ArchiveAvailability,
                     "archive is missing its availability projection",
                 )
             })?;
@@ -210,8 +204,8 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
             || projection.healthy_replicas != healthy_replicas
             || projection.availability != expected_availability
         {
-            return Err(invalid_musubi_state(
-                "musubi_archive_availability",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ArchiveAvailability,
                 "availability projection is not the exact result of current SoraFS evidence",
             )
             .into());
@@ -222,8 +216,8 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
             || world.musubi_archives().get(archive_id).is_none()
             || projection.validate().is_err()
         {
-            return Err(invalid_musubi_state(
-                "musubi_archive_availability",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ArchiveAvailability,
                 "availability row is invalid or has no exact archive source",
             )
             .into());
@@ -231,8 +225,8 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
     }
     for (_, row) in world.musubi_resolver_index().iter() {
         if row.index_revision < row.selection.storage.index_revision {
-            return Err(invalid_musubi_state(
-                "musubi_resolver_index",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ResolverIndex,
                 "resolver row predates its embedded availability projection",
             )
             .into());
@@ -242,17 +236,19 @@ pub(in crate::state) fn validate_musubi_live_projection_cut(
 }
 
 /// Keep the exact provider evidence needed by availability on the same World cut.
-fn validate_musubi_live_attestation_cut(world: &impl WorldReadOnly) -> Result<(), json::Error> {
+fn validate_musubi_live_attestation_cut(
+    world: &impl WorldReadOnly,
+) -> Result<(), ProjectionRejection> {
     for (key, record) in world.musubi_provider_bundle_attestations().iter() {
         record.validate().map_err(|error| {
-            invalid_musubi_state("musubi_provider_bundle_attestations", error.to_string())
+            ProjectionRejection::new(ProjectionTable::ProviderBundleAttestations, error.reason())
         })?;
         let archive = world
             .musubi_archives()
             .get(&key.archive_id)
             .ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_provider_bundle_attestations",
+                ProjectionRejection::new(
+                    ProjectionTable::ProviderBundleAttestations,
                     "provider attestation references a missing archive",
                 )
             })?;
@@ -267,28 +263,28 @@ fn validate_musubi_live_attestation_cut(world: &impl WorldReadOnly) -> Result<()
             || binding.semantic_release_manifest_digest != ingress.semantic_release_manifest_digest
             || binding.source_tree_digest != archive.commitment.source_tree_digest
         {
-            return Err(invalid_musubi_state(
-                "musubi_provider_bundle_attestations",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ProviderBundleAttestations,
                 "provider attestation disagrees with its key, archive, or ingress receipt",
             ));
         }
     }
     for (key, location) in world.musubi_archive_locations().iter() {
-        location
-            .validate()
-            .map_err(|error| invalid_musubi_state("musubi_archive_locations", error.to_string()))?;
+        location.validate().map_err(|error| {
+            ProjectionRejection::new(ProjectionTable::ArchiveLocations, error.reason())
+        })?;
         let archive = world
             .musubi_archives()
             .get(&location.archive_id)
             .ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_archive_locations",
+                ProjectionRejection::new(
+                    ProjectionTable::ArchiveLocations,
                     "archive location references a missing archive",
                 )
             })?;
         if key != &location.key() || location.revision > archive.location_revision {
-            return Err(invalid_musubi_state(
-                "musubi_archive_locations",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ArchiveLocations,
                 "archive-location key or revision is inconsistent with its archive",
             ));
         }
@@ -308,15 +304,15 @@ fn validate_musubi_live_attestation_cut(world: &impl WorldReadOnly) -> Result<()
                 .musubi_provider_bundle_attestations()
                 .get(&attestation_key)
                 .ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_locations",
+                    ProjectionRejection::new(
+                        ProjectionTable::ArchiveLocations,
                         "archive location references a missing exact provider attestation",
                     )
                 })?;
             let digest = record.attestation.payload.binding.verification_lock_digest;
             if verification_lock_digest.is_some_and(|expected| expected != digest) {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_locations",
+                return Err(ProjectionRejection::new(
+                    ProjectionTable::ArchiveLocations,
                     "archive-location provider attestations disagree on the verification lock",
                 ));
             }
@@ -331,10 +327,12 @@ fn validate_musubi_live_attestation_cut(world: &impl WorldReadOnly) -> Result<()
             location.replication_order,
             &references[..location.providers.len()],
         )
-        .map_err(|error| invalid_musubi_state("musubi_archive_locations", error.to_string()))?;
+        .map_err(|error| {
+            ProjectionRejection::new(ProjectionTable::ArchiveLocations, error.reason())
+        })?;
         if location.provider_attestation_set_digest != expected_set_digest {
-            return Err(invalid_musubi_state(
-                "musubi_archive_locations",
+            return Err(ProjectionRejection::new(
+                ProjectionTable::ArchiveLocations,
                 "archive-location provider-attestation set digest is not exact",
             ));
         }

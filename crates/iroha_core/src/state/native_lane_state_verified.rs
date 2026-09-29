@@ -79,7 +79,7 @@ impl State {
         {
             return Ok(None);
         }
-        let result = (|| {
+        let result: Result<Arc<SumeragiLaneState>, String> = (|| {
             let archive =
                 crate::query::native_context_archive::NativeContextArchive::open_existing(
                     &self.kura,

@@ -295,7 +295,7 @@ impl Client {
         &self,
         height: NonZeroU64,
         committed: &CommittedTransaction,
-        execution_commitment: &iroha_data_model::block::consensus_v2::ExecutionCommitment,
+        execution_commitment: &iroha_data_model::sumeragi_finality::ExecutionCommitment,
     ) -> Result<Vec<u8>> {
         self.ensure_data_model_compatibility()?;
         let path = iroha_torii_shared::route_catalog::core::LEDGER_EXECUTED_BLOCK_WIRE

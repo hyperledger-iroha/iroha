@@ -7,10 +7,7 @@ use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
-    block::{
-        consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
-        consensus_v2::recommended_data_availability_layout,
-    },
+    block::consensus_v2::recommended_data_availability_layout,
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
         OfferContractOwnership, SetContractParliamentDelegation,
@@ -36,46 +33,57 @@ use reqwest::StatusCode;
 use std::time::{Duration, Instant};
 use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
-    let meta = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 0,
+    ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
         max_cycles: 1_000,
-        abi_version: 1,
-    };
-    let interface = ivm::EmbeddedContractInterfaceV1 {
-        seiyaku_name: "TestContract".to_owned(),
-        compiler_fingerprint: "integration-tests".to_owned(),
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        features_bitmap: 0,
-        access_set_hints: None,
-        kotoba: Vec::new(),
-        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-            name: "main".to_owned(),
-            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
-            params: Vec::new(),
-            argument_schema: None,
-            return_type: Some("()".to_owned()),
-            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
-            }),
-            permission: None,
-            read_keys: Vec::new(),
-            write_keys: Vec::new(),
-            access_hints_complete: Some(true),
-            access_hints_skipped: Vec::new(),
-            triggers: Vec::new(),
-            entry_pc: 0,
-        }],
-        error_types: Vec::new(),
-        states: Vec::new(),
-    };
-    let mut out = meta.encode();
-    out.extend_from_slice(&interface.encode_section());
-    out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    out
+        ..Default::default()
+    })
+    .compile_source("seiyaku TestContract { view fn main() { () } }")
+    .expect("compile the minimal contract with its canonical callable table")
 }
+
+#[test]
+fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
+    let artifact = minimal_contract_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact).expect("admit minimal contract");
+    assert_eq!(verified.metadata.abi_version, 1);
+    assert_eq!(verified.metadata.max_cycles, 1_000);
+    let mut interface = verified.contract_interface;
+    assert_eq!(interface.seiyaku_name, "TestContract");
+    assert_eq!(interface.entrypoints.len(), 1);
+    let entrypoint = &interface.entrypoints[0];
+    assert_eq!(entrypoint.name, "main");
+    assert_eq!(
+        entrypoint.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::View
+    );
+    assert!(entrypoint.params.is_empty());
+    assert_eq!(entrypoint.return_type.as_deref(), Some("()"));
+    assert!(entrypoint.permission.is_none());
+    assert_eq!(interface.callables.len(), 1);
+    let callable = &interface.callables[0];
+    assert_eq!(callable.entry_pc, entrypoint.entry_pc);
+    assert_ne!(callable.entry_pc, 0, "raw entry must not dispatch main");
+    assert!(callable.validate());
+    assert!(callable.argument_words.is_empty());
+    assert_eq!(callable.result_words, vec![ivm::call::CallWordV1::Unit]);
+
+    // Preserve all remaining compiler sections while removing only the
+    // authenticated callable descriptor; admission must reject that omission.
+    let section_end = verified.header_len + interface.encode_section().len();
+    interface.callables.clear();
+    let mut missing_callable = artifact[..verified.header_len].to_vec();
+    missing_callable.extend_from_slice(&interface.encode_section());
+    missing_callable.extend_from_slice(&artifact[section_end..]);
+    let error = ivm::verify_contract_artifact(&missing_callable)
+        .expect_err("public entrypoints require their canonical callable descriptors");
+    assert!(
+        error.to_string().contains(
+            "CNTR callable descriptors must cover exactly every entrypoint and direct-call root"
+        ),
+        "unexpected admission error: {error}"
+    );
+}
+
 // The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
 // instance-scoped state paths and bounded scan precharges on real validators.
 const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;
@@ -287,10 +295,6 @@ async fn submit_contract_probe_detached(
     );
     let builder = TransactionBuilder::decode_payload(&payload_bytes)?;
     assert_eq!(builder.encode_payload(), payload_bytes);
-    assert_eq!(
-        builder.payload().admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    );
     let signing_message_b64 = prepared["signing_message_b64"]
         .as_str()
         .ok_or_else(|| eyre!("validated detached draft has no signing message"))?;
@@ -1105,60 +1109,61 @@ fn signed_consensus_handshake(
     norito::json::from_str(custom.payload().get())
         .map_err(|error| eyre!("decode signed consensus handshake metadata: {error}"))
 }
-fn lane_payload_contains_applied_transaction(
-    proposal_height: u64,
-    accepted_transaction_hashes: &[Hash],
-    applied_height: u64,
-    transaction_hash: &Hash,
-) -> bool {
-    // Payload planning precedes or coincides with execution in a certified global merge.
-    // Its proposal coordinate need not equal the transaction's authoritative Applied height.
-    proposal_height != 0
-        && proposal_height <= applied_height
-        && accepted_transaction_hashes.contains(transaction_hash)
-}
-
-#[test]
-fn contract_v1_rbc_transaction_uses_distinct_proposal_and_applied_heights() {
-    let transaction_hash = Hash::new(b"contract probe transaction");
-    let other_hash = Hash::new(b"different contract probe transaction");
-    let accepted = [transaction_hash];
-    assert!(lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        3,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        5,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        0,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        4,
-        &other_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        3,
-        &[],
-        4,
-        &transaction_hash
-    ));
+/// Authenticate the original contiguous native chain on every peer and, when
+/// selected, join the exact successful transaction to its certified execution.
+async fn verify_contract_finality_everywhere(
+    network: &sandbox::SerializedNetwork,
+    height: u64,
+    transaction_hash: Option<Hash>,
+) -> Result<()> {
+    use iroha_data_model::sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier};
+    let genesis = network.genesis().0;
+    let validators = iroha_genesis::signed_genesis_validator_pops(&genesis)?
+        .into_iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key,
+            proof_of_possession,
+        })
+        .collect();
+    let selected =
+        SumeragiFinalityVerifier::new(&genesis, &network.chain_id().to_string(), validators)?;
+    let deadline = Instant::now() + network.sync_timeout();
+    let mut common = None;
+    for peer in network.peers() {
+        wait_for_contract_applied_height(peer, height, network.sync_timeout()).await?;
+        let context = read_on_dedicated_thread({
+            let client = peer
+                .client()
+                .client()
+                .clone()
+                .with_request_deadline(deadline);
+            let mut verifier = selected.clone();
+            move || -> Result<Hash> {
+                let mut tip = None;
+                for current in 1..=height {
+                    let proof =
+                        client.get_sumeragi_finality_proof(NonZeroU64::new(current).unwrap())?;
+                    tip = Some(verifier.verify(&proof)?);
+                }
+                let tip = tip.ok_or_else(|| eyre!("finality height must be positive"))?;
+                if let Some(hash) = transaction_hash {
+                    let details =
+                        client.get_transaction_details(HashOf::from_untyped_unchecked(hash))?;
+                    tip.verify_committed_transaction(client.network_id(), &details.transaction)?;
+                }
+                Ok(tip.context_id())
+            }
+        })
+        .await?;
+        if let Some(expected) = common {
+            assert_eq!(
+                context, expected,
+                "validators disagree on the certified execution context"
+            );
+        }
+        common = Some(context);
+    }
+    Ok(())
 }
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
@@ -2465,8 +2470,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
     network.ensure_blocks(1).await?;
-    let rbc_baseline =
-        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
     let deploy_client = network.peers()[0].client();
     let http = integration_tests::http::client();
     let (contract_address, deployment_tx_hash, deploy_height) = deploy_contract_artifact(
@@ -2478,13 +2481,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     )
     .await?;
     network.ensure_blocks(deploy_height).await?;
-    wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        Some(&rbc_baseline),
-        Some((deploy_height, &deployment_tx_hash)),
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, deploy_height, Some(deployment_tx_hash)).await?;
     let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
         read_on_dedicated_thread({
             let client = deploy_client.clone();
@@ -2839,25 +2836,25 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     Ok(())
 }
 #[test]
-fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<()> {
-    run_contract_v1_four_peer_da_rbc_restart(
+fn contract_v1_executes_and_survives_four_peer_native_finality_restart() -> Result<()> {
+    run_contract_v1_four_peer_native_finality_restart(
         false,
-        stringify!(contract_v1_executes_and_survives_four_peer_da_rbc_restart),
+        stringify!(contract_v1_executes_and_survives_four_peer_native_finality_restart),
     )
 }
 
 #[test]
-fn contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart()
+fn contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_native_finality_restart()
 -> Result<()> {
-    run_contract_v1_four_peer_da_rbc_restart(
+    run_contract_v1_four_peer_native_finality_restart(
         true,
         stringify!(
-            contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart
+            contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_native_finality_restart
         ),
     )
 }
 
-fn run_contract_v1_four_peer_da_rbc_restart(
+fn run_contract_v1_four_peer_native_finality_restart(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
@@ -2874,7 +2871,7 @@ fn run_contract_v1_four_peer_da_rbc_restart(
                 .enable_all()
                 .build()
                 .expect("build four-validator contract runtime")
-                .block_on(contract_v1_four_peer_da_rbc_restart_impl(
+                .block_on(contract_v1_four_peer_native_finality_restart_impl(
                     registered_in_genesis,
                     context,
                 ))
@@ -2886,7 +2883,7 @@ fn run_contract_v1_four_peer_da_rbc_restart(
     }
 }
 
-async fn contract_v1_four_peer_da_rbc_restart_impl(
+async fn contract_v1_four_peer_native_finality_restart_impl(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
@@ -2914,8 +2911,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
                     ["logger", "filter"],
                     "iroha_core::sumeragi=trace,iroha_p2p=debug",
                 )
-                // This gate exercises consensus and mandatory DA/RBC, not
-                // SoraNet admission-puzzle cost. Keep PoW enabled at the
+                // Keep SoraNet PoW enabled at the
                 // production difficulty while bounding full-mesh startup work.
                 .write(
                     [
@@ -3062,8 +3058,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         }
     })
     .await?;
-    // Applied follows successive admission, autonomous-anchor, and execution
-    // carriers. Keep its wait outside the signed-cadence round budget.
+    // Observe state application, then authenticate its original native certificate.
     let deployment_height = wait_for_tx_applied(
         &http,
         client.client().endpoint(),
@@ -3074,16 +3069,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     .await?;
     network.ensure_blocks(deployment_height).await?;
     let deployment_hash = Hash::from(deployment_tx_hash);
-    // Genesis has a global QC but bootstraps the lane catalog without a lane-block
-    // certificate. The applied deployment is the first normal work whose certified
-    // lane payload can establish this test's cross-peer RBC baseline.
-    let deployment_rbc = wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        None,
-        Some((deployment_height, &deployment_hash)),
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, deployment_height, Some(deployment_hash)).await?;
     // CommitContractDeployment already activates the address, binds its alias and stages
     // hajimari; its transaction also grants Alice the exact hook invocation token.
     // Pin the address/code in a trusted intent, then sign the SDK's exact quoted
@@ -3180,13 +3166,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         );
     }
 
-    wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        Some(&deployment_rbc),
-        None,
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, verification_height, None).await?;
     let restart_index = network.peers().len() - 1;
     let restart_peer = network.peers()[restart_index].clone();
     let config_layers = network.config_layers().collect::<Vec<_>>();

@@ -1,4 +1,4 @@
-//! Durable ingress for single-route ordinary transactions.
+//! Native queue ingress for single-route ordinary transactions.
 //!
 //! The leader samples these transactions from its local queue. An exact-height
 //! threshold-key lifecycle certificate additionally authenticates its own
@@ -9,8 +9,7 @@ use iroha_data_model::isi::consensus_keys::{
 };
 
 fn certificate(transaction: &SignedTransaction) -> Option<&ThresholdKeyLifecycleCertificateV1> {
-    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary
-        || transaction.attachments().is_some()
+    if transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
         || !transaction.metadata().is_empty()
     {
@@ -35,9 +34,6 @@ pub(super) fn authenticate(
     transaction: &TransactionEntrypoint,
     routing_plan: &RoutingPlan,
 ) -> Result<(), String> {
-    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
-        return Err("ordinary ingress requires a signature-bound ordinary intent".to_owned());
-    }
     if !matches!(routing_plan, RoutingPlan::Single(_)) {
         return Err(
             "multi-route transaction admission is unsupported by the current consensus driver"
@@ -70,30 +66,24 @@ pub(super) fn authenticate(
             "lifecycle certificate requires the exact single global control route".to_owned(),
         );
     }
-    let context = app
-        .queue
-        .plan_admission_context_with_state(&app.state, routing_plan)
-        .map_err(|error| format!("lifecycle route authority is unavailable: {error}"))?;
-    if context.proposal_height != certificate.effective_height
-        || context.route_incarnations.len() != 1
-    {
-        return Err("lifecycle route does not bind the certified next height".to_owned());
-    }
-    let (parent_hash, roster) = app
+    let (_parent_hash, roster) = app
         .state
         .verify_next_height_threshold_key_lifecycle_certificate_v1(certificate)?;
-    if context.predecessor_block_hash != Some(parent_hash) {
-        return Err("lifecycle route differs from the authenticated parent".to_owned());
-    }
-    let route = &context.route_incarnations[0];
+    let route = app
+        .state
+        .resolve_route_authority(iroha_core::state::LaneAuthorityRoute::new(
+            global_route.lane_id,
+            global_route.dataspace_id,
+        ))
+        .map_err(|error| format!("lifecycle route authority is unavailable: {error}"))?;
     let local = app
         .local_peer_id
         .as_ref()
         .ok_or_else(|| "lifecycle ingress has no local validator identity".to_owned())?;
     if !roster.contains(local)
-        || !route.validator_set.contains(local)
+        || !route.validators().contains(local)
         || route
-            .validator_set
+            .validators()
             .iter()
             .collect::<std::collections::BTreeSet<_>>()
             != roster.iter().collect::<std::collections::BTreeSet<_>>()
@@ -124,16 +114,15 @@ pub(super) async fn submit(
         permit,
         "ordinary_transaction_admission_worker_failed",
         move || {
-            require_current_transaction_admission(accepted.entrypoint().admission_intent())?;
             require_current_transaction_route(&routing_plan)?;
             authenticate(&worker_app, accepted.entrypoint(), &routing_plan).map_err(|message| {
                 Error::Query(iroha_data_model::ValidationFail::NotPermitted(message))
             })?;
-            routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+            routing::push_accepted_transaction_for_ingress_with_routing_plan(
                 worker_app.queue.clone(),
                 worker_app.state.clone(),
                 accepted,
-                routing_plan,
+                Some(routing_plan),
             )
         },
     )

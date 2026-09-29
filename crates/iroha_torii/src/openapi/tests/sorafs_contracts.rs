@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 16_498;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_343;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "00dd61298d1f22984ba421a48538d69acd21280ba216e68040543a07c8a9456a";
+    "0743402196a2d2e15426d464c3e584ebfebe4d552851a21087b767e77e38a9ba";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -14,23 +14,8 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "proof.por.required",
     "proof.pdp.failures",
     "proof.potr.failures",
-    "sumeragi.da.required",
     "bridge.proof.required",
     "bridge.attestation.required",
-    "finality.artifact.required",
-    "height.context.required",
-    "height.context.nullable",
-    "validator.power.required",
-    "dual.quorum.required",
-    "block.subject.required",
-    "block.subject.nullable",
-    "merge.carrier.required",
-    "execution.required",
-    "execution.nullable",
-    "qc.required",
-    "snapshot.bootstrap.required",
-    "next.epoch.required",
-    "bridge.commitment.required",
     "bridge.bundle.required",
     "block.header.required",
     "block.header.nullable",
@@ -38,19 +23,11 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "ledger.state_finality.retired",
     "ledger.state_finality.retired_paths",
     "ledger.state_finality.retired_schemas",
-    "bridge.components",
-    "bridge.retired",
     "fixture.header.required",
-    "fixture.artifact.fields",
-    "fixture.execution.fields",
     "fixture.retired",
     "lifecycle.required",
     "status.required",
     "status.absent",
-    "native.receipt.required",
-    "native.leg.required",
-    "native.proposal.required",
-    "native.body.required",
     "hf.headers",
     "app.page.required",
     "app.page.properties",

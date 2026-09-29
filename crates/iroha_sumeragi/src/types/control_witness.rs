@@ -1,181 +1,26 @@
 //! Fixed-capacity application control bytes carried and signed independently of transactions.
 
-use norito::core as ncore;
-use std::{
-    fmt,
-    hash::{Hash, Hasher},
-    io,
-};
+use crate::bytes::{ByteSequence, InlineBytes, InlineDomain};
 
 /// Maximum occupied bytes in one signed application control witness.
-/// This bound is checked before copying or constructing any variable-size decode allocation.
 pub const MAX_CONTROL_WITNESS_BYTES: usize = 2048;
 
-/// Opaque application control witness with no heap backing or mutable allocation escape.
-///
-/// The sole canonical codec emits its occupied bytes as one byte sequence. The private unused
-/// capacity is always zero and is never encoded. The application validates exact demand and
-/// context; empty bytes do not by themselves prove that no witness was required.
-#[derive(Clone, Copy)]
-pub struct ControlWitness {
-    bytes: [u8; MAX_CONTROL_WITNESS_BYTES],
-    len: u16,
-}
-
-/// A control witness exceeded the fixed protocol capacity.
+/// Semantic identity of application control bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ControlWitnessError {
-    /// Requested occupied byte length.
-    pub length: usize,
+pub enum ControlDomain {}
+impl InlineDomain for ControlDomain {
+    const NAME: &'static str = "ControlWitness";
+    const FRAME: &'static str = "iroha_sumeragi::ControlWitness";
 }
-impl fmt::Display for ControlWitnessError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "control witness length {} exceeds {}",
-            self.length, MAX_CONTROL_WITNESS_BYTES
-        )
-    }
-}
-impl std::error::Error for ControlWitnessError {}
-
-impl ControlWitness {
-    /// Empty control bytes. Application validation must still check whether demand exists.
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self {
-            bytes: [0; MAX_CONTROL_WITNESS_BYTES],
-            len: 0,
-        }
-    }
-
-    /// Copy bounded canonical application bytes without allocating.
-    ///
-    /// # Errors
-    /// Rejects lengths above the protocol cap before copying any bytes.
-    pub fn try_from_slice(bytes: &[u8]) -> Result<Self, ControlWitnessError> {
-        if bytes.len() > MAX_CONTROL_WITNESS_BYTES {
-            return Err(ControlWitnessError {
-                length: bytes.len(),
-            });
-        }
-        let mut witness = Self::empty();
-        witness.bytes[..bytes.len()].copy_from_slice(bytes);
-        witness.len = u16::try_from(bytes.len()).expect("protocol bound fits u16");
-        Ok(witness)
-    }
-    /// Occupied canonical application bytes, without the unused capacity.
-    #[must_use]
-    pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
-    }
-    /// Whether no application control bytes are carried.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-    /// Number of occupied bytes.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.len as usize
-    }
-}
-impl Default for ControlWitness {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-impl fmt::Debug for ControlWitness {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("ControlWitness")
-            .field(&self.as_slice())
-            .finish()
-    }
-}
-impl PartialEq for ControlWitness {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-impl Eq for ControlWitness {}
-impl Hash for ControlWitness {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_slice().hash(state);
-    }
-}
-
-// The application can count and stream its sole canonical frame directly into this owner.
-// A failed write leaves it unchanged; neither replacement backing nor partial writes occur.
-impl io::Write for ControlWitness {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let start = self.len();
-        let end = start
-            .checked_add(bytes.len())
-            .filter(|end| *end <= MAX_CONTROL_WITNESS_BYTES)
-            .ok_or_else(|| io::Error::from(io::ErrorKind::WriteZero))?;
-        self.bytes[start..end].copy_from_slice(bytes);
-        self.len = u16::try_from(end).expect("protocol bound fits u16");
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-impl ncore::SerializePayload for ControlWitness {
-    fn serialize(&self, encoder: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_seq_len(encoder, u64::from(self.len))?;
-        encoder.write_all(self.as_slice())?;
-        Ok(())
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        Some(8 + self.len())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        Some(8 + self.len())
-    }
-}
-impl<'de> ncore::DecodeFromSlice<'de> for ControlWitness {
-    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (length, prefix) = ncore::read_seq_len_slice(bytes)?;
-        if length > MAX_CONTROL_WITNESS_BYTES {
-            return Err(ncore::Error::FieldLengthExceeded {
-                length: u64::try_from(length).unwrap_or(u64::MAX),
-                limit: MAX_CONTROL_WITNESS_BYTES as u64,
-            });
-        }
-        let used = prefix
-            .checked_add(length)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let data = bytes
-            .get(prefix..used)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let witness = Self::try_from_slice(data).map_err(|_| ncore::Error::LengthMismatch)?;
-        ncore::note_payload_access(bytes, used);
-        Ok((witness, used))
-    }
-}
-impl<'de> ncore::DeserializePayload<'de> for ControlWitness {
-    fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("canonical bounded control witness")
-    }
-    fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
-        <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes).map(|(witness, _)| witness)
-    }
-}
-impl norito::NoritoSchema for ControlWitness {
-    fn nominal_name() -> String {
-        "iroha_sumeragi::ControlWitness".to_owned()
-    }
-    fn static_frame_name() -> Option<&'static str> {
-        Some("iroha_sumeragi::ControlWitness")
-    }
-}
+/// Opaque application control witness, encoded as its occupied canonical byte sequence.
+/// Application validation determines exact demand and context, including empty witnesses.
+pub type ControlWitness = ByteSequence<InlineBytes<MAX_CONTROL_WITNESS_BYTES, ControlDomain>>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::codec::{DecodeAll as _, Encode as _};
+    use norito::core as ncore;
     use std::io::Write as _;
 
     #[test]

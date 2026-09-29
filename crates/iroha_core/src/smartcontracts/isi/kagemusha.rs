@@ -17,7 +17,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId},
-    block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     isi::kagemusha_v1::{
         KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
@@ -38,6 +37,7 @@ use iroha_data_model::{
         kagemusha_asset_identity_digest_v1, kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
+    sumeragi_finality::SumeragiFinalityProof,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -50,8 +50,8 @@ use crate::zk::{
         KagemushaDirectoryArtifactResolverV1, KagemushaLoadedEpMintAuthorityArtifactsV1,
         KagemushaLoadedEpMintHashArtifactsV1, KagemushaLoadedEqMintAuthorityArtifactsV1,
         KagemushaLoadedEqMintHashArtifactsV1, KagemushaMintAuthorityCheckpointV1,
-        KagemushaMintCertificateWitnessV1, KagemushaRecursiveVerifierProfileV1,
-        decode_kagemusha_mint_finality_seal_bundle_v1, kagemusha_mint_finality_empty_root_v1,
+        KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitnessV1,
+        KagemushaRecursiveVerifierProfileV1, kagemusha_mint_finality_empty_root_v1,
         load_kagemusha_ep_mint_authority_artifacts_v1, load_kagemusha_ep_mint_hash_artifacts_v1,
         load_kagemusha_eq_mint_authority_artifacts_v1, load_kagemusha_eq_mint_hash_artifacts_v1,
         prove_kagemusha_finalized_mint_from_checkpoint_v1,
@@ -274,22 +274,50 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         authorization: &KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String>;
 
+    /// Terminally reverify a stored checkpoint under the installed release and an independently
+    /// selected complete scheduling authorization. Decoding the cache grants no authority.
+    fn verify_mint_authority_checkpoint(
+        &self,
+        release_id: [u8; 32],
+        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(), String>;
+
+    /// Reverify a cached result's original native decision, exact receipt, enabled hardware
+    /// profile and complete release-pinned recursive mint proof before reusing its bytes.
+    fn verify_finalized_top_up(
+        &self,
+        record: &KagemushaTopUpRecordV1,
+        result: &KagemushaTopUpResultV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
+    ) -> Result<(), String>;
+
     /// Produce the immutable mint result for one canonical finalized reserve top-up.
     ///
     /// The implementation must recursively verify `authority_checkpoint` and prove the exact
-    /// Kura finality evidence in both Pasta circuits. Native finality checks are preflight only.
+    /// Kura finality evidence in both Pasta circuits. `trust_anchor` must be selected from
+    /// independently authenticated native history, never from the supplied result. Native
+    /// finality and paired-share checks are preflight; release-pinned recursive proof
+    /// verification remains mandatory.
+    ///
+    /// TODO(S8): connect the original-execution publication owner to this producer with its
+    /// retained native checkpoint and governed recursive authority checkpoint. No production
+    /// caller currently produces the immutable mint result through this trait.
     fn prove_finalized_top_up(
         &self,
         record: &KagemushaTopUpRecordV1,
         finality: KagemushaOperationFinalityV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
         authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaTopUpResultV1, String>;
 
     /// Advance an authority checkpoint at an epoch boundary certified by the current roster.
+    /// The complete `trust_anchor` must be authenticated independently of `finality_proof`.
     fn prove_mint_authority_rotation(
         &self,
         release_id: [u8; 32],
-        finality_artifact: &V2FinalityArtifact,
+        finality_proof: &SumeragiFinalityProof,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
         top_up_membership: Option<KagemushaTopUpMembershipWitnessV1>,
         authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String>;
@@ -327,10 +355,29 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
         Err("authenticated Kagemusha V1 mint authority is unavailable".to_owned())
     }
 
+    fn verify_mint_authority_checkpoint(
+        &self,
+        _release_id: [u8; 32],
+        _authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        _checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(), String> {
+        Err("authenticated Kagemusha V1 mint checkpoint verifier is unavailable".to_owned())
+    }
+
+    fn verify_finalized_top_up(
+        &self,
+        _record: &KagemushaTopUpRecordV1,
+        _result: &KagemushaTopUpResultV1,
+        _trust_anchor: &KagemushaFinalityTrustAnchorV1,
+    ) -> Result<(), String> {
+        Err("authenticated Kagemusha V1 mint result verifier is unavailable".to_owned())
+    }
+
     fn prove_finalized_top_up(
         &self,
         _record: &KagemushaTopUpRecordV1,
         _finality: KagemushaOperationFinalityV1,
+        _trust_anchor: &KagemushaFinalityTrustAnchorV1,
         _authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaTopUpResultV1, String> {
         Err("authenticated Kagemusha V1 mint prover is unavailable".to_owned())
@@ -339,7 +386,8 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
     fn prove_mint_authority_rotation(
         &self,
         _release_id: [u8; 32],
-        _finality_artifact: &V2FinalityArtifact,
+        _finality_proof: &SumeragiFinalityProof,
+        _trust_anchor: &KagemushaFinalityTrustAnchorV1,
         _top_up_membership: Option<KagemushaTopUpMembershipWitnessV1>,
         _authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
@@ -886,6 +934,7 @@ mod release_lifecycle_tests {
             kagemusha_liability_pool_id_v1,
         },
         nexus::AxtAssetIncarnationV1,
+        sumeragi_finality::SumeragiFinalityProof,
     };
     use iroha_model_base::domain::DomainId;
 
@@ -1204,11 +1253,10 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
             .map_err(|_| "Kagemusha bootstrap roster exceeds u32".to_owned())?,
         network_id,
         block_height: 1,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(binding(
-            b"height-context",
-        )))),
-        subject_digest: binding(b"subject"),
-        execution_commitment_digest: binding(b"execution"),
+        native_instance: binding(b"bootstrap-native-instance"),
+        native_epoch_context: binding(b"bootstrap-native-epoch-context"),
+        native_block_hash: binding(b"bootstrap-native-block"),
+        native_result: binding(b"bootstrap-native-result"),
         kagemusha_top_up_root: kagemusha_mint_finality_root_v1(root),
         kagemusha_top_up_count: 0,
         next_epoch_authorization: None,
@@ -1424,23 +1472,123 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             certificate,
         )
         .map_err(|error| format!("failed to prove Kagemusha mint bootstrap: {error}"))?;
+        self.verify_mint_authority_checkpoint(release_id, authorization, &checkpoint)?;
+        Ok(checkpoint)
+    }
+
+    fn verify_mint_authority_checkpoint(
+        &self,
+        release_id: [u8; 32],
+        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(), String> {
+        let runtime = self
+            .releases
+            .get(&release_id)
+            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        authorization
+            .validate()
+            .map_err(|error| error.to_string())?;
+        if authorization.network_id != runtime.network_id
+            || checkpoint.statement.lifecycle.network_id != runtime.network_id
+            || checkpoint.release_id != release_id
+            || checkpoint.authority_head
+                != authorization
+                    .authorization_id()
+                    .map_err(|error| error.to_string())?
+            || checkpoint.genesis_authorization_id
+                != runtime.verifier.mint_genesis_authorization_id()
+            || (checkpoint.step == KagemushaMintAuthorityStepV1::Bootstrap)
+                != (authorization.decision == KagemushaMintFinalityEpochDecisionV1::Genesis)
+        {
+            return Err("stored mint checkpoint differs from the independently selected authorization or release".to_owned());
+        }
         match runtime.purpose {
             KagemushaReleasePurposeV1::Production => runtime
                 .verifier
-                .verify_mint_authority_checkpoint(&checkpoint)?,
+                .verify_mint_authority_checkpoint(checkpoint)?,
             KagemushaReleasePurposeV1::TestnetExperiment(_) => runtime
                 .verifier
-                .verify_experimental_mint_authority_checkpoint_for_testnet(&checkpoint)?,
+                .verify_experimental_mint_authority_checkpoint_for_testnet(checkpoint)?,
         };
-        Ok(checkpoint)
+        Ok(())
+    }
+
+    fn verify_finalized_top_up(
+        &self,
+        record: &KagemushaTopUpRecordV1,
+        result: &KagemushaTopUpResultV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
+    ) -> Result<(), String> {
+        record.validate_basic().map_err(|error| error.to_string())?;
+        let runtime = self.runtime_for_terminal_verification(record.release_id)?;
+        if result.request != record.issuance_intent.request
+            || result.finality.reserve_receipt_witness.receipt != record.reserve_receipt
+            || trust_anchor.network_id != runtime.network_id
+        {
+            return Err(
+                "stored mint result differs from the original request, receipt or network".into(),
+            );
+        }
+        result
+            .validate_against(trust_anchor)
+            .map_err(|error| error.to_string())?;
+        let authorization =
+            Self::verify_top_up_authorization_against_runtime(&result.request, runtime)?;
+        let statement = authorization
+            .mint_statement(&result.request, record.reserve_receipt.committed_at_ms)?;
+        if result.mint_credit.statement != statement {
+            return Err(
+                "stored mint result differs from the authenticated request statement".into(),
+            );
+        }
+        let membership = result
+            .finality
+            .top_up_membership_witness
+            .clone()
+            .ok_or("stored mint result lacks its exact top-up membership")?;
+        let (seal_bundle, authority_generation) =
+            crate::sumeragi::attestation::verify_native_mint_finality_bundle(
+                &result.finality.finality_proof,
+                trust_anchor,
+            )?;
+        let authority_head = seal_bundle
+            .message
+            .epoch_authorization
+            .authorization_id()
+            .map_err(|error| error.to_string())?;
+        let certificate = KagemushaMintCertificateWitnessV1 {
+            statement,
+            membership,
+            seal_bundle,
+            authority_generation,
+        };
+        let certificate_binding =
+            certificate.certificate_binding_digest(KagemushaMintAuthorityStepV1::FinalizedMint)?;
+        if result.mint_credit.finality_certificate_binding != certificate_binding
+            || result.mint_credit.finality_authority_head != authority_head
+            || result.mint_credit.finality_genesis_authorization_id
+                != runtime.verifier.mint_genesis_authorization_id()
+        {
+            return Err("stored mint proof names another native certificate or authority".into());
+        }
+        verify_kagemusha_mint_finality_helper_v1(
+            &runtime.verifier,
+            runtime.artifacts.recursion_artifacts(),
+            &result.mint_credit,
+        )
+        .map_err(|error| format!("stored finalized-mint recursive proof was rejected: {error}"))?;
+        Ok(())
     }
 
     fn prove_finalized_top_up(
         &self,
         record: &KagemushaTopUpRecordV1,
         finality: KagemushaOperationFinalityV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
         authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaTopUpResultV1, String> {
+        record.validate_basic().map_err(|error| error.to_string())?;
         let request = &record.issuance_intent.request;
         let runtime = self.runtime_for_terminal_verification(record.release_id)?;
         if request.release_id != record.release_id
@@ -1452,13 +1600,11 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         {
             return Err("finalized top-up differs from its authenticated proof release".to_owned());
         }
-        let trust_anchor = KagemushaFinalityTrustAnchorV1 {
-            network_id: finality.finality_artifact.height_context.network_id,
-            block_height: finality.finality_artifact.height,
-            height_context_id: finality.finality_artifact.context_id(),
-        };
+        if trust_anchor.network_id != runtime.network_id {
+            return Err("finalized top-up differs from the release's selected network".to_owned());
+        }
         finality
-            .validate_against(&trust_anchor)
+            .validate_against(trust_anchor)
             .map_err(|error| format!("invalid canonical top-up finality: {error}"))?;
         if finality.reserve_receipt_witness.receipt != record.reserve_receipt {
             return Err("canonical finality receipt differs from reserve state".to_owned());
@@ -1477,23 +1623,16 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .top_up_membership_witness
             .clone()
             .ok_or_else(|| "canonical top-up finality lacks its membership witness".to_owned())?;
-        let seal_payload = finality
-            .finality_artifact
-            .commit_qc
-            .kagemusha_finality_seal_payload()
-            .map_err(|error| format!("invalid Kagemusha CommitQC envelope: {error}"))?
-            .ok_or_else(|| "finalized top-up lacks its paired-Pasta seal bundle".to_owned())?;
-        let seal_bundle = decode_kagemusha_mint_finality_seal_bundle_v1(seal_payload)
-            .map_err(|error| format!("invalid finalized mint seal bundle: {error}"))?;
+        let (seal_bundle, authority_generation) =
+            crate::sumeragi::attestation::verify_native_mint_finality_bundle(
+                &finality.finality_proof,
+                trust_anchor,
+            )?;
         let certificate = KagemushaMintCertificateWitnessV1 {
             statement: statement.clone(),
             membership,
             seal_bundle,
-            authority_generation: finality
-                .finality_artifact
-                .height_context
-                .kagemusha_mint_finality_authority
-                .clone(),
+            authority_generation,
         };
         let generated = match runtime.purpose {
             KagemushaReleasePurposeV1::Production => {
@@ -1531,34 +1670,21 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
         };
-        require_release_mint_scope_v1(
-            runtime.purpose,
-            runtime.network_id,
-            runtime.release_id,
-            KagemushaMintScopeSubjectV1::from_statement(&mint_credit.statement),
-        )?;
-        let _verified_finality = verify_kagemusha_mint_finality_helper_v1(
-            &runtime.verifier,
-            runtime.artifacts.recursion_artifacts(),
-            &mint_credit,
-        )
-        .map_err(|error| format!("generated finalized-mint proof was rejected: {error}"))?;
         let result = KagemushaTopUpResultV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             request: request.clone(),
             finality,
             mint_credit,
         };
-        result
-            .validate_against(&trust_anchor)
-            .map_err(|error| format!("generated top-up result is invalid: {error}"))?;
+        self.verify_finalized_top_up(record, &result, trust_anchor)?;
         Ok(result)
     }
 
     fn prove_mint_authority_rotation(
         &self,
         release_id: [u8; 32],
-        finality_artifact: &V2FinalityArtifact,
+        finality_proof: &SumeragiFinalityProof,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
         top_up_membership: Option<KagemushaTopUpMembershipWitnessV1>,
         authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
@@ -1567,7 +1693,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .get(&release_id)
             .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
         if release_id != runtime.release_id
-            || finality_artifact.height_context.network_id != runtime.network_id
+            || trust_anchor.network_id != runtime.network_id
             || authority_checkpoint.release_id != runtime.release_id
             || authority_checkpoint.statement.lifecycle.network_id != runtime.network_id
         {
@@ -1576,21 +1702,20 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
                     .to_owned(),
             );
         }
-        finality_artifact
-            .verify()
-            .map_err(|error| format!("invalid boundary finality artifact: {error}"))?;
-        let seal_payload = finality_artifact
-            .commit_qc
-            .kagemusha_finality_seal_payload()
-            .map_err(|error| format!("invalid Kagemusha boundary CommitQC envelope: {error}"))?
-            .ok_or_else(|| "epoch boundary lacks its paired-Pasta seal bundle".to_owned())?;
-        let seal_bundle = decode_kagemusha_mint_finality_seal_bundle_v1(seal_payload)
-            .map_err(|error| format!("invalid boundary mint seal bundle: {error}"))?;
-        if seal_bundle.message.next_epoch_authorization.is_none() {
-            return Err(
-                "mint authority rotation seal lacks the next epoch authorization".to_owned(),
-            );
-        }
+        let (seal_bundle, authority_generation) =
+            crate::sumeragi::attestation::verify_native_mint_finality_bundle(
+                finality_proof,
+                trust_anchor,
+            )?;
+        let next_authorization = seal_bundle
+            .message
+            .next_epoch_authorization
+            .ok_or("mint authority rotation seal lacks the next epoch authorization")?;
+        self.verify_mint_authority_checkpoint(
+            release_id,
+            &seal_bundle.message.epoch_authorization,
+            authority_checkpoint,
+        )?;
         let membership = match top_up_membership {
             Some(membership) => membership,
             None if seal_bundle.message.kagemusha_top_up_count == 0 => {
@@ -1626,10 +1751,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             statement: authority_checkpoint.statement.clone(),
             membership,
             seal_bundle,
-            authority_generation: finality_artifact
-                .height_context
-                .kagemusha_mint_finality_authority
-                .clone(),
+            authority_generation,
         };
         let checkpoint = match runtime.purpose {
             KagemushaReleasePurposeV1::Production => {
@@ -1656,14 +1778,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             }
         }
         .map_err(|error| format!("failed to prove Kagemusha mint roster rotation: {error}"))?;
-        match runtime.purpose {
-            KagemushaReleasePurposeV1::Production => runtime
-                .verifier
-                .verify_mint_authority_checkpoint(&checkpoint)?,
-            KagemushaReleasePurposeV1::TestnetExperiment(_) => runtime
-                .verifier
-                .verify_experimental_mint_authority_checkpoint_for_testnet(&checkpoint)?,
-        };
+        self.verify_mint_authority_checkpoint(release_id, &next_authorization, &checkpoint)?;
         Ok(checkpoint)
     }
 }

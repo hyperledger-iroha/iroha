@@ -1376,7 +1376,6 @@ fn sample_block_with_result(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &SAMPLE_OUTPUT_LIMITS,
         )
         .expect("attach aligned sample transaction result");
@@ -1456,7 +1455,6 @@ fn block_summary_and_smoke_join_keep_scheduled_outputs_separate_from_network_inp
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &SAMPLE_OUTPUT_LIMITS,
         )
         .expect("attach distinct network and time outputs");
@@ -1793,53 +1791,37 @@ fn data_event_fixture_event() -> EventBox {
 fn encode_status_payload(status: &TelemetryStatus) -> Vec<u8> {
     norito::to_bytes(status).expect("encode framed status")
 }
-fn encode_sumeragi_status_payload(status: &SumeragiV2Status) -> Vec<u8> {
+fn encode_sumeragi_status_payload(status: &SumeragiStatus) -> Vec<u8> {
     let mut encoded = Vec::new();
     norito::core::to_bytes_in(status, &mut encoded).expect("encode framed status");
     encoded
 }
-fn sample_sumeragi_status_wire() -> SumeragiV2Status {
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::consensus_v2::{
-        ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-        SumeragiV2HeightContextStatus, SumeragiV2StatusPhase,
-    };
-    SumeragiV2Status {
-        protocol_version: PROTOCOL_VERSION,
-        node_fingerprint: Hash::new(b"mochi-status-node"),
-        build_fingerprint: Hash::new(b"mochi-status-build"),
-        config_fingerprint: Hash::new(b"mochi-status-config"),
-        restart_required: false,
-        height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"mochi-status-context",
-        ))),
+fn sample_sumeragi_status_wire() -> SumeragiStatus {
+    SumeragiStatus {
+        protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+        config_fingerprint: iroha_crypto::Hash::new(b"mochi-status-config"),
+        beacon_horizon: None,
+        instance: [0x41; 32],
         height: 15,
         view: 6,
-        phase: SumeragiV2StatusPhase::Prepare,
-        leader: 3,
-        locked_prepare_qc: None,
-        highest_prepare_qc: None,
-        last_timeout_certificate: None,
-        body_state: SumeragiV2BodyState::Validated,
-        pending_persistence_id: None,
-        last_committed_height: 14,
-        last_committed_subject: None,
-        height_context: SumeragiV2HeightContextStatus {
-            epoch: 1,
-            epoch_end_height: 100,
-            mode: ConsensusMode::Permissioned,
-            epoch_seed: [0xA5; 32],
-            validator_count: 4,
-            quorum: DualQuorum {
-                min_signers: 3,
-                total_power: 4,
-            },
-        },
-        last_commit_qc: None,
-        liveness: Default::default(),
-        beacon_horizon: None,
+        stage: 0,
+        leader: None,
+        proxy_tail: None,
+        high_qc_view: None,
+        level: 0,
+        start_level: 0,
+        t_retx_ms: 100,
+        committed_height: 14,
+        applied_height: 14,
+        awaiting: false,
+        signer: None,
+        unanchored: false,
+        abstaining: true,
+        halted: None,
+        footprint: Default::default(),
     }
 }
+
 #[path = "tests/canonical_fixture_owner.rs"]
 mod canonical_fixture_owner;
 #[tokio::test(flavor = "current_thread")]

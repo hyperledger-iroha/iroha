@@ -579,7 +579,7 @@ def fault_payload(participants: int = 3) -> dict[str, Any]:
             {
                 "cut": cut,
                 "control_acknowledged": True,
-                "delayed_delivery": True,
+                "delayed_delivery": cut != "restart_before_global_finality",
                 "healed": True,
                 "converged": True,
                 "partial_visibility_observed": False,
@@ -768,69 +768,6 @@ def _route_occurrence(
     return {
         "control_type": phase,
         "peer_index": MODULE.VALIDATORS_PER_DATASPACE,
-        "command_sha256": command_sha,
-        "command_hex": command_bytes.hex(),
-        "acknowledgement_sha256": MODULE.hashlib.sha256(
-            acknowledgement_bytes
-        ).hexdigest(),
-        "acknowledgement_hex": acknowledgement_bytes.hex(),
-        "before_pid": None,
-        "after_pid": None,
-    }
-
-
-def _consensus_carrier_occurrence(
-    peer_index: int, action: str, revision: int
-) -> dict[str, Any]:
-    drain = action == "heal"
-    rules = (
-        []
-        if drain
-        else [
-            {
-                "action": "hold",
-                "height": 10,
-                "kind": "proposal",
-                "view": 0,
-            }
-        ]
-    )
-    command = {
-        "drain": drain,
-        "queue_capacity": 512 if drain else 256,
-        "release": [],
-        "revision": revision,
-        "rules": rules,
-        "version": 5,
-    }
-    command_bytes = MODULE.canonical_bytes(command)
-    command_sha = MODULE.hashlib.sha256(command_bytes).hexdigest()
-    sequence = peer_index + 1
-    acknowledgement = {
-        "command_digest": _iroha_hash_literal(command_sha),
-        "delivered": [sequence] if drain else [],
-        "dropped": 0,
-        "drain_fence": revision if drain else None,
-        "draining": False,
-        "fatal": False,
-        "held": [] if drain else [{"sequence": sequence}],
-        "held_bytes": 0 if drain else 128,
-        "in_flight": None,
-        "in_flight_bytes": 0,
-        "last_error": None,
-        "overflowed": 0,
-        "queue_capacity": command["queue_capacity"],
-        "rejected_commands": 0,
-        "release_pending": [],
-        "retired": [],
-        "revision": revision,
-        "rules": rules,
-        "version": 5,
-    }
-    acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
-    return {
-        "control_type": "consensus_carrier",
-        "peer_index": peer_index,
         "command_sha256": command_sha,
         "command_hex": command_bytes.hex(),
         "acknowledgement_sha256": MODULE.hashlib.sha256(
@@ -1072,27 +1009,14 @@ def write_fault_evidence(
     observations: list[dict[str, Any]] = []
     revision = 1
     peer_count = (participants + 1) * MODULE.VALIDATORS_PER_DATASPACE
-    collections = ("loss_trials", "phase_cut_partitions", "crash_recoveries")
-    crash_phases = {
-        "sidecar_fsync": "after_private_settlement_sidecar_fsync",
-        "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
-        "prepare_qc": "after_private_settlement_prepare_qc_fsync",
-        "prepare_registration_kura_append": "after_private_settlement_kura_append",
-        "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
-        "commit_qc": "after_private_settlement_commit_qc_fsync",
-        "finalization_kura_append": "after_private_settlement_kura_append",
-        "finalization_wsv_application": "after_private_settlement_wsv_application",
-        "receipt_publication": "after_private_settlement_receipt_publication",
-    }
+    collections = ("loss_trials", "phase_cut_partitions")
     total_checks = 0
     for collection in collections:
         for index, trial in enumerate(payload[collection]):
             record_id = f"n{participants}:s{seed}:r{run}:{collection}:{index}"
             bundle_id = MODULE.hashlib.sha256(record_id.encode()).hexdigest()
             trial_controls: list[dict[str, Any]] = []
-            expected_after_state = (
-                "reverted" if collection == "crash_recoveries" else "finalized"
-            )
+            expected_after_state = "finalized"
             if collection == "loss_trials":
                 dropped = trial["loss_percent"] // 5
                 trial_controls.append(
@@ -1129,7 +1053,7 @@ def write_fault_evidence(
                     )
                 )
                 revision += 1
-            elif collection == "phase_cut_partitions" and trial["cut"] != "carrier_before_global_finality":
+            elif collection == "phase_cut_partitions" and trial["cut"] != "restart_before_global_finality":
                 phase = {
                     "da_before_availability_qc": "restricted_da",
                     "prepare_before_complete_barrier": "prepare",
@@ -1204,56 +1128,6 @@ def write_fault_evidence(
                     )
                 )
                 revision += 1
-                for carrier_action in ("hold", "heal"):
-                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
-                        trial_controls.append(
-                            _consensus_carrier_occurrence(
-                                peer_index, carrier_action, revision
-                            )
-                        )
-                        revision += 1
-            else:
-                boundary = trial["boundary"]
-                phase = crash_phases[boundary]
-                global_boundary = boundary in {
-                    "prepare_registration_kura_append",
-                    "prepare_registration_wsv_application",
-                    "finalization_kura_append",
-                    "finalization_wsv_application",
-                }
-                target_peer = 0 if global_boundary else 4
-                restart_type = (
-                    "global_restart" if global_boundary else "validator_restart"
-                )
-                cut = {
-                    "version": 1,
-                    "revision": revision,
-                    "phase": phase,
-                    "source_id": bundle_id,
-                }
-                trial_controls.append(
-                    _canonical_occurrence("persistence_cut", target_peer, cut)
-                )
-                revision += 1
-                trial_controls.append(
-                    _restart_occurrence(
-                        restart_type,
-                        target_peer,
-                        revision,
-                        "recover_crashed_validator",
-                        before_pid=800 + index * 2,
-                        after_pid=801 + index * 2,
-                    )
-                )
-                revision += 1
-                if boundary in {
-                    "prepare_registration_kura_append",
-                    "prepare_registration_wsv_application",
-                    "finalization_kura_append",
-                    "finalization_wsv_application",
-                    "receipt_publication",
-                }:
-                    expected_after_state = "finalized"
             control_row = {
                 "record": record_id,
                 "bundle_id": bundle_id,
@@ -1271,13 +1145,7 @@ def write_fault_evidence(
                 label=f"fixture.{collection}[{index}]",
             )
             snapshots = []
-            full_lock_boundary = collection != "crash_recoveries" or trial[
-                "boundary"
-            ] not in {
-                "sidecar_fsync",
-                "staged_delta_fsync",
-                "prepare_qc",
-            }
+            full_lock_boundary = True
             for label in ("before", "nonfinalized", "after"):
                 finalized = label == "after" and expected_after_state == "finalized"
                 snapshots.append(
@@ -1424,7 +1292,7 @@ def response(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         "signed_rs16_da_observations": (
             MODULE.minimum_signed_rs16_da_observations(job["participants"])
         ),
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "process_inventory": process_inventory(job["participants"]),
         "payload": payload,
     }
@@ -2003,7 +1871,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 }
             ]
             _refresh_fault_observation_row(premature_finalization[0])
-            with self.assertRaisesRegex(MODULE.RunnerError, "finalized in a disallowed phase"):
+            with self.assertRaisesRegex(MODULE.RunnerError, "financial finality in a disallowed phase"):
                 validate_observations(premature_finalization)
             finalized_then_baseline = copy.deepcopy(rows)
             rollback_phase = finalized_then_baseline[0]["continuous_observations"][0][
@@ -2054,7 +1922,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             registration_row = next(
                 row
                 for row in missing_registration_recovery
-                if row["collection"] == "crash_recoveries"
+                if row["collection"] == "phase_cut_partitions"
                 and row["trial_index"] == 3
             )
             registration_row["snapshots"][1]["validators"] = copy.deepcopy(
@@ -2159,7 +2027,8 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             crash_restart = next(
                 control
                 for row in substituted_restart
-                if row["collection"] == "crash_recoveries"
+                if row["collection"] == "phase_cut_partitions"
+                and row["trial_index"] == 3
                 for control in row["controls"]
                 if control["control_type"] == "validator_restart"
             )
@@ -2168,6 +2037,26 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 MODULE.validate_fault_control_records(
                     substituted_restart, participants=3, seed=7, run=2
                 )
+
+    def test_fault_evidence_uses_only_thirteen_route_and_restart_trials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            controls, _ = MODULE.read_bound_jsonl_file(
+                evidence / MODULE.FAULT_CONTROL_EVIDENCE_FILE, "fault controls"
+            )
+            self.assertEqual(len(controls), 13)
+            self.assertEqual(payload["crash_recoveries"], [])
+            MODULE.validate_fault_control_records(controls, participants=3, seed=7, run=2)
+            for retired in ("consensus_carrier", "persistence_cut"):
+                with self.subTest(retired=retired):
+                    changed = copy.deepcopy(controls)
+                    changed[0]["controls"][0]["control_type"] = retired
+                    with self.assertRaisesRegex(MODULE.RunnerError, "unknown type"):
+                        MODULE.validate_fault_control_records(
+                            changed, participants=3, seed=7, run=2
+                        )
 
     def test_fault_restart_topology_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2245,63 +2134,6 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     collection="phase_cut_partitions",
                     trial=payload["phase_cut_partitions"][3],
                     label="carrier",
-                )
-
-            empty_hold = copy.deepcopy(
-                by_record["n3:s7:r2:phase_cut_partitions:3"]
-            )
-            hold_control = next(
-                control
-                for control in empty_hold["controls"]
-                if control["control_type"] == "consensus_carrier"
-            )
-            hold_ack = MODULE.strict_json_loads(
-                bytes.fromhex(hold_control["acknowledgement_hex"]).decode(),
-                "hold acknowledgement",
-            )
-            hold_ack["held"] = []
-            hold_ack["held_bytes"] = 0
-            hold_ack_bytes = MODULE.canonical_bytes(hold_ack)
-            hold_control["acknowledgement_hex"] = hold_ack_bytes.hex()
-            hold_control["acknowledgement_sha256"] = MODULE.hashlib.sha256(
-                hold_ack_bytes
-            ).hexdigest()
-            with self.assertRaisesRegex(MODULE.RunnerError, "active carrier Hold"):
-                MODULE.validate_fault_trial_control_semantics(
-                    empty_hold,
-                    collection="phase_cut_partitions",
-                    trial=payload["phase_cut_partitions"][3],
-                    label="carrier",
-                )
-
-            crash = copy.deepcopy(by_record["n3:s7:r2:crash_recoveries:0"])
-            restart = next(
-                control
-                for control in crash["controls"]
-                if control["control_type"] == "validator_restart"
-            )
-            restart["peer_index"] = 5
-            with self.assertRaisesRegex(MODULE.RunnerError, "persistence cut"):
-                MODULE.validate_fault_trial_control_semantics(
-                    crash,
-                    collection="crash_recoveries",
-                    trial=payload["crash_recoveries"][0],
-                    label="crash",
-                )
-
-            wrong_receipt_target = copy.deepcopy(
-                by_record["n3:s7:r2:crash_recoveries:8"]
-            )
-            for control in wrong_receipt_target["controls"]:
-                control["peer_index"] = 0
-                if control["control_type"] == "validator_restart":
-                    control["control_type"] = "global_restart"
-            with self.assertRaisesRegex(MODULE.RunnerError, "persistence cut"):
-                MODULE.validate_fault_trial_control_semantics(
-                    wrong_receipt_target,
-                    collection="crash_recoveries",
-                    trial=payload["crash_recoveries"][8],
-                    label="receipt",
                 )
 
     def test_fault_evidence_cache_binds_capture_to_each_transcript(self) -> None:
@@ -2906,7 +2738,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     ).encode()
                 },
             )
-            with self.assertRaisesRegex(MODULE.RunnerError, "retained staged locks"):
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained (replicated )?staged locks"):
                 MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
 
             terminal_replicated = json.loads(valid_source)
@@ -2926,7 +2758,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     ).encode()
                 },
             )
-            with self.assertRaisesRegex(MODULE.RunnerError, "retained staged locks"):
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained (replicated )?staged locks"):
                 MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
 
     def test_differential_manifest_is_accepted_by_release_validator(self) -> None:
@@ -3247,10 +3079,10 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.RunnerError, "at most"):
             MODULE.verify_seed_policy(tuple(range(MODULE.MAX_FAULT_SEEDS + 1)))
 
-    def test_fault_timeout_covers_nonfinalized_expiry_without_activation_delay(self) -> None:
-        # Four trials must pass their inclusive 96-block expiry at a four-second
-        # cadence. Genesis privacy activation adds no blocks to that budget.
-        expected_floor = 1_552
+    def test_fault_timeout_covers_thirteen_native_route_and_restart_trials(self) -> None:
+        # Every fresh trial needs its original Prepare registration and finalization.
+        expected_floor = 13 * 2 * 4
+        self.assertEqual(MODULE.FAULT_CAMPAIGN_TRIALS, 13)
         self.assertFalse(hasattr(MODULE, "PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS"))
         self.assertEqual(MODULE.FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS, expected_floor)
         self.assertGreater(MODULE.DEFAULT_HARNESS_TIMEOUT_SECONDS, expected_floor)

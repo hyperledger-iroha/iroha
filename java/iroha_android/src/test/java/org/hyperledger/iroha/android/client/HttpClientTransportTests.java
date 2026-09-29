@@ -2111,8 +2111,6 @@ public final class HttpClientTransportTests {
     assert "abcd".equals(execute.outputCiphertext()) : "Output ciphertext mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
-    assert "identifier_lookup_retail".equals(execute.outputOpening().payload().programId())
-        : "Output opening must be parsed";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "RAM-LFE execute request must be captured";
@@ -2197,6 +2195,10 @@ public final class HttpClientTransportTests {
   private static void ramLfeResponseParsersRejectNonExactFields() {
     final String canonicalExecute = ramLfeExecuteResponseJson();
     final String[][] executeCases = {
+      {
+        "output_opening",
+        canonicalExecute.replaceFirst("\\{", "{\"output_opening\":{},")
+      },
       {
         "program_id",
         canonicalExecute.replace(

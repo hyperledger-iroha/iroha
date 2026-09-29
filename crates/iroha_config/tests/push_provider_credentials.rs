@@ -246,8 +246,10 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
         .expect_err("malformed hidden-program material must fail typed configuration decoding");
     let report = format!("{error:?}");
     assert!(report.contains("torii.ram_lfe"), "{report}");
-    assert!(report.contains("hidden program"), "{report}");
-    assert!(report.contains("lowercase hex"), "{report}");
+    assert!(
+        report.contains("hidden program requires bounded non-empty lowercase hex"),
+        "{report}"
+    );
     assert!(
         !report.contains("0xnot-hex"),
         "private input leaked: {report}"

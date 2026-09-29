@@ -870,11 +870,30 @@ fn appeal_finance_asset_lock_world_with_scale(
 fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
-) -> (SharedAppState, TempDir) {
-    let mut app = mk_app_state_for_tests_with_world(appeal_finance_asset_lock_world(
-        auth,
-        asset_definition_id,
-    ));
+) -> (
+    SharedAppState,
+    TempDir,
+    iroha_core::sumeragi::test_chain::CertifiedTestChain,
+) {
+    let config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        appeal_finance_asset_lock_world(auth, asset_definition_id),
+        1,
+    );
+    let prepared = iroha_core::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("original appeal asset-lock genesis");
+    let validator = prepared.validator_keys[0].clone();
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
+        .expect("execute appeal asset-lock genesis");
+    let mut app = mk_app_state_for_tests();
+    {
+        let inner = Arc::get_mut(&mut app).unwrap();
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
+        inner.local_peer_id = Some(iroha_model_base::peer::PeerId::new(
+            validator.public_key().clone(),
+        ));
+        inner.torii_proxy_bridge_signer = validator;
+    }
     let (node, temp_dir) = sorafs_node_with_temp_storage();
     let app_inner = Arc::get_mut(&mut app).expect("unique app state");
     app_inner.sorafs_node = node;
@@ -882,16 +901,35 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     {
         app_inner.telemetry = isolated_test_telemetry();
     }
-    (app, temp_dir)
+    (app, temp_dir, chain)
 }
 fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
-) -> (SharedAppState, TempDir) {
-    let mut app = mk_app_state_for_tests_with_world(appeal_finance_asset_lock_world(
-        auth,
-        asset_definition_id,
-    ));
+) -> (
+    SharedAppState,
+    TempDir,
+    iroha_core::sumeragi::test_chain::CertifiedTestChain,
+) {
+    let config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        appeal_finance_asset_lock_world(auth, asset_definition_id),
+        1,
+    );
+    let prepared = iroha_core::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("original appeal asset-lock genesis");
+    let validator = prepared.validator_keys[0].clone();
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
+        .expect("execute appeal asset-lock genesis");
+    let mut app = mk_app_state_for_tests();
+    {
+        let inner = Arc::get_mut(&mut app).unwrap();
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
+        inner.local_peer_id = Some(iroha_model_base::peer::PeerId::new(
+            validator.public_key().clone(),
+        ));
+        inner.torii_proxy_bridge_signer = validator;
+    }
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let temp_root = temp_dir
         .path()
@@ -912,22 +950,38 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     {
         app_inner.telemetry = isolated_test_telemetry();
     }
-    (app, temp_dir)
+    (app, temp_dir, chain)
+}
+fn commit_appeal_finance_instruction(
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    authority: &AccountId,
+    instruction: InstructionBox,
+) {
+    let auth = orderbook_auth_fixture();
+    let signer = if authority == &auth.provider.account {
+        auth.provider.keypair
+    } else {
+        assert_eq!(authority, &auth.buyer.account);
+        auth.buyer.keypair
+    };
+    let transaction = iroha_data_model::transaction::TransactionBuilder::new(
+        chain.network_id(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .sign(signer.private_key());
+    assert_eq!(
+        chain.commit(vec![transaction]),
+        vec![true],
+        "actual asset-lock instruction must execute"
+    );
 }
 fn seed_appeal_finance_asset_lock(
-    app: &SharedAppState,
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
     expected: &AppealFinanceDepositExpectation,
 ) {
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero block height"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAF; Hash::LENGTH]));
-    OpenAssetLock::with_options(
+    let instruction = OpenAssetLock::with_options(
         expected.escrow_id,
         expected.asset_definition_id.clone(),
         expected.destination_account.clone(),
@@ -935,89 +989,62 @@ fn seed_appeal_finance_asset_lock(
         expected.release_authority_account.clone(),
         expected.expires_at_ms,
         expected.evidence_hashes.clone(),
-    )
-    .execute(&expected.payer_account, &mut tx)
-    .expect("open appeal finance asset lock");
-    tx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit appeal finance asset lock");
-}
-fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero block height"),
-        None,
-        None,
-        0,
-        0,
     );
-    app.state
-        .block(header)
-        .commit_empty_block_for_testing()
-        .expect("commit empty finalized block");
+    commit_appeal_finance_instruction(chain, &expected.payer_account, instruction.into());
+}
+fn seed_appeal_finance_finalized_anchor(
+    chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+) {
+    assert_eq!(
+        chain.height(),
+        1,
+        "original nonempty genesis anchors pre-deposit reads"
+    );
 }
 fn drawdown_appeal_finance_asset_lock(
-    app: &SharedAppState,
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
     expected: &AppealFinanceDepositExpectation,
     authority: &AccountId,
     amount: iroha_primitives::numeric::Quantity,
     height: u64,
 ) {
-    let expected_remaining_amount = app
-        .state
-        .view()
-        .world()
+    assert_eq!(
+        chain.height(),
+        height,
+        "native genesis precedes the requested instruction height"
+    );
+    let remaining = chain
+        .state()
+        .world_view()
         .asset_escrows()
         .get(&expected.escrow_id)
-        .expect("appeal finance asset lock")
+        .unwrap()
         .remaining_amount
         .clone();
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("non-zero block height"),
-        None,
-        None,
-        0,
-        0,
+    commit_appeal_finance_instruction(
+        chain,
+        authority,
+        DrawdownAssetLock::new(expected.escrow_id, amount, remaining).into(),
     );
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
-    DrawdownAssetLock::new(expected.escrow_id, amount, expected_remaining_amount)
-        .execute(authority, &mut tx)
-        .expect("drawdown appeal finance asset lock");
-    tx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit appeal finance asset lock drawdown");
 }
 fn cancel_appeal_finance_asset_lock(
-    app: &SharedAppState,
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
     expected: &AppealFinanceDepositExpectation,
     authority: &AccountId,
     height: u64,
 ) {
-    let expected_remaining_amount = app
-        .state
-        .view()
-        .world()
+    assert_eq!(chain.height(), height);
+    let remaining = chain
+        .state()
+        .world_view()
         .asset_escrows()
         .get(&expected.escrow_id)
-        .expect("appeal finance asset lock")
+        .unwrap()
         .remaining_amount
         .clone();
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("non-zero block height"),
-        None,
-        None,
-        0,
-        0,
+    commit_appeal_finance_instruction(
+        chain,
+        authority,
+        CancelAssetLock::new(expected.escrow_id, remaining).into(),
     );
-    let mut block = app.state.block(header);
-    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
-    CancelAssetLock::new(expected.escrow_id, expected_remaining_amount)
-        .execute(authority, &mut tx)
-        .expect("cancel appeal finance asset lock");
-    tx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit appeal finance asset lock cancellation");
 }

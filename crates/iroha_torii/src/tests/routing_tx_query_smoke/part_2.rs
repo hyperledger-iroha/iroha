@@ -4,11 +4,12 @@ async fn or_multi_field_with_ties_and_sorting() {
     // State
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(iroha_core::state::State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
+    let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
+    )
+    .expect("original native query fixture genesis");
+    let state = Arc::clone(native_chain.state());
+    let kura = Arc::clone(native_chain.kura());
     // Accounts and chain
     let network_id = *state.network_id_ref();
     let kp_b = checked_smoke_keypair(
@@ -29,11 +30,13 @@ async fn or_multi_field_with_ties_and_sorting() {
         let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
             leader0.public_key().clone(),
         )]);
-        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader0.private_key())
-            .unpack(|_| {});
-        let mut st_block0 = state.block(unverified0.header());
+        let mut st_block0 = state.block(iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(native_chain.height() + 1).unwrap(),
+            state.view().latest_block_hash(),
+            None,
+            1_000,
+            0,
+        ));
         let mut stx0 = st_block0.transaction();
         let exec_id = dm::AccountId::new(kp_b.public_key().clone());
         dm::Register::domain(dm::Domain::new(dom.clone()))
@@ -43,12 +46,9 @@ async fn or_multi_field_with_ties_and_sorting() {
             .execute(exec_id.account(), &mut stx0)
             .ok();
         stx0.apply();
-        let valid0 = unverified0
-            .clone()
-            .validate_and_record_transactions(&mut st_block0)
-            .unpack(|_| {});
-        let committed0 = valid0.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+        st_block0
+            .commit_world_overlay_for_testing()
+            .expect("seed query fixture World");
     }
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
@@ -111,16 +111,10 @@ async fn or_multi_field_with_ties_and_sorting() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let unverified = BlockBuilder::new(vec![tx_success, tx_fail_c, tx_fail_d, tx_fail_e])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-    let mut st_block = state.block(unverified.header());
-    let valid: ValidBlock = unverified
-        .validate_and_record_transactions(&mut st_block)
-        .unpack(|_| {});
-    let committed = valid.clone().commit_unchecked().unpack(|_| {});
-    crate::test_utils::finalize_committed_block(&state, st_block, committed);
+    let committed = crate::test_utils::commit_native_accepted_inputs(
+        &mut native_chain,
+        vec![tx_success, tx_fail_c, tx_fail_d, tx_fail_e],
+    );
     // Filter: (result_ok == true) OR (result_ok == false) → all transactions, used to
     // exercise multi-key sorting (result flag + entrypoint hash).
     // Sort: result_ok desc, then entrypoint_hash asc (all timestamps identical)
@@ -203,11 +197,12 @@ async fn stable_ordering_with_multiple_keys() {
     // State
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(iroha_core::state::State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
+    let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
+    )
+    .expect("original native query fixture genesis");
+    let state = Arc::clone(native_chain.state());
+    let kura = Arc::clone(native_chain.kura());
     // Accounts and chain
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
@@ -228,11 +223,13 @@ async fn stable_ordering_with_multiple_keys() {
         let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
             leader0.public_key().clone(),
         )]);
-        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader0.private_key())
-            .unpack(|_| {});
-        let mut st_block0 = state.block(unverified0.header());
+        let mut st_block0 = state.block(iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(native_chain.height() + 1).unwrap(),
+            state.view().latest_block_hash(),
+            None,
+            1_000,
+            0,
+        ));
         let mut stx0 = st_block0.transaction();
         let exec_id = dm::AccountId::new(kp_a.public_key().clone());
         dm::Register::domain(dm::Domain::new(dom.clone()))
@@ -242,12 +239,9 @@ async fn stable_ordering_with_multiple_keys() {
             .execute(exec_id.account(), &mut stx0)
             .ok();
         stx0.apply();
-        let valid0 = unverified0
-            .clone()
-            .validate_and_record_transactions(&mut st_block0)
-            .unpack(|_| {});
-        let committed0 = valid0.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+        st_block0
+            .commit_world_overlay_for_testing()
+            .expect("seed query fixture World");
     }
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
@@ -305,16 +299,8 @@ async fn stable_ordering_with_multiple_keys() {
     let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
         leader.public_key().clone(),
     )]);
-    let unverified = BlockBuilder::new(vec![tx1, tx2, tx3])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-    let mut st_block = state.block(unverified.header());
-    let valid: ValidBlock = unverified
-        .validate_and_record_transactions(&mut st_block)
-        .unpack(|_| {});
-    let committed = valid.clone().commit_unchecked().unpack(|_| {});
-    crate::test_utils::finalize_committed_block(&state, st_block, committed);
+    let committed =
+        crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx1, tx2, tx3]);
     // Sort by 4 keys: result_ok desc, timestamp_ms asc, entrypoint_hash asc, authority asc
     let env = crate::filter::QueryEnvelope {
         query: None,

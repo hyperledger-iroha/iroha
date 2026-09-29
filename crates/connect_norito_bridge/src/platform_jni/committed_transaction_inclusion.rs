@@ -247,7 +247,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     response: JByteArray<'_>,
     chain_json: JByteArray<'_>,
     network_id: JByteArray<'_>,
-    trusted_height_context_id: JByteArray<'_>,
+    expected_chain: JByteArray<'_>,
+    trusted_checkpoint: JByteArray<'_>,
     transaction_hash: JByteArray<'_>,
 ) -> jobjectArray {
     let Some(response) = read_java_byte_array_bounded(
@@ -261,7 +262,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     let Some(chain_json) = read_java_byte_array_bounded(
         &mut env,
         &chain_json,
-        "finalityBundleChainJson",
+        "nativeFinalityProofChainJson",
         MAX_CHAIN_JSON_BYTES,
     ) else {
         return std::ptr::null_mut();
@@ -270,11 +271,16 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     else {
         return std::ptr::null_mut();
     };
-    let Some(anchor) = read_java_byte_array_bounded(
+    let Some(label) =
+        read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
+    else {
+        return std::ptr::null_mut();
+    };
+    let Some(checkpoint) = read_java_byte_array_bounded(
         &mut env,
-        &trusted_height_context_id,
-        "trustedHeightContextId",
-        128,
+        &trusted_checkpoint,
+        "trustedCheckpoint",
+        iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
     ) else {
         return std::ptr::null_mut();
     };
@@ -299,13 +305,14 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
         let transaction_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             Hash::prehashed(transaction_bytes),
         );
-        let anchor = std::str::from_utf8(&anchor)
-            .map_err(|_| "trustedHeightContextId is not UTF-8".to_owned())?;
+        let label =
+            std::str::from_utf8(&label).map_err(|_| "expectedChain is not UTF-8".to_owned())?;
         verify_committed_transaction_inclusion(
             &response,
             &chain_json,
             network_id,
-            anchor,
+            label,
+            &checkpoint,
             transaction_hash,
         )
     }) else {
@@ -324,10 +331,11 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
         verified.block_hash.to_vec(),
         verified.block_height.to_be_bytes().to_vec(),
         vec![u8::from(verified.result_ok)],
+        verified.checkpoint,
     ];
     let array = (|| {
         let byte_array_class = env.find_class("[B")?;
-        let array = env.new_object_array(5, byte_array_class, jni::objects::JObject::null())?;
+        let array = env.new_object_array(6, byte_array_class, jni::objects::JObject::null())?;
         for (index, field) in fields.iter().enumerate() {
             let value = env.byte_array_from_slice(field)?;
             env.set_object_array_element(&array, index as i32, &value)?;

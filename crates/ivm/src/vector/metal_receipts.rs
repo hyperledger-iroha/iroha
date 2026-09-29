@@ -100,6 +100,12 @@ pub fn metal_completed_dispatches(kernel: MetalKernel) -> u64 {
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(super) fn record_completion(kernel: Option<MetalKernel>, completed: bool) {
+    if completed
+        && let Some(kernel) = kernel
+        && let Some(health) = super::metal_runtime::current_health()
+    {
+        health.record_completion(kernel as usize);
+    }
     COMPLETIONS.record(kernel, completed);
 }
 

@@ -8,11 +8,33 @@ use iroha_data_model::kagemusha::{
 use super::*;
 
 fn network(byte: u8) -> NetworkId {
+    if byte == 3 {
+        return iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            &checkpoint_bytes(1),
+        )
+        .unwrap()
+        .network_id();
+    }
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
 }
 
-fn context(byte: u8) -> HeightContextId {
-    HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+// Captured twice from the real signed native fixture. These bytes grant no World or
+// monetary authority; threshold approvals authenticate their selection for this protocol.
+fn checkpoint_bytes(height: u64) -> Vec<u8> {
+    match height {
+        0 => Vec::new(),
+        1 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+        ))
+        .to_vec(),
+        2 => include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/sumeragi/native-finality/height-2-checkpoint.nrt"
+        ))
+        .to_vec(),
+        _ => panic!("fixture checkpoint height"),
+    }
 }
 
 fn fixture() -> (
@@ -42,7 +64,7 @@ fn fixture() -> (
         },
         release_id: [7; 32],
         release_attestation_digest: [8; 32],
-        first_context_id: context(5),
+        finality_checkpoint: checkpoint_bytes(1),
         sequence: 10,
         issued_at_ms: 1_000,
         expires_at_ms: 300_000,
@@ -56,7 +78,7 @@ fn signed(
     keys: &[KeyPair],
 ) -> KagemushaMobileBootstrapPackageV1 {
     KagemushaMobileBootstrapPackageV1 {
-        checkpoint,
+        checkpoint: checkpoint.clone(),
         approvals: keys
             .iter()
             .map(|key| KagemushaMobileBootstrapApprovalV1 {
@@ -102,7 +124,10 @@ fn accepts_exact_threshold_package_and_exposes_only_verified_pins() {
     let verified = verified_fixture();
     assert_eq!(*verified.checkpoint(), package.checkpoint);
     assert_eq!(verified.network_id(), network(3));
-    assert_eq!(verified.first_context_id(), context(5));
+    assert_eq!(
+        verified.finality_checkpoint().encode_canonical().unwrap(),
+        checkpoint_bytes(1)
+    );
     assert_eq!(verified.scope(), package.checkpoint.scope);
     assert_eq!(verified.release_id(), [7; 32]);
     assert_eq!(verified.release_attestation_digest(), [8; 32]);
@@ -209,12 +234,12 @@ fn rejects_native_network_scope_and_release_substitution() {
 }
 
 #[test]
-fn authenticates_first_context_and_freshness_fields_in_signature() {
+fn authenticates_native_checkpoint_and_freshness_fields_in_signature() {
     let (_, policy, package) = fixture();
     for index in 0..4 {
         let mut changed = package.clone();
         match index {
-            0 => changed.checkpoint.first_context_id = context(9),
+            0 => changed.checkpoint.finality_checkpoint = checkpoint_bytes(2),
             1 => changed.checkpoint.sequence += 1,
             2 => changed.checkpoint.issued_at_ms += 1,
             _ => changed.checkpoint.expires_at_ms += 1,
@@ -226,12 +251,12 @@ fn authenticates_first_context_and_freshness_fields_in_signature() {
 }
 
 #[test]
-fn rejects_even_threshold_signed_invalid_context_scope_version_and_freshness() {
+fn rejects_even_threshold_signed_invalid_checkpoint_scope_version_and_freshness() {
     let (keys, policy, package) = fixture();
     for index in 0..8 {
-        let mut checkpoint = package.checkpoint;
+        let mut checkpoint = package.checkpoint.clone();
         match index {
-            0 => checkpoint.first_context_id = context(0),
+            0 => checkpoint.finality_checkpoint = checkpoint_bytes(0),
             1 => checkpoint.scope.asset_identity_digest = [0; 32],
             2 => checkpoint.scope.asset_scale = KAGEMUSHA_ASSET_SCALE_MAX_V1 + 1,
             3 => checkpoint.scope.liability_pool_id = checkpoint.scope.asset_identity_digest,
@@ -240,7 +265,7 @@ fn rejects_even_threshold_signed_invalid_context_scope_version_and_freshness() {
             6 => checkpoint.issued_at_ms = 0,
             _ => checkpoint.expires_at_ms = checkpoint.issued_at_ms,
         }
-        let changed = signed(checkpoint, &keys[..2]);
+        let changed = signed(checkpoint.clone(), &keys[..2]);
         let mut changed_pins = pins(&policy);
         changed_pins.scope = checkpoint.scope;
         assert!(
@@ -254,7 +279,9 @@ fn rejects_package_selected_key_and_changed_authority_policy() {
     let (_, policy, package) = fixture();
     let foreign = KeyPair::from_seed(vec![99; 32], Algorithm::Ed25519);
     let mut changed = package.clone();
-    changed.approvals[0] = signed(changed.checkpoint, &[foreign]).approvals.remove(0);
+    changed.approvals[0] = signed(changed.checkpoint.clone(), &[foreign])
+        .approvals
+        .remove(0);
     changed
         .approvals
         .sort_by(|a, b| a.public_key.cmp(&b.public_key));
@@ -344,13 +371,13 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
     let accepted = verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&policy)))
         .expect("first accepted package")
         .replay_pin();
-    for (sequence, context_byte, succeeds) in
-        [(10, 5, true), (9, 5, false), (10, 9, false), (11, 9, true)]
+    for (sequence, checkpoint_height, succeeds) in
+        [(10, 1, true), (9, 1, false), (10, 2, false), (11, 2, true)]
     {
-        let mut checkpoint = package.checkpoint;
+        let mut checkpoint = package.checkpoint.clone();
         checkpoint.sequence = sequence;
-        checkpoint.first_context_id = context(context_byte);
-        let changed = signed(checkpoint, &keys[..2]);
+        checkpoint.finality_checkpoint = checkpoint_bytes(checkpoint_height);
+        let changed = signed(checkpoint.clone(), &keys[..2]);
         let mut changed_pins = pins(&policy);
         changed_pins.previous = Some(accepted);
         assert_eq!(

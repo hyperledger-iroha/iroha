@@ -11,7 +11,8 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
-    install_test_lane_manifests(&state);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -80,23 +81,19 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let succeed_hash = tx2.as_ref().hash_as_entrypoint();
     // Creating a block of two identical transactions and validating it
     let transactions = vec![tx0, tx, tx2];
-    state
-        .seed_genesis_for_testing()
-        .expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(transactions)
         .chain(0, state.view().latest_block().as_deref())
         .sign(alice_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
-    let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    state
-        .commit_executed_block_for_testing(
-            state_block,
-            valid_block.clone().commit_unchecked().unpack(|_| {}),
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
         )
-        .expect("publish exact validated fixture outputs");
+        .expect("original writer-first component execution");
+    let valid_block = unverified_block
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
+        .unpack(|_| {});
     // The 1st transaction should fail and 2nd succeed
     let block_ref = valid_block.as_ref();
     let outcomes: Vec<_> = block_ref

@@ -834,13 +834,12 @@ async fn fetch_sumeragi_status_decodes_payload() {
     assert_eq!(decoded, status);
 }
 #[tokio::test(flavor = "current_thread")]
-async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
+async fn fetch_sumeragi_status_rejects_unknown_wire_revision() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
     let mut status = sample_sumeragi_status_wire();
-    status.phase = iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase::Commit;
-    assert!(status.validate().is_err(), "fixture must be invalid");
+    status.protocol_version = iroha_data_model::sumeragi::PROTOCOL_VERSION + 1;
     let mut encoded = Vec::new();
     norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
     let mock = server.mock(|when, then| {

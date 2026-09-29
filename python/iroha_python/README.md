@@ -9,7 +9,7 @@ public integration guidance.
 
 The pure `iroha-python` wheel depends on the separate `iroha-native` wheel,
 whose `iroha_native._crypto` extension owns all cryptographic identity admission.
-Account constructors and exact I105 parsers require ABI 24 and preserve all eleven
+Account constructors and exact I105 parsers require ABI 25 and preserve all eleven
 key algorithms and complete weighted multisig policies. `AccountId` is always
 domainless. Missing native validation fails explicitly, and canonical parsers
 reject surrounding whitespace.
@@ -220,8 +220,7 @@ codec. The embedded request ceiling is 16 KiB, which accommodates the complete
 paired mint-authorization proof. No unsigned or server-signed top-up envelope
 exists. `Kagemusha.top_up_instruction_wire_id` is the exact
 `iroha.kagemusha.v1.top_up` registry ID. The standard `TransactionBuilder`
-signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not use ordinary
-queue admission.
+signs the exact nine-field canonical payload, including the complete top-up request.
 
 
 ## Native Privacy Bridge
@@ -889,41 +888,13 @@ if status and status.enabled:
     for entry in status.per_ip_sessions:
         print(entry.ip, entry.sessions)
 
-# Fetch consensus status with structured accessors
+# Native protocol-1 observation from the canonical Torii client model.
 snapshot = client.get_sumeragi_status_typed()
-print(
-    "Sumeragi v2",
-    snapshot.protocol_version,
-    "height/view",
-    snapshot.height,
-    snapshot.view,
-    "leader",
-    snapshot.leader,
-)
-print(
-    "reducer liveness",
-    snapshot.liveness.generation,
-    snapshot.liveness.no_progress_age_ms,
-)
-
-# Fetch non-authoritative operator and lane evidence separately.
-diagnostics = client.get_sumeragi_diagnostics_typed()
-# Settlement models own receipt tuples, including direct constructor inputs.
-# Parsed Native participant settlements retain their checked Prepare/Commit hash
-# when callers change the original response payload.
-print(
-    "lane artifacts",
-    len(diagnostics.lane_payload_ownerships),
-    len(diagnostics.committed_lane_blocks),
-    len(diagnostics.lane_block_sessions),
-)
-print("transaction queue saturated:", diagnostics.tx_queue_saturated)
-for application in diagnostics.native_amx_participant_applications:
-    print(application.lane_id, application.participant_height, application.state)
-
-# `get_status_snapshot_typed()` below is the generic node/operational status
-# surface. Its lane commitment and governance fields are intentionally distinct
-# from the authoritative reducer facts returned by `/v1/sumeragi/status`.
+print(snapshot.protocol_version, snapshot.height, snapshot.view, snapshot.stage)
+print(snapshot.committed_height, snapshot.applied_height, snapshot.halted)
+# All 21 fields are mandatory; nullable values are explicit. This immutable
+# bounded observation is not a finality proof. Global QC and grouped diagnostic
+# DTOs and methods are removed. Native capture parity remains an open gate.
 
 # Inspect Nexus lane commitments and governance coverage from `/status`
 status_snapshot = client.get_status_snapshot_typed()
@@ -1324,25 +1295,26 @@ the nonce-bearing body once, with redirects and transport retries disabled. Tori
 exact transaction predicate, signature, freshness, nonce, and involved-account/operator
 authorization.
 
-`get_verified_committed_transaction(...)` requires exact `executed_block_wire` bytes,
-`finality_bundle_chain_json` (a Norito JSON array of 1–4096 `BridgeFinalityBundle`
-values, at most 16 MiB UTF-8), and `trusted_height_context_id`. The array starts at
-an independently trusted context/checkpoint and follows immediate successors to
-the selected carrier. Obtain the typed `network_id` and canonical checksummed
-context hash from trusted network configuration or a previously authenticated
-checkpoint; copying them from the response does not establish trust.
+`get_verified_committed_transaction(...)` requires a typed `network_id`, an
+independently selected chain label and complete canonical native checkpoint
+bytes, and `native_finality_proof_chain_json` (a Norito JSON array of 1–4096
+`SumeragiFinalityProof` values, at most 16 MiB UTF-8). The checkpoint is bounded
+to 68 MiB. The array starts at the checkpoint height and extends consecutively
+to the selected carrier. Obtain these trust inputs from approved deployment
+configuration or a previously accepted checkpoint; the response cannot select
+them.
 
-The native `BridgeFinalityVerifier` authenticates each bundle before the final
-Commit QC's execution commitment is joined to the exact canonical executed wire
-and selected input/full-output proofs. The returned `VerifiedCommittedTransaction`
-contains the carrier hash/height, authenticated network/context, typed
-`execution_commitment`, executed wire hash/length, and full `output_hash`. The
-low-level `verify_committed_transaction_inclusion(...)` accepts the same proof
-and trust inputs with exact committed-query response bytes for offline consumers.
-Both helpers authenticate rejected results; application code must check
-`result_ok` before treating an operation as successful. Internal `Time` and
-`Pipeline` outputs cannot be selected as network transactions. Header signatures
-alone cannot authenticate execution outputs.
+The native verifier authenticates the entire page before joining the exact
+original block wire and selected input/full-output proofs. The returned
+`VerifiedCommittedTransaction` includes the authenticated carrier hash/height,
+network, native `context_id`, execution commitment, executed wire hash/length,
+full output hash and immutable `promoted_checkpoint` bytes. Retain that checkpoint
+atomically with the accepted application result. The low-level
+`verify_committed_transaction_inclusion(...)` accepts the same proof and trust
+inputs with exact committed-query response bytes for offline consumers. Both
+helpers authenticate rejected results; check `result_ok` before treating an
+operation as successful. Header signatures alone do not authenticate outputs.
+The ABI-25 native call returns projection JSON and checkpoint bytes separately.
 
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`
@@ -1421,7 +1393,7 @@ print(hijiri_quote.aggregate_adjusted_fee_minor_units)
 The helper requires HTTPS and explicit canonical account authentication. It
 sends and accepts only bounded `application/x-norito`, requires a private
 `no-store` response with absent or identity content encoding, and delegates
-request encoding plus complete response coherence to the ABI 24 native
+request encoding plus complete response coherence to the ABI 25 native
 verifier. Media type parameters are rejected. The returned frozen projection
 is evaluated-only; admission remains authoritative and rejects quotes made
 stale by an intervening policy or Hijiri-risk update.
@@ -2266,7 +2238,7 @@ Connect frame encoding and crypto helpers require the compiled
 `iroha-native` wheel from `../iroha_native` before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-24 extension from the current clean source revision:
+3.12 and rebuilds the ABI-25 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -2414,7 +2386,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 24 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 25 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
@@ -2679,7 +2651,8 @@ no environment variables need to be exported.
 - Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
   and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
   without reimplementing the Rust toolchain.
-  Evidence reads use the closed first-release `SumeragiV2Equivocation` shape,
+  Evidence reads use the closed first-release `NativeSumeragiEvidence` shape,
+  retain exact instance/context/generation attribution and ordered historical offenders,
   require a non-null consensus admission height and an exact penalty lifecycle,
   reject missing, extra, or retired response fields, and stream responses under
   a 1 KiB count ceiling and 1 MiB JSON-list ceiling.

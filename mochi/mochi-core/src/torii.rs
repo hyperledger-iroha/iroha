@@ -12,16 +12,14 @@ use iroha_data_model::{
     Identifiable,
     asset::{AssetDefinitionId, AssetId},
     block::{
-        SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status,
-        execution_output::ExecutionOutputV1,
+        SignedBlock, consensus::SumeragiDiagnosticsStatus, execution_output::ExecutionOutputV1,
     },
     events::{
         EventBox, EventFilterBox,
         data::{DataEvent, DataEventFilter, prelude::*, sorafs},
         execute_trigger::ExecuteTriggerEventFilter,
         pipeline::{
-            BlockEventFilter, MergeLedgerEventFilter, PipelineEventBox, TransactionEventFilter,
-            WitnessEventFilter,
+            BlockEventFilter, PipelineEventBox, TransactionEventFilter, WitnessEventFilter,
         },
         time::{ExecutionTime, TimeEventFilter},
         trigger_completed::TriggerCompletedEventFilter,
@@ -31,6 +29,7 @@ use iroha_data_model::{
     parameter::Parameter,
     prelude::{AccountId, NetworkId},
     query::{QueryOutput, QueryRequest, SignedQuery},
+    sumeragi::SumeragiStatus,
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -2171,7 +2170,6 @@ fn canonical_event_filters() -> Vec<EventFilterBox> {
     vec![
         EventFilterBox::Pipeline(TransactionEventFilter::default().into()),
         EventFilterBox::Pipeline(BlockEventFilter::default().into()),
-        EventFilterBox::Pipeline(MergeLedgerEventFilter::default().into()),
         EventFilterBox::Pipeline(WitnessEventFilter::default().into()),
         EventFilterBox::Data(DataEventFilter::Any),
         EventFilterBox::Time(TimeEventFilter::new(ExecutionTime::PreCommit)),
@@ -2793,8 +2791,8 @@ impl ToriiClient {
     ) -> ToriiResult<ToriiStatusSnapshot> {
         await_torii_before_deadline(deadline, context, self.fetch_status_snapshot()).await
     }
-    /// Fetch the exact reducer-owned Sumeragi v2 status snapshot.
-    pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2Status> {
+    /// Fetch the exact native Sumeragi v1 status snapshot.
+    pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiStatus> {
         let url = self.sumeragi_status_endpoint()?;
         let request = build_operator_get_request(
             &self.http,
@@ -2811,10 +2809,12 @@ impl ToriiClient {
             });
         }
         let body = read_bounded_sumeragi_response(response).await?;
-        let status: SumeragiV2Status = decode_norito(&body)?;
-        status
-            .validate()
-            .map_err(|error| ToriiError::Decode(error.to_string()))?;
+        let status: SumeragiStatus = decode_norito(&body)?;
+        if status.protocol_version != iroha_data_model::sumeragi::PROTOCOL_VERSION {
+            return Err(ToriiError::Decode(
+                "unsupported Sumeragi protocol version".to_owned(),
+            ));
+        }
         Ok(status)
     }
     /// Fetch non-authoritative Sumeragi pipeline, queue, election, and lane diagnostics.
@@ -2839,11 +2839,6 @@ impl ToriiClient {
         if let Some(npos) = diagnostics.npos {
             npos.validate()
                 .map_err(|reason| ToriiError::Decode(reason.to_owned()))?;
-        }
-        for envelope in &diagnostics.lane_relay_envelopes {
-            envelope
-                .verify()
-                .map_err(|error| ToriiError::Decode(error.to_string()))?;
         }
         Ok(diagnostics)
     }
@@ -3393,7 +3388,6 @@ fn pipeline_summary(event: &PipelineEventBox) -> (String, Option<String>) {
             )
         }
         PipelineEventBox::Warning(warning) => ("Warning".to_owned(), Some(format!("{warning:?}"))),
-        PipelineEventBox::Merge(merge) => ("Merge".to_owned(), Some(format!("{merge:?}"))),
         PipelineEventBox::Witness(witness) => ("Witness".to_owned(), Some(format!("{witness:?}"))),
     }
 }

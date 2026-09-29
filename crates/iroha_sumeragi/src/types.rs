@@ -4,7 +4,9 @@
 use core::fmt;
 
 mod control_witness;
-pub use control_witness::{ControlWitness, ControlWitnessError, MAX_CONTROL_WITNESS_BYTES};
+/// Requested opaque bytes exceeded their fixed protocol capacity.
+pub use crate::bytes::ByteLengthError;
+pub use control_witness::{ControlWitness, MAX_CONTROL_WITNESS_BYTES};
 
 /// Length in bytes of every signature and aggregate signature.
 ///
@@ -80,11 +82,7 @@ impl PublicKey {
     /// [`KeyError`] if the length is out of range.
     pub fn new(raw: Vec<u8>) -> Result<Self, KeyError> {
         let key = Self(raw);
-        if key.is_well_formed() {
-            Ok(key)
-        } else {
-            Err(KeyError)
-        }
+        key.is_well_formed().then_some(key).ok_or(KeyError)
     }
 
     /// The raw key bytes.

@@ -2185,56 +2185,36 @@ mod tests {
         config
             .atomic_private_settlement
             .minimum_activation_notice_blocks = NonZeroU64::new(1).expect("notice");
-        // Authenticate the final configured catalog when Kura opens, before State publishes it.
-        let state = CoreState::new_with_pre_genesis_nexus_for_testing(
-            World::default(),
-            config,
-            LiveQueryStore::start_test(),
-        );
-        let header = |height, previous| {
-            BlockHeader::new(
-                NonZeroU64::new(height).expect("height"),
-                previous,
-                None,
-                0,
-                0,
-            )
-        };
-        let authority = abort_carrier_manifest_fixture().sponsor;
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let profile = iroha_core::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
             .expect("compiled profile");
-        let genesis_header = header(1, None);
-        let genesis_hash = genesis_header.hash();
-        let mut block = state.block(genesis_header);
-        let mut transaction = block.transaction();
-        RegisterPrivacyProtocolActivationV1::new(profile.activation_record(
-            PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                proposed_at_height: 1,
-            }),
-        ))
-        .execute(&authority, &mut transaction)
-        .expect("initial-governance registration");
-        TransitionPrivacyProtocolLifecycleV1::new(
-            protocol_id,
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 1,
-                state_since_height: 1,
-            }),
-        )
-        .execute(&authority, &mut transaction)
-        .expect("explicit initial-governance activation");
-        transaction.apply();
-        block
-            .commit_empty_block_for_testing()
-            .expect("commit activation fixture block");
-        state
-            .block(header(2, Some(genesis_hash)))
-            .commit_empty_block_for_testing()
-            .expect("commit configured service height");
+        let mut chain_config =
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
+        chain_config.nexus = Some(config);
+        chain_config.genesis_instructions = vec![
+            RegisterPrivacyProtocolActivationV1::new(profile.activation_record(
+                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 1,
+                }),
+            ))
+            .into(),
+            TransitionPrivacyProtocolLifecycleV1::new(
+                protocol_id,
+                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 1,
+                    state_since_height: 1,
+                }),
+            )
+            .into(),
+        ];
+        let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(chain_config)
+            .expect("execute original privacy activation genesis");
+        chain.commit_at(2, Vec::new());
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
-        Arc::get_mut(&mut app).expect("unique test app").state = Arc::new(state);
+        let inner = Arc::get_mut(&mut app).expect("unique test app");
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
         let view = app.state.view();
         assert_eq!(view.height(), 2);
         active_config_at_view(&app, 2, &view).expect("real active capability gate");

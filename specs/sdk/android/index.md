@@ -54,7 +54,6 @@ import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -73,7 +72,6 @@ TransactionPayload payload = TransactionPayload.builder()
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-    .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
     .build();
 
 SignedTransaction tx = builder.encodeAndSign(

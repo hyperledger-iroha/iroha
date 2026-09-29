@@ -9,7 +9,7 @@ use std::{
     io,
     sync::{
         Arc, Condvar,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -334,6 +334,7 @@ pub struct FakeExecutor {
     /// The shared state.
     pub state: Arc<Mutex<ExecState>>,
     gate: Arc<(std::sync::Mutex<bool>, Condvar)>,
+    waiting: Arc<AtomicUsize>,
 }
 
 impl FakeExecutor {
@@ -350,6 +351,7 @@ impl FakeExecutor {
                 config,
             })),
             gate: Arc::new((std::sync::Mutex::new(true), Condvar::new())),
+            waiting: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -362,15 +364,24 @@ impl FakeExecutor {
         cvar.notify_all();
     }
 
+    /// Number of original operations currently held behind the test latch.
+    pub fn waiting(&self) -> usize {
+        self.waiting.load(Ordering::Acquire)
+    }
+
     fn wait_open(&self) {
         let (lock, cvar) = &*self.gate;
         let mut open = lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while !*open {
-            open = cvar
-                .wait(open)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !*open {
+            self.waiting.fetch_add(1, Ordering::AcqRel);
+            while !*open {
+                open = cvar
+                    .wait(open)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            self.waiting.fetch_sub(1, Ordering::AcqRel);
         }
     }
 
@@ -561,6 +572,8 @@ impl Drop for WorkPump {
 /// An observer that records the driver's own reports.
 #[derive(Default)]
 pub struct RecordingObserver {
+    /// Explicit orderly completions of the event loop.
+    pub finished: Mutex<usize>,
     /// Threads whose end stopped the instance.
     pub stopped: Mutex<Vec<Worker>>,
     /// Configurations that outgrew the transport.
@@ -568,6 +581,10 @@ pub struct RecordingObserver {
 }
 
 impl Observer for RecordingObserver {
+    fn finished(&self) {
+        *self.finished.lock() += 1;
+    }
+
     fn stopped(&self, worker: Worker) {
         self.stopped.lock().push(worker);
     }

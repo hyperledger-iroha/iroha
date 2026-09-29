@@ -1979,11 +1979,8 @@ fn authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl() {
 }
 
 #[test]
-fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
-    use iroha::data_model::{
-        nexus::FeeDebitSource,
-        transaction::{TransactionAdmissionIntent, TransactionPayload},
-    };
+fn fee_quote_signing_preserves_exact_payload_and_expiry() {
+    use iroha::data_model::{nexus::FeeDebitSource, transaction::TransactionPayload};
     use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
     use std::{
         io::{Read, Write},
@@ -1991,8 +1988,8 @@ fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
         thread,
     };
 
-    // Every entry point must quote and sign its selected admission intent.
-    for mode in 0..4 {
+    // Each signing entry point binds the exact quoted payload.
+    for mode in 0..2 {
         let mut config = fallback_config();
         let discriminant = config.account_chain_discriminant;
         let _profile = ChainDiscriminantGuard::enter(discriminant);
@@ -2070,30 +2067,14 @@ fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
         .unwrap()
             + 10_000;
         let (transaction, quote) = match mode {
-            0 => quote_and_sign_transaction_with_admission_and_expiry(
+            0 => quote_and_sign_transaction_with_expiry(
                 &client,
                 executable,
                 fees,
                 Metadata::default(),
-                TransactionAdmissionIntent::Ordinary,
                 expiry,
             ),
-            1 => quote_and_sign_transaction_with_admission_and_expiry(
-                &client,
-                executable,
-                fees,
-                Metadata::default(),
-                TransactionAdmissionIntent::QueuePlanSynced,
-                expiry,
-            ),
-            2 => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
-            _ => quote_and_sign_transaction_with_admission(
-                &client,
-                executable,
-                fees,
-                Metadata::default(),
-                TransactionAdmissionIntent::QueuePlanSynced,
-            ),
+            _ => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
         }
         .unwrap();
         let quoted = server.join().unwrap();
@@ -2106,14 +2087,7 @@ fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
         quote
             .validate_for_signed_payload(transaction.payload())
             .unwrap();
-        let expected_intent = if matches!(mode, 1 | 3) {
-            TransactionAdmissionIntent::QueuePlanSynced
-        } else {
-            TransactionAdmissionIntent::Ordinary
-        };
-        assert_eq!(quoted.admission_intent(), expected_intent);
-        assert_eq!(transaction.admission_intent(), expected_intent);
-        if mode < 2 {
+        if mode == 0 {
             assert!(quoted.creation_time_ms + quoted.time_to_live_ms.unwrap().get() <= expiry);
         }
     }

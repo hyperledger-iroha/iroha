@@ -202,6 +202,7 @@ impl Fixture {
                 payload_len: u32::try_from(payload.len()).expect("small"),
                 proposer: 0,
                 skipped_leaders: Vec::new(),
+                control_witness: iroha_sumeragi::types::ControlWitness::empty(),
                 attest: false,
             },
             payload,
@@ -219,6 +220,7 @@ impl Fixture {
             signers: Bitmap::from_indices(4, [0, 1, 2]).expect("bitmap"),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         };
         store.append(&block, &qc).expect("append");
         block_hash
@@ -305,7 +307,6 @@ fn global_blocks_merge_fresh_lane_blocks_and_drop_what_they_must_not_execute() {
     );
     assert_eq!(context.routing_plan_digest, plan.digest());
     assert_eq!(context.routing_plan_legs.len(), 1);
-    assert!(context.native_amx_receipt.is_none());
     assert_eq!(
         execution
             .external
@@ -392,6 +393,10 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
             tip_hash: [9; 32],
             ..merge
         },
+        SumeragiLaneMerge {
+            tip_result: [9; 32],
+            ..merge
+        },
         SumeragiLaneMerge { from: 2, ..merge },
         SumeragiLaneMerge {
             incarnation: [7; 32],
@@ -441,9 +446,7 @@ fn expansion_consumes_only_the_exact_original_proposal() {
     .unwrap();
     let mut foreign = proposal.clone();
     let mut context = foreign.execution_context().cloned().unwrap_or_default();
-    context
-        .queue_plan_admissions
-        .push(b"changed expansion source".to_vec());
+    context.version = context.version.wrapping_add(1);
     foreign.set_execution_context(Some(context));
     let foreign_hash = foreign.hash();
     let (returned, reason) = expansion

@@ -138,9 +138,12 @@ fn transfer_to_missing_account_creates_account_by_default() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
     state_block
         .commit_world_overlay_for_testing()
@@ -189,9 +192,12 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     let err = result.expect_err("transfer must be rejected in ExplicitOnly domain");
     assert!(
         matches!(
@@ -232,9 +238,12 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
     state_block
         .commit_world_overlay_for_testing()
@@ -269,9 +278,12 @@ fn transaction_quota_limits_implicit_accounts() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_100_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     let err = result.expect_err("tx should be rejected by per-tx quota");
     assert!(
         matches!(
@@ -337,13 +349,19 @@ fn block_quota_limits_creations_across_transactions() {
     let accepted2 = accept_transaction(&state, tx2);
     let mut state_block = state.block(block_header(1, 1_700_000_200_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, res1) = state_block
-        .validate_transaction(accepted1, &mut ivm_cache)
-        .expect("local execution completes");
+    let res1 = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted1,
+        &mut ivm_cache,
+        None,
+    );
     assert!(res1.is_ok(), "first tx should succeed: {res1:?}");
-    let (_, res2) = state_block
-        .validate_transaction(accepted2, &mut ivm_cache)
-        .expect("local execution completes");
+    let res2 = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted2,
+        &mut ivm_cache,
+        None,
+    );
     let err = res2.expect_err("second tx must be rejected by block quota");
     assert!(
         matches!(
@@ -395,9 +413,12 @@ fn missing_default_role_rejects_in_pipeline() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_400_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     let err = result.expect_err("tx should fail when default role is missing");
     assert!(
         matches!(
@@ -442,9 +463,12 @@ fn implicit_account_can_spend_without_roles() {
     let accepted1 = accept_transaction(&state, tx1);
     let mut block1 = state.block(block_header(1, 1_700_000_500_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, res1) = block1
-        .validate_transaction(accepted1, &mut ivm_cache)
-        .expect("local execution completes");
+    let res1 = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block1,
+        accepted1,
+        &mut ivm_cache,
+        None,
+    );
     assert!(res1.is_ok(), "first transfer should succeed: {res1:?}");
     block1
         .commit_world_overlay_for_testing()
@@ -466,9 +490,12 @@ fn implicit_account_can_spend_without_roles() {
     let accepted2 = accept_transaction(&state, tx2);
     let mut block2 = state.block(block_header(2, 1_700_000_600_000));
     let mut ivm_cache2 = IvmCache::new();
-    let (_, res2) = block2
-        .validate_transaction(accepted2, &mut ivm_cache2)
-        .expect("local execution completes");
+    let res2 = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted2,
+        &mut ivm_cache2,
+        None,
+    );
     assert!(
         res2.is_ok(),
         "implicit account should be able to spend: {res2:?}"
@@ -499,9 +526,12 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_ok(), "batched transfers must succeed: {result:?}");
     state_block
         .commit_world_overlay_for_testing()
@@ -551,9 +581,12 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     let accepted = accept_transaction(&state, tx);
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = state_block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     let err = result.expect_err("cap should reject second implicit creation");
     assert!(
         matches!(

@@ -115,10 +115,7 @@ fn merge_with_overrides(
     if is_cli_source(matches, "sumeragi_block_max_transactions") {
         base.sumeragi_block_max_transactions = overrides.sumeragi_block_max_transactions;
     }
-    if is_cli_source(matches, "sumeragi_proposal_queue_scan_multiplier") {
-        base.sumeragi_proposal_queue_scan_multiplier =
-            overrides.sumeragi_proposal_queue_scan_multiplier;
-    }
+
     if is_cli_source(matches, "workload_profile") {
         base.workload_profile = overrides.workload_profile;
     }
@@ -330,18 +327,14 @@ mod tests {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.sumeragi_block_max_transactions = 1_024;
-        persisted.sumeragi_proposal_queue_scan_multiplier = 1;
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
             "--sumeragi-block-max-transactions".to_string(),
             "1536".to_string(),
-            "--sumeragi-proposal-queue-scan-multiplier".to_string(),
-            "2".to_string(),
         ]);
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
         assert_eq!(merged.sumeragi_block_max_transactions, 1_536);
-        assert_eq!(merged.sumeragi_proposal_queue_scan_multiplier, 2);
     }
     #[test]
     fn cli_overrides_shutdown_drain_timeout() {

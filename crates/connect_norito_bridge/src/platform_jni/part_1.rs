@@ -92,40 +92,30 @@ pub(super) fn java_validation_fee_policy_proof_result(
 }
 pub(super) fn java_native_validation_fee_current_policy_proof_request_v1(
     env: &mut jni::JNIEnv<'_>,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_validation_fee_policy_proof_result(env, |env| {
-        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
-            .ok()
-            .filter(|height| *height != 0)
-            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
-        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+        let checkpoint = read_java_byte_array_bounded(
             env,
-            &trusted_checkpoint_context_id,
-            "trustedCheckpointContextId",
-            32,
+            &trusted_checkpoint,
+            "trustedCheckpoint",
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
         )
-        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
-        .try_into()
-        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        validation_fee_current_policy_proof_request_v1(
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )
-        .map_err(|_| "trusted checkpoint was rejected".to_owned())
+        .ok_or_else(|| {
+            "trustedCheckpoint must contain one bounded canonical checkpoint".to_owned()
+        })?;
+        validation_fee_current_policy_proof_request_v1(&checkpoint)
+            .map_err(|_| "trusted checkpoint was rejected".to_owned())
     })
 }
-#[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_validation_fee_current_policy_proof_verify_v1(
     env: &mut jni::JNIEnv<'_>,
     proof_norito: jni::objects::JByteArray<'_>,
     network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_validation_fee_policy_proof_result(env, |env| {
+    trusted_checkpoint: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let proof = read_java_byte_array_bounded(
             env,
             &proof_norito,
@@ -149,30 +139,37 @@ pub(super) fn java_native_validation_fee_current_policy_proof_verify_v1(
         .ok_or_else(|| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?
         .try_into()
         .map_err(|_| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?;
-        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
-            .ok()
-            .filter(|height| *height != 0)
-            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
-        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+        let checkpoint = read_java_byte_array_bounded(
             env,
-            &trusted_checkpoint_context_id,
-            "trustedCheckpointContextId",
-            32,
+            &trusted_checkpoint,
+            "trustedCheckpoint",
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
         )
-        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
-        .try_into()
-        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        validation_fee_current_policy_proof_verify_v1(
+        .ok_or_else(|| {
+            "trustedCheckpoint must contain one bounded canonical checkpoint".to_owned()
+        })?;
+        let (projection, promoted) = validation_fee_current_policy_proof_verify_v1(
             &proof,
             network_id,
             policy_chain_genesis_hash,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
+            &checkpoint,
         )
         .map_err(|_| {
             "proof, finality, registry, or immutable deployment binding was rejected".to_owned()
-        })
-    })
+        })?;
+        java_byte_array_pair(env, &projection, &promoted)
+    }));
+    match result {
+        Ok(Ok(array)) => array,
+        Ok(Err(message)) => {
+            throw_java_illegal_argument(env, format!("validation-fee consensus proof: {message}"));
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            throw_java_illegal_state(env, "validation-fee consensus proof panicked".to_owned());
+            std::ptr::null_mut()
+        }
+    }
 }
 /// Report the exact native ABI required by the validation-fee proof bridge.
 #[unsafe(no_mangle)]
@@ -182,24 +179,16 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-/// JNI projection of
-/// [`connect_norito_validation_fee_current_policy_proof_request_v1`].
+/// JNI projection of the complete-checkpoint request encoder.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_native_validation_fee_current_policy_proof_request_v1(
-        &mut env,
-        trusted_checkpoint_height,
-        trusted_checkpoint_context_id,
-    )
+    java_native_validation_fee_current_policy_proof_request_v1(&mut env, trusted_checkpoint)
 }
-/// JNI projection of
-/// [`connect_norito_validation_fee_current_policy_proof_verify_v1`].
-#[allow(clippy::too_many_arguments)]
+/// JNI verifier returning the projection JSON and promoted canonical checkpoint as two arrays.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1(
     mut env: jni::JNIEnv<'_>,
@@ -207,16 +196,14 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
     proof_norito: jni::objects::JByteArray<'_>,
     network_id: jni::objects::JByteArray<'_>,
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
-    trusted_checkpoint_height: jni::sys::jlong,
-    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
+    trusted_checkpoint: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
     java_native_validation_fee_current_policy_proof_verify_v1(
         &mut env,
         proof_norito,
         network_id,
         policy_chain_genesis_hash,
-        trusted_checkpoint_height,
-        trusted_checkpoint_context_id,
+        trusted_checkpoint,
     )
 }
 pub(super) fn java_validation_fee_hijiri_quote_result(

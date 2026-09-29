@@ -239,15 +239,14 @@ impl Worker<'_> {
                 .map_err(|error| error.to_string())?;
         }
         let verifier = NativePastaVerifier::new(instance, *view.network_id());
-        iroha_sumeragi::crypto::verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &**crypto,
-            &verifier,
             &instance,
             &config.epoch.id,
             &config.committee,
-            qc,
         )
-        .map_err(|error| error.to_string())
+        .verify_qc(&verifier, qc)
+        .map_err(|error| format!("native quorum verification failed: {error:?}"))
     }
 }
 

@@ -55,6 +55,22 @@ pub struct GenesisTip {
     pub result: Hash32,
 }
 
+/// Origin proof produced only after this module executes the independently signed genesis.
+pub(crate) struct GenesisExecutionAuthorization {
+    state: usize,
+    tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
+}
+impl GenesisExecutionAuthorization {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        usize,
+        crate::state::native_execution_tip::NativeExecutionTipRecord,
+    ) {
+        (self.state, self.tip)
+    }
+}
+
 /// The core hash of an iroha block: the bytes of its header hash.
 #[must_use]
 pub fn core_hash_of(block: &SignedBlock) -> Hash32 {
@@ -134,7 +150,7 @@ pub fn apply_genesis(
     )
     .map_err(|error| StartupError::Local(error.to_string()))?;
     let native_contexts = archive
-        .prepare(&overlay, valid.as_ref(), &retained_result)
+        .prepare(&overlay, valid.as_ref(), &retained_result, &witness)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let committed = valid.commit_unchecked().unpack(|_| {});
     match stored {
@@ -161,7 +177,26 @@ pub fn apply_genesis(
         .publish(&native_contexts)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     overlay
-        .authorize_sumeragi_output_publication(&committed, &witness, &certificate)
+        .authorize_sumeragi_output_publication(
+            &committed,
+            &witness,
+            &certificate,
+            super::executor::NativeExecutionAuthorization::from_genesis(
+                GenesisExecutionAuthorization {
+                    state: std::ptr::from_ref(state) as usize,
+                    tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
+                        height: GENESIS_HEIGHT,
+                        creation_time_ms: u64::try_from(
+                            committed.as_ref().header().creation_time().as_millis(),
+                        )
+                        .expect("block creation time fits u64"),
+                        iroha_hash: committed.as_ref().hash(),
+                        core_hash: block_hash.0,
+                        result: result.0,
+                    },
+                },
+            ),
+        )
         .map_err(StartupError::Local)?;
     overlay
         .apply_without_execution_with_sumeragi_commit(&committed, &certificate, committee)

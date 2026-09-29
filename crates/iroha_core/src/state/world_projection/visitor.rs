@@ -14,10 +14,10 @@ pub(crate) trait WorldProjection {
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
-    fn append_cell_with<V: Value>(
+    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V>,
+        cell: &CellBlock<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
@@ -59,10 +59,10 @@ impl<T: WorldProjection> WorldProjection for &mut T {
     ) -> Result<(), Self::Error> {
         (**self).append_storage_with(name, storage, encode)
     }
-    fn append_cell_with<V: Value>(
+    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V>,
+        cell: &CellBlock<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         (**self).append_cell_with(name, cell, encode)
@@ -101,10 +101,10 @@ impl WorldProjection for WorldDeltaBuilder {
         Self::append_storage_with(self, name, storage, encode)
     }
 
-    fn append_cell_with<V: Value>(
+    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
-        cell: &CellBlock<'_, V>,
+        cell: &CellBlock<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
         Self::append_cell_with(self, name, cell, encode)
@@ -131,7 +131,7 @@ impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> Appe
     }
 }
 
-impl<V: Value + Encode> AppendWorldField for CellBlock<'_, V> {
+impl<V: Value + Encode, C: Send + Sync + 'static> AppendWorldField for CellBlock<'_, V, C> {
     fn append_world_field<P: WorldProjection>(
         &self,
         name: &'static str,

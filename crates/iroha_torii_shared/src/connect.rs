@@ -266,7 +266,7 @@ pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
     let view = norito::core::from_bytes_view(bytes)?;
-    view.decode_exact_with(|payload| {
+    view.decode_exact_with::<ConnectFrameV1, _, _>(|payload| {
         let frame = decode_connect_frame_payload(payload)?;
         Ok((frame, payload.len()))
     })
@@ -1135,7 +1135,7 @@ mod tests {
             CONNECT_LAYOUT_FLAGS,
         )?;
         let view = norito::core::from_bytes_view(&framed)?;
-        let decoded = view.decode_exact_with(decode_frame_kind_payload)?;
+        let decoded = view.decode_exact_with::<FrameKind, _, _>(decode_frame_kind_payload)?;
         assert_eq!(decoded, fk);
         Ok(())
     }
@@ -1162,7 +1162,7 @@ mod tests {
         .expect("frame control");
         let view = norito::core::from_bytes_view(&framed).expect("view");
         let decoded = view
-            .decode_exact_with(decode_connect_control_payload)
+            .decode_exact_with::<ConnectControlV1, _, _>(decode_connect_control_payload)
             .expect("decode control");
         assert_eq!(decoded, ctrl);
     }
@@ -1172,7 +1172,7 @@ mod tests {
         let framed = norito::to_bytes(&arr).expect("encode array");
         let view = norito::core::from_bytes_view(&framed).expect("view");
         let decoded_field = view
-            .decode_exact_with(norito::core::decode_field_canonical::<[u8; 32]>)
+            .decode_exact_with::<[u8; 32], _, _>(norito::core::decode_field_canonical::<[u8; 32]>)
             .expect("field decode");
         assert_eq!(decoded_field, arr);
         let decoded: [u8; 32] = norito::decode_from_bytes(&framed).expect("decode");

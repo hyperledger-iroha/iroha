@@ -12,13 +12,11 @@ macro_rules! effect_indexes {
     ($apply:ident) => {
         $apply! {
             latest_block_header: Option<BlockHeader>,
-            merge_admission: MergeAdmissionState,
             da_commitments: DaCommitmentStore,
             da_confidential_compute: ConfidentialComputeStore,
             da_receipt_cursors: DaReceiptCursorIndex,
             da_shard_cursors: DaShardCursorIndex,
             da_pin_intents: DaPinStore,
-            lane_relays: LaneRelayStore,
             lane_manifests: LaneManifestRegistryHandle,
             lane_privacy_registry: LanePrivacyRegistryHandle,
             da_indexes_hydrated: Option<Result<(), DaIndexHydrationError>>,
@@ -32,7 +30,7 @@ macro_rules! define_indexes {
         pub(in crate::state) struct StateEffectLocks<'state> {
             target: &'state State,
             $(pub(in crate::state) $field: Option<PublicationRwLockWriteGuard<'state, $ty>> ,)*
-            retired: [concread::release::DeferredReleaseBatch; 11],
+            retired: [concread::release::DeferredReleaseBatch; 9],
             attempted: bool,
             complete: bool,
             retired_manifests: Option<LaneManifestRegistryHandle>,
@@ -98,19 +96,6 @@ macro_rules! define_indexes {
                 })*
             }
 
-            /// Retain the real short preflight read until the enclosing State
-            /// cleanup ends, including if validation unwinds. The later writer
-            /// coalesces into this same original source batch.
-            pub(in crate::state) fn with_merge_admission<R>(&mut self, inspect: impl FnOnce(&MergeAdmissionState) -> R) -> R {
-                let names = [$(stringify!($field),)*];
-                let index = names.iter().position(|name| *name == "merge_admission").expect("original merge index");
-                let read = DeferredIndexRead {
-                    guard: Some(self.target.merge_admission.read()),
-                    releases: &mut self.retired[index],
-                };
-                inspect(&read)
-            }
-
             /// Original guards remain owned through the exact registry swap.
             pub(in crate::state) fn install_registries(&mut self, manifests: LaneManifestRegistryHandle, privacy: LanePrivacyRegistryHandle) {
                 assert!(self.complete && self.retired_manifests.is_none() && self.retired_privacy.is_none(), "one complete registry publication");
@@ -154,27 +139,5 @@ impl std::ops::DerefMut for EffectLockScope<'_, '_> {
 impl Drop for EffectLockScope<'_, '_> {
     fn drop(&mut self) {
         self.0.release_writers();
-    }
-}
-
-/// A short original index read whose notification remains in the caller's batch.
-struct DeferredIndexRead<'scope, 'state, T> {
-    guard: Option<crate::publication_rwlock::PublicationRwLockReadGuard<'state, T>>,
-    releases: &'scope mut concread::release::DeferredReleaseBatch,
-}
-impl<T> std::ops::Deref for DeferredIndexRead<'_, '_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        self.guard.as_deref().expect("original short index read")
-    }
-}
-impl<T> Drop for DeferredIndexRead<'_, '_, T> {
-    fn drop(&mut self) {
-        if let Some(guard) = self.guard.take() {
-            assert!(
-                guard.try_release_into(self.releases).is_ok(),
-                "original short index release source"
-            );
-        }
     }
 }

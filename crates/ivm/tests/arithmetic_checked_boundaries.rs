@@ -18,7 +18,7 @@ fn vm_with_instruction(instruction: u32) -> IVM {
     vm
 }
 fn execute_binary(vm: &mut IVM, left: i64, right: i64) -> (Result<(), VMError>, u64) {
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     vm.set_register(1, left as u64);
     vm.set_register(2, right as u64);
     vm.set_register(3, DESTINATION_SENTINEL);
@@ -26,7 +26,7 @@ fn execute_binary(vm: &mut IVM, left: i64, right: i64) -> (Result<(), VMError>, 
     (result, vm.register(3))
 }
 fn execute_abs(vm: &mut IVM, value: i64) -> (Result<(), VMError>, u64) {
-    vm.reset();
+    vm.reset().expect("private lifecycle cleanup succeeds");
     vm.set_register(1, value as u64);
     vm.set_register(3, DESTINATION_SENTINEL);
     let result = vm.run();

@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_crypto::Algorithm;
+use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 
 fn fixture() -> (
     tempfile::TempDir,
@@ -28,12 +29,11 @@ fn fixture() -> (
         threshold: 2,
         authorized_signers: keys.iter().map(|key| key.public_key().clone()).collect(),
     };
+    let native = NativeFinalityFixture::new();
     let checkpoint = KagemushaMobileBootstrapCheckpointV1 {
         version: 1,
         authority_policy_digest: policy.canonical_digest().unwrap(),
-        network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [3; 32],
-        ))),
+        network_id: native.network_id(),
         scope: KagemushaMobileBootstrapScopeV1 {
             asset_identity_digest: [4; 32],
             asset_incarnation: [5; 32],
@@ -42,7 +42,7 @@ fn fixture() -> (
         },
         release_id: [7; 32],
         release_attestation_digest: [8; 32],
-        first_context_id: height_context(&"09".repeat(32)).unwrap(),
+        finality_checkpoint: native.checkpoint().encode_canonical().unwrap(),
         sequence: 10,
         issued_at_ms: 1000,
         expires_at_ms: 2000,
@@ -59,7 +59,7 @@ fn fixture() -> (
             expected_liability_pool_id: hex::encode(checkpoint.scope.liability_pool_id),
         },
         expected_release_attestation_digest: hex::encode(checkpoint.release_attestation_digest),
-        expected_first_context_id: hex::encode(checkpoint.first_context_id.0.as_ref()),
+        expected_finality_checkpoint: directory.path().join("native-finality-checkpoint.norito"),
         expected_sequence: 10,
         expected_issued_at_ms: 1000,
         expected_expires_at_ms: 2000,
@@ -73,6 +73,11 @@ fn fixture() -> (
     crate::secure_fs::write_private_file_atomic(
         &input.authority_policy,
         &norito::encode_canonical(&policy).unwrap(),
+    )
+    .unwrap();
+    crate::secure_fs::write_private_file_atomic(
+        &input.expected_finality_checkpoint,
+        &checkpoint.finality_checkpoint,
     )
     .unwrap();
     (directory, keys, policy, checkpoint, input)
@@ -179,7 +184,28 @@ fn mobile_bootstrap_exact_operator_pins_reject_each_changed_subject_field() {
             4 => changed.deployment.expected_asset_scale += 1,
             5 => changed.deployment.expected_liability_pool_id = "15".repeat(32),
             6 => changed.expected_release_attestation_digest = "16".repeat(32),
-            7 => changed.expected_first_context_id = "17".repeat(32),
+            7 => {
+                // The same network's genesis-only checkpoint is valid but is a different trust root.
+                let other = NativeFinalityFixture::start("portable-native-fixture")
+                    .checkpoint()
+                    .encode_canonical()
+                    .unwrap();
+                changed.expected_finality_checkpoint =
+                    input.checkpoint.with_file_name("other-native.norito");
+                crate::secure_fs::write_private_file_atomic(
+                    &changed.expected_finality_checkpoint,
+                    &other,
+                )
+                .unwrap();
+                assert_eq!(
+                    read_finality_checkpoint(
+                        &changed.expected_finality_checkpoint,
+                        checkpoint.network_id
+                    )
+                    .unwrap(),
+                    other
+                );
+            }
             8 => changed.expected_sequence -= 1,
             9 => changed.expected_issued_at_ms -= 1,
             10 => changed.expected_expires_at_ms += 1,
@@ -218,20 +244,6 @@ fn mobile_bootstrap_signer_rejects_foreign_key_and_noncanonical_subject_before_p
 }
 
 #[test]
-fn mobile_bootstrap_context_parser_never_normalizes_a_supplied_hash() {
-    assert!(height_context(&"09".repeat(32)).is_ok());
-    for value in [
-        "08".repeat(32),
-        "00".repeat(32),
-        "AB".repeat(32),
-        "ab".repeat(31),
-        hex::encode(Hash::prehashed([0; 32]).as_ref()),
-    ] {
-        assert!(height_context(&value).is_err(), "rejected {value}");
-    }
-}
-
-#[test]
 fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_subject() {
     let (_directory, _keys, _policy, _checkpoint, input) = fixture();
     let parent = input.checkpoint.parent().unwrap();
@@ -244,7 +256,7 @@ fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_s
             artifact_root: parent.to_path_buf(),
             pins: input.deployment.clone(),
         },
-        first_context_id: input.expected_first_context_id,
+        finality_checkpoint: input.expected_finality_checkpoint,
         sequence: input.expected_sequence,
         issued_at_ms: input.expected_issued_at_ms,
         expires_at_ms: input.expected_expires_at_ms,
@@ -259,7 +271,7 @@ fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_s
 fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_files() {
     use iroha_data_model::testing::kagemusha_release::KagemushaExperimentalReleaseFixtureV1;
 
-    let (directory, _keys, _policy, seed, _input) = fixture();
+    let (directory, _keys, _policy, seed, input) = fixture();
     let artifact_root = directory.path().join("artifacts");
     fs::create_dir(&artifact_root).unwrap();
     let bindings = crate::kagemusha::tests::write_experimental_artifact_fixture(&artifact_root);
@@ -320,7 +332,7 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_fi
                 expected_liability_pool_id: hex::encode(scope.liability_pool_id),
             },
         },
-        first_context_id: hex::encode(seed.first_context_id.0.as_ref()),
+        finality_checkpoint: input.expected_finality_checkpoint.clone(),
         sequence: seed.sequence,
         issued_at_ms: seed.issued_at_ms,
         expires_at_ms: seed.expires_at_ms,
@@ -343,7 +355,7 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_fi
         checkpoint.authority_policy_digest,
         authenticated.authority_policy_digest()
     );
-    assert_eq!(checkpoint.first_context_id, seed.first_context_id);
+    assert_eq!(checkpoint.finality_checkpoint, seed.finality_checkpoint);
     assert_eq!(checkpoint.sequence, seed.sequence);
     assert_eq!(checkpoint.issued_at_ms, seed.issued_at_ms);
     assert_eq!(checkpoint.expires_at_ms, seed.expires_at_ms);
@@ -369,14 +381,13 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_fi
 fn mobile_bootstrap_commands_require_all_independent_pins_and_one_signer() {
     use clap::Parser as _;
     let pins = format!(
-        "--checkpoint checkpoint.norito --authority-policy policy.norito --expected-network-id {} --expected-release-id {} --expected-asset-identity-digest {} --expected-asset-incarnation {} --expected-asset-scale 2 --expected-liability-pool-id {} --expected-release-attestation-digest {} --expected-first-context-id {} --expected-sequence 10 --expected-issued-at-ms 1000 --expected-expires-at-ms 2000 --trusted-now-ms 1500",
+        "--checkpoint checkpoint.norito --authority-policy policy.norito --expected-network-id {} --expected-release-id {} --expected-asset-identity-digest {} --expected-asset-incarnation {} --expected-asset-scale 2 --expected-liability-pool-id {} --expected-release-attestation-digest {} --expected-finality-checkpoint native-finality.norito --expected-sequence 10 --expected-issued-at-ms 1000 --expected-expires-at-ms 2000 --trusted-now-ms 1500",
         "03".repeat(32),
         "07".repeat(32),
         "04".repeat(32),
         "05".repeat(32),
         "06".repeat(32),
-        "08".repeat(32),
-        "09".repeat(32)
+        "08".repeat(32)
     );
     for command in [
         format!(
@@ -387,7 +398,13 @@ fn mobile_bootstrap_commands_require_all_independent_pins_and_one_signer() {
         ),
     ] {
         assert!(crate::Cli::try_parse_from(command.split_whitespace()).is_ok());
+        let retired = command.replace(
+            "--expected-finality-checkpoint native-finality.norito",
+            &format!("--expected-first-context-id {}", "09".repeat(32)),
+        );
+        assert!(crate::Cli::try_parse_from(retired.split_whitespace()).is_err());
         for omitted in [
+            "--expected-finality-checkpoint native-finality.norito",
             "--trusted-now-ms 1500",
             "--expected-sequence 10",
             "--expected-expires-at-ms 2000",
@@ -398,4 +415,45 @@ fn mobile_bootstrap_commands_require_all_independent_pins_and_one_signer() {
             );
         }
     }
+}
+
+#[test]
+fn native_checkpoint_input_requires_canonical_original_file_and_exact_network() {
+    let (directory, _, _, checkpoint, input) = fixture();
+    let original = checkpoint.finality_checkpoint.clone();
+    assert_eq!(
+        read_finality_checkpoint(&input.expected_finality_checkpoint, checkpoint.network_id)
+            .unwrap(),
+        original
+    );
+    let other_network = NativeFinalityFixture::start("another-mobile-bootstrap-network");
+    let mut trailing = original.clone();
+    trailing.push(0);
+    for (index, bytes) in [
+        Vec::new(),
+        trailing,
+        other_network.checkpoint().encode_canonical().unwrap(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = directory
+            .path()
+            .join(format!("invalid-native-{index}.norito"));
+        crate::secure_fs::write_private_file_atomic(&path, &bytes).unwrap();
+        assert!(read_finality_checkpoint(&path, checkpoint.network_id).is_err());
+    }
+    let alias = directory.path().join("native-alias.norito");
+    std::os::unix::fs::symlink(&input.expected_finality_checkpoint, &alias).unwrap();
+    assert!(read_finality_checkpoint(&alias, checkpoint.network_id).is_err());
+    fs::remove_file(&alias).unwrap();
+    fs::hard_link(&input.expected_finality_checkpoint, &alias).unwrap();
+    assert!(
+        read_finality_checkpoint(&input.expected_finality_checkpoint, checkpoint.network_id)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(&input.expected_finality_checkpoint).unwrap(),
+        original
+    );
 }

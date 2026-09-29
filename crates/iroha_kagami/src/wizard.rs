@@ -680,7 +680,13 @@ fn apply_overrides(
         TomlValue::String("observer".into()),
     );
     set_table(config, "sumeragi", sumeragi);
-    ensure_sumeragi_body_ingress(config, trusted_pops.len())?;
+    let remote_trusted_peer_count = wizard_remote_trusted_peer_count(config)?;
+    let reply_source_capacity = wizard_reply_source_capacity(config)?;
+    if remote_trusted_peer_count > reply_source_capacity {
+        return Err(eyre!(
+            "wizard trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+        ));
+    }
     let mut network = table(config, "network");
     let network_template = network
         .get("address")
@@ -900,26 +906,6 @@ fn wizard_remote_trusted_peer_count(config: &TomlValue) -> Result<usize> {
                 .ok_or_else(|| eyre!("wizard trusted-peer remote connection count overflowed"))
         }
     })
-}
-fn sumeragi_queue_capacity(
-    queues: &TomlTable,
-    field: &'static str,
-    default: usize,
-) -> Result<usize> {
-    let Some(value) = queues.get(field) else {
-        return Ok(default);
-    };
-    let value = value
-        .as_integer()
-        .ok_or_else(|| eyre!("wizard template sumeragi.queues.{field} must be an integer"))?;
-    let value = usize::try_from(value)
-        .map_err(|_| eyre!("wizard template sumeragi.queues.{field} must be greater than zero"))?;
-    if value == 0 {
-        return Err(eyre!(
-            "wizard template sumeragi.queues.{field} must be greater than zero"
-        ));
-    }
-    Ok(value)
 }
 fn table(config: &TomlValue, path: &str) -> TomlTable {
     let mut table = TomlTable::new();

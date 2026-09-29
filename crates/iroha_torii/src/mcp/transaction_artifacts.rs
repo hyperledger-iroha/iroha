@@ -14,9 +14,8 @@ use iroha_data_model::{
     NetworkId,
     isi::instruction_wire_id,
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, SignedTransaction,
-        TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionPayload,
-        signed::TransactionSignatureError,
+        Executable, ExecutableBatchItem, FeePaymentIntent, SignedTransaction, TransactionBuilder,
+        TransactionDomain, TransactionPayload, signed::TransactionSignatureError,
     },
 };
 use iroha_version::codec::DecodeVersioned as _;
@@ -111,8 +110,6 @@ pub(crate) struct TransactionStructuralSummary {
     pub(crate) time_to_live_ms: Option<u64>,
     /// Whether a nonce is present, without echoing its value.
     pub(crate) has_nonce: bool,
-    /// Stable admission-intent discriminator.
-    pub(crate) admission_intent: &'static str,
     /// Stable top-level executable discriminator.
     pub(crate) executable_kind: &'static str,
     /// Number of direct items in the top-level executable.
@@ -157,7 +154,6 @@ impl TransactionStructuralSummary {
             creation_time_ms: payload.creation_time_ms,
             time_to_live_ms: payload.time_to_live_ms.map(Into::into),
             has_nonce: payload.nonce.is_some(),
-            admission_intent: admission_intent_name(payload.admission_intent()),
             executable_kind: executable.kind,
             executable_item_count: executable.item_count,
             native_instruction_count: executable.native_instruction_count,
@@ -192,10 +188,6 @@ impl TransactionStructuralSummary {
             optional_u64_value(self.time_to_live_ms),
         );
         object.insert("has_nonce".into(), Value::Bool(self.has_nonce));
-        object.insert(
-            "admission_intent".into(),
-            Value::String(self.admission_intent.to_owned()),
-        );
         object.insert(
             "executable_kind".into(),
             Value::String(self.executable_kind.to_owned()),
@@ -632,13 +624,6 @@ fn ensure_expected_network(
     }
 }
 
-const fn admission_intent_name(intent: TransactionAdmissionIntent) -> &'static str {
-    match intent {
-        TransactionAdmissionIntent::Ordinary => "ordinary",
-        TransactionAdmissionIntent::QueuePlanSynced => "queue_plan_synced",
-    }
-}
-
 const fn fee_payment_kind(intent: &FeePaymentIntent) -> &'static str {
     match intent {
         FeePaymentIntent::Authority(_) => "authority",
@@ -663,9 +648,6 @@ fn signature_error_code(error: &TransactionSignatureError) -> &'static str {
         TransactionSignatureError::MissingTimeToLive => "missing_time_to_live",
         TransactionSignatureError::GenesisDomainNotAllowed => "genesis_domain_not_allowed",
         TransactionSignatureError::GenesisDomainRequired => "genesis_domain_required",
-        TransactionSignatureError::GenesisAdmissionIntentRequired => {
-            "genesis_admission_intent_required"
-        }
         TransactionSignatureError::InsufficientMultisigWeight { .. } => {
             "insufficient_multisig_weight"
         }

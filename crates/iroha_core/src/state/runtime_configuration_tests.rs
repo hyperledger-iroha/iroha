@@ -143,47 +143,6 @@ fn configured_stake_index_pool_keeps_original_charge_through_reconfiguration() {
 }
 
 #[test]
-fn replay_prevalidation_retains_original_evidence_preparation_pool() {
-    run_runtime_configuration_test(|| {
-        let mut state = State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let one_plan =
-            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES;
-        let charge = state
-            .evidence_preparation_budget()
-            .try_reserve_bytes(one_plan)
-            .expect("hold one original evidence plan");
-        let key_bytes =
-            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES;
-        let stake_charge = state
-            .stake_index_budget()
-            .try_reserve_bytes(key_bytes)
-            .expect("hold one original stake-index key backing");
-        let isolated = isolated_state_for_replay_prevalidation(&state, &state.kura)
-            .expect("construct a replay image with the original process policy");
-        assert_eq!(
-            isolated.evidence_preparation_budget().reserved_bytes(),
-            one_plan
-        );
-        assert_eq!(isolated.stake_index_budget().reserved_bytes(), key_bytes);
-        let retired = install_prevalidated_replay_state(&mut state, isolated);
-        assert_eq!(
-            state.evidence_preparation_budget().reserved_bytes(),
-            one_plan
-        );
-        assert_eq!(state.stake_index_budget().reserved_bytes(), key_bytes);
-        drop(retired);
-        drop(charge);
-        drop(stake_charge);
-        assert_eq!(state.evidence_preparation_budget().reserved_bytes(), 0);
-        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
-    });
-}
-
-#[test]
 fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isolated() {
     run_runtime_configuration_test(|| {
         let mut state = State::new_for_testing(

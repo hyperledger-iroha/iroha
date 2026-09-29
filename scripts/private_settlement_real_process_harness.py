@@ -56,7 +56,7 @@ REQUEST_FIELDS = {
     "quorum",
     "mandatory_signed_rs16_da_rbc",
     "minimum_signed_rs16_da_observations",
-    "authenticated_message_control",
+    "authenticated_private_settlement_route_control",
     "seed",
     "run",
     "configuration",
@@ -92,7 +92,7 @@ RUST_RESULT_FIELDS = {
     "participants",
     "mandatory_signed_rs16_da_rbc",
     "signed_rs16_da_observations",
-    "authenticated_message_control",
+    "authenticated_private_settlement_route_control",
     "process_inventory",
     "payload",
 }
@@ -406,7 +406,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         or request["global_validators"] != runner.GLOBAL_VALIDATORS
         or request["quorum"] != runner.QUORUM
         or request["mandatory_signed_rs16_da_rbc"] is not True
-        or request["authenticated_message_control"] is not True
+        or request["authenticated_private_settlement_route_control"] is not True
         or request["minimum_signed_rs16_da_observations"]
         != runner.minimum_signed_rs16_da_observations(participants)
     ):
@@ -1121,7 +1121,7 @@ def run_rust_harness(
             {
                 "IROHA_TEST_SKIP_BUILD": "1",
                 "IROHA_TEST_BUILD_PROFILE": "release",
-                "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": str(VALIDATOR_EXECUTABLE),
+                "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES": str(VALIDATOR_EXECUTABLE),
                 "APS_REAL_PROCESS_REQUEST": str(request_path),
                 "APS_REAL_PROCESS_RESULT": str(rust_result),
                 "APS_REAL_PROCESS_REQUEST_SHA256": request_sha,
@@ -1140,7 +1140,7 @@ def run_rust_harness(
                 "--bin",
                 "iroha3d",
                 "--features",
-                "test-network-message-control",
+                "test-network-private-settlement-route-control",
                 "--target-dir",
                 str(TARGET_DIR),
             ],
@@ -1247,7 +1247,7 @@ def validate_rust_result(
         or result["commit"] != request["commit"]
         or result["participants"] != request["participants"]
         or result["mandatory_signed_rs16_da_rbc"] is not True
-        or result["authenticated_message_control"] is not True
+        or result["authenticated_private_settlement_route_control"] is not True
     ):
         raise HarnessError("Rust result does not bind the exact invocation")
     observations = result["signed_rs16_da_observations"]
@@ -1355,8 +1355,8 @@ def build_response(
         "signed_rs16_da_observations": rust_result[
             "signed_rs16_da_observations"
         ],
-        "authenticated_message_control": rust_result[
-            "authenticated_message_control"
+        "authenticated_private_settlement_route_control": rust_result[
+            "authenticated_private_settlement_route_control"
         ],
         "process_inventory": rust_result["process_inventory"],
         "payload": rust_result["payload"],

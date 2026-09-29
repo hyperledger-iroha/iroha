@@ -167,12 +167,12 @@ mod tests {
         );
         a.commit(Vec::new());
         assert!(consensus_configuration_fingerprint(a.committed(2).block()).is_err());
-        let mut tampered = genesis.block().clone();
+        let mut tampered = genesis.block().as_ref().clone();
         let foreign =
             iroha_crypto::KeyPair::from_seed(vec![0xC9; 32], iroha_crypto::Algorithm::Ed25519);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            iroha_crypto::SignatureOf::new(foreign.private_key(), tampered.header()),
+            iroha_crypto::SignatureOf::new(foreign.private_key(), &tampered.header()),
         );
         tampered
             .replace_signatures(std::collections::BTreeSet::from([signature]))

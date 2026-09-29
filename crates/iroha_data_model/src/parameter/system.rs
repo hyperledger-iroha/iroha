@@ -3233,7 +3233,7 @@ mod tests {
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-        for version in [0, 1, 2, 3, 4, 5, 7, 99] {
+        for version in [0, 2, 3, 4, 5, 7, 8, 99] {
             let mut bad_version = baseline.clone();
             bad_version.wire_protocol_version = version;
             assert!(

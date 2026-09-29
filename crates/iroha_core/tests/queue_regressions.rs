@@ -7,7 +7,7 @@ use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::{Error as QueueError, Queue, TransactionGuard},
+    queue::{Error as QueueError, Queue},
     state::{State, StateView, World},
     tx::AcceptedTransaction,
 };
@@ -19,20 +19,23 @@ use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
-/// Helper trait exposing queue drain helpers for the integration tests.
-///
-/// The production queue exposes `get_transactions_for_block` and
-/// `all_transactions`; the trait simply wraps them to allow expressive calls that
-/// mirror the original `drain_ready`/`drain_pending` helper terminology.
+/// Read the queue's bounded ready snapshot and complete pending observation.
 trait QueueDrainExt {
-    fn drain_ready(&self, view: &StateView<'_>, limit: NonZeroUsize) -> Vec<TransactionGuard>;
+    fn drain_ready(
+        &self,
+        view: &StateView<'_>,
+        limit: NonZeroUsize,
+    ) -> Vec<AcceptedTransaction<'static>>;
     fn drain_pending(&self, view: &StateView<'_>) -> Vec<AcceptedTransaction<'static>>;
 }
 impl QueueDrainExt for Arc<Queue> {
-    fn drain_ready(&self, view: &StateView<'_>, limit: NonZeroUsize) -> Vec<TransactionGuard> {
-        let mut drained = Vec::with_capacity(limit.get());
-        self.get_transactions_for_block(view, limit, &mut drained);
-        drained
+    fn drain_ready(
+        &self,
+        view: &StateView<'_>,
+        limit: NonZeroUsize,
+    ) -> Vec<AcceptedTransaction<'static>> {
+        self.bounded_pending_snapshot_for_testing(view, limit)
+            .expect("healthy queue snapshot")
     }
     fn drain_pending(&self, view: &StateView<'_>) -> Vec<AcceptedTransaction<'static>> {
         self.all_transactions(view).collect()

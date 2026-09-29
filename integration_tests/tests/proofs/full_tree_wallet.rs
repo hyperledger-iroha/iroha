@@ -211,7 +211,7 @@ async fn four_validator_full_tree_wallet_proof_records_reject_corruption_and_rel
     );
     ensure!(
         !zk::verify_backend(zk::ZK_BACKEND_HALO2_IPA, &wrong_role, Some(&transfer_key)),
-        "full-unshield proof cannot attest confidential transfer"
+        "full-unshield proof cannot attest a confidential transfer"
     );
     for (proof, key, status) in [
         (result.proof, full_id.clone(), ProofStatus::Verified),

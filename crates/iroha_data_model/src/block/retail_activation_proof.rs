@@ -1,12 +1,11 @@
 //! Finalized first-release retail activation evidence.
 //!
 //! This authenticates an executed activation transaction at its block height.
-//! It does not prove a later state-map value: the Sumeragi-v2 execution root
+//! It does not prove a later state-map value: the native execution root
 //! commits to that block's witness, not to all accumulated contract state.
 
 use super::{
     SignedBlock,
-    consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     proofs::{TrustedBlockProofAnchor, TrustedBlockProofAnchorError},
 };
 use crate::{
@@ -16,6 +15,7 @@ use crate::{
         AssetBalancePolicy, AssetDefinitionId, RetailDailyActivationV1, RetailDailyLimitPolicyV1,
     },
     isi::retail_daily_limit::ActivateRetailDailyLimitV1,
+    sumeragi_finality::VerifiedSumeragiBlock,
     transaction::{Executable, signed::TransactionEntrypoint},
 };
 use iroha_crypto::{Hash, HashOf};
@@ -23,7 +23,7 @@ use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 
 /// Exact immutable values established by a verified successful activation.
 ///
-/// The caller must independently pin the height context, owner, complete
+/// The caller must independently authenticate native finality and pin the owner, complete
 /// policy, definition, domain, dataspace and entrypoint hash. This result is historical evidence,
 /// not an authenticated read of the current state map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +71,8 @@ pub enum RetailActivationProofError {
 
 /// Verify one direct activation from a finalized, result-bearing block.
 ///
-/// `expected_context` must be established from an independently trusted chain
-/// checkpoint. It must never be copied from `artifact` before verification.
+/// `verified` must come from the native verifier rooted in an independently
+/// selected genesis or complete authenticated checkpoint.
 /// The owner, complete policy (including cap, reserve, issuer accounts and
 /// keys), and exact BPNG coordinates must come from signed allocation and
 /// policy authority, not from the candidate transaction or this response.
@@ -86,8 +86,7 @@ pub enum RetailActivationProofError {
 )]
 pub fn verify_finalized_retail_activation_v1(
     block: &SignedBlock,
-    artifact: &V2FinalityArtifact,
-    expected_context: HeightContextId,
+    verified: &VerifiedSumeragiBlock,
     expected_entry_hash: HashOf<TransactionEntrypoint>,
     expected_owner: &AccountId,
     expected_policy: &RetailDailyLimitPolicyV1,
@@ -95,12 +94,8 @@ pub fn verify_finalized_retail_activation_v1(
     expected_domain: &DomainId,
     expected_dataspace: DataSpaceId,
 ) -> Result<FinalizedRetailActivationV1, RetailActivationProofError> {
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        block,
-        artifact,
-        expected_context,
-        &expected_entry_hash,
-    )?;
+    let anchor =
+        TrustedBlockProofAnchor::from_verified_finality(block, verified, &expected_entry_hash)?;
     let index = usize::try_from(anchor.entry_index())
         .map_err(|_| RetailActivationProofError::MissingSuccessfulDirectInput)?;
     let Some(TransactionEntrypoint::External(transaction)) = block.network_entrypoint_at(index)

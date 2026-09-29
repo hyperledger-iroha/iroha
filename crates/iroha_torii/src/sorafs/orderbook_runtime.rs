@@ -215,9 +215,6 @@ fn classify_orderbook_transaction_submission(
         iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
             OrderbookTransactionSubmissionDispositionV1::Submitted
         }
-        iroha_core::queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-            OrderbookTransactionSubmissionDispositionV1::Ambiguous
-        }
         iroha_core::queue::Error::Expired => OrderbookTransactionSubmissionDispositionV1::Rejected,
         _ => OrderbookTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
@@ -302,13 +299,13 @@ fn classify_exact_orderbook_entrypoint_outcome(
     }
 }
 fn inspect_indexed_orderbook_transaction(
-    kura: &iroha_core::kura::Kura,
+    state: &iroha_core::state::State,
     transaction_hash: &HashOf<SignedTransaction>,
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> OrderbookAuthoritativeTransactionOutcomeV1 {
     let Ok((_header, outcome)) = crate::canonical_history::exact_external_outcome(
-        kura,
+        state,
         block_height,
         expected_block_hash,
         transaction_hash,
@@ -1139,7 +1136,7 @@ fn observe_orderbook_transaction_in_one_finalized_view(
             (None, _) => OrderbookAuthoritativeTransactionOutcomeV1::Absent,
             (Some(_), None) => OrderbookAuthoritativeTransactionOutcomeV1::Unavailable,
             (Some(_), Some((height, expected))) => {
-                inspect_indexed_orderbook_transaction(&state.kura, hash, height, expected)
+                inspect_indexed_orderbook_transaction(&state.state, hash, height, expected)
             }
         });
     let current = state.state.view();
@@ -1741,23 +1738,12 @@ async fn submit_sorafs_orderbook_transaction(
             };
         }
     };
-    let durable_retry_claim = match state
+    let routing_plan = match state
         .queue
-        .durable_plan_admission_claim_with_state(&accepted, state.state.as_ref())
+        .route_plan_with_state(&accepted, state.state.as_ref())
     {
-        Ok(claim) => claim,
+        Ok(plan) => plan,
         Err(_) => return OrderbookTransactionSubmissionResultV1::Deferred,
-    };
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
-        claim.routing_plan.clone()
-    } else {
-        match state
-            .queue
-            .route_plan_with_state(&accepted, state.state.as_ref())
-        {
-            Ok(plan) => plan,
-            Err(_) => return OrderbookTransactionSubmissionResultV1::Deferred,
-        }
     };
     let routing_decision = routing_plan.coordinator_route();
     let exact_transaction_bytes = match state
@@ -1771,11 +1757,11 @@ async fn submit_sorafs_orderbook_transaction(
         return OrderbookTransactionSubmissionResultV1::Deferred;
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
-        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+        match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan(
             state.queue.clone(),
             state.state.clone(),
             accepted,
-            routing_plan,
+            Some(routing_plan),
         ) {
             Ok(_) => OrderbookTransactionSubmissionDispositionV1::Submitted,
             Err(crate::Error::PushIntoQueue { source, .. }) => {
@@ -1788,7 +1774,6 @@ async fn submit_sorafs_orderbook_transaction(
             state,
             accepted,
             routing_plan,
-            durable_retry_claim,
             true,
             crate::utils::ResponseFormat::Norito,
         )

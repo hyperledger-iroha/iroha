@@ -3,14 +3,29 @@
 use super::*;
 use crate::publication_rwlock::DeferredPublicationRwLock;
 
+/// Retains original index releases outside the calling operation's physical fences.
+/// Short read/write guards unlock normally; their notifications stay in this owner.
+pub(super) struct LaneLifecycleReleases<'state> {
+    pub(super) hashes: Option<concread::release::DeferredReleaseBatch>,
+    pub(super) membership: concread::release::DeferredReleaseBatch,
+    pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
+    pub(super) manifests: DeferredPublicationRwLock<'state, LaneManifestRegistryHandle>,
+    pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistryHandle>,
+    pub(super) commitments: DeferredPublicationRwLock<'state, DaCommitmentStore>,
+    pub(super) confidential_compute: DeferredPublicationRwLock<'state, ConfidentialComputeStore>,
+    pub(super) receipt_cursors: DeferredPublicationRwLock<'state, DaReceiptCursorIndex>,
+    pub(super) shard_cursors: DeferredPublicationRwLock<'state, DaShardCursorIndex>,
+    pub(super) pin_intents: DeferredPublicationRwLock<'state, DaPinStore>,
+    pub(super) hydrated:
+        DeferredPublicationRwLock<'state, Option<Result<(), DaIndexHydrationError>>>,
+}
+
 impl<'state> LaneLifecycleReleases<'state> {
     pub(super) fn new(state: &'state State) -> Self {
         Self {
             hashes: state.block_hashes.reader_release_batch(),
             membership: state.transactions.reader_release_batch(),
             header: state.latest_block_header.defer_notifications(),
-            merge_admission: state.merge_admission.defer_notifications(),
-            relays: state.lane_relays.defer_notifications(),
             manifests: state.lane_manifests.defer_notifications(),
             privacy: state.lane_privacy_registry.defer_notifications(),
             commitments: state.da_commitments.defer_notifications(),

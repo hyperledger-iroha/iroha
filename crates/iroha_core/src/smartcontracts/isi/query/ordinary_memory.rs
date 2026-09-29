@@ -905,7 +905,6 @@ define_singular_source_admission! {
     FindDaPinIntentByManifest: ProvenBounded,
     FindDaPinIntentByAlias: ProvenBounded,
     FindDaPinIntentByLaneEpochSequence: ProvenBounded,
-    FindLaneRelayEnvelopeByRef: ProvenBounded,
     FindSorafsProviderOwner: ProvenBounded,
     FindSorafsOrderbookPolicy: ProvenBounded,
     FindSorafsOrderbookOrderById: ProvenBounded,
@@ -1307,9 +1306,6 @@ pub(super) fn preflight_server_singular_source_materialization(
             {
                 charge(intent, &mut remaining)?;
             }
-        }
-        SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {
-            require_active_adapter(singular_output_lane_active, "FindLaneRelayEnvelopeByRef")?;
         }
         SingularQueryBox::FindFeeSponsorProgramById(query) => {
             if let Some(policy) = world.fee_sponsor_programs().get(&query.id) {

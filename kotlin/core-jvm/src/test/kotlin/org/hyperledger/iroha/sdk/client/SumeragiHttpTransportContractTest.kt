@@ -39,7 +39,7 @@ class SumeragiHttpTransportContractTest {
 
         val status = transport.getSumeragiStatus().join()
 
-        assertEquals(8, status.protocolVersion)
+        assertEquals(1, status.protocolVersion)
         assertEquals("https://torii.example/api/v1/sumeragi/status", executor.request.uri.toString())
         assertEquals("GET", executor.request.method)
         assertTrue(executor.request.body.isEmpty())
@@ -74,7 +74,7 @@ class SumeragiHttpTransportContractTest {
                 .setHeaders(headers)
                 .build()
             assertEquals(
-                8,
+                1,
                 transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join().protocolVersion,
             )
 

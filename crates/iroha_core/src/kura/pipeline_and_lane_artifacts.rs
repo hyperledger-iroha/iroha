@@ -148,9 +148,9 @@ impl PipelineRecoverySidecar {
     /// Returns an error if framing fails (e.g., compression/header mismatch).
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         let bytes = norito::encode_canonical(self)?;
-        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
+        if bytes.len() > MAX_PIPELINE_RECOVERY_SIDECAR_BYTES {
             return Err(norito::Error::Message(
-                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
+                "pipeline recovery sidecar exceeds its byte limit".to_owned(),
             ));
         }
         Ok(bytes)

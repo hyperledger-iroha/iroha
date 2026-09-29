@@ -34,12 +34,10 @@ def integers(value, expected):
 
 @dataclass(frozen=True, slots=True)
 class ReaderBudget:
-    """Eight original Core reader limits; an observed height is never a limit."""
+    """Six original Core reader limits; an observed height is never a limit."""
     max_committed_blocks: int
     max_store_data_bytes: int
     max_carrier_bytes: int
-    max_merge_log_bytes: int
-    max_merge_frames: int
     reader_max_output_bytes: int
     max_decode_allocation_bytes: int
     owner_uid: int
@@ -48,19 +46,17 @@ class ReaderBudget:
 def reader_snapshot(value):
     row = integers(value, ReaderBudget)
     maxima = (1_000_000, 2 * 1024 * MIB, 32 * MIB, MAX_BYTES,
-              1_000_000, MAX_BYTES, 512 * MIB, (1 << 32) - 1)
+              512 * MIB, (1 << 32) - 1)
     for index, (item, maximum) in enumerate(zip(row, maxima, strict=True)):
-        _integer(item, 0 if index == 7 else 1, maximum)
-    require(row[4] <= row[0])
+        _integer(item, 0 if index == 5 else 1, maximum)
     return row
 
 
-def stopped_reader(store, merge, height, limits):
+def stopped_reader(store, height, limits):
     """Create the single canonical reader type used by collection and proof export."""
-    store, merge = Path(_path(store)), Path(_path(merge))
-    require(store != merge)
+    store = Path(_path(store))
     _integer(height, 1, limits[0])
-    return StoppedReader(store, merge, 1, height, *limits)
+    return StoppedReader(store, 1, height, *limits)
 
 
 @dataclass(frozen=True, slots=True)

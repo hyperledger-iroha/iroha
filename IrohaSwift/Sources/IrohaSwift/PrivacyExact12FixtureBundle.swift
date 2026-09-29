@@ -806,8 +806,8 @@ public enum PrivacyExact12FixtureCodecV1 {
     ) throws -> [Data] {
         var reader = Exact12Reader(payload)
         var fields: [Data] = []
-        fields.reserveCapacity(10)
-        for index in 0..<10 {
+        fields.reserveCapacity(9)
+        for index in 0..<9 {
             fields.append(
                 try reader.readField(
                     maximum: maximumUnsignedTransactionBytes,
@@ -816,12 +816,6 @@ public enum PrivacyExact12FixtureCodecV1 {
             )
         }
         try reader.requireFinished(label: label)
-        guard fields[7] == TransactionAdmissionIntentV1.ordinary.norito else {
-            throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
-                row: rowIndex,
-                field: "unsigned transaction admission intent"
-            )
-        }
         let instructionArchive = try decodeSingleSubmitInstruction(
             fields[3],
             rowIndex: rowIndex,

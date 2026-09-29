@@ -105,8 +105,6 @@ fn verify_signed_genesis_attempt(
 ) -> Result<(Vec<PeerId>, NativeJournalCursor, u64)> {
     iroha_genesis::init_instruction_registry();
     let session = request.dkg_session;
-    iroha_genesis::init_instruction_registry();
-    let session = request.dkg_session;
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
         &genesis.signed_wire,
         &genesis.manifest,

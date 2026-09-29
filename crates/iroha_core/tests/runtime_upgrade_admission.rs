@@ -445,9 +445,12 @@ fn activation_allows_v1_in_same_block() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block2,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_ok(), "program with ABI v1 should validate");
 }
 #[test]

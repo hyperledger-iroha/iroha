@@ -10,7 +10,7 @@ public final class SumeragiStatusModelsTests {
   @Test public void nativeFixturePreservesUnsignedValuesAndValueSemantics() {
     String json = NativeStatusFixtures.json("validator");
     SumeragiStatus status = SumeragiStatus.parseJson(json);
-    assertEquals(8, status.protocolVersion);
+    assertEquals(1, status.protocolVersion);
     assertEquals(new BigInteger("18446744073709551615"), status.view);
     assertEquals(new BigInteger("4294967295"), status.level);
     assertEquals(new BigInteger("18446744073709551615"), status.footprint.votes);

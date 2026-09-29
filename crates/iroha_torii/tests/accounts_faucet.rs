@@ -27,7 +27,6 @@ use iroha_data_model::{
     prelude::{
         Account, Asset, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction,
     },
-    transaction::TransactionAdmissionIntent,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
@@ -49,6 +48,7 @@ mod fixtures;
 #[path = "accounts_faucet_policy_tests.rs"]
 mod policy_tests;
 struct FaucetTestContext {
+    native_chain: parking_lot::Mutex<iroha_core::sumeragi::test_chain::CertifiedTestChain>,
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -128,6 +128,21 @@ fn build_faucet_test_context_with_enabled(
     faucet_selector: Option<&str>,
     register_user: bool,
     faucet_enabled: bool,
+) -> FaucetTestContext {
+    build_faucet_test_context_with_authority(
+        prefund_user,
+        faucet_selector,
+        register_user,
+        faucet_enabled,
+        false,
+    )
+}
+fn build_faucet_test_context_with_authority(
+    prefund_user: bool,
+    faucet_selector: Option<&str>,
+    register_user: bool,
+    faucet_enabled: bool,
+    authoritative: bool,
 ) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
@@ -230,14 +245,6 @@ fn build_faucet_test_context_with_enabled(
         block.parameters.get_mut().set_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ));
-        let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
-        block
-            .install_global_beacon_fixture_for_testing(
-                key_record,
-                pulse,
-                &iroha_core::beacon::pulse_context_fixture_v1(),
-            )
-            .expect("install proof-valid faucet beacon fixture");
         block.commit();
     }
     if let Some(selector) = faucet_selector {
@@ -254,79 +261,74 @@ fn build_faucet_test_context_with_enabled(
             block.commit();
         }
     }
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+    let mut seed_instructions: Vec<InstructionBox> = vec![
+        Mint::asset_quantity(
+            50_000_u32,
+            AssetId::new(asset_definition_id.clone(), authority_id.clone()),
+        )
+        .into(),
+    ];
+    if prefund_user {
+        seed_instructions.push(
+            Mint::asset_quantity(
+                1_u32,
+                AssetId::new(asset_definition_id.clone(), user_id.clone()),
+            )
+            .into(),
+        );
+    }
+    for key_pair in &validator_keys {
+        seed_instructions.push(
+            RegisterPeerWithPop::new(
+                PeerId::new(key_pair.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                    .expect("validator proof of possession"),
+            )
+            .into(),
+        );
+        let validator = AccountId::new(key_pair.public_key().clone());
+        seed_instructions.push(
+            RegisterPublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::new(key_pair.public_key().clone()),
+                stake_account: validator.clone(),
+                initial_stake: Quantity::from(1_000_u32),
+                metadata: Default::default(),
+                monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
+                    Quantity::from(1_000_u32),
+                ),
+            }
+            .into(),
+        );
+        seed_instructions.push(
+            ActivatePublicLaneValidator {
+                lane_id: LaneId::SINGLE,
+                validator,
+            }
+            .into(),
+        );
+    }
+    let mut native_chain = fixtures::commit_genesis_fixture(
         world,
-        kura.clone(),
-        query,
         chain_id.clone(),
-        network_id,
-    ));
+        &authority_kp,
+        seed_instructions,
+        Some(validator_keys),
+        iroha_primitives::time::TimeSource::new_system(),
+    );
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let network_id = native_chain.network_id();
     let nexus = state.nexus_snapshot();
     let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
         &nexus.governance,
         &nexus.registry,
     ));
-    state.install_lane_manifests(&lane_manifests);
-    {
-        let mut seed_instructions: Vec<InstructionBox> = vec![
-            Mint::asset_quantity(
-                50_000_u32,
-                AssetId::new(asset_definition_id.clone(), authority_id.clone()),
-            )
-            .into(),
-        ];
-        if prefund_user {
-            seed_instructions.push(
-                Mint::asset_quantity(
-                    1_u32,
-                    AssetId::new(asset_definition_id.clone(), user_id.clone()),
-                )
-                .into(),
-            );
-        }
-        for key_pair in &validator_keys {
-            seed_instructions.push(
-                RegisterPeerWithPop::new(
-                    PeerId::new(key_pair.public_key().clone()),
-                    iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
-                        .expect("validator proof of possession"),
-                )
-                .into(),
-            );
-            let validator = AccountId::new(key_pair.public_key().clone());
-            seed_instructions.push(
-                RegisterPublicLaneValidator {
-                    lane_id: LaneId::SINGLE,
-                    validator: validator.clone(),
-                    peer_id: PeerId::new(key_pair.public_key().clone()),
-                    stake_account: validator.clone(),
-                    initial_stake: Quantity::from(1_000_u32),
-                    metadata: Default::default(),
-                    monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
-                        AssetId::new(stake_asset_id.clone(), validator.clone()),
-                        AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
-                        Quantity::from(1_000_u32),
-                    ),
-                }
-                .into(),
-            );
-            seed_instructions.push(
-                ActivatePublicLaneValidator {
-                    lane_id: LaneId::SINGLE,
-                    validator,
-                }
-                .into(),
-            );
-        }
-        fixtures::commit_genesis_fixture(
-            &state,
-            &authority_id,
-            &authority_kp,
-            seed_instructions,
-            iroha_primitives::time::TimeSource::new_system(),
-        );
-    }
+    state.install_lane_manifests_for_testing(&lane_manifests);
     let committee = state
         .resolve_lane_committee(LaneAuthorityRoute::new(
             LaneId::SINGLE,
@@ -336,13 +338,34 @@ fn build_faucet_test_context_with_enabled(
     assert_eq!(committee.validators().len(), 4);
     assert!(committee.validators().contains(&local_peer_id));
     advance_faucet_state_chain(
-        &state,
-        &chain_id,
+        &mut native_chain,
         &authority_id,
         &authority_kp,
         4,
         "reach faucet beacon pulse height",
     );
+    {
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(native_chain.height() + 1).unwrap(),
+            Some(native_chain.committed(native_chain.height()).block_hash()),
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
+        block
+            .world
+            .install_global_beacon_fixture_for_testing(
+                key_record,
+                pulse,
+                &iroha_core::beacon::pulse_context_fixture_v1(),
+            )
+            .expect("install proof-valid faucet query fixture bound to original network");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("publish faucet beacon query fixture");
+    }
     let current_committee = state
         .resolve_lane_committee(LaneAuthorityRoute::new(
             LaneId::SINGLE,
@@ -378,7 +401,7 @@ fn build_faucet_test_context_with_enabled(
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-    queue.install_lane_manifests_with_state(&lane_manifests, &state);
+    queue.install_lane_manifests_with_state_for_testing(&lane_manifests, &state);
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
@@ -397,7 +420,13 @@ fn build_faucet_test_context_with_enabled(
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii faucet fixture");
+    let torii = if authoritative {
+        torii.with_local_peer_id(local_peer_id)
+    } else {
+        torii
+    };
     FaucetTestContext {
+        native_chain: parking_lot::Mutex::new(native_chain),
         app: torii
             .api_router_for_tests()
             .expect("test Torii router initializes"),
@@ -523,11 +552,9 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
     .expect("decode prepared transaction wire");
     let prepared_tx =
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
-    assert_eq!(
-        prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::Ordinary,
-        "prepared faucet writes bind current single-route admission"
-    );
+    prepared_tx
+        .verify_signature()
+        .expect("exact current transaction signature");
     app.clone()
         .oneshot(faucet_post_request(
             "/v1/accounts/faucet",
@@ -537,7 +564,7 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
         .expect("faucet submit response")
 }
 
-async fn expect_faucet_submit_without_durable_admission(resp: Response) {
+async fn expect_faucet_submit_without_local_authority(resp: Response) {
     let resp = expect_status(resp, StatusCode::SERVICE_UNAVAILABLE).await;
     assert!(
         resp.headers()
@@ -551,17 +578,14 @@ async fn expect_faucet_submit_without_durable_admission(resp: Response) {
         .expect("strict faucet response body");
     let payload: norito::json::Value =
         norito::json::from_slice(&body).expect("strict faucet response JSON");
-    #[cfg(feature = "connect")]
-    let expected_code = "queue_plan_journal_unavailable";
-    #[cfg(not(feature = "connect"))]
-    let expected_code = "queue_plan_synced_transport_unavailable";
+    let expected_code = "route_unavailable";
     assert_eq!(payload["code"].as_str(), Some(expected_code), "{payload:?}");
     assert!(
         payload
             .as_object()
             .and_then(|object| object.get("outcome"))
             .is_none(),
-        "a faucet write without durable custody must not claim Pending"
+        "a faucet write without an authoritative ingress route must not claim Pending"
     );
 }
 
@@ -634,8 +658,7 @@ fn solve_faucet_pow(
     unreachable!("u64 nonce space exhausted");
 }
 fn advance_faucet_state_chain(
-    state: &Arc<State>,
-    chain_id: &iroha_model_base::chain::ChainId,
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
     authority_id: &AccountId,
     authority_key_pair: &KeyPair,
     blocks: u64,
@@ -643,31 +666,18 @@ fn advance_faucet_state_chain(
 ) {
     for index in 0..blocks {
         let tx = TransactionBuilder::new(
-            *state.network_id_ref(),
+            chain.network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, format!("{message} {index}"))])
         .sign(authority_key_pair.private_key());
-        let leader = checked_faucet_block_leader_fixture();
-        let unverified =
-            BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(leader.private_key())
-                .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        state_block.chain_id = chain_id.clone();
-        let valid = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
+        assert_eq!(chain.commit(vec![tx]), vec![true]);
     }
 }
 fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
     advance_faucet_state_chain(
-        &context.state,
-        &context.chain_id,
+        &mut context.native_chain.lock(),
         &context.authority_id,
         &context.authority_key_pair,
         blocks,
@@ -675,7 +685,7 @@ fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
     );
 }
 #[tokio::test]
-async fn accounts_faucet_prepared_transfer_fails_closed_without_durable_admission() {
+async fn accounts_faucet_prepared_transfer_fails_closed_without_local_authority() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -701,7 +711,7 @@ async fn accounts_faucet_prepared_transfer_fails_closed_without_durable_admissio
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let height_before = state.committed_height();
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_durable_admission(resp).await;
+    expect_faucet_submit_without_local_authority(resp).await;
     assert_eq!(queue.active_len(), 0);
     assert_eq!(state.committed_height(), height_before);
     let view = state.view();
@@ -760,10 +770,9 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     .expect("decode prepared transaction wire");
     let prepared_tx =
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
-    assert_eq!(
-        prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    prepared_tx
+        .verify_signature()
+        .expect("exact current transaction signature");
     let marker_key: Name = iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
         .parse()
         .expect("marker metadata key");
@@ -805,7 +814,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
         .oneshot(faucet_post_request("/v1/accounts/faucet", prepared_body))
         .await
         .expect("faucet submit response");
-    expect_faucet_submit_without_durable_admission(resp).await;
+    expect_faucet_submit_without_local_authority(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     assert!(view.world().account(&user_id).is_err());
@@ -853,10 +862,9 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     .expect("decode post-onboarding wire");
     let post_tx =
         SignedTransaction::decode_all_versioned(&post_wire).expect("decode post-onboarding tx");
-    assert_eq!(
-        post_tx.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    post_tx
+        .verify_signature()
+        .expect("exact current transaction signature");
     assert_eq!(
         post_tx.instructions().explicit_instructions().count(),
         1,
@@ -865,7 +873,7 @@ async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_preserves_prefunded_balance_without_durable_admission() {
+async fn accounts_faucet_preserves_prefunded_balance_without_local_authority() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -890,7 +898,7 @@ async fn accounts_faucet_preserves_prefunded_balance_without_durable_admission()
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_durable_admission(resp).await;
+    expect_faucet_submit_without_local_authority(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
@@ -908,7 +916,7 @@ async fn accounts_faucet_preserves_prefunded_balance_without_durable_admission()
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_repeated_claims_do_not_spend_without_durable_admission() {
+async fn accounts_faucet_repeated_claims_do_not_spend_without_local_authority() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -935,7 +943,7 @@ async fn accounts_faucet_repeated_claims_do_not_spend_without_durable_admission(
         ]);
         let body = norito::json::to_json(&body).expect("serialize faucet request");
         let resp = prepare_and_submit_faucet(&app, body).await;
-        expect_faucet_submit_without_durable_admission(resp).await;
+        expect_faucet_submit_without_local_authority(resp).await;
         assert_eq!(queue.active_len(), 0);
     }
     let view = state.view();
@@ -976,7 +984,7 @@ async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    expect_faucet_submit_without_durable_admission(resp).await;
+    expect_faucet_submit_without_local_authority(resp).await;
     assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
@@ -991,7 +999,7 @@ async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
 }
 
 #[tokio::test]
-async fn faucet_prepared_envelope_aging_reaches_durable_admission_gate() {
+async fn faucet_prepared_envelope_aging_reaches_authoritative_routing_gate() {
     let context = build_faucet_test_context(false);
     let scrypt_params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
@@ -1032,7 +1040,7 @@ async fn faucet_prepared_envelope_aging_reaches_durable_admission_gate() {
         ))
         .await
         .expect("aged faucet submit response");
-    expect_faucet_submit_without_durable_admission(submitted).await;
+    expect_faucet_submit_without_local_authority(submitted).await;
     assert_eq!(context.queue.active_len(), 0);
     context.app.shutdown().await;
 }
@@ -1086,10 +1094,9 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
     .expect("decode prepared transaction wire");
     let prepared_tx =
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
-    assert_eq!(
-        prepared_tx.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
+    prepared_tx
+        .verify_signature()
+        .expect("exact current transaction signature");
     for field in [
         "transaction_hash_hex",
         "signed_transaction_wire_sha256",
@@ -1123,7 +1130,7 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         ))
         .await
         .expect("faucet submit response");
-    expect_faucet_submit_without_durable_admission(submitted).await;
+    expect_faucet_submit_without_local_authority(submitted).await;
     let response_loss_replay = context
         .app
         .clone()
@@ -1133,7 +1140,7 @@ async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
         ))
         .await
         .expect("faucet replay response");
-    expect_faucet_submit_without_durable_admission(response_loss_replay).await;
+    expect_faucet_submit_without_local_authority(response_loss_replay).await;
     assert_eq!(context.queue.active_len(), 0);
     let destination = AssetId::new(context.asset_definition_id.clone(), context.user_id.clone());
     assert!(context.state.view().world().asset(&destination).is_err());
@@ -1454,7 +1461,7 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     let initial_claim_body =
         norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
     let resp = prepare_and_submit_faucet(&app, initial_claim_body).await;
-    expect_faucet_submit_without_durable_admission(resp).await;
+    expect_faucet_submit_without_local_authority(resp).await;
     let resp = app
         .clone()
         .oneshot(
@@ -1491,3 +1498,74 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
 
 #[path = "../src/build_identity_test_fixture.rs"]
 mod build_identity_test_fixture;
+
+#[tokio::test]
+async fn authoritative_faucet_submission_executes_the_exact_prepared_transfer() {
+    let context = build_faucet_test_context_with_authority(false, None, false, true, true);
+    let params = faucet_pow_scrypt_params(
+        context.pow_scrypt_log_n,
+        context.pow_scrypt_r,
+        context.pow_scrypt_p,
+    );
+    let (anchor, nonce) = solve_faucet_pow(
+        &context.state,
+        &context.user_id,
+        context.pow_difficulty_bits,
+        &params,
+    );
+    let body = norito::json::to_json(&json_object(vec![
+        json_entry("account_id", context.user_id.to_string()),
+        json_entry("pow_anchor_height", anchor),
+        json_entry("pow_nonce_hex", nonce),
+    ]))
+    .unwrap();
+    let response = prepare_and_submit_faucet(&context.app, body).await;
+    let response = expect_status(response, StatusCode::ACCEPTED).await;
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let pending: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(pending["outcome"].as_str(), Some("Pending"));
+    assert_eq!(context.queue.active_len(), 1);
+    assert!(
+        context
+            .state
+            .view()
+            .world()
+            .account(&context.user_id)
+            .is_err()
+    );
+    assert_eq!(
+        iroha_torii::test_utils::apply_queued_in_one_block(
+            &mut context.native_chain.lock(),
+            &context.queue
+        ),
+        1
+    );
+    let view = context.state.view();
+    assert!(view.world().account(&context.user_id).is_ok());
+    let destination = AssetId::new(context.asset_definition_id.clone(), context.user_id.clone());
+    let source = AssetId::new(
+        context.asset_definition_id.clone(),
+        context.authority_id.clone(),
+    );
+    assert_eq!(
+        view.world()
+            .asset(&destination)
+            .unwrap()
+            .value()
+            .as_ref()
+            .to_string(),
+        "25000"
+    );
+    assert_eq!(
+        view.world()
+            .asset(&source)
+            .unwrap()
+            .value()
+            .as_ref()
+            .to_string(),
+        "25000"
+    );
+    assert_eq!(context.queue.active_len(), 0);
+    drop(view);
+    context.app.shutdown().await;
+}

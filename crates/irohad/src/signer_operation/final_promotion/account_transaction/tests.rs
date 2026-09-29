@@ -26,9 +26,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
     sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
-    transaction::{
-        SignedTransaction, TransactionAdmissionIntent, TransactionBuilder, TransactionDomain,
-    },
+    transaction::{SignedTransaction, TransactionBuilder, TransactionDomain},
 };
 use sorafs_manifest::signer::{
     custody::{SignerCustodyAuthorityV1, SignerCustodyRecordV1, SignerCustodyStatementV1},
@@ -708,12 +706,6 @@ fn account_payload_commitment_covers_all_fields_and_rejects_unapproved_substitut
     assert_eq!(original_digest, <[u8; 32]>::from(hasher.finalize()));
     let mut changed = payload.clone();
     changed.creation_time_ms += 1;
-    assert_ne!(
-        validate_payload(&prepared.binding, instruction, &fees, &changed).unwrap(),
-        original_digest
-    );
-    changed = payload.clone();
-    changed.admission_intent = TransactionAdmissionIntent::QueuePlanSynced;
     assert_ne!(
         validate_payload(&prepared.binding, instruction, &fees, &changed).unwrap(),
         original_digest

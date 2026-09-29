@@ -11,10 +11,7 @@ use iroha_data_model::{
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
-    transaction::{
-        FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
-        signed::TransactionPayload,
-    },
+    transaction::{FeePaymentIntent, TransactionBuilder, signed::TransactionPayload},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -70,7 +67,7 @@ struct PayloadSpec {
     time_to_live_ms: u64,
     nonce: u32,
     fee_payment: FeePaymentSpec,
-    admission_intent: TransactionAdmissionIntent,
+
     metadata: BTreeMap<String, Value>,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
@@ -182,13 +179,7 @@ impl PayloadSpec {
             self.network_id,
             authority.clone(),
             self.fee_payment.to_intent()?,
-        )
-        .with_admission_intent(self.admission_intent);
-        if self.admission_intent != TransactionAdmissionIntent::Ordinary {
-            return Err(
-                "Swift public parity fixtures require Ordinary admission intent".to_owned(),
-            );
-        }
+        );
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if self.time_to_live_ms == 0 {
             return Err("time_to_live_ms must be > 0".to_owned());
@@ -1338,7 +1329,7 @@ mod tests {
                     gas_limit: None,
                 },
             },
-            admission_intent: TransactionAdmissionIntent::Ordinary,
+
             metadata: BTreeMap::new(),
         }
     }
@@ -1519,28 +1510,19 @@ mod tests {
         assert!(decode_document(null).is_err());
     }
     #[test]
-    fn source_schema_requires_current_ordinary_admission_intent() {
+    fn source_schema_rejects_retired_admission_fields() {
         let _chain_guard = address::ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
-        let mut missing = source_document();
-        first_payload(&mut missing).remove("admission_intent");
-        assert!(decode_document(missing).is_err());
-
-        let mut retired = source_document();
-        first_payload(&mut retired).insert(
-            "admission_intent".into(),
-            json::to_value(&TransactionAdmissionIntent::QueuePlanSynced)
-                .expect("serialize retired admission intent"),
-        );
-        let payload = decode_document(retired)
-            .expect("retired intent is structurally valid")
-            .into_iter()
-            .next()
-            .expect("fixture exists")
-            .payload;
-        assert_eq!(
-            payload.to_builder().err().as_deref(),
-            Some("Swift public parity fixtures require Ordinary admission intent")
-        );
+        assert!(decode_document(source_document()).is_ok());
+        for field in ["admission_intent", "admissionIntent"] {
+            for label in ["ordinary", "queue_plan_synced"] {
+                let mut retired = source_document();
+                first_payload(&mut retired).insert(
+                    field.into(),
+                    norito::json!({"intent": label, "value": null}),
+                );
+                assert!(decode_document(retired).is_err(), "retired field {field}");
+            }
+        }
     }
 
     #[test]

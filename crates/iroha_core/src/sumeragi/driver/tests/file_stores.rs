@@ -22,7 +22,7 @@ use iroha_sumeragi::{
 
 use super::{
     super::{
-        Driver, DriverConfig, DriverStart, SharedCrypto, assemble_init,
+        Driver, DriverConfig, DriverStart, NodeGate, SharedCrypto, assemble_init,
         traits::{BlockStore, BodyStore, Observer, RecordStore, SystemClock},
     },
     fakes::{FakeBlocks, FakeExecutor, FakeNet, RecordingObserver},
@@ -173,6 +173,7 @@ fn file_stores_survive_disk_errors() {
     .spawn(
         DriverConfig::default(),
         DriverStart {
+            node_gate: Arc::new(NodeGate::new()),
             allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
             local: LocalParams::default(),
             init,

@@ -302,11 +302,6 @@ capture_world_table_once!(
     "world.public_lane_reward_claims"
 );
 capture_world_table_once!(
-    pub(super) capture_lane_relay_emergency_validators_once,
-    lane_relay_emergency_validators,
-    "world.lane_relay_emergency_validators"
-);
-capture_world_table_once!(
     pub(super) capture_zk_assets_once,
     zk_assets,
     "world.zk_assets"
@@ -418,14 +413,13 @@ mod tests {
         account::AccountId,
         asset::AssetDefinitionId,
         content::ContentChunk,
-        nexus::LaneRelayEmergencyValidatorSet,
         soracloud::{
             SORA_SERVICE_STATE_ENTRY_VERSION_V1, SoraServiceLifecycleActionV1,
             SoraServiceStateEntryV1, SoraStateEncryptionV1,
         },
         sorafs::capacity::ProviderId,
     };
-    use iroha_model_base::{metadata::Metadata, topology::LaneId};
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
 
     fn account(seed: &[u8]) -> AccountId {
@@ -508,21 +502,6 @@ mod tests {
         capture_kagemusha_mint_credit_operations_once,
         ([0x24_u8; 32], [0x25_u8; 32]),
         |row: &mut [u8; 32]| row[0] ^= 1
-    );
-
-    capture_controls!(
-        lane_emergency_reader_rejects_changed_expiry_and_omitted_row,
-        lane_relay_emergency_validators,
-        capture_lane_relay_emergency_validators_once,
-        (
-            LaneId::new(7),
-            LaneRelayEmergencyValidatorSet {
-                peers: Vec::new(),
-                expires_at_height: 17,
-                metadata: Metadata::default(),
-            }
-        ),
-        |row: &mut LaneRelayEmergencyValidatorSet| row.expires_at_height += 1
     );
 
     capture_controls!(

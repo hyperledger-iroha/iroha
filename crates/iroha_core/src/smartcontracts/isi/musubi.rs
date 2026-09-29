@@ -339,7 +339,8 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
                         &archive,
                         &key.replication_order,
                         state_transaction.world(),
-                    )?,
+                    )
+                    .map_err(|error| invariant(error.reason()))?,
                     MusubiReplicationOrderLocationLifecycleV1::Retired(_)
                 ) {
                     return Err(invariant(
@@ -2772,7 +2773,8 @@ fn bind_location_reverse_indices(
         &archive,
         &location.replication_order,
         state_transaction.world(),
-    )?;
+    )
+    .map_err(|error| invariant(error.reason()))?;
     match state_transaction
         .world
         .musubi_locations_by_pin
@@ -2901,8 +2903,8 @@ fn validate_exact_archive_location_replay(
             "Musubi archive location revision or finalized height is inconsistent",
         ));
     }
-    let records =
-        load_location_provider_attestations(archive, location, state_transaction.world())?;
+    let records = load_location_provider_attestations(archive, location, state_transaction.world())
+        .map_err(|error| invariant(error.reason()))?;
     if records.len() != location.providers.len() {
         return Err(invariant(
             "Musubi archive location provider attestation registry is inconsistent",
@@ -3024,7 +3026,8 @@ fn validate_provider_bundle_attestation(
         archive,
         &binding.replication_order,
         state_transaction.world(),
-    )?;
+    )
+    .map_err(|error| invariant(error.reason()))?;
     let order = state_transaction
         .world
         .replication_orders
@@ -3095,7 +3098,8 @@ fn validate_sorafs_location(
             archive,
             replication_order,
             state_transaction.world(),
-        )?,
+        )
+        .map_err(|error| invariant(error.reason()))?,
         MusubiReplicationOrderLocationLifecycleV1::Retired(_)
     ) {
         return Err(invariant(
@@ -3252,7 +3256,8 @@ fn validate_publication_archive_evidence(
             .musubi_archive_locations()
             .get(&key)
             .ok_or_else(|| invariant("Musubi archive location directory is inconsistent"))?;
-        let records = load_location_provider_attestations(archive, location, world)?;
+        let records = load_location_provider_attestations(archive, location, world)
+            .map_err(|error| invariant(error.reason()))?;
         for record in records.iter() {
             let binding = &record.attestation.payload.binding;
             if binding.semantic_release_manifest_digest != semantic_digest

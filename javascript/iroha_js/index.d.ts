@@ -218,7 +218,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 24;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 25;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -1709,7 +1709,6 @@ export interface RamLfeExecuteResponse {
   backend: string;
   verification_mode: string;
   receipt: RamLfeExecutionReceipt;
-  output_opening: RamLfeOutputOpening;
 }
 
 export interface IdentifierResolutionRequestOptions {
@@ -4161,219 +4160,6 @@ export interface ToriiDataspaceCommitmentSnapshot {
   block_hash: string;
 }
 
-export interface ToriiLaneSettlementReceipt {
-  source_id: string;
-  local_amount: string;
-  xor_due: string;
-  xor_after_haircut: string;
-  xor_variance: string;
-  timestamp_ms: ToriiU64;
-}
-
-export type ToriiLaneLiquidityProfile = Readonly<{
-  profile: "Tier1" | "Tier2" | "Tier3";
-  state: null;
-}>;
-
-export type ToriiLaneVolatilityClass = Readonly<{
-  bucket: "Stable" | "Elevated" | "Dislocated";
-  state: null;
-}>;
-
-export interface ToriiLaneSwapMetadata {
-  epsilon_bps: number;
-  twap_window_seconds: number;
-  liquidity_profile: ToriiLaneLiquidityProfile;
-  /** Canonical signed Numeric string with a 512-bit mantissa and scale at most 28. */
-  twap_local_per_xor: string;
-  volatility_class: ToriiLaneVolatilityClass;
-}
-
-export interface ToriiNexusFeeScheduleInputs {
-  tx_bytes_len: ToriiU64;
-  instruction_count: ToriiU64;
-  gas_used: ToriiU64;
-  base_fee: string;
-  per_byte_fee: string;
-  per_instruction_fee: string;
-  per_gas_unit_fee: string;
-}
-
-export interface ToriiNexusFeeReceipt {
-  version: 1;
-  source_id: string;
-  dataspace_id: ToriiU64;
-  lane_id: number;
-  block_height: ToriiU64;
-  payer_account_id: string;
-  fee_asset_id: string;
-  fee_amount: string;
-  schedule: Readonly<ToriiNexusFeeScheduleInputs>;
-}
-
-export type ToriiNativeAmxPhase = Readonly<{
-  phase: "prepare" | "commit";
-  detail: null;
-}>;
-
-declare const toriiNativeAmxSourceIdBrand: unique symbol;
-declare const toriiNativeAmxTransactionEntrypointHashBrand: unique symbol;
-
-/** Exact uppercase raw 32-byte source identity. */
-export type ToriiNativeAmxSourceId = string & {
-  readonly [toriiNativeAmxSourceIdBrand]: "ToriiNativeAmxSourceId";
-};
-
-/** Canonical Iroha transaction-entrypoint hash, distinct from a source ID. */
-export type ToriiNativeAmxTransactionEntrypointHash = string & {
-  readonly [toriiNativeAmxTransactionEntrypointHashBrand]:
-    "ToriiNativeAmxTransactionEntrypointHash";
-};
-
-export interface ToriiNativeAmxAttestationBody {
-  round: ToriiSumeragiV2ConsensusRound;
-  epoch: ToriiU64;
-  network_id: string;
-  source_id: ToriiNativeAmxSourceId;
-  tx_entrypoint_hash: ToriiNativeAmxTransactionEntrypointHash;
-  plan_digest: string;
-  phase: ToriiNativeAmxPhase;
-  coordinator_lane_id: number;
-  coordinator_dataspace_id: ToriiU64;
-  coordinator_lane_incarnation: string;
-  participant_lane_id: number;
-  participant_dataspace_id: ToriiU64;
-  participant_lane_incarnation: string;
-  participant_previous_block_height: ToriiU64;
-  participant_previous_block_descriptor_hash: string | null;
-  participant_lane_block_height: ToriiU64;
-  participant_lane_block_view: ToriiU64;
-  participant_proposal_hash: string;
-  participant_settlement_commitment: string;
-  participant_validator_set_hash: string;
-  participant_validator_count: number;
-  participant_min_quorum: number;
-  authority_context_height: ToriiU64;
-  planned_coordinator_block_height: ToriiU64;
-  coordinator_lane_block_view: ToriiU64;
-  coordinator_proposal_hash: string;
-}
-
-export interface ToriiNativeAmxAttestationQc {
-  body: Readonly<ToriiNativeAmxAttestationBody>;
-  validator_set_hash_version: 1;
-  validator_set_hash: string;
-  validator_set: ReadonlyArray<string>;
-  validator_set_pops: ReadonlyArray<ReadonlyArray<number>>;
-  signers_bitmap: ReadonlyArray<number>;
-  bls_aggregate_signature: ReadonlyArray<number>;
-}
-
-export interface ToriiNativeAmxParticipantLaneBlockDescriptor {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  proposal_height: ToriiU64;
-  previous_lane_block_height: ToriiU64;
-  previous_lane_block_descriptor_hash?: string;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  subject_hash: string;
-  payload_ownership_hash: string;
-  rbc_instance_hash: string;
-  accepted_candidate_indices: ReadonlyArray<ToriiU64>;
-  accepted_transaction_hashes: ReadonlyArray<string>;
-  validator_set_hash_version: 1;
-  validator_set_hash: string;
-  validator_set: ReadonlyArray<string>;
-  validator_count: number;
-  min_quorum: number;
-  qc_mode_tag: string;
-  descriptor_hash: string;
-}
-
-export interface ToriiNativeAmxParticipantLaneBlockProposal {
-  descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>;
-  proposal_hash: string;
-  /** Required control-only marker; Native AMX payload recovery hints are forbidden. */
-  payload_block_hint: null;
-}
-
-/** Seven-field nonrecursive participant control commitment in candidate order. */
-export interface ToriiNativeAmxParticipantSettlement {
-  readonly lane_id: number;
-  readonly dataspace_id: ToriiU64;
-  readonly lane_incarnation: string;
-  readonly participant_lane_block_height: ToriiU64;
-  readonly authority_context_height: ToriiU64;
-  readonly previous_native_settlement_hash: string | null;
-  readonly source_ids: ReadonlyArray<ToriiNativeAmxSourceId>;
-}
-
-export interface ToriiNativeAmxLeg {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  participant_proposal: Readonly<ToriiNativeAmxParticipantLaneBlockProposal>;
-  participant_settlement: Readonly<ToriiNativeAmxParticipantSettlement>;
-  participant_settlement_hash: string;
-  prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
-  commit_qc: Readonly<ToriiNativeAmxAttestationQc>;
-  /** Full block validation must establish the mixed-role coordinator anchor. */
-  readonly requires_mixed_role_anchor_validation: boolean;
-}
-
-export interface ToriiNativeAmxReceipt {
-  version: 2;
-  source_id: ToriiNativeAmxSourceId;
-  network_id: string;
-  plan_digest: string;
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  authority_context_height: ToriiU64;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  coordinator_proposal_hash: string;
-  legs: ReadonlyArray<Readonly<ToriiNativeAmxLeg>>;
-}
-
-export interface ToriiLaneSettlementCommitment {
-  block_height: ToriiU64;
-  lane_id: number;
-  lane_incarnation: string;
-  dataspace_id: ToriiU64;
-  tx_count: ToriiU64;
-  total_local_amount: string;
-  total_xor_due: string;
-  total_xor_after_haircut: string;
-  total_xor_variance: string;
-  swap_metadata: ToriiLaneSwapMetadata | null;
-  receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
-  nexus_fee_receipts: ReadonlyArray<Readonly<ToriiNexusFeeReceipt>>;
-  native_amx_receipts: ReadonlyArray<Readonly<ToriiNativeAmxReceipt>>;
-}
-
-export interface ToriiLaneFastpqProofMaterial {
-  proof_digest: string;
-  verified_at_height: ToriiU64 | null;
-}
-
-export interface ToriiLaneRelayEnvelope {
-  lane_id: number;
-  lane_incarnation: string;
-  dataspace_id: ToriiU64;
-  block_height: ToriiU64;
-  block_header: Record<string, unknown>;
-  qc: Record<string, unknown> | null;
-  da_commitment_hash: string | null;
-  lane_block_descriptor_hash: string | null;
-  settlement_commitment: ToriiLaneSettlementCommitment;
-  settlement_hash: string;
-  rbc_bytes_total: ToriiU64;
-  manifest_root: string | null;
-  fastpq_proof: ToriiLaneFastpqProofMaterial | null;
-}
-
 export interface ToriiLaneRuntimeUpgradeHookSnapshot {
   allow: boolean;
   require_metadata: boolean;
@@ -6331,579 +6117,56 @@ export interface ToriiPipelineRecoveryFastpqProofs {
   proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
-export type ToriiSumeragiV2HeightContextId = readonly [string];
-
-export type ToriiSumeragiV2ConsensusMode = Readonly<{
-  mode: "permissioned" | "npos";
-  details: null;
-}>;
-
-export type ToriiSumeragiV2GlobalPhase = Readonly<{
-  phase: "prepare" | "commit";
-  details: null;
-}>;
-
-export type ToriiSumeragiV2StatusPhase = Readonly<{
-  phase:
-    | "awaiting_proposal"
-    | "reconstructing_payload"
-    | "validating_payload"
-    | "prepare"
-    | "commit"
-    | "pending_apply";
-  details: null;
-}>;
-
-export type ToriiSumeragiV2BodyState = Readonly<{
-  state:
-    | "missing"
-    | "reconstructing"
-    | "stored"
-    | "validated"
-    | "pending_apply"
-    | "applied";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2ConsensusRound {
-  context_id: ToriiSumeragiV2HeightContextId;
+/** Native protocol-1 observation; all nullable keys are mandatory. */
+export interface ToriiSumeragiStatus {
+  protocol_version: 1;
+  config_fingerprint: string;
+  beacon_horizon: ToriiSumeragiBeaconHorizon | null;
+  instance: string;
   height: ToriiU64;
   view: ToriiU64;
+  stage: 0 | 1 | 2;
+  leader: string | null;
+  proxy_tail: string | null;
+  high_qc_view: ToriiU64 | null;
+  level: number;
+  start_level: number;
+  t_retx_ms: ToriiU64;
+  committed_height: ToriiU64;
+  applied_height: ToriiU64;
+  awaiting: boolean;
+  signer: string | null;
+  unanchored: boolean;
+  abstaining: boolean;
+  halted: ToriiSumeragiHaltReason | null;
+  footprint: ToriiSumeragiFootprint;
 }
-
-export interface ToriiSumeragiV2BlockSubject {
-  parent_block_hash: string | null;
-  block_hash: string;
-  payload_hash: string;
+export interface ToriiSumeragiFootprint {
+  votes: ToriiU64;
+  timeouts: ToriiU64;
+  blocks: ToriiU64;
+  exec_entries: ToriiU64;
+  wants: ToriiU64;
+  pending_apply: ToriiU64;
+  sync_entries: ToriiU64;
+  sync_bytes: ToriiU64;
+  peers: ToriiU64;
+  recent_headers: ToriiU64;
+  configs: ToriiU64;
+  cert_cache: ToriiU64;
+  evidence_keys: ToriiU64;
+  probe: ToriiU64;
 }
-
-export interface ToriiSumeragiV2LaneFinalityManifestCommitment { root: string; leaf_count: number; }
-
-export interface ToriiSumeragiV2MergeCarrierCommitment { version: 1; entry_hash: string; }
-
-export interface ToriiSumeragiV2TransactionTreeCommitment { root: string; leaf_count: ToriiU64; }
-
-export interface ToriiSumeragiV2ExecutionCommitment {
-  parent_state_root: string;
-  post_state_root: string;
-  ordinary_writes_root: string;
-  kagemusha_top_up_root: string | null;
-  kagemusha_top_up_count: number;
-  native_amx_application_manifest_version: number;
-  native_amx_application_manifest_root: string;
-  native_amx_application_manifest_count: number;
-  lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;
-  merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
-  executed_block_wire_len: ToriiU64;
-  executed_block_wire_hash: string;
-  transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
-  transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
-}
-
-export interface ToriiSumeragiV2QuorumCertificateRef {
-  round: ToriiSumeragiV2ConsensusRound;
-  proposal_round: ToriiSumeragiV2ConsensusRound;
-  phase: ToriiSumeragiV2GlobalPhase;
-  subject: ToriiSumeragiV2BlockSubject;
-  execution_commitment: ToriiSumeragiV2ExecutionCommitment;
-}
-
-export interface ToriiSumeragiV2TimeoutCertificateRef {
-  round: ToriiSumeragiV2ConsensusRound;
-  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
-  certificate_hash: string;
-}
-
-export interface ToriiSumeragiV2HeightContextStatus {
-  epoch: ToriiU64;
-  epoch_end_height: ToriiU64;
-  mode: ToriiSumeragiV2ConsensusMode;
-  epoch_seed: ReadonlyArray<number>;
-  validator_count: number;
-  quorum: Readonly<{
-    min_signers: number;
-    total_power: ToriiU64;
-  }>;
-}
-
-/** Local global-beacon horizon signed inside the authoritative Sumeragi status. */
-export interface ToriiSumeragiV2BeaconHorizonStatus {
+export interface ToriiSumeragiBeaconHorizon {
   epoch_length_blocks: ToriiU64;
   next_required_pulse_height: ToriiU64 | null;
   active_session_id: string | null;
   session_covers_next_pulse: boolean;
   local_provider_ready: boolean;
 }
-
-export interface ToriiSumeragiV2CommitQcStatus {
-  certificate: ToriiSumeragiV2QuorumCertificateRef;
-  validator_count: number;
-  signer_count: number;
-  min_signers: number;
-  signed_power: ToriiU64;
-  total_power: ToriiU64;
-}
-
-export interface ToriiSumeragiV2VoteQuorumStatus {
-  round: ToriiSumeragiV2ConsensusRound;
-  proposal_round: ToriiSumeragiV2ConsensusRound;
-  subject: ToriiSumeragiV2BlockSubject;
-  execution_commitment: ToriiSumeragiV2ExecutionCommitment;
-  signer_count: number;
-  signed_power: ToriiU64;
-  min_signers: number;
-  total_power: ToriiU64;
-}
-
-export interface ToriiSumeragiV2TimeoutQuorumStatus {
-  round: ToriiSumeragiV2ConsensusRound;
-  signer_count: number;
-  signed_power: ToriiU64;
-  min_signers: number;
-  total_power: ToriiU64;
-  certificate_formed: boolean;
-}
-
-export type ToriiSumeragiV2OutboundIntentKind = Readonly<{
-  kind:
-    | "proposal"
-    | "prepare_vote"
-    | "commit_vote"
-    | "timeout_vote"
-    | "prepare_qc"
-    | "commit_qc"
-    | "timeout_certificate";
-  details: null;
-}>;
-
-export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
-  stage: "pending_persistence" | "pending_signature" | "queued" | "retained";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2OutboundIntentStatus {
-  kind: ToriiSumeragiV2OutboundIntentKind;
-  round: ToriiSumeragiV2ConsensusRound;
-  proposal_round: ToriiSumeragiV2ConsensusRound | null;
-  subject: ToriiSumeragiV2BlockSubject | null;
-  execution_commitment: ToriiSumeragiV2ExecutionCommitment | null;
-  stage: ToriiSumeragiV2OutboundIntentStage;
-}
-
-export type ToriiSumeragiV2LocalWorkStage = Readonly<{
-  stage: "idle" | "queued" | "running" | "complete";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2WorkStatus {
-  candidate: ToriiSumeragiV2LocalWorkStage;
-  body_recovery: ToriiSumeragiV2LocalWorkStage;
-  body_store: ToriiSumeragiV2LocalWorkStage;
-  validation: ToriiSumeragiV2LocalWorkStage;
-  application: ToriiSumeragiV2LocalWorkStage;
-  successor_height: ToriiSumeragiV2LocalWorkStage;
-}
-
-export type ToriiSumeragiV2QueueKind = Readonly<{
-  queue:
-    | "ingress"
-    | "deferred_normal"
-    | "deferred_progress"
-    | "deferred_completion"
-    | "runtime_normal"
-    | "runtime_progress"
-    | "runtime_completion"
-    | "effect_completion"
-    | "network_ingress"
-    | "effect_dispatch";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2QueueLivenessStatus {
-  queue: ToriiSumeragiV2QueueKind;
-  depth: number;
-  capacity: number;
-  oldest_age_ms: ToriiU64 | null;
-  /** Accumulated eligible dispatches skipped by this queue's oldest item. */
-  service_debt: ToriiU64;
-}
-
-export type ToriiSumeragiV2ProgressTransition = Readonly<{
-  transition:
-    | "proposal_admitted"
-    | "body_available"
-    | "body_stored"
-    | "body_validated"
-    | "prepare_vote_admitted"
-    | "commit_vote_admitted"
-    | "timeout_vote_admitted"
-    | "prepare_quorum"
-    | "lock_installed"
-    | "commit_quorum"
-    | "timeout_certificate_installed"
-    | "decision_persisted"
-    | "applied"
-    | "successor_height_activated"
-    | "recovery_replayed";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2ProgressTransitionStatus {
-  generation: ToriiU64;
-  round: ToriiSumeragiV2ConsensusRound;
-  transition: ToriiSumeragiV2ProgressTransition;
-  age_ms: ToriiU64;
-}
-
-export type ToriiSumeragiV2LivenessBlocker = Readonly<{
-  blocker:
-    | "missing_proposal"
-    | "body_unavailable"
-    | "prepare_quorum_missing"
-    | "commit_quorum_missing"
-    | "timeout_certificate_missing"
-    | "scheduler_starvation"
-    | "application_pending"
-    | "successor_activation_pending"
-    | "local_control_pending";
-  details: null;
-}>;
-
-export type ToriiSumeragiV2IgnoreReason = Readonly<{
-  reason:
-    | "wrong_height"
-    | "wrong_view"
-    | "stale_generation"
-    | "busy"
-    | "duplicate"
-    | "no_matching_work"
-    | "observer"
-    | "view_closed"
-    | "already_decided"
-    | "recovery_pending"
-    | "irrelevant_view"
-    | "unsafe_proposal";
-  details: null;
-}>;
-
-export interface ToriiSumeragiV2IgnoreCount {
-  reason: ToriiSumeragiV2IgnoreReason;
-  count: ToriiU64;
-}
-
-export interface ToriiSumeragiV2LivenessStatus {
-  generation: ToriiU64;
-  prepare_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
-  commit_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
-  timeout_quorums: ReadonlyArray<ToriiSumeragiV2TimeoutQuorumStatus>;
-  outbound_intents: ReadonlyArray<ToriiSumeragiV2OutboundIntentStatus>;
-  work: ToriiSumeragiV2WorkStatus;
-  queues: ReadonlyArray<ToriiSumeragiV2QueueLivenessStatus>;
-  last_progress: ToriiSumeragiV2ProgressTransitionStatus | null;
-  no_progress_age_ms: ToriiU64;
-  blocker: ToriiSumeragiV2LivenessBlocker | null;
-  ignore_counts: ReadonlyArray<ToriiSumeragiV2IgnoreCount>;
-}
-
-export interface ToriiSumeragiV2AdapterQueueStatus {
-  ingress_keys: number;
-  ingress_capacity: number;
-  deferred_completion: number;
-  deferred_progress: number;
-  deferred_progress_capacity: number;
-  deferred_normal: number;
-  deferred_normal_capacity: number;
-}
-
-export interface ToriiSumeragiV2TxQueueStatus {
-  tracked_transactions: number;
-  queued_transactions: number;
-  capacity: number;
-  retained_bytes: number;
-  max_retained_bytes: number;
-  oldest_queued_age_ms: number;
-  saturated_by_count: boolean;
-  saturated_by_bytes: boolean;
-  saturated_by_age: boolean;
-}
-
-export interface ToriiSumeragiV2OperatorStatus {
-  view_change_install_total: ToriiU64;
-  busy_deferral_total: ToriiU64;
-  adapter_queues: ToriiSumeragiV2AdapterQueueStatus;
-  tx_queue: ToriiSumeragiV2TxQueueStatus;
-}
-
-export interface ToriiSumeragiLanePayloadOwnership {
-  proposal_height: ToriiU64;
-  proposal_view: ToriiU64;
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  subject_hash: string;
-  qc_mode_tag: string;
-  accepted_candidate_indices: ReadonlyArray<ToriiU64>;
-  accepted_transaction_hashes: ReadonlyArray<string>;
-  previous_lane_block_height: ToriiU64;
-  previous_lane_block_descriptor_hash: string | null;
-  lane_block_descriptor_hash: string;
-  lane_block_descriptor_validator_set: ReadonlyArray<string>;
-  lane_block_descriptor_validator_count: number;
-  lane_block_descriptor_min_quorum: number;
-  payload_ownership_hash: string;
-  rbc_instance_hash: string;
-}
-
-export type ToriiSumeragiCommittedLaneExecutionStatus =
-  | "awaiting_executable_payload"
-  | "payload_available_awaiting_executor"
-  | "payload_recovered_awaiting_state_application"
-  | "payload_preflighted_awaiting_state_application"
-  | "payload_preflight_rejected_awaiting_state_application"
-  | "application_receipt_conflicts_with_preflight"
-  | "awaiting_predecessor_application"
-  | "state_applied_by_canonical_block"
-  | "state_applied_by_direct_execution";
-
-export interface ToriiSumeragiCommittedLaneBlock {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  descriptor_hash: string;
-  proposal_hash: string;
-  execution_status: ToriiSumeragiCommittedLaneExecutionStatus;
-  executable_payload_available: boolean;
-  subject_hash: string;
-  payload_ownership_hash: string;
-  rbc_instance_hash: string;
-  qc_mode_tag: string;
-  validator_count: number;
-  min_quorum: number;
-  prepare_qc_signer_count: number;
-  commit_qc_signer_count: number;
-}
-
-export interface ToriiSumeragiLaneBlockSessionStatus {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  proposal_hash: string;
-  has_proposal: boolean;
-  prepare_vote_count: number;
-  commit_vote_count: number;
-  has_prepare_qc: boolean;
-  has_commit_qc: boolean;
-  pending_commit_vote_request: boolean;
-  pending_committed_session_drain: boolean;
-  committed_session_drained: boolean;
-  validator_count: number;
-  min_quorum: number;
-}
-
-export interface ToriiSumeragiSafetyHaltStatus {
-  active: boolean;
-  reason: string | null;
-  height: ToriiU64;
-  epoch: ToriiU64;
-  first_block_hash: string | null;
-  conflicting_block_hash: string | null;
-  first_parent_state_root: string | null;
-  first_post_state_root: string | null;
-  conflicting_parent_state_root: string | null;
-  conflicting_post_state_root: string | null;
-}
-
-export interface ToriiSumeragiStatus {
-  protocol_version: 4;
-  node_fingerprint: string;
-  build_fingerprint: string;
-  config_fingerprint: string;
-  restart_required: boolean;
-  height_context_id: ToriiSumeragiV2HeightContextId;
-  height: ToriiU64;
-  view: ToriiU64;
-  phase: ToriiSumeragiV2StatusPhase;
-  leader: number;
-  locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
-  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
-  last_timeout_certificate: ToriiSumeragiV2TimeoutCertificateRef | null;
-  body_state: ToriiSumeragiV2BodyState;
-  pending_persistence_id: ToriiU64 | null;
-  last_committed_height: ToriiU64;
-  last_committed_subject: ToriiSumeragiV2BlockSubject | null;
-  height_context: ToriiSumeragiV2HeightContextStatus;
-  last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
-  liveness: ToriiSumeragiV2LivenessStatus;
-  beacon_horizon: ToriiSumeragiV2BeaconHorizonStatus | null;
-}
-
-export interface ToriiSumeragiPipelineExecutionStatus {
-  tx_vertices_total: ToriiU64;
-  tx_edges_total: ToriiU64;
-  overlay_count_total: ToriiU64;
-  overlay_instr_total: ToriiU64;
-  overlay_bytes_total: ToriiU64;
-  rbc_chunks_total: ToriiU64;
-  rbc_bytes_total: ToriiU64;
-  detached_prepared_total: ToriiU64;
-  detached_merged_total: ToriiU64;
-  detached_fallback_total: ToriiU64;
-  detached_fallback_fee_postprocessing_total: ToriiU64;
-  detached_fallback_user_executor_total: ToriiU64;
-  detached_fallback_durable_state_total: ToriiU64;
-  detached_fallback_unsupported_instruction_total: ToriiU64;
-  detached_fallback_rejected_eval_total: ToriiU64;
-  detached_fallback_overlay_error_total: ToriiU64;
-  quarantine_executed_total: ToriiU64;
-}
-
-export interface ToriiSumeragiNposDiagnostics {
-  epoch_length_blocks: ToriiU64;
-  epoch_seed: string;
-  prf_height: ToriiU64;
-  prf_view: ToriiU64;
-}
-
-export interface ToriiSumeragiDiagnosticLaneCommitment {
-  block_height: ToriiU64;
-  lane_id: number;
-  tx_count: ToriiU64;
-  total_chunks: ToriiU64;
-  rbc_bytes_total: ToriiU64;
-  teu_total: ToriiU64;
-  block_hash: string;
-}
-
-export interface ToriiSumeragiDiagnosticDataspaceCommitment
-  extends ToriiSumeragiDiagnosticLaneCommitment {
-  dataspace_id: ToriiU64;
-}
-
-export interface ToriiSumeragiDiagnosticRuntimeUpgrade {
-  allow: boolean;
-  require_metadata: boolean;
-  metadata_key: string | null;
-  allowed_ids: ReadonlyArray<string>;
-}
-
-export interface ToriiSumeragiDiagnosticLaneGovernance {
-  lane_id: number;
-  alias: string;
-  governance: string | null;
-  manifest_required: boolean;
-  manifest_ready: boolean;
-  manifest_path: string | null;
-  validator_ids: ReadonlyArray<string>;
-  quorum: number | null;
-  protected_namespaces: ReadonlyArray<string>;
-  runtime_upgrade: ToriiSumeragiDiagnosticRuntimeUpgrade | null;
-}
-
-export type ToriiSumeragiNativeAmxParticipantApplicationState =
-  | "certified_pending_carrier"
-  | "committed_evidence_pending"
-  | "durably_applied"
-  | "conflict";
-
-export interface ToriiSumeragiNativeAmxParticipantApplication {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  participant_height: ToriiU64;
-  participant_view: ToriiU64;
-  predecessor_height: ToriiU64;
-  predecessor_descriptor_hash: string | null;
-  descriptor_hash: string;
-  proposal_hash: string;
-  settlement_hash: string;
-  source_count: number;
-  application_block_height: ToriiU64 | null;
-  application_block_hash: string | null;
-  state: ToriiSumeragiNativeAmxParticipantApplicationState;
-}
-
-export type ToriiSumeragiAutonomousLaneExecutionStage =
-  | "reservations_durable"
-  | "executable_payload_durable"
-  | "payload_availability_certified"
-  | "lane_certified"
-  | "certified_bundle_durable"
-  | "merge_candidate_durable"
-  | "global_carrier_committed"
-  | "kura_wsv_application_receipt_durable"
-  | "queue_finalized"
-  | "conflict";
-
-export type ToriiSumeragiAutonomousLaneExecutionStuckReason =
-  | "awaiting_executable_payload"
-  | "awaiting_payload_availability"
-  | "awaiting_lane_certification"
-  | "certified_bundle_unavailable"
-  | "awaiting_merge_selection"
-  | "awaiting_global_carrier"
-  | "awaiting_application_receipt"
-  | "queue_finalization_unverifiable"
-  | "evidence_conflict";
-
-export interface ToriiSumeragiAutonomousLaneExecution {
-  lane_id: number;
-  dataspace_id: ToriiU64;
-  lane_incarnation: string;
-  lane_block_height: ToriiU64;
-  lane_block_view: ToriiU64;
-  proposal_height: ToriiU64;
-  proposal_view: ToriiU64 | null;
-  reservation_owner_hash: string;
-  proposal_identity_hash: string;
-  reservation_group_hash: string;
-  proposal_hash: string | null;
-  descriptor_hash: string | null;
-  executable_payload_hash: string | null;
-  source_bundle_hash: string | null;
-  merge_entry_hash: string | null;
-  application_block_height: ToriiU64 | null;
-  application_block_hash: string | null;
-  reservation_count: number;
-  transaction_count: number;
-  highest_durable_stage: ToriiSumeragiAutonomousLaneExecutionStage;
-  stuck_reason: ToriiSumeragiAutonomousLaneExecutionStuckReason | null;
-}
-
-export interface ToriiSumeragiDiagnostics {
-  pipeline_execution: ToriiSumeragiPipelineExecutionStatus;
-  tx_queue_depth: ToriiU64;
-  tx_queue_capacity: ToriiU64;
-  tx_queue_retained_bytes: ToriiU64;
-  tx_queue_max_retained_bytes: ToriiU64;
-  tx_queue_saturated: boolean;
-  tx_queue_saturated_by_count: boolean;
-  tx_queue_saturated_by_bytes: boolean;
-  tx_queue_saturated_by_age: boolean;
-  tx_queue_oldest_queued_age_ms: ToriiU64;
-  npos: ToriiSumeragiNposDiagnostics | null;
-  lane_commitments: ReadonlyArray<ToriiSumeragiDiagnosticLaneCommitment>;
-  dataspace_commitments: ReadonlyArray<ToriiSumeragiDiagnosticDataspaceCommitment>;
-  lane_settlement_commitments: ReadonlyArray<ToriiLaneSettlementCommitment>;
-  lane_relay_envelopes: ReadonlyArray<ToriiLaneRelayEnvelope>;
-  lane_payload_ownerships: ReadonlyArray<ToriiSumeragiLanePayloadOwnership>;
-  committed_lane_blocks: ReadonlyArray<ToriiSumeragiCommittedLaneBlock>;
-  lane_block_sessions: ReadonlyArray<ToriiSumeragiLaneBlockSessionStatus>;
-  lane_governance_sealed_total: number;
-  lane_governance_sealed_aliases: ReadonlyArray<string>;
-  lane_governance: ReadonlyArray<ToriiSumeragiDiagnosticLaneGovernance>;
-  native_amx_participant_applications: ReadonlyArray<
-    ToriiSumeragiNativeAmxParticipantApplication
-  >;
-  autonomous_lane_executions: ReadonlyArray<
-    ToriiSumeragiAutonomousLaneExecution
-  >;
-}
+export type ToriiSumeragiHaltReason =
+  | Readonly<{ reason: "safety_record_corrupt" | "safety_record_inconsistent" | "driver_anomaly"; details: null }>
+  | Readonly<{ reason: "safety_violation" | "apply_diverged" | "publication_recovery_required"; details: ToriiU64 }>;
 
 export interface ToriiConsensusCaps {
   collectors_k: number;
@@ -6926,11 +6189,6 @@ export interface ToriiSumeragiCommitQuorumSummary {
   signatures_set_b: number;
   signatures_required: number;
   last_updated_ms: number;
-}
-
-export interface ToriiSumeragiV2QcResponse {
-  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
-  locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
 }
 
 export interface ToriiSumeragiPrfContext {
@@ -6956,7 +6214,7 @@ export interface ToriiSumeragiParamsSnapshot {
   chain_height: number;
 }
 
-export type SumeragiEvidenceKind = "SumeragiV2Equivocation";
+export type SumeragiEvidenceKind = "NativeSumeragiEvidence";
 
 export interface SumeragiEvidenceListOptions {
   limit?: NumericLike;
@@ -6985,24 +6243,28 @@ export type SumeragiEvidencePenaltyStatus =
   | SumeragiEvidenceAppliedPenaltyStatus
   | SumeragiEvidenceCancelledPenaltyStatus;
 
-export interface SumeragiV2EquivocationEvidenceRecord {
-  kind: "SumeragiV2Equivocation";
-  class: "proposal" | "phase_vote" | "timeout_vote";
-  height: ToriiU64;
-  view: ToriiU64;
-  epoch: ToriiU64;
+export interface SumeragiEvidenceOffender {
   signer: number;
+  peer_id: string;
+}
+
+export interface SumeragiEvidenceRecord {
+  kind: "NativeSumeragiEvidence";
+  class: "proposal" | "phase_vote" | "timeout_vote" | "invalid_proposal" | "conflicting_certificates";
+  instance: string;
+  height: ToriiU64;
+  epoch: ToriiU64;
   context_id: string;
-  artifact_hash_1: string;
-  artifact_hash_2: string;
+  authority_generation: string;
+  offenders: ReadonlyArray<SumeragiEvidenceOffender>;
+  safety_violation: boolean;
+  native_frame_hash: string;
   recorded_height: ToriiU64;
   recorded_view: ToriiU64;
   recorded_ms: ToriiU64;
   consensus_admitted_height: ToriiU64;
   penalty_status: SumeragiEvidencePenaltyStatus;
 }
-
-export type SumeragiEvidenceRecord = SumeragiV2EquivocationEvidenceRecord;
 
 export interface SumeragiEvidenceListResponse {
   total: ToriiU64;
@@ -10770,8 +10032,6 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
-  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
   listKaigiRelays(options?: { signal?: AbortSignal }): Promise<KaigiRelaySummaryList>;
   getKaigiRelay(
     relayId: string,
@@ -10783,8 +10043,8 @@ export declare class ToriiBrowserClient {
 }
 
 export interface ValidationFeeCheckpointV1 {
-  readonly height: number | string | bigint;
-  readonly contextId: string;
+  /** Complete canonical native checkpoint selected independently of the response. */
+  readonly checkpointNorito: ArrayBuffer | ArrayBufferView;
 }
 
 export interface ValidationFeeLedgerBindingV1 {
@@ -10795,8 +10055,8 @@ export interface ValidationFeeLedgerBindingV1 {
 }
 
 export interface NormalizedValidationFeeCheckpointV1 {
-  readonly height: bigint;
-  readonly contextId: string;
+  /** Returns a copy of the privately retained complete canonical checkpoint bytes. */
+  readonly checkpointNorito: Buffer;
 }
 
 export interface NormalizedValidationFeeLedgerBindingV1 {
@@ -10878,10 +10138,13 @@ export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly more_available: boolean;
 }
 
-export interface ValidationFeeCurrentPolicyProofPageV1 {
-  readonly proofNorito: Buffer;
+export interface ValidationFeeVerifiedPageV1 {
   readonly projection: ValidationFeeVerifiedPolicyProjectionV1;
   readonly promotedCheckpoint: NormalizedValidationFeeCheckpointV1;
+}
+
+export interface ValidationFeeCurrentPolicyProofPageV1 extends ValidationFeeVerifiedPageV1 {
+  readonly proofNorito: Buffer;
 }
 
 export interface ValidationFeeHijiriQuoteProjectionV1 {
@@ -11694,15 +10957,6 @@ export declare class ToriiClient {
   getSumeragiStatusTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiStatus>;
-  getSumeragiDiagnostics(options?: {
-    signal?: AbortSignal;
-  }): Promise<Record<string, unknown>>;
-  getSumeragiDiagnosticsTyped(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiDiagnostics>;
-  getSumeragiQc(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiV2QcResponse>;
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;
@@ -12583,26 +11837,6 @@ export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
   payoutBinding: Readonly<Record<string, JsonValue>>,
 ): string;
 
-export interface LaneRelaySample {
-  valid: Buffer;
-  tampered: Buffer;
-}
-
-export function laneRelayEnvelopeSample(): LaneRelaySample;
-export function verifyLaneRelayEnvelope(
-  envelope: ArrayBufferView | ArrayBuffer | Buffer | string,
-): void;
-export function verifyLaneRelayEnvelopeJson(envelope: object | string, networkPrefix: number): void;
-export function verifyLaneRelayEnvelopes(
-  envelopes: Array<object | string>,
-  networkPrefix: number,
-): void;
-export function decodeLaneRelayEnvelope(
-  envelope: ArrayBufferView | ArrayBuffer | Buffer | string,
-  networkPrefix: number,
-): JsonValue;
-export function laneSettlementHash(settlement: object | string, networkPrefix: number): string;
-
 export interface AxtTouchManifest {
   read: ReadonlyArray<string>;
   write: ReadonlyArray<string>;
@@ -12811,7 +12045,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 24;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 25;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -12828,7 +12062,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   binding: ValidationFeeLedgerBindingV1,
   checkpoint: ValidationFeeCheckpointV1,
   networkPrefix: number,
-): ValidationFeeVerifiedPolicyProjectionV1;
+): ValidationFeeVerifiedPageV1;
 
 export const VALIDATION_FEE_HIJIRI_QUOTE_PATH: "/v1/validation-fee/hijiri/quote";
 export const VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA: "iroha.torii.v1.validation_fee.hijiri_quote.response";
@@ -12836,7 +12070,7 @@ export const VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE: "EVALUATED_PROJECTION_NOT_IN
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES: 4096;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES: 65536;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS: 100000;
-export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 24;
+export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 25;
 export function encodeValidationFeeHijiriQuoteRequestV1(
   accountId: string,
   qualifyingTransferCount: number,

@@ -2,7 +2,69 @@
 
 use super::{Algorithm, ParseError, PublicKey};
 
+/// Fixed rejection while borrowing a compact key's existing envelope.
+///
+/// This error retains no key bytes or formatted diagnostic. It does not assert
+/// that the algorithm-specific payload is canonical or cryptographically valid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublicKeyEnvelopeError(EnvelopeFailure);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvelopeFailure {
+    MissingAlgorithm,
+    InvalidAlgorithm(u8),
+    MissingPayload,
+}
+
+impl PublicKeyEnvelopeError {
+    pub(crate) fn into_parse_error(self) -> ParseError {
+        ParseError(match self.0 {
+            EnvelopeFailure::MissingAlgorithm => "missing public key algorithm tag".to_owned(),
+            EnvelopeFailure::InvalidAlgorithm(tag) => {
+                format!("invalid public key algorithm tag {tag}")
+            }
+            EnvelopeFailure::MissingPayload => "missing public key payload".to_owned(),
+        })
+    }
+}
+
+pub(super) fn algorithm(bytes: &[u8]) -> Result<Algorithm, PublicKeyEnvelopeError> {
+    let tag = *bytes
+        .first()
+        .ok_or(PublicKeyEnvelopeError(EnvelopeFailure::MissingAlgorithm))?;
+    Algorithm::try_from(tag)
+        .map_err(|()| PublicKeyEnvelopeError(EnvelopeFailure::InvalidAlgorithm(tag)))
+}
+
+pub(super) fn payload(bytes: &[u8]) -> Result<&[u8], PublicKeyEnvelopeError> {
+    bytes
+        .get(1..)
+        .ok_or(PublicKeyEnvelopeError(EnvelopeFailure::MissingPayload))
+}
+
 impl PublicKey {
+    /// Borrow the signature algorithm without constructing a public error String.
+    ///
+    /// # Errors
+    /// Returns a fixed rejection for a missing or unsupported algorithm tag.
+    pub fn borrowed_algorithm(&self) -> Result<Algorithm, PublicKeyEnvelopeError> {
+        algorithm(&self.0.algorithm_and_payload)
+    }
+
+    /// Borrow the compact algorithm and payload with fixed rejection custody.
+    ///
+    /// This preserves algorithm-before-payload error order. It admits only the
+    /// envelope; callers must still apply the existing algorithm relation.
+    ///
+    /// # Errors
+    /// Returns a fixed rejection if the existing compact envelope is malformed.
+    pub fn borrowed_parts(&self) -> Result<(Algorithm, &[u8]), PublicKeyEnvelopeError> {
+        Ok((
+            self.borrowed_algorithm()?,
+            payload(&self.0.algorithm_and_payload)?,
+        ))
+    }
+
     /// Fallibly extracts the signature algorithm and raw public-key payload.
     ///
     /// This is the checked counterpart to [`Self::to_bytes`]. Use it for
@@ -14,7 +76,8 @@ impl PublicKey {
     /// Returns [`ParseError`] if the compact public-key state is missing its
     /// algorithm tag or otherwise cannot expose a well-formed payload envelope.
     pub fn try_to_bytes(&self) -> Result<(Algorithm, &[u8]), ParseError> {
-        Ok((self.0.try_algorithm()?, self.0.try_payload()?))
+        self.borrowed_parts()
+            .map_err(PublicKeyEnvelopeError::into_parse_error)
     }
 
     /// Length of the retained key payload, excluding the compact algorithm tag.

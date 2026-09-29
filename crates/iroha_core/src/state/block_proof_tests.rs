@@ -7,7 +7,7 @@ use iroha_data_model::{
         execution_output::*, proofs::TrustedBlockProofAnchor,
     },
     events::{
-        time::{TimeEvent, TimeInterval},
+        time::{Schedule, TimeEvent, TimeInterval},
         trigger_completed::TriggerCompletedOutcome,
     },
     transaction::{
@@ -33,158 +33,135 @@ struct MutableSignedBlockWire {
 
 fn proof_limits() -> BlockProofLimits {
     BlockProofLimits {
+        max_source_blocks: 8,
+        max_source_wire_bytes: 32 * 1024 * 1024,
         max_block_wire_bytes: 4 * 1024 * 1024,
         max_work_items: 128,
         max_response_bytes: 4 * 1024 * 1024,
     }
 }
-
-fn proof_target(parent: &SignedBlock, sealed_commitment: bool) -> SignedBlock {
-    let keypair = checked_keypair();
-    let authority = AccountId::new(keypair.public_key().clone());
-    let mut builder = ModelBlockBuilder::new(BlockHeader::new(
-        nonzero!(2_u64),
-        Some(parent.hash()),
-        None,
-        u64::try_from(parent.header().creation_time().as_millis()).unwrap() + 1,
-        0,
-    ));
-    let signed = |millis| {
-        let mut tx = TransactionBuilder::new(
-            *DEFAULT_TEST_NETWORK_ID,
-            authority.clone(),
-            FeePaymentIntent::authority(Vec::new(), None),
-        );
-        tx.set_creation_time(std::time::Duration::from_millis(millis));
-        tx.sign(keypair.private_key())
+fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
+    use iroha_data_model::{
+        events::pipeline::{BlockEventFilter, BlockStatus},
+        isi::Log,
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
     };
-    if sealed_commitment {
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    let signer = config.genesis_key.clone();
+    let authority = AccountId::new(signer.public_key().clone());
+    config.genesis_instructions = vec![
+        Register::trigger(Trigger::new(
+            "proof_pipeline".parse().unwrap(),
+            Action::new(
+                [InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "pipeline proof".into(),
+                ))],
+                Repeats::Exactly(1),
+                authority.clone(),
+                BlockEventFilter::new().for_status(BlockStatus::Approved),
+            )
+            .unwrap(),
+        ))
+        .into(),
+        Register::trigger(Trigger::new(
+            "proof_time".parse().unwrap(),
+            Action::new(
+                [InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "time proof".into(),
+                ))],
+                Repeats::Exactly(1),
+                authority.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule {
+                    start_ms: 1001,
+                    period_ms: None,
+                })),
+            )
+            .unwrap(),
+        ))
+        .into(),
+    ];
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    let successful = chain.sign(
+        &signer,
+        [Log::new(Level::INFO, "network proof".into()).into()],
+        1001,
+    );
+    if sealed {
         use iroha_data_model::transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
             compute_sealed_transaction_commitment,
         };
-        let tx = signed(7);
-        let payload = SealedTransactionCommitmentPayload {
-            network_id: *DEFAULT_TEST_NETWORK_ID,
-            authority: authority.clone(),
-            commitment: compute_sealed_transaction_commitment(
-                &*DEFAULT_TEST_NETWORK_ID,
-                &tx,
-                [0xA5; 32],
-                5,
-            ),
-            reveal_after_height: 3,
-            reveal_deadline_height: 5,
-            nonce: None,
-        };
-        builder.push_sealed_transaction_commitment(SignedSealedTransactionCommitment::sign(
-            payload,
-            keypair.private_key(),
-        ));
-    } else {
-        builder.push_transaction(signed(7));
-        builder.push_sealed_transaction_reveal(SealedTransactionReveal::new(
-            Hash::new(b"proof sealed commitment"),
-            signed(8),
-            [0xA5; 32],
-        ));
-    }
-    let mut block = builder.build_with_signature(0, keypair.private_key());
-    let mut outputs = block
-        .network_entrypoints()
-        .enumerate()
-        .map(|(index, _)| {
-            let result =
-                if index == 1 {
-                    TransactionResult::new(Err(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::NotPermitted("alpha".into()))))
-                } else {
-                    TransactionResult::new(Ok(Vec::new()))
-                };
-            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                input_index: u32::try_from(index).unwrap(),
-                result,
-                completions: Vec::new(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let trigger = |name: &str| TriggerUseV1 {
-        trigger_id: name.parse().unwrap(),
-        registered_at_height: 1,
-        action_hash: Hash::new(name.as_bytes()),
-    };
-    let trace = |id: &TriggerId| {
-        TransactionResult::new(Ok(vec![DataTriggerStep {
-            id: id.clone(),
-            instructions: ExecutionStep(Vec::new().into()),
-        }]))
-    };
-    let completion = |id: &TriggerId| {
-        vec![InvocationCompletionV1 {
-            callback_index: 0,
-            trigger_id: id.clone(),
-            outcome: TriggerCompletedOutcome::Success,
-        }]
-    };
-    let pipeline = trigger("proof_pipeline");
-    outputs.push(ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
-        result: trace(&pipeline.trigger_id),
-        completions: completion(&pipeline.trigger_id),
-        invocation: PipelineInvocationV1 {
-            event: PipelineEventPositionV1::BlockApproved,
-            candidate_index: 0,
-            trigger: pipeline,
-        },
-        failure_root: None,
-    }));
-    let timer = trigger("proof_timer");
-    outputs.push(ExecutionOutputV1::Time(TimeExecutionOutputV1 {
-        result: trace(&timer.trigger_id),
-        completions: completion(&timer.trigger_id),
-        invocation: TimeInvocationV1 {
-            schedule_index: 0,
-            event: TimeEvent {
-                interval: TimeInterval {
-                    since_ms: 1,
-                    length_ms: 1,
-                },
+        let commitment = SignedSealedTransactionCommitment::sign(
+            SealedTransactionCommitmentPayload {
+                network_id: chain.network_id(),
+                authority,
+                commitment: compute_sealed_transaction_commitment(
+                    &chain.network_id(),
+                    &successful,
+                    [0xA5; 32],
+                    5,
+                ),
+                reveal_after_height: 3,
+                reveal_deadline_height: 5,
+                nonce: None,
             },
-            trigger: timer,
-        },
-        failure_root: None,
-    }));
-    crate::kura::tests::install_network_index_test_outputs(&mut block, outputs);
-    block.validate_output_merkle_cache().unwrap();
-    block
+            signer.private_key(),
+        );
+        chain.commit_with_proposal(
+            None,
+            vec![successful],
+            Signers::Quorum,
+            Default::default(),
+            |proposal| {
+                proposal.set_external_entrypoints(vec![TransactionEntrypoint::SealedCommitment(
+                    commitment,
+                )]);
+            },
+        );
+    } else {
+        let rejected = chain.sign(
+            &signer,
+            [Unregister::domain(
+                iroha_model_base::domain::DomainId::try_new("missing-proof-domain", "universal")
+                    .unwrap(),
+            )
+            .into()],
+            1002,
+        );
+        assert_eq!(chain.commit(vec![successful, rejected]), vec![true, false]);
+    }
+    chain
 }
 
 fn proof_fixture() -> CommittedNetworkProofFixture {
-    CommittedNetworkProofFixture::new(|parent| proof_target(parent, false), true)
+    CommittedNetworkProofFixture::from_chain(proof_chain(false))
 }
 
-fn proof_state(fixture: &CommittedNetworkProofFixture) -> Box<State> {
-    let state = Box::new(
-        State::try_new_with_chain_and_network_id(
-            crate::state::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            World::default(),
-            Arc::clone(&fixture.kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            (*DEFAULT_TEST_CHAIN_ID).clone(),
-            fixture.artifacts[0].height_context.network_id,
-            #[cfg(feature = "telemetry")]
-            Default::default(),
-        )
-        .expect("actual fallible State startup over authenticated configured Kura"),
-    );
-    let mut hashes = state.block_hashes.block();
-    for block in &fixture.blocks {
-        hashes.push(block.hash());
-    }
-    hashes.commit();
-    state
+fn proof_state(fixture: &CommittedNetworkProofFixture) -> Arc<State> {
+    Arc::clone(&fixture.state)
+}
+
+fn proof_anchor(
+    fixture: &CommittedNetworkProofFixture,
+    input: &HashOf<TransactionEntrypoint>,
+) -> TrustedBlockProofAnchor {
+    let view = fixture.state.view();
+    let chain = crate::sumeragi::certified_chain::CertifiedChain::new(&view).unwrap();
+    let authority = chain.authenticated_execution(2).unwrap();
+    let execution = &authority.committed().commitment().execution;
+    TrustedBlockProofAnchor::from_committed_execution(
+        fixture.target(),
+        execution.executed_block_wire_len,
+        execution.executed_block_wire_hash,
+        input,
+    )
+    .unwrap()
 }
 
 fn mutate_stored_block(
@@ -198,9 +175,9 @@ fn mutate_stored_block(
 }
 
 fn assert_invalid_finalized_body(mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult)) {
-    let fixture = CommittedNetworkProofFixture::with_malformed_target(|parent| {
-        mutate_stored_block(&proof_target(parent, false), mutate)
-    });
+    let fixture = proof_fixture();
+    let altered = mutate_stored_block(fixture.target(), mutate);
+    fixture.replace_target_wire(&altered.encode_wire().unwrap());
     let target = fixture.target();
     let entry = target.network_entrypoint_at(0).unwrap().hash();
     let error = proof_state(&fixture)
@@ -218,8 +195,6 @@ fn block_proofs_for_external_entry_use_distinct_input_and_output_trees() {
     let fixture = proof_fixture();
     let state = proof_state(&fixture);
     let block = fixture.target();
-    let artifact = fixture.artifacts.last().unwrap();
-    let fixture_context = artifact.context_id();
     for (index, input) in block.network_entrypoints().enumerate() {
         let proofs = state
             .block_proofs_for_entry(nonzero!(2_u64), input.hash(), proof_limits())
@@ -246,34 +221,22 @@ fn block_proofs_for_external_entry_use_distinct_input_and_output_trees() {
         };
         assert_eq!(usize::try_from(row.input_index).unwrap(), index);
         assert_eq!(row.result.is_err(), index == 1);
-        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-            block,
-            artifact,
-            fixture_context,
-            &input.hash(),
-        )
-        .unwrap();
+        let anchor = proof_anchor(&fixture, &input.hash());
         assert!(proofs.verify(&anchor));
     }
 }
 
 #[test]
-fn block_proofs_do_not_reinterpret_sealed_inner_or_internal_calls_as_inputs() {
+fn block_proofs_do_not_reinterpret_internal_calls_as_inputs() {
     let fixture = proof_fixture();
     let state = proof_state(&fixture);
     let block = fixture.target();
-    let TransactionEntrypoint::SealedReveal(reveal) = block.network_entrypoint_at(1).unwrap()
-    else {
-        unreachable!()
-    };
-    let inner = reveal.signed_transaction().hash_as_entrypoint();
-    assert_ne!(inner, block.network_entrypoint_at(1).unwrap().hash());
     let internal = block.execution_outputs()[2..].iter().map(|output| {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             output.execution_call_hash(block.hash(), block).unwrap(),
         )
     });
-    for hash in std::iter::once(inner).chain(internal) {
+    for hash in internal {
         assert!(
             matches!(state.block_proofs_for_entry(nonzero!(2_u64), hash, proof_limits()),
             Err(BlockProofError::EntrypointNotFound { entry_hash, block_height })
@@ -288,8 +251,14 @@ fn block_proofs_reject_kura_body_not_committed_by_wsv() {
     let expected =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"different committed WSV header"));
     assert_ne!(fixture.target().hash(), expected);
+    let view = fixture.state.view();
     let error = block_proofs_for_entry_from_kura(
-        &fixture.kura,
+        super::block_proofs::NativeProofSource {
+            kura: &fixture.kura,
+            chain_id: view.chain_id(),
+            network: *view.network_id(),
+            hashes: view.block_hashes(),
+        },
         nonzero!(2_u64),
         expected,
         fixture.target().network_entrypoint_at(0).unwrap().hash(),
@@ -378,21 +347,16 @@ fn block_proofs_validate_foreign_network_join_and_unrelated_internal_owner() {
 
 #[test]
 fn block_proofs_reject_retired_context_even_with_exact_finality() {
-    let fixture = CommittedNetworkProofFixture::new(
-        |parent| {
-            mutate_stored_block(&proof_target(parent, false), |payload, _| {
-                let mut context =
-                    iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new());
-                context.version = 0;
-                assert!(!context.has_current_version());
-                payload
-                    .header
-                    .set_execution_context_hash(Some(HashOf::new(&context)));
-                payload.execution_context = Some(context);
-            })
-        },
-        true,
-    );
+    let fixture = proof_fixture();
+    let altered = mutate_stored_block(fixture.target(), |payload, _| {
+        let mut context = iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new());
+        context.version = 0;
+        payload
+            .header
+            .set_execution_context_hash(Some(HashOf::new(&context)));
+        payload.execution_context = Some(context);
+    });
+    fixture.replace_target_wire(&altered.encode_wire().unwrap());
     let entry = fixture.target().network_entrypoint_at(0).unwrap().hash();
     let error = proof_state(&fixture)
         .block_proofs_for_entry(nonzero!(2_u64), entry, proof_limits())
@@ -410,8 +374,14 @@ fn block_proofs_reject_retired_context_even_with_exact_finality() {
 fn block_proofs_reject_requested_slot_header_height_mismatch() {
     let fixture = proof_fixture();
     let target = fixture.target();
+    let view = fixture.state.view();
     let error = block_proofs_for_entry_from_kura(
-        &fixture.kura,
+        super::block_proofs::NativeProofSource {
+            kura: &fixture.kura,
+            chain_id: view.chain_id(),
+            network: *view.network_id(),
+            hashes: view.block_hashes(),
+        },
         nonzero!(1_u64),
         target.hash(),
         target.network_entrypoint_at(0).unwrap().hash(),
@@ -432,17 +402,15 @@ fn block_proofs_reject_requested_slot_header_height_mismatch() {
 #[test]
 fn block_proofs_require_published_finality_and_attached_outputs() {
     for resultless in [false, true] {
-        let fixture = CommittedNetworkProofFixture::new(
-            |parent| {
-                let block = proof_target(parent, false);
-                if resultless {
-                    block.canonical_resultless_proposal()
-                } else {
-                    block
-                }
-            },
-            resultless,
-        );
+        let fixture = proof_fixture();
+        let altered = if resultless {
+            fixture.target().canonical_resultless_proposal()
+        } else {
+            let mut block = fixture.target().clone();
+            block.set_commit_certificate(None);
+            block
+        };
+        fixture.replace_target_wire(&altered.encode_wire().unwrap());
         let target = fixture.target();
         let error = proof_state(&fixture)
             .block_proofs_for_entry(
@@ -479,22 +447,8 @@ fn block_proofs_deny_cold_body_before_read_and_reject_finalized_wire_substitutio
         let entry = block.network_entrypoint_at(0).unwrap().hash();
         let original = block.encode_wire().unwrap();
         if corrupt {
-            let altered =
-                mutate_stored_block(block, |_, result| {
-                    let ExecutionOutputV1::Network(row) = &mut result.outputs[1] else {
-                        unreachable!()
-                    };
-                    row.result = TransactionResult::new(Err(
-                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                        iroha_data_model::ValidationFail::NotPermitted("bravo".into()))));
-                    result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
-                });
-            altered.validate_output_merkle_cache().unwrap();
-            assert_eq!(altered.header(), block.header());
-            assert_eq!(altered.hash(), block.hash());
-            let wire = altered.encode_wire().unwrap();
-            assert_eq!(wire.len(), original.len());
-            assert_ne!(wire, original);
+            let mut wire = original.clone();
+            *wire.last_mut().unwrap() ^= 1;
             fixture.overwrite_target_wire(&wire);
         } else {
             fixture.make_target_cold();
@@ -529,13 +483,10 @@ fn block_proofs_deny_cold_body_before_read_and_reject_finalized_wire_substitutio
         );
         assert_eq!(
             fixture.kura.canonical_body_bytes_read_for_test(),
-            reads_before + actual
+            reads_before + native_prefix_wire_bytes(&fixture)
         );
         if corrupt {
-            let expected = crate::kura::Error::CanonicalBlockWireMismatch { height: 2 }.to_string();
-            assert!(
-                matches!(admitted, Err(BlockProofError::Storage { reason, .. }) if reason == expected)
-            );
+            assert!(matches!(admitted, Err(BlockProofError::Storage { .. })));
         } else {
             assert!(admitted.is_ok());
         }
@@ -664,14 +615,14 @@ fn executed_block_wire_returns_exact_finalized_bytes_and_enforces_admission() {
     );
     assert_eq!(
         fixture.kura.canonical_body_bytes_read_for_test(),
-        before + size
+        before + native_prefix_wire_bytes(&fixture)
     );
     assert!(!fixture.target_cached());
 }
 
 /// Keep the existing sealed-commitment State regression on genuine exact-wire finality.
 pub(super) fn assert_sealed_commitment_proof_uses_distinct_trees() {
-    let fixture = CommittedNetworkProofFixture::new(|parent| proof_target(parent, true), true);
+    let fixture = CommittedNetworkProofFixture::from_chain(proof_chain(true));
     let state = proof_state(&fixture);
     let block = fixture.target();
     let sealed_hash = block.network_entrypoint_at(0).unwrap().hash();
@@ -703,13 +654,14 @@ pub(super) fn assert_sealed_commitment_proof_uses_distinct_trees() {
         block.execution_outputs()[2],
         ExecutionOutputV1::Time(_)
     ));
-    let artifact = fixture.artifacts.last().unwrap();
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        block,
-        artifact,
-        artifact.context_id(),
-        &sealed_hash,
-    )
-    .unwrap();
+    let anchor = proof_anchor(&fixture, &sealed_hash);
     assert!(proof.verify(&anchor));
+}
+
+fn native_prefix_wire_bytes(fixture: &CommittedNetworkProofFixture) -> u64 {
+    fixture
+        .blocks
+        .iter()
+        .map(|block| block.encode_wire().unwrap().len() as u64)
+        .sum()
 }

@@ -479,9 +479,6 @@ final class ToriiClientTests: XCTestCase {
             "instructions": .object([:]),
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
-            "admission_intent": .object(
-                ["intent": .string("ordinary"), "value": .null]
-            ),
             "metadata": .object([:]),
             "attachments": .null,
         ]
@@ -2127,6 +2124,19 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(response.valid)
         XCTAssertEqual(response.programId, "identifier_lookup_retail")
         XCTAssertEqual(response.outputHashMatches, true)
+    }
+
+    func testRamLfeExecuteResponseRejectsRetiredOutputOpening() throws {
+        let valid = ramLfeExecuteResponseJSON()
+        _ = try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: valid)
+        for retiredValue in [NSNull(), ["payload": [:], "signature": "ab"]] as [Any] {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+            object["output_opening"] = retiredValue
+            let data = try JSONSerialization.data(withJSONObject: object)
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: data)) { error in
+                XCTAssertTrue(String(describing: error).contains("unknown or retired field"))
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11093,7 +11103,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             option(uint64(100_000)),
             Data([0]),
             feePayment.data,
-            TransactionAdmissionIntentV1.ordinary.norito,
+
             uint64(0),
             Data([0]),
         ] {
@@ -15342,7 +15352,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, servedPayload)
         }
         let snapshot = try await makeClient().getSumeragiStatus()
-        XCTAssertEqual(snapshot.protocolVersion, 8)
+        XCTAssertEqual(snapshot.protocolVersion, 1)
         XCTAssertEqual(snapshot.instance, String(repeating: "cd", count: 32))
         XCTAssertEqual(snapshot.height, 15)
         XCTAssertEqual(snapshot.view, UInt64.max)

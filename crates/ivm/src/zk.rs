@@ -27,6 +27,11 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+mod diagnostic_snapshot;
+pub use diagnostic_snapshot::{
+    DiagnosticMemoryEvent, DiagnosticRegisterEvent, DiagnosticRegisterSource,
+    DiagnosticTraceSnapshot, DiagnosticTraceSource,
+};
 pub(crate) type SharedRegLog = Arc<parking_lot::Mutex<RegLog>>;
 #[derive(Clone)]
 struct RegLoggerState {
@@ -217,7 +222,22 @@ mod tests {
         trace.record(8, gpr, [false; 256]);
         let copied_trace = trace.try_clone_allocation().expect("bounded delta trace");
         assert_eq!(copied_trace.entries, trace.entries);
-        assert_eq!(copied_trace.expand(), trace.expand());
+        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let capture = |rows| {
+            DiagnosticTraceSource {
+                registers: DiagnosticRegisterSource::Deltas(rows),
+                constraints: &[],
+                memory_events: &[],
+                register_events: &[],
+                steps: &[],
+            }
+            .try_snapshot(&budget)
+            .expect("fund copied trace fixture")
+        };
+        assert_eq!(
+            capture(&copied_trace.entries).states(),
+            capture(&trace.entries).states()
+        );
         assert!(copied_trace.allocated_bytes().expect("checked capacity") > 0);
 
         let mut steps = StepLog::default();
@@ -340,13 +360,27 @@ mod tests {
         assert!(auto >= 1);
         super::set_prover_threads(baseline);
     }
+    fn snapshot_fixture(
+        states: &[RegisterState],
+        constraints: &[Constraint],
+    ) -> DiagnosticTraceSnapshot {
+        DiagnosticTraceSource {
+            registers: DiagnosticRegisterSource::States(states),
+            constraints,
+            memory_events: &[],
+            register_events: &[],
+            steps: &[],
+        }
+        .try_snapshot(&mv::allocation::AllocationBudget::new(64 * 1024))
+        .expect("fund checker fixture")
+    }
     #[test]
     fn diagnostic_trace_check_handles_empty_inputs() {
         // Ensure a pre-existing global Rayon pool does not block prover pool creation.
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build_global();
-        let result = check_diagnostic_trace(&[], &[], &[]);
+        let result = check_diagnostic_trace(&snapshot_fixture(&[], &[]));
         assert!(result.is_ok());
     }
     #[test]
@@ -359,7 +393,7 @@ mod tests {
             tags: [false; 256],
         }];
 
-        assert!(check_diagnostic_trace(&trace, &[], &[]).is_ok());
+        assert!(check_diagnostic_trace(&snapshot_fixture(&trace, &[])).is_ok());
     }
     #[test]
     fn diagnostic_trace_check_rejects_out_of_range_constraints_without_panicking() {
@@ -385,8 +419,9 @@ mod tests {
                 cycle: u64::MAX,
             },
         ] {
-            let result =
-                std::panic::catch_unwind(|| check_diagnostic_trace(&trace, &[constraint], &[]));
+            let result = std::panic::catch_unwind(|| {
+                check_diagnostic_trace(&snapshot_fixture(&trace, &[constraint]))
+            });
             assert!(
                 matches!(
                     result.expect("malformed diagnostic check must not panic"),
@@ -712,37 +747,6 @@ impl DeltaTraceLog {
         }
         self.last = Some(RegisterState { pc, gpr, tags });
     }
-    pub fn expand(&self) -> Vec<RegisterState> {
-        let mut result = Vec::new();
-        let (mut gpr, mut tags) = if let Some(first) = self.entries.first() {
-            let mut gpr = [0u64; 256];
-            let mut tags_arr = [false; 256];
-            for (i, v, t) in &first.changes {
-                gpr[*i] = *v;
-                tags_arr[*i] = *t;
-            }
-            result.push(RegisterState {
-                pc: first.pc,
-                gpr,
-                tags: tags_arr,
-            });
-            (gpr, tags_arr)
-        } else {
-            return result;
-        };
-        for entry in self.entries.iter().skip(1) {
-            for (i, v, t) in &entry.changes {
-                gpr[*i] = *v;
-                tags[*i] = *t;
-            }
-            result.push(RegisterState {
-                pc: entry.pc,
-                gpr,
-                tags,
-            });
-        }
-        result
-    }
     /// Zero retained register values before discarding the compact trace.
     pub(crate) fn scrub(&mut self) {
         for entry in &mut self.entries {
@@ -802,10 +806,10 @@ impl StepLog {
 /// semantics, trace completeness, or memory-event membership and must not be
 /// used as a proof verifier or admission decision.
 pub fn check_diagnostic_trace(
-    trace: &[RegisterState],
-    constraints: &[Constraint],
-    reg_log: &[RegEvent],
+    snapshot: &DiagnosticTraceSnapshot,
 ) -> Result<(), crate::error::VMError> {
+    let trace = snapshot.states();
+    let constraints = snapshot.constraints();
     prover_pool().install(|| {
         constraints.par_iter().try_for_each(|c| {
             match *c {
@@ -834,51 +838,45 @@ pub fn check_diagnostic_trace(
             Ok::<(), crate::error::VMError>(())
         })?;
         // Verify register Merkle proofs
-        reg_log.par_iter().try_for_each(|e| {
-            let (idx, value, tag, path, root) = match e {
-                RegEvent::Read {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => (*index, *value, *tag, path, root),
-                RegEvent::Write {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => (*index, *value, *tag, path, root),
-            };
-            let leaf_index = u32::try_from(idx)
-                .ok()
-                .filter(|index| *index < 256)
-                .ok_or(crate::error::VMError::AssertionFailed)?;
-            let mut leaf = [0u8; 9];
-            leaf[0] = if tag { 1 } else { 0 };
-            leaf[1..].copy_from_slice(&value.to_le_bytes());
-            let mut leaf_hash = [0u8; 32];
-            leaf_hash.copy_from_slice(&Sha256::digest(leaf));
-            let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
-            let siblings: Vec<Option<HashOf<[u8; 32]>>> = path
-                .iter()
-                .map(|sib| {
-                    (*sib != [0u8; 32])
-                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(*sib)))
-                })
-                .collect();
-            let proof = MerkleProof::from_audit_path(leaf_index, siblings);
-            let commitment = MerkleTreeCommitment::new(
-                *root,
-                NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
-            );
-            if proof.verify_sha256(&leaf, &commitment) {
-                Ok(())
-            } else {
-                Err(crate::error::VMError::AssertionFailed)
-            }
-        })?;
+        (0..snapshot.register_event_count())
+            .into_par_iter()
+            .try_for_each(|index| {
+                let event = snapshot
+                    .register_event(index)
+                    .expect("initialized register descriptor");
+                let (idx, value, tag, path, root) =
+                    (event.index, event.value, event.tag, event.path, event.root);
+                let leaf_index = u32::try_from(idx)
+                    .ok()
+                    .filter(|index| *index < 256)
+                    .ok_or(crate::error::VMError::AssertionFailed)?;
+                let mut leaf = [0u8; 9];
+                leaf[0] = if tag { 1 } else { 0 };
+                leaf[1..].copy_from_slice(&value.to_le_bytes());
+                let mut leaf_hash = [0u8; 32];
+                leaf_hash.copy_from_slice(&Sha256::digest(leaf));
+                iroha_crypto::zeroize_value_for_confidential_discard(&mut leaf);
+                let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
+                // A complete 256-register tree has exactly eight siblings. Reject
+                // both missing and extra paths before filling fixed stack storage.
+                let path: &[[u8; 32]; 8] = path
+                    .try_into()
+                    .map_err(|_| crate::error::VMError::AssertionFailed)?;
+                let siblings = path.map(|sibling| {
+                    (sibling != [0; 32])
+                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(sibling)))
+                });
+                let commitment = MerkleTreeCommitment::new(
+                    HashOf::from_untyped_unchecked(Hash::prehashed(*root)),
+                    NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
+                );
+                if MerkleProof::verify_audit_path_sha256(leaf_index, &siblings, &leaf, &commitment)
+                {
+                    Ok(())
+                } else {
+                    Err(crate::error::VMError::AssertionFailed)
+                }
+            })?;
         Ok(())
     })
 }

@@ -328,3 +328,12 @@ def test_node_budget_precedes_schema_or_policy_construction(monkeypatch):
     monkeypatch.setattr(config, '_object', forbidden)
     with pytest.raises(config.ExperimentConfigError):
         config.decode_plan(raw)
+
+
+@pytest.mark.parametrize('field', ['max_merge_log_bytes', 'max_merge_frames'])
+def test_retired_reader_policy_slots_are_rejected(field):
+    plan_raw, _ = inputs()
+    value = json.loads(plan_raw)
+    value['trials'][0]['reader'][field] = 1
+    with pytest.raises(config.ExperimentConfigError):
+        config.decode_plan(encoded(value))

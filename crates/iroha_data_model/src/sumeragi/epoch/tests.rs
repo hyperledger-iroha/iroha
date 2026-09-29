@@ -6,10 +6,10 @@ use crate::isi::kagemusha_v1::{
 };
 use iroha_crypto::{Hash, KeyPair};
 
-// Public multiples 1..8 of (-1,2) on y²=x³+5, generated independently with the
+// Public multiples 1..10 of (-1,2) on y²=x³+5, generated independently with the
 // pinned Pasta base fields in vendor/vega-prover/src/provider/pasta.rs. These are
 // public test scalars, never signing inputs. The production decoder validates them.
-const PALLAS: [[u8; 32]; 8] = [
+const PALLAS: [[u8; 32]; 10] = [
     hex_literal::hex!("00000000ed302d991bf94c09fc98462200000000000000000000000000000040"),
     hex_literal::hex!("030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c"),
     hex_literal::hex!("63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788"),
@@ -18,8 +18,10 @@ const PALLAS: [[u8; 32]; 8] = [
     hex_literal::hex!("eb24c6f3d47de736844b67db8f8d3c439fb95c20fb81a91ff0e13ab291630705"),
     hex_literal::hex!("998b9d02ab10540a55a6ec55855c743ee3d8f8b10232bc22cc00abb11438a499"),
     hex_literal::hex!("07ef940d7798553b338b80e8de384cb8b3b6860627530de8c043716fb0ec5d34"),
+    hex_literal::hex!("791b2c704a9b71222d23f6992b501fbdce116b05159a325706aec7b17ad2ce8c"),
+    hex_literal::hex!("406dd76c6e8e283e2cc28d875a16a525d549807b7bce53fdbbad3784caa8e328"),
 ];
-const VESTA: [[u8; 32]; 8] = [
+const VESTA: [[u8; 32]; 10] = [
     hex_literal::hex!("0000000021eb468cdda89409fc98462200000000000000000000000000000040"),
     hex_literal::hex!("03000070de065fede0093144eee2fe0e0000000000000000000000000000001c"),
     hex_literal::hex!("5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837"),
@@ -28,6 +30,8 @@ const VESTA: [[u8; 32]; 8] = [
     hex_literal::hex!("fa9553dbbc34b5ca9c03f5ee975bbc66ef7fe6a16e4568779708648c406a8c13"),
     hex_literal::hex!("d9b64d40adcf7b8c3155141bc2e813c9c83d49cc66c199856d118b9530ebccb7"),
     hex_literal::hex!("ab2cecbc329b95461e3993c4ddb07d5132cdafea622f88869dd6af129fce1517"),
+    hex_literal::hex!("7acaf6dfb451dbec3b23b191c0418c0dff2aef2717968f45d0687420aa21b511"),
+    hex_literal::hex!("5dd951afd934da1f383baff361d8acc11bea9c7e6027a4e0c3fe2eb45d00dc1e"),
 ];
 
 pub(crate) fn fixture(count: usize) -> ValidatorEpochContextV1 {
@@ -91,7 +95,7 @@ pub(crate) fn retained(previous: &ValidatorEpochContextV1) -> ValidatorEpochCont
 
 #[test]
 fn complete_epoch_round_trips_real_credentials_and_binds_every_field() {
-    for count in [4, 7] {
+    for count in [4, 7, 10] {
         let context = fixture(count);
         let id = context.context_id().unwrap();
         let bytes = norito::encode_canonical(&context).unwrap();

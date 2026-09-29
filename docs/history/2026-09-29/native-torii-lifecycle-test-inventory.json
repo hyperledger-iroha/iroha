@@ -1,0 +1,80 @@
+[
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_5b_finalized_block.rs",
+    "functions_before": 2,
+    "functions_after": 2,
+    "removed_or_renamed": [],
+    "added_or_renamed": []
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_5_threshold_key_lifecycle.rs",
+    "functions_before": 11,
+    "functions_after": 12,
+    "removed_or_renamed": [
+      "ordinary_sealed_commitment_is_durable_and_requires_one_route",
+      "ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected"
+    ],
+    "added_or_renamed": [
+      "lifecycle_pending_wire",
+      "ordinary_sealed_commitment_retains_exact_local_custody_and_requires_one_route",
+      "ordinary_single_route_application_retains_local_custody_and_rejects_mixed_lifecycle"
+    ]
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_1.rs",
+    "functions_before": 125,
+    "functions_after": 125,
+    "removed_or_renamed": [
+      "handler_transaction_ingress_rejects_changed_route_before_durable_enqueue"
+    ],
+    "added_or_renamed": [
+      "handler_transaction_ingress_rejects_changed_route_before_local_enqueue"
+    ]
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_2.rs",
+    "functions_before": 92,
+    "functions_after": 92,
+    "removed_or_renamed": [],
+    "added_or_renamed": []
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_3.rs",
+    "functions_before": 97,
+    "functions_after": 97,
+    "removed_or_renamed": [
+      "prepared_current_admission_retains_exact_durable_pending_identity"
+    ],
+    "added_or_renamed": [
+      "prepared_current_admission_retains_exact_local_pending_identity"
+    ]
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/current_transaction_admission.rs",
+    "functions_before": 5,
+    "functions_after": 4,
+    "removed_or_renamed": [
+      "current_http_admission_rejects_actual_multiroute_before_journal_write",
+      "current_http_admission_rejects_unsupported_intent_before_any_durable_promise",
+      "current_peer_and_canonical_retry_reject_unsupported_admission_without_custody"
+    ],
+    "added_or_renamed": [
+      "current_http_admission_rejects_actual_multiroute_before_local_custody",
+      "current_http_admission_retains_exact_canonical_input_in_local_custody"
+    ]
+  },
+  {
+    "path": "crates/iroha_data_model/src/transaction/receipt.rs",
+    "functions_before": 18,
+    "functions_after": 18,
+    "removed_or_renamed": [],
+    "added_or_renamed": []
+  },
+  {
+    "path": "crates/iroha_torii/src/tests/lib_runtime_handlers/part_5.rs",
+    "functions_before": 91,
+    "functions_after": 91,
+    "removed_or_renamed": [],
+    "added_or_renamed": []
+  }
+]

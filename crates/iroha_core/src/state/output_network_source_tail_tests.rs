@@ -398,7 +398,6 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
                 Ok(crate::state::ExecutionOutputSealMetadata {
                     committed_fragment_count: u64::try_from(block.committed_fragment_count())
                         .unwrap(),
-                    lane_finality_statements: Vec::new(),
                 })
             })
             .unwrap();

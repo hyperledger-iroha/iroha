@@ -244,9 +244,11 @@ pub struct AllocationBudget {
 }
 
 impl AllocationBudget {
-    // Equality of actual retained pool owners, never a caller-supplied digest
-    // or the address of a movable AllocationBudget handle.
-    pub(crate) fn same_pool(&self, other: &Self) -> bool {
+    /// Check identity of retained pool owners without reserving or allocating.
+    ///
+    /// Cloned handles identify the same pool; equal limits and caller-supplied
+    /// digests do not. This predicate grants no allocation credit.
+    pub fn same_pool(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.pool, &other.pool)
     }
 

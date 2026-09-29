@@ -98,78 +98,26 @@ where
 pub fn seed_peer(world: &mut World, peer_id: PeerId) {
     seed_peers(world, [peer_id]);
 }
-/// Execute a nonempty first block through authenticated genesis admission.
-///
-/// The supplied signer authorizes both the genesis-domain transaction and its
-/// block. The native genesis producer omits ordinary lane execution contexts.
-/// Current State commitments and strict validation produce canonical execution
-/// outputs before the test publishes the committed block.
+/// Create an original signed four-validator genesis and its native execution owner.
+/// The initial World and governance instructions are committed by the same production startup.
 #[allow(dead_code)]
 pub fn commit_genesis_fixture(
-    state: &Arc<State>,
-    authority: &AccountId,
+    world: World,
+    chain_id: ChainId,
     signer: &KeyPair,
     instructions: Vec<iroha_data_model::prelude::InstructionBox>,
+    validator_keys: Option<Vec<KeyPair>>,
     time_source: iroha_primitives::time::TimeSource,
-) {
-    use iroha_core::{
-        block::ValidBlock, state::StateReadOnly, sumeragi::network_topology::Topology,
-    };
-    use iroha_data_model::{
-        block::SignedBlock,
-        transaction::{FeePaymentIntent, TransactionBuilder},
-    };
-
-    assert_eq!(
-        state.committed_height(),
-        0,
-        "genesis must start the fixture"
-    );
-    assert!(
-        !instructions.is_empty(),
-        "genesis must contain fixture effects"
-    );
-    let mut builder = TransactionBuilder::new_genesis(
-        authority.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(instructions);
-    builder.set_creation_time(time_source.get_unix_time());
-    let transaction = builder.sign(signer.private_key());
-    let (proof_policies, confidential_features) = {
-        let view = state.view();
-        let digest =
-            iroha_core::state::compute_confidential_feature_digest(view.world(), view.zk(), 1);
-        (
-            iroha_core::da::active_proof_policy_bundle_at_height(view.nexus(), 1),
-            (!digest.is_empty()).then_some(digest),
-        )
-    };
-    let proposal = SignedBlock::try_genesis_with_da_proof_policies(
-        vec![transaction],
-        signer.private_key(),
-        confidential_features,
-        None,
-        Some(proof_policies),
-    )
-    .expect("sign native fixture genesis");
-    assert!(
-        proposal.execution_context().is_none(),
-        "genesis must not inherit ordinary lane execution context"
-    );
-    let mut state_block = state.block(proposal.header());
-    let valid = ValidBlock::validate_sumeragi_v2_fixture(
-        proposal,
-        &Topology::new([PeerId::new(signer.public_key().clone())]),
-        authority,
-        &time_source,
-        &mut state_block,
-    )
-    .unpack(|_| {})
-    .map_err(|(_, error)| error)
-    .expect("authenticate and execute fixture genesis");
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    let time_ms =
+        u64::try_from(time_source.get_unix_time().as_millis()).expect("fixture time fits");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, time_ms);
+    config.chain_id = chain_id;
+    config.genesis_key = signer.clone();
+    config.genesis_instructions = instructions;
+    config.validator_keys = validator_keys;
+    iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original signed fixture genesis")
 }
 /// Own a Torii test instance together with the Kiso task that backs its configuration handle.
 #[allow(dead_code)]

@@ -42,10 +42,6 @@ workspace = true
 # corridors; ordinary Core builds additionally select the optional accelerator.
 default = ["node", "simd"]
 dev-tools = []
-# Non-shipping, feature-isolated process-cut hooks used by the dedicated
-# `iroha_test_network` daemon. The default/node feature graph never enables
-# these hooks.
-test-network-native-amx-fault-injection = ["json"]
 # Non-shipping, read-only private-settlement state commitments used only by
 # adversarial real-process release tests. Shipping/default feature graphs must
 # never expose the diagnostic surface that consumes this evidence.
@@ -244,6 +240,7 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }
 crossbeam-epoch = "=0.9.20"
 futures = { workspace = true, features = ["std", "async-await"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
@@ -267,7 +264,7 @@ required-features = ["bench"]
 [[bench]]
 name = "kura"
 harness = false
-required-features = ["bench"]
+required-features = ["bench", "iroha-core-tests"]
 
 [[bench]]
 name = "state"
@@ -391,3 +388,7 @@ path = "tests/world_original_shell.rs"
 [[test]]
 name = "scalar_snapshot_allocation"
 path = "tests/scalar_snapshot_allocation.rs"
+
+[[test]]
+name = "musubi_projection_rejection_allocation"
+path = "tests/musubi_projection_rejection_allocation.rs"

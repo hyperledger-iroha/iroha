@@ -429,7 +429,7 @@ pub(super) fn matched_benchmark_builder(
             )
         })
         .with_genesis_instruction(npos_override_instruction(VALIDATORS_PER_LANE))
-        .with_consensus_message_control())
+        .with_private_settlement_route_control())
 }
 
 pub(super) fn matched_workload_record(
@@ -673,7 +673,7 @@ pub(super) fn validate_matched_replay_details(
         details.hash == expected_entrypoint.to_string()
             && transaction.entrypoint_hash() == &expected_entrypoint
             && transaction.entrypoint().hash() == expected_entrypoint
-            && transaction.result_hash() == &transaction.result().hash(),
+            && transaction.output_hash() == &iroha_crypto::HashOf::new(transaction.output()),
         "replay details substituted transaction or result binding"
     );
     let TransactionEntrypoint::External(retained) = transaction.entrypoint() else {
@@ -1121,11 +1121,16 @@ mod tests {
         changed.hash = hash(99).to_string();
         assert!(validate_matched_replay_details(&changed, &replay, &settlement).is_err());
         let mut changed = make(&expected);
-        changed.transaction.result = TransactionResult::new(Ok(Default::default()));
-        changed.transaction.result_hash = changed.transaction.result.hash();
+        let iroha::data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+            &mut changed.transaction.output
+        else {
+            panic!("expected Network output");
+        };
+        output.result = TransactionResult::new(Ok(Default::default()));
+        changed.transaction.output_hash = HashOf::new(&changed.transaction.output);
         assert!(validate_matched_replay_details(&changed, &replay, &settlement).is_err());
         let mut changed = make(&expected);
-        changed.transaction.result_hash = HashOf::from_untyped_unchecked(hash(98));
+        changed.transaction.output_hash = HashOf::from_untyped_unchecked(hash(98));
         assert!(validate_matched_replay_details(&changed, &replay, &settlement).is_err());
     }
 }

@@ -78,7 +78,6 @@ fn outputs(block: &mut SignedBlock) {
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &crate::execution_output_test_support::structural_output_limits(),
         )
         .unwrap();
@@ -225,7 +224,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         execution_commitment(&witness, &genesis).unwrap(),
         outcome(1, &current, None),
         None,
-        iroha_data_model::sumeragi_finality::NativeContextsProof::from_witness(
+        iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
             &witness,
             &mv::allocation::AllocationBudget::new(64 * 1024),
         )
@@ -244,13 +243,29 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     let mut selected_fixture = None;
     for height in 2..=14 {
         let parent = history.last().unwrap();
-        let mut block = payload::empty_block(
+        let signer = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let mut builder = iroha_data_model::transaction::TransactionBuilder::new(
+            network,
+            iroha_data_model::account::AccountId::new(signer.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(parent.header().creation_time());
+        let input = builder
+            .with_instructions([iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                format!("offline committee transcript {height}"),
+            )])
+            .sign(signer.private_key());
+        let mut block = payload::assemble(
             &state,
             Assembly {
                 parent,
                 view: 0,
                 cadence: Duration::from_millis(1),
             },
+            &[crate::tx::AcceptedTransaction::new_unchecked(
+                std::borrow::Cow::Owned(input),
+            )],
         )
         .unwrap();
         outputs(&mut block);
@@ -352,7 +367,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             execution_commitment(&witness, &block).unwrap(),
             outcome(height, &current, boundary.clone()),
             pulse,
-            iroha_data_model::sumeragi_finality::NativeContextsProof::from_witness(
+            iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
                 &witness,
                 &mv::allocation::AllocationBudget::new(64 * 1024),
             )
@@ -766,13 +781,14 @@ fn status_selection_binding_uses_the_same_actual_native_boundary_as_custody() {
 
 /// Complete-set proof fixture derived from an actual canonical ordinary write.
 fn complete_context_witness(network: NetworkId, height: u64) -> ExecWitness {
-    let contexts = iroha_data_model::block::lane_consensus::LaneConsensusContextsV1::default();
-    let commitment =
-        crate::state::LaneConsensusContextsCommitmentV1::from_contexts(network, height, &contexts)
-            .unwrap();
+    let contexts = iroha_data_model::sumeragi_lanes::SumeragiLaneState::default();
+    let commitment = iroha_data_model::sumeragi_finality::SumeragiLaneStateCommitment::from_state(
+        network, height, &contexts,
+    )
+    .unwrap();
     ExecWitness {
         writes: vec![iroha_data_model::block::consensus::ExecKv {
-            key: crate::state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY.to_vec(),
+            key: iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY.to_vec(),
             value: norito::encode_canonical(&commitment).unwrap(),
         }],
         ..ExecWitness::default()

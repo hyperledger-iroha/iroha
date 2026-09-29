@@ -5260,34 +5260,41 @@ function assertEvidenceU64(value, label) {
 function assertEvidenceRecord(entry) {
   assert.ok(entry && typeof entry === "object", "evidence entry must be an object");
   assert.deepEqual(Object.keys(entry).sort(), [
-    "artifact_hash_1",
-    "artifact_hash_2",
+    "authority_generation",
     "class",
     "consensus_admitted_height",
     "context_id",
     "epoch",
     "height",
+    "instance",
     "kind",
+    "native_frame_hash",
+    "offenders",
     "penalty_status",
     "recorded_height",
     "recorded_ms",
     "recorded_view",
-    "signer",
-    "view",
+    "safety_violation",
   ]);
-  assert.equal(entry.kind, "SumeragiV2Equivocation");
-  assert.ok(
-    ["proposal", "phase_vote", "timeout_vote"].includes(entry.class),
-    "v2 equivocation class must be canonical",
-  );
-  assertEvidenceU64(entry.height, "v2 equivocation height");
-  assertEvidenceU64(entry.view, "v2 equivocation view");
-  assertEvidenceU64(entry.epoch, "v2 equivocation epoch");
-  assertNonNegativeInteger(entry.signer, "v2 equivocation signer must be non-negative");
-  assert.match(entry.context_id, /^[0-9a-f]{64}$/u);
-  assert.match(entry.artifact_hash_1, /^[0-9a-f]{64}$/u);
-  assert.match(entry.artifact_hash_2, /^[0-9a-f]{64}$/u);
-  assert.notEqual(entry.artifact_hash_1, entry.artifact_hash_2);
+  assert.equal(entry.kind, "NativeSumeragiEvidence");
+  assert.ok(["proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates"].includes(entry.class));
+  assertEvidenceU64(entry.height, "native evidence height");
+  assertEvidenceU64(entry.epoch, "native evidence epoch");
+  for (const field of ["instance", "context_id", "authority_generation", "native_frame_hash"]) {
+    assert.match(entry[field], /^[0-9a-f]{64}$/u);
+  }
+  assert.equal(typeof entry.safety_violation, "boolean");
+  assert.ok(Array.isArray(entry.offenders) && entry.offenders.length >= 1 && entry.offenders.length <= 1024);
+  let previous = -1;
+  const peers = new Set();
+  for (const offender of entry.offenders) {
+    assert.deepEqual(Object.keys(offender).sort(), ["peer_id", "signer"]);
+    assert.ok(Number.isInteger(offender.signer) && offender.signer > previous && offender.signer < 1024);
+    assert.match(offender.peer_id, /^ea0130[0-9A-F]{96}$/u);
+    assert.ok(!peers.has(offender.peer_id));
+    peers.add(offender.peer_id);
+    previous = offender.signer;
+  }
   assertEvidenceU64(
     entry.recorded_height,
     "evidence entry recorded_height",

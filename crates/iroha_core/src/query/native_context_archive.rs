@@ -1,4 +1,4 @@
-//! Original complete native context values, durably retained under their exact carrier.
+//! Original native context and execution writes retained under their exact carrier.
 //!
 //! Records are untrusted projections. Only the native certificate and its mandatory R proof
 //! authenticate them. The writer borrows the original sealed overlay, streams one prepaid
@@ -7,11 +7,14 @@
 
 use crate::{
     kura::Kura,
-    state::{NativeLaneStateProjectionV1, StateBlock, StateReadOnly, WorldReadOnly},
+    state::{NativeExecutionProjectionV1, StateBlock, StateReadOnly, WorldReadOnly},
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{ExecKv, ExecWitness},
+    },
     sumeragi_finality::ExecutionResultCommitment,
     sumeragi_lanes::SumeragiLaneState,
 };
@@ -62,18 +65,63 @@ impl NativeContextArchiveError {
     }
 }
 
+/// Borrow only the existing payload, without adding a field, frame, allocation or decoder.
+struct LaneStateRef<'a>(&'a SumeragiLaneState);
+impl norito::core::SerializePayload for LaneStateRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::SerializePayload::serialize(self.0, writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_hint(self.0)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_exact(self.0)
+    }
+}
+
+/// Stream the original owned write sequence without a clone or second graph.
+struct OrdinaryWritesRef<'a>(&'a Vec<ExecKv>);
+impl norito::core::SerializePayload for OrdinaryWritesRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::SerializePayload::serialize(self.0, writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_hint(self.0)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_exact(self.0)
+    }
+}
+
+struct CastingBindingsRef<'a>(
+    &'a Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
+);
+impl norito::core::SerializePayload for CastingBindingsRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::SerializePayload::serialize(self.0, writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_hint(self.0)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_exact(self.0)
+    }
+}
+
 #[derive(norito::Encode)]
 struct Projection<'a> {
     carrier_height: u64,
     carrier_hash: HashOf<BlockHeader>,
-    lanes: &'a SumeragiLaneState,
+    lanes: LaneStateRef<'a>,
+    ordinary_writes: OrdinaryWritesRef<'a>,
+    casting_bindings: CastingBindingsRef<'a>,
 }
 impl norito::NoritoSchema for Projection<'_> {
     fn nominal_name() -> String {
-        <NativeLaneStateProjectionV1 as norito::NoritoSchema>::nominal_name()
+        <NativeExecutionProjectionV1 as norito::NoritoSchema>::nominal_name()
     }
     fn static_frame_name() -> Option<&'static str> {
-        <NativeLaneStateProjectionV1 as norito::NoritoSchema>::static_frame_name()
+        <NativeExecutionProjectionV1 as norito::NoritoSchema>::static_frame_name()
     }
 }
 
@@ -191,6 +239,7 @@ impl NativeContextArchive {
         overlay: &StateBlock<'_>,
         executed: &SignedBlock,
         result: &RetainedPayload<ExecutionResultCommitment>,
+        witness: &ExecWitness,
     ) -> Result<PreparedNativeContext, NativeContextArchiveError> {
         self.recheck_namespace()?;
         if !self.writable
@@ -212,6 +261,26 @@ impl NativeContextArchive {
                 "lane-state path differs from original execution root",
             ));
         }
+        // Recompute the mandatory path using charged scratch over borrowed writes.
+        // Its root binds the complete ordered source without cloning that graph.
+        let original_path =
+            iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
+                witness,
+                &self.budget,
+            )
+            .map_err(|error| match error {
+                iroha_data_model::sumeragi_finality::NativeLaneStateProofError::Scratch(error) => {
+                    NativeContextArchiveError::Allocation(error)
+                }
+                _ => NativeContextArchiveError::Source(
+                    "original ordinary writes differ from native result",
+                ),
+            })?;
+        if original_path != result.get().native_lanes {
+            return Err(NativeContextArchiveError::Source(
+                "original ordinary writes differ from native result",
+            ));
+        }
         let lanes = overlay.world().sumeragi_lanes();
         if !result
             .get()
@@ -226,7 +295,13 @@ impl NativeContextArchive {
         let projection = Projection {
             carrier_height: result.get().height,
             carrier_hash: executed.hash(),
-            lanes,
+            lanes: LaneStateRef(lanes),
+            ordinary_writes: OrdinaryWritesRef(&witness.writes),
+            casting_bindings: CastingBindingsRef(
+                overlay.captured_parliament_casting_bindings().ok_or(
+                    NativeContextArchiveError::Source("original casting leaves are absent"),
+                )?,
+            ),
         };
         self.encode_projection(&projection)
     }

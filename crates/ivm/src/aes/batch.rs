@@ -15,8 +15,12 @@ fn rounds_in_place(states: &mut [[u8; 16]], keys: &[[u8; 16]], decrypt: bool, fu
             (false, true) => MetalBatchWork::AesEncRounds(keys.len()),
             (true, true) => MetalBatchWork::AesDecRounds(keys.len()),
         };
-        if crate::vector::metal_batch_prefer_gpu(work, states.len())
-            && crate::vector::metal_aes_batch_in_place(states, keys, decrypt, fused)
+        if crate::vector::select_metal_batch(work, states.len())
+            .and_then(|selected| {
+                selected
+                    .run(|| crate::vector::metal_aes_batch_in_place(states, keys, decrypt, fused))
+            })
+            .unwrap_or(false)
         {
             return;
         }

@@ -430,12 +430,7 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
         panic!("seal error must preserve the local owner");
     };
     assert_eq!(sealed_owner.allocation_refusal(), Some(&refusal));
-    let native = native::native_attempt_error(error);
-    let block_error = crate::block::BlockValidationError::from_certified_merge_stage_error(native);
-    let crate::block::BlockValidationError::ExecutionDeferred(owner) = block_error else {
-        panic!("block boundary must preserve the local owner");
-    };
-    assert_eq!(owner.allocation_refusal(), Some(&refusal));
+    let owner = sealed_owner;
     drop(block);
     drop(state);
     drop(budget);

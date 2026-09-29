@@ -47,7 +47,7 @@ class KagemushaTestnetValueAdmissionV1Test {
         val endpoint = Endpoint()
         val admission = KagemushaTestnetValueAdmissionV1.openEndpoint(endpoint)
         val id = ByteArray(32) { 7 }
-        assertEquals(480, endpoint.archive.size)
+        assertEquals(546, endpoint.archive.size) // 498-byte payload plus canonical header/padding.
         assertEquals(8, ADMISSION_TEST_PADDING_BYTES_V1)
         assertContentEquals(admissionArchive(), admission.admitFinalizedValue(id))
         assertContentEquals(ByteArray(32) { 7 }, id)
@@ -81,7 +81,11 @@ class KagemushaTestnetValueAdmissionV1Test {
             admissionArchive(fields = validAdmissionFields().apply { set(10, ByteArray(32)) }),
             admissionArchive(fields = validAdmissionFields().apply { set(11, ByteArray(16)) }),
             admissionArchive(fields = validAdmissionFields().apply { set(15, ByteArray(8)) }),
+            admissionArchive(fields = validAdmissionFields().dropLast(2)),
             admissionArchive(fields = validAdmissionFields().apply { set(16, ByteArray(32)) }),
+            admissionArchive(fields = validAdmissionFields().apply { set(17, ByteArray(32)) }),
+            admissionArchive(fields = validAdmissionFields().apply { set(18, ByteArray(32)) }),
+            admissionArchive(fields = validAdmissionFields().apply { set(15, ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(1).array()) }),
         )
         for (archive in altered) {
             val admission = KagemushaTestnetValueAdmissionV1.openEndpoint(
@@ -173,7 +177,7 @@ private fun validAdmissionFields(): MutableList<ByteArray> = mutableListOf(
     ByteArray(32) { 6 }, ByteArray(32) { 7 }, ByteArray(32) { 8 },
     ByteArray(16).apply { this[0] = 9 }, ByteArray(32) { 10 }, ByteArray(32) { 11 },
     ByteArray(32) { 12 }, ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(13).array(),
-    ByteArray(32) { 14 },
+    ByteArray(32) { 14 }, ByteArray(32) { 15 }, ByteArray(32) { 16 },
 )
 
 private fun admissionArchive(

@@ -1303,11 +1303,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
         }
         insert_provisional_index_v1(&mut state, &candidate, encoded_len)?;
         state.canonical_bytes = next_bytes;
-        #[cfg(feature = "test-network-native-amx-fault-injection")]
-        crate::native_amx_fault_injection::maybe_abort(
-            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
-            *candidate.material.manifest.bundle_id.as_ref(),
-        );
         Ok(PrivateSettlementSidecarStoreOutcomeV1::Stored)
     }
 
@@ -2135,11 +2130,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.verified_leg = Some(verified);
         durable.validate()?;
         self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
-        #[cfg(feature = "test-network-native-amx-fault-injection")]
-        crate::native_amx_fault_injection::maybe_abort(
-            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
-            *durable.sidecar.manifest.bundle_id.as_ref(),
-        );
         Ok(())
     }
 
@@ -2387,14 +2377,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
         }
         durable.validate()?;
         self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
-        #[cfg(feature = "test-network-native-amx-fault-injection")]
-        crate::native_amx_fault_injection::maybe_abort(
-            match phase {
-                PrivateSettlementPhaseV1::Prepare => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
-                PrivateSettlementPhaseV1::Commit => crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
-            },
-            *durable.sidecar.manifest.bundle_id.as_ref(),
-        );
         Ok(())
     }
 
@@ -2509,11 +2491,6 @@ impl PrivateSettlementFileSidecarStoreV1 {
         durable.terminal_evidence_digest = Some(receipt_digest);
         durable.validate()?;
         self.persist_lifecycle_record_v1(&mut state, digest, &metadata, &durable)?;
-        #[cfg(feature = "test-network-native-amx-fault-injection")]
-        crate::native_amx_fault_injection::maybe_abort(
-            crate::native_amx_fault_injection::NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
-            *receipt.manifest.bundle_id.as_ref(),
-        );
         Ok(())
     }
 

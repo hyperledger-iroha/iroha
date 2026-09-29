@@ -2,11 +2,11 @@
 
 use std::{fmt, sync::Arc};
 
+use crate::bytes::{ByteSequence, ByteStorage, InlineBytes, InlineDomain};
 use mv::allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, ChargedShared,
     PrepaidSharedError,
 };
-use norito::core as ncore;
 
 /// Largest canonical application result carried once by a flagged certificate.
 pub const MAX_RESULT_WITNESS_BYTES: usize = 64 * 1024;
@@ -18,15 +18,18 @@ pub const MAX_ATTESTATION_SIGNATURE_BYTES: usize = 256;
 /// Decoding creates explicitly untrusted storage. Production retention requires admission to
 /// the original pool, independently of cryptographic validity. No mutable or naked Vec escape
 /// exists; the original charged backing and shared control survive every retained clone.
-pub struct ResultWitness {
-    storage: Storage,
-}
+pub type ResultWitness = ByteSequence<Storage>;
 
-enum Storage {
+/// Untrusted or original-pool admitted immutable witness storage.
+pub enum Storage {
+    /// Decoded source and any exact original-pool allocation retained across refusal.
     Untrusted {
+        /// Immutable decoded source, shared without granting production admission.
         source: Arc<Vec<u8>>,
+        /// Original backing retained until shared-control admission succeeds.
         pending: Option<ChargedBuffer<u8>>,
     },
+    /// Exact admitted backing and shared-control owner.
     Admitted(ChargedShared<ChargedBuffer<u8>>),
 }
 
@@ -82,11 +85,10 @@ impl ResultWitness {
         })
     }
     fn check_len(length: usize) -> Result<(), WitnessAdmissionError> {
-        if length == 0 || length > MAX_RESULT_WITNESS_BYTES {
-            Err(WitnessAdmissionError::Length { length })
-        } else {
-            Ok(())
-        }
+        (1..=MAX_RESULT_WITNESS_BYTES)
+            .contains(&length)
+            .then_some(())
+            .ok_or(WitnessAdmissionError::Length { length })
     }
     /// Move exact charged backing into an original-pool shared owner.
     ///
@@ -136,11 +138,7 @@ impl ResultWitness {
         let Storage::Untrusted { source, pending } = &mut self.storage else {
             unreachable!("admitted owner handled above")
         };
-        if let Some(bytes) = pending.as_ref() {
-            if !bytes.belongs_to(budget) {
-                return Err(WitnessAdmissionError::ForeignBudget);
-            }
-        } else {
+        if pending.is_none() {
             let mut bytes =
                 ChargedBuffer::new(source.len(), budget).map_err(WitnessAdmissionError::Buffer)?;
             bytes
@@ -168,237 +166,49 @@ impl ResultWitness {
             Storage::Admitted(bytes) => bytes.belongs_to(budget),
         }
     }
-    /// Borrow the occupied bytes without escaping their immutable allocation owner.
-    #[must_use]
-    pub fn as_slice(&self) -> &[u8] {
-        match &self.storage {
-            Storage::Untrusted { source, pending } => pending
+}
+impl Clone for Storage {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Untrusted { source, .. } => Self::Untrusted {
+                source: Arc::clone(source),
+                pending: None,
+            },
+            Self::Admitted(bytes) => Self::Admitted(bytes.clone()),
+        }
+    }
+}
+impl ByteStorage for Storage {
+    const MIN: usize = 1;
+    const MAX: usize = MAX_RESULT_WITNESS_BYTES;
+    const NAME: &'static str = "ResultWitness";
+    const FRAME: &'static str = "iroha_sumeragi::ResultWitness";
+    fn from_bytes(bytes: &[u8]) -> Self {
+        Self::Untrusted {
+            source: Arc::new(bytes.to_vec()),
+            pending: None,
+        }
+    }
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Untrusted { source, pending } => pending
                 .as_ref()
                 .map_or_else(|| source.as_slice(), |bytes| bytes.as_slice()),
-            Storage::Admitted(bytes) => bytes.as_slice(),
+            Self::Admitted(bytes) => bytes.as_slice(),
         }
-    }
-}
-impl Clone for ResultWitness {
-    fn clone(&self) -> Self {
-        Self {
-            storage: match &self.storage {
-                Storage::Untrusted { source, .. } => Storage::Untrusted {
-                    source: Arc::clone(source),
-                    pending: None,
-                },
-                Storage::Admitted(bytes) => Storage::Admitted(bytes.clone()),
-            },
-        }
-    }
-}
-impl fmt::Debug for ResultWitness {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("ResultWitness")
-            .field(&self.as_slice())
-            .finish()
-    }
-}
-impl PartialEq for ResultWitness {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-impl Eq for ResultWitness {}
-impl ncore::SerializePayload for ResultWitness {
-    fn serialize(&self, encoder: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_seq_len(encoder, self.as_slice().len() as u64)?;
-        encoder.write_all(self.as_slice())?;
-        Ok(())
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        Some(8 + self.as_slice().len())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded_len_hint()
-    }
-}
-impl<'de> ncore::DecodeFromSlice<'de> for ResultWitness {
-    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (length, prefix) = ncore::read_seq_len_slice(bytes)?;
-        if length == 0 || length > MAX_RESULT_WITNESS_BYTES {
-            return Err(ncore::Error::FieldLengthExceeded {
-                length: length as u64,
-                limit: MAX_RESULT_WITNESS_BYTES as u64,
-            });
-        }
-        let used = prefix
-            .checked_add(length)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let data = bytes
-            .get(prefix..used)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let value =
-            Self::from_untrusted(data.to_vec()).map_err(|_| ncore::Error::LengthMismatch)?;
-        ncore::note_payload_access(bytes, used);
-        Ok((value, used))
-    }
-}
-impl<'de> ncore::DeserializePayload<'de> for ResultWitness {
-    fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("bounded canonical result witness")
-    }
-    fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
-        <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes).map(|(value, _)| value)
-    }
-}
-impl norito::NoritoSchema for ResultWitness {
-    fn nominal_name() -> String {
-        "iroha_sumeragi::ResultWitness".to_owned()
-    }
-    fn static_frame_name() -> Option<&'static str> {
-        Some("iroha_sumeragi::ResultWitness")
     }
 }
 
-/// Opaque compact application signature with no heap backing or mutable allocation escape.
-///
-/// The sole canonical codec emits its occupied bytes as one byte sequence. The private unused
-/// capacity is always zero and is never encoded. The application verifies every signature against the shared result witness and exact signer.
-#[derive(Clone, Copy)]
-pub struct AttestationSignature {
-    bytes: [u8; MAX_ATTESTATION_SIGNATURE_BYTES],
-    len: u16,
-}
-
-/// A attestation signature exceeded the fixed protocol capacity.
+/// Semantic identity of compact per-member attestation signatures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AttestationSignatureError {
-    /// Requested occupied byte length.
-    pub length: usize,
+pub enum SignatureDomain {}
+impl InlineDomain for SignatureDomain {
+    const NAME: &'static str = "AttestationSignature";
+    const FRAME: &'static str = "iroha_sumeragi::AttestationSignature";
 }
-impl fmt::Display for AttestationSignatureError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "attestation signature length {} exceeds {}",
-            self.length, MAX_ATTESTATION_SIGNATURE_BYTES
-        )
-    }
-}
-impl std::error::Error for AttestationSignatureError {}
-
-impl AttestationSignature {
-    /// Empty signature bytes. Application validation must still check whether demand exists.
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self {
-            bytes: [0; MAX_ATTESTATION_SIGNATURE_BYTES],
-            len: 0,
-        }
-    }
-
-    /// Copy bounded canonical application bytes without allocating.
-    ///
-    /// # Errors
-    /// Rejects lengths above the protocol cap before copying any bytes.
-    pub fn try_from_slice(bytes: &[u8]) -> Result<Self, AttestationSignatureError> {
-        if bytes.len() > MAX_ATTESTATION_SIGNATURE_BYTES {
-            return Err(AttestationSignatureError {
-                length: bytes.len(),
-            });
-        }
-        let mut witness = Self::empty();
-        witness.bytes[..bytes.len()].copy_from_slice(bytes);
-        witness.len = u16::try_from(bytes.len()).expect("protocol bound fits u16");
-        Ok(witness)
-    }
-    /// Occupied canonical application bytes, without the unused capacity.
-    #[must_use]
-    pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
-    }
-    /// Whether no application signature bytes are carried.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-    /// Number of occupied bytes.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.len as usize
-    }
-}
-impl Default for AttestationSignature {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-impl fmt::Debug for AttestationSignature {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("AttestationSignature")
-            .field(&self.as_slice())
-            .finish()
-    }
-}
-impl PartialEq for AttestationSignature {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-impl Eq for AttestationSignature {}
-impl std::hash::Hash for AttestationSignature {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(self.as_slice(), state);
-    }
-}
-
-impl ncore::SerializePayload for AttestationSignature {
-    fn serialize(&self, encoder: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_seq_len(encoder, u64::from(self.len))?;
-        encoder.write_all(self.as_slice())?;
-        Ok(())
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        Some(8 + self.len())
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        Some(8 + self.len())
-    }
-}
-impl<'de> ncore::DecodeFromSlice<'de> for AttestationSignature {
-    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (length, prefix) = ncore::read_seq_len_slice(bytes)?;
-        if length > MAX_ATTESTATION_SIGNATURE_BYTES {
-            return Err(ncore::Error::FieldLengthExceeded {
-                length: u64::try_from(length).unwrap_or(u64::MAX),
-                limit: MAX_ATTESTATION_SIGNATURE_BYTES as u64,
-            });
-        }
-        let used = prefix
-            .checked_add(length)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let data = bytes
-            .get(prefix..used)
-            .ok_or(ncore::Error::LengthMismatch)?;
-        let witness = Self::try_from_slice(data).map_err(|_| ncore::Error::LengthMismatch)?;
-        ncore::note_payload_access(bytes, used);
-        Ok((witness, used))
-    }
-}
-impl<'de> ncore::DeserializePayload<'de> for AttestationSignature {
-    fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("canonical bounded attestation signature")
-    }
-    fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
-        <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes).map(|(witness, _)| witness)
-    }
-}
-impl norito::NoritoSchema for AttestationSignature {
-    fn nominal_name() -> String {
-        "iroha_sumeragi::AttestationSignature".to_owned()
-    }
-    fn static_frame_name() -> Option<&'static str> {
-        Some("iroha_sumeragi::AttestationSignature")
-    }
-}
+/// Opaque compact application signature, with inline bounded storage and a byte-sequence codec.
+pub type AttestationSignature =
+    ByteSequence<InlineBytes<MAX_ATTESTATION_SIGNATURE_BYTES, SignatureDomain>>;
 
 /// One source-complete commit share. A certificate keeps its witness only once.
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]

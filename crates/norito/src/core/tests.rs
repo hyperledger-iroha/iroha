@@ -2488,7 +2488,7 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
     let inner = from_bytes_view(&inner_frame).expect("construct nested view");
     assert_eq!(decode_state_fingerprint(), ambient_state);
     let decoded = outer
-        .decode_exact_with::<u8, _>(|payload| {
+        .decode_exact_with::<u8, u8, _>(|payload| {
             let state = payload_ctx_state().expect("view decode payload context");
             assert_eq!(state.schema, Some(outer.schema()));
             assert_eq!(state.flags, outer.flags());
@@ -2498,19 +2498,19 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
     assert_eq!(decoded, 0x31);
     assert_eq!(decode_state_fingerprint(), ambient_state);
     let error = outer
-        .decode_exact_with::<u8, _>(|_| Err(Error::Message("expected failure".to_owned())))
+        .decode_exact_with::<u8, u8, _>(|_| Err(Error::Message("expected failure".to_owned())))
         .expect_err("custom decoder error must propagate");
     assert!(matches!(error, Error::Message(_)));
     assert_eq!(decode_state_fingerprint(), ambient_state);
     let panic = std::panic::catch_unwind(|| {
-        let _ = outer.decode_exact_with::<u8, _>(|_| panic!("expected decoder panic"));
+        let _ = outer.decode_exact_with::<u8, u8, _>(|_| panic!("expected decoder panic"));
     });
     assert!(panic.is_err());
     assert_eq!(decode_state_fingerprint(), ambient_state);
     let nested = outer
-        .decode_exact_with::<u8, _>(|outer_payload| {
+        .decode_exact_with::<u8, u8, _>(|outer_payload| {
             let outer_state = decode_state_fingerprint();
-            let inner_value = inner.decode_exact_with::<u8, _>(|inner_payload| {
+            let inner_value = inner.decode_exact_with::<u8, u8, _>(|inner_payload| {
                 let state = payload_ctx_state().expect("nested view payload context");
                 assert_eq!(state.schema, Some(inner.schema()));
                 assert_eq!(state.flags, inner_flags);
@@ -2860,3 +2860,114 @@ fn encode_slice_payloads_matches_length_prefixed_layout() {
 }
 // Preserve pointer and length boundary coverage under `core::tests`.
 include!("../core_payload_boundary_tests.rs");
+
+#[test]
+fn archive_custom_result_keeps_original_wire_identity_and_exact_consumption() {
+    reset_decode_state();
+    let frame = crate::encode_canonical(&0xA5_u128).unwrap();
+    let view = from_bytes_view(&frame).unwrap();
+    // This borrowed result deliberately has no codec; only u128 owns the frame identity.
+    struct Borrowed<'a>(&'a [u8]);
+    let borrowed = view
+        .decode_exact_with::<u128, Borrowed<'_>, _>(|payload| {
+            Ok((Borrowed(payload), payload.len()))
+        })
+        .unwrap();
+    assert_eq!(borrowed.0, &0xA5_u128.to_le_bytes());
+    assert!(core::ptr::eq(borrowed.0.as_ptr(), view.as_bytes().as_ptr()));
+    let entered = std::cell::Cell::new(false);
+    assert!(matches!(
+        view.decode_exact_with::<u64, (), _>(|payload| {
+            entered.set(true);
+            Ok(((), payload.len()))
+        }),
+        Err(Error::SchemaMismatch)
+    ));
+    assert!(!entered.get());
+    let padding = payload_alignment_padding_for::<u128>();
+    if padding != 0 {
+        let mut missing_padding = frame[..Header::SIZE].to_vec();
+        missing_padding.extend_from_slice(&frame[Header::SIZE + padding..]);
+        let view = from_bytes_view(&missing_padding).unwrap();
+        assert!(matches!(
+            view.decode_exact_with::<u128, (), _>(|payload| {
+                entered.set(true);
+                Ok(((), payload.len()))
+            }),
+            Err(Error::LengthMismatch)
+        ));
+        assert!(!entered.get());
+    }
+    let dropped = std::cell::Cell::new(false);
+    struct Returned<'a>(&'a std::cell::Cell<bool>);
+    impl Drop for Returned<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+    assert!(matches!(
+        view.decode_exact_with::<u128, Returned<'_>, _>(|payload| {
+            Ok((Returned(&dropped), payload.len() - 1))
+        }),
+        Err(Error::LengthMismatch)
+    ));
+    assert!(
+        dropped.get(),
+        "result ownership must be reclaimed on a consumption failure"
+    );
+    let mut unknown_flags = frame.clone();
+    unknown_flags[Header::SIZE - 1] = 0x80;
+    assert!(from_bytes_view(&unknown_flags).is_err());
+    assert!(from_bytes_view(&frame[..frame.len() - 1]).is_err());
+    let mut suffix = frame.clone();
+    suffix.push(0);
+    assert!(from_bytes_view(&suffix).is_err());
+    reset_decode_state();
+}
+
+#[test]
+fn archive_custom_result_cannot_widen_outer_element_or_allocation_budgets() {
+    reset_decode_state();
+    let frame = crate::encode_canonical(&0x42_u8).unwrap();
+    let view = from_bytes_view(&frame).unwrap();
+    let ambient = [0xA1, 0xA2];
+    let guard = PayloadCtxGuard::enter_with_schema_and_flags(&ambient, [7; 16], 0);
+    let original = decode_state_fingerprint();
+    let allocation = with_decode_limits(DecodeLimits::new(32, 32, 32, 0, 8), || {
+        view.decode_exact_with::<u8, bool, _>(|payload| {
+            reserve_decode_allocation(1)?;
+            Ok((true, payload.len()))
+        })
+    });
+    assert!(matches!(
+        allocation,
+        Err(Error::TotalAllocationExceeded {
+            attempted: 1,
+            limit: 0
+        })
+    ));
+    assert_eq!(decode_state_fingerprint(), original);
+    let elements = with_decode_limits(DecodeLimits::new(1, 32, 1, 32, 8), || {
+        view.decode_exact_with::<u8, bool, _>(|payload| {
+            enforce_decode_sequence_length(2)?;
+            Ok((true, payload.len()))
+        })
+    });
+    assert!(matches!(
+        elements,
+        Err(Error::SequenceLengthExceeded {
+            length: 2,
+            limit: 1
+        })
+    ));
+    assert_eq!(decode_state_fingerprint(), original);
+    let (borrowed, usage) =
+        with_decode_limits_measured(DecodeLimits::new(32, 32, 32, 0, 8), || {
+            view.decode_exact_with::<u8, &[u8], _>(|payload| Ok((payload, payload.len())))
+        });
+    assert_eq!(borrowed.unwrap(), &[0x42]);
+    assert_eq!(usage.total_allocated_bytes(), 0);
+    assert_eq!(decode_state_fingerprint(), original);
+    drop(guard);
+    reset_decode_state();
+}

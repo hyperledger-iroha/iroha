@@ -1,5 +1,7 @@
 //! Genesis-related logic and constructs. Contains the [`GenesisBlock`],
 //! [`RawGenesisTransaction`] and the [`GenesisBuilder`] structures.
+//! Every genesis batch signs expiry height two and its one-based sequence so the
+//! genesis parameter snapshot may require either ingress rule from height one.
 #![allow(unexpected_cfgs)]
 #![allow(
     clippy::let_and_return,
@@ -20,6 +22,25 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
+
+/// Genesis runs at height one; every signed batch remains admissible when its
+/// own parameter snapshot enables height expiry or per-authority sequencing.
+fn genesis_transaction_metadata(index: u64) -> Result<Metadata> {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "expires_at_height".parse().expect("fixed metadata name"),
+        Json::from(2_u64),
+    );
+    metadata.insert(
+        "tx_sequence".parse().expect("fixed metadata name"),
+        Json::from(
+            index
+                .checked_add(1)
+                .ok_or_else(|| eyre!("genesis sequence exceeds u64"))?,
+        ),
+    );
+    Ok(metadata)
+}
 mod bounded_manifest;
 #[cfg(test)]
 mod ivm_path_codec_tests;
@@ -443,7 +464,10 @@ fn validate_signed_manifest_binding(
                 "signed genesis transaction {index} has the wrong domain or root authority"
             ));
         }
-        if !transaction.metadata().is_empty()
+        if transaction.metadata()
+            != &genesis_transaction_metadata(
+                u64::try_from(index).wrap_err("genesis index exceeds u64")?,
+            )?
             || transaction.nonce().is_some()
             || transaction.multisig_signatures().is_some()
             || transaction.attachments().is_some()
@@ -2215,13 +2239,14 @@ impl RawGenesisTransaction {
                     encoded.len()
                 );
             }
+            let tx_index =
+                u64::try_from(tx_index).expect("genesis transaction count validated above");
             let mut builder = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions(instructions);
-            let tx_index =
-                u64::try_from(tx_index).expect("genesis transaction count validated above");
+            .with_instructions(instructions)
+            .with_metadata(genesis_transaction_metadata(tx_index)?);
             builder.set_creation_time(Duration::from_millis(
                 creation_time_base_ms
                     .checked_add(tx_index)
@@ -3084,6 +3109,47 @@ mod tests {
             .expect("test genesis manifest has one transaction")
             .topology = deterministic_test_genesis_topology_entries();
         manifest
+    }
+
+    #[test]
+    fn signed_genesis_batches_have_canonical_expiry_and_increasing_sequences() -> Result<()> {
+        init_instruction_registry();
+        let key = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
+        let manifest = with_test_signing_topology(
+            GenesisBuilder::new_without_executor(ChainId::from("genesis-ingress-policy"), ".")
+                .append_parameter(Parameter::Transaction(
+                    iroha_data_model::parameter::system::TransactionParameter::RequireHeightTtl(
+                        true,
+                    ),
+                ))
+                .append_parameter(Parameter::Transaction(
+                    iroha_data_model::parameter::system::TransactionParameter::RequireSequence(
+                        true,
+                    ),
+                ))
+                .build_raw_for_test(),
+        )
+        .with_consensus_meta();
+        let block = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &key, None, None, 1_000,
+            )?
+            .0;
+        assert!(block.external_transactions().len() > 1);
+        for (index, transaction) in block.external_transactions().enumerate() {
+            assert_eq!(transaction.expires_at_height()?, Some(2));
+            assert_eq!(transaction.tx_sequence()?, Some(index as u64 + 1));
+            assert_eq!(transaction.metadata().len(), 2);
+        }
+        validate_prepared_genesis_bundle(
+            &block.encode_wire()?,
+            &manifest,
+            key.public_key(),
+            block.hash(),
+        )?;
+        assert!(genesis_transaction_metadata(u64::MAX).is_err());
+        Ok(())
     }
 
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {

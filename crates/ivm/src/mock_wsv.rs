@@ -3686,7 +3686,7 @@ impl IVMHost for WsvHost {
                         }
                         _ => return Err(VMError::NoritoInvalid),
                     },
-                    Err(_) => self.decode_asset_reg(vm, 10)?,
+                    Err(error) => return Err(error),
                 };
                 // Determine mintability from r13 (0 → Infinitely, 1 → Once, otherwise Not)
                 let mintable = match vm.register(13) {
@@ -7189,5 +7189,28 @@ mod tests_null_decode {
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
+    }
+}
+
+#[cfg(test)]
+mod read_deferral_tests {
+    use super::*;
+
+    #[test]
+    fn asset_registration_returns_read_refusal_without_retrying_an_alternate_decoder() {
+        let caller = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
+        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let mut vm = IVM::try_new_with_memory_budget(1_000_000, &budget).unwrap();
+        vm.set_register(10, crate::Memory::INPUT_START);
+        budget.set_limit_bytes(budget.reserved_bytes());
+        assert!(matches!(
+            host.syscall(syscalls::SYSCALL_REGISTER_ASSET, &mut vm),
+            Err(VMError::AllocationDeferred(_))
+        ));
+        assert_eq!(vm.register(10), crate::Memory::INPUT_START);
     }
 }

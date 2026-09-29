@@ -63,7 +63,7 @@ fn current_block_signature_capture() -> Value {
     assert_eq!(rows.len(), 7);
     norito::json!({
         "format_version": 1,
-        "purpose": "public BlockSignature pre-declaration capture",
+        "purpose": "public BlockSignature canonical v1 policy capture",
         "default_encode_flags": (norito::core::default_encode_flags()),
         "signing_inputs": signing_inputs,
         "rows": rows,
@@ -77,7 +77,7 @@ fn block_signature_frames_match_capture() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/block_signature_identity_frames.json"
     )))
-    .expect("immutable pre-declaration BlockSignature capture");
+    .expect("canonical BlockSignature v1 policy capture");
     assert_eq!(evidence, expected);
 }
 

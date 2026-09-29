@@ -162,43 +162,15 @@ pub(crate) fn quote_and_sign_transaction(
     requested_fee_payment: FeePaymentIntent,
     metadata: Metadata,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
-    quote_and_sign_transaction_inner(
-        client,
-        executable,
-        requested_fee_payment,
-        metadata,
-        None,
-        None,
-    )
+    quote_and_sign_transaction_inner(client, executable, requested_fee_payment, metadata, None)
 }
 
-/// Select the signature-bound admission protocol before quoting the exact payload.
-pub(crate) fn quote_and_sign_transaction_with_admission(
+/// Bound the signed execution lifetime before quoting the exact payload.
+pub(crate) fn quote_and_sign_transaction_with_expiry(
     client: &BlockingClient,
     executable: Executable,
     requested_fee_payment: FeePaymentIntent,
     metadata: Metadata,
-    admission_intent: iroha::data_model::transaction::TransactionAdmissionIntent,
-) -> Result<(SignedTransaction, FeeQuoteResponse)> {
-    quote_and_sign_transaction_inner(
-        client,
-        executable,
-        requested_fee_payment,
-        metadata,
-        None,
-        Some(admission_intent),
-    )
-}
-
-/// Select an intentional admission corridor before quoting the exact payload.
-/// Ordinary lifecycle certificates still retain the signed execution expiry;
-/// callers of the default helpers keep the account draft's Ordinary intent.
-pub(crate) fn quote_and_sign_transaction_with_admission_and_expiry(
-    client: &BlockingClient,
-    executable: Executable,
-    requested_fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-    admission_intent: iroha::data_model::transaction::TransactionAdmissionIntent,
     execution_expiry_ms: u64,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     quote_and_sign_transaction_inner(
@@ -207,7 +179,6 @@ pub(crate) fn quote_and_sign_transaction_with_admission_and_expiry(
         requested_fee_payment,
         metadata,
         Some(execution_expiry_ms),
-        Some(admission_intent),
     )
 }
 
@@ -232,18 +203,15 @@ fn quote_and_sign_transaction_inner(
     requested_fee_payment: FeePaymentIntent,
     metadata: Metadata,
     execution_expiry_ms: Option<u64>,
-    admission_intent: Option<iroha::data_model::transaction::TransactionAdmissionIntent>,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
     let account = client.account_client();
-    let mut draft = iroha::client::AccountTransactionDraft::new(
+    let draft = iroha::client::AccountTransactionDraft::new(
         executable.clone(),
         requested_fee_payment.clone(),
         metadata,
     );
-    if let Some(intent) = admission_intent {
-        draft = draft.with_admission_intent(intent);
-    }
+
     let mut payload = account
         .prepare_transaction(draft)
         .wrap_err("Failed to build exact unsigned transaction payload for fee quoting")?;

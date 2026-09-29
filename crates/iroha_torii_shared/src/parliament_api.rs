@@ -6,15 +6,13 @@
 //! state even while reducer internals evolve within the first release.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::Hash;
 use iroha_data_model::isi::governance::{
     PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
     ParliamentLifecycleTransitionV1,
 };
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
         GovernanceAttemptId, GovernanceAttemptV1, GovernanceCertificateV1,
@@ -24,6 +22,9 @@ use iroha_data_model::{
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
         ParliamentTimedOvnCastingContextMembershipProofV1, ParliamentTimedOvnCastingWitnessProofV1,
+    },
+    sumeragi_finality::{
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, verify_checkpoint_page,
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -476,8 +477,8 @@ pub struct ParliamentTimedOvnCastingProofRequestV1 {
 /// Intermediate pages deliberately omit every casting field. Only a terminal
 /// page (`more_available == false`) contains the archive, its archive-derived
 /// compact binding, application-Merkle membership, and fixed ordinary-write
-/// witness. A wallet must independently configure the network id and exact
-/// checkpoint context, verify this response, and rederive the compact binding
+/// witness. A wallet must independently select the network id and complete native
+/// checkpoint, verify this response, and rederive the compact binding
 /// from the fully replay-validated archive before it touches secret seed bytes.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -492,17 +493,21 @@ pub struct ParliamentTimedOvnCastingProofResponseV1 {
     /// Response layout version.
     pub version: u16,
     /// Canonical framed Core casting archive, present only at the observed tip.
+    #[norito(required)]
     pub casting_context_archive: Option<Vec<u8>>,
     /// Compact archive-derived leaf committed by the evaluated block.
+    #[norito(required)]
     pub casting_context_binding: Option<ParliamentTimedOvnCastingContextBindingV1>,
     /// Application-Merkle membership proof for `casting_context_binding`.
+    #[norito(required)]
     pub context_membership_proof: Option<ParliamentTimedOvnCastingContextMembershipProofV1>,
     /// Fixed synthetic ordinary-write proof for the committed context-set root.
+    #[norito(required)]
     pub casting_witness: Option<ParliamentTimedOvnCastingWitnessProofV1>,
     /// Consecutive finality proofs beginning at the caller's checkpoint.
-    pub finality_chain: Vec<BridgeFinalityProof>,
-    /// Context id at the evaluated tip, suitable for durable checkpoint promotion.
-    pub evaluated_context_id: HeightContextId,
+    pub finality_chain: Vec<SumeragiFinalityProof>,
+    /// Native decision digest at the evaluated tip; the verified checkpoint supplies promotion authority.
+    pub evaluated_context_id: Hash,
     /// Height whose post-execution casting state was evaluated.
     pub evaluated_block_height: u64,
     /// Canonical lowercase hash of the evaluated committed block.
@@ -1046,12 +1051,17 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
     pub fn verify_consensus_page_against(
         &self,
         network_id: NetworkId,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
         expected_ballot_attempt_id: BallotAttemptId,
-    ) -> Result<Option<&ParliamentTimedOvnCastingContextBindingV1>, String> {
+    ) -> Result<
+        (
+            Option<&ParliamentTimedOvnCastingContextBindingV1>,
+            SumeragiFinalityCheckpoint,
+        ),
+        String,
+    > {
         if self.version != PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
-            || trusted_checkpoint_height == 0
+            || trusted_checkpoint.height() == 0
             || self.evaluated_block_height == 0
             || self.observed_ledger_tip_height < self.evaluated_block_height
             || self.more_available
@@ -1061,10 +1071,6 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
                 "unsupported Parliament casting proof version or invalid trust anchor".into(),
             );
         }
-        parliament_casting_require_canonical_hash(
-            "trusted Parliament casting checkpoint context id",
-            &trusted_checkpoint_context_id,
-        )?;
         parliament_casting_require_canonical_hash(
             "Parliament casting network id",
             network_id.as_bytes(),
@@ -1084,67 +1090,26 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
             "evaluated Parliament casting block hash",
             &evaluated_block_hash,
         )?;
-        if self.finality_chain.is_empty()
-            || self.finality_chain.len() > PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1
-        {
-            return Err("Parliament casting finality chain is empty or exceeds 64 proofs".into());
-        }
-        let finality_bytes = norito::to_bytes(&self.finality_chain)
-            .map_err(|error| format!("Parliament casting finality encoding failed: {error}"))?;
-        if finality_bytes.len() > PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1 {
-            return Err("Parliament casting finality chain exceeds its byte bound".into());
-        }
-        if self.finality_chain.windows(2).any(|pair| {
-            pair[0].finality_artifact.height.checked_add(1)
-                != Some(pair[1].finality_artifact.height)
-        }) {
-            return Err("Parliament casting finality chain skips or reorders a height".into());
-        }
-        let trusted_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-            trusted_checkpoint_context_id,
-        )));
-        let first = self
-            .finality_chain
-            .first()
-            .expect("non-empty Parliament casting finality chain");
-        if first.finality_artifact.height != trusted_checkpoint_height
-            || first.finality_artifact.context_id() != trusted_context
+        require_casting_finality_chain_count(&self.finality_chain)?;
+        let page = verify_checkpoint_page(
+            network_id,
+            trusted_checkpoint,
+            &self.finality_chain,
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1,
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
+        )
+        .map_err(|error| format!("native finality page failed: {error}"))?;
+        let evaluated = page.tip();
+        if evaluated.height() != self.evaluated_block_height
+            || evaluated.header().hash().as_ref() != &evaluated_block_hash
+            || self.evaluated_context_id != evaluated.context_id()
         {
             return Err(
-                "Parliament casting finality chain does not begin at the caller's checkpoint"
-                    .into(),
+                "native finality page tip does not match the evaluated application block".into(),
             );
         }
-        if first.finality_artifact.height_context.network_id != network_id {
-            return Err("Parliament casting finality chain targets a different network".into());
-        }
-        let mut verifier = BridgeFinalityVerifier::with_context(network_id, trusted_context);
-        for proof in &self.finality_chain {
-            verifier
-                .verify(proof)
-                .map_err(|error| format!("Parliament casting finality chain failed: {error}"))?;
-        }
-        let evaluated = self
-            .finality_chain
-            .last()
-            .expect("non-empty Parliament casting finality chain");
-        let artifact: &V2FinalityArtifact = &evaluated.finality_artifact;
-        if artifact.height != self.evaluated_block_height
-            || artifact.block_hash.as_ref() != &evaluated_block_hash
-            || evaluated.block_header.height().get() != artifact.height
-            || evaluated.block_header.hash() != artifact.block_hash
-            || self.evaluated_context_id != artifact.context_id()
-        {
-            return Err("finality chain tip does not match the evaluated casting block".into());
-        }
-        artifact
-            .commit_qc
-            .execution_commitment
-            .validate()
-            .map_err(|error| {
-                format!("evaluated casting execution commitment is invalid: {error}")
-            })?;
-
+        // The verified page already validated the complete native result commitment.
+        // Application witnesses below stay bound to that same authenticated tip.
         let casting_fields = (
             self.casting_context_archive.as_ref(),
             self.casting_context_binding.as_ref(),
@@ -1155,7 +1120,7 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
             if !matches!(casting_fields, (None, None, None, None)) {
                 return Err("checkpoint-promotion page unexpectedly contains casting state".into());
             }
-            return Ok(None);
+            return Ok((None, page.into_checkpoint()));
         }
         let (Some(archive), Some(binding), Some(membership), Some(witness)) = casting_fields else {
             return Err("terminal Parliament casting proof is incomplete".into());
@@ -1165,7 +1130,7 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
         {
             return Err("terminal Parliament casting archive exceeds its byte bound".into());
         }
-        if binding.evaluated_height != artifact.height
+        if binding.evaluated_height != evaluated.height()
             || binding.network_id != *network_id.as_bytes()
             || binding.ballot_attempt_id != expected_ballot_attempt_id
             || !binding.is_valid()
@@ -1174,18 +1139,26 @@ impl ParliamentTimedOvnCastingProofResponseV1 {
                 "Parliament casting binding differs from the expected ballot or block".into(),
             );
         }
-        if !witness.verify(artifact.commit_qc.execution_commitment.ordinary_writes_root) {
+        if !witness.verify(evaluated.execution().ordinary_writes_root) {
             return Err("Parliament casting synthetic ordinary-write proof is invalid".into());
         }
         let snapshot = witness.commitment()?;
-        if snapshot.evaluated_height != artifact.height {
+        if snapshot.evaluated_height != evaluated.height() {
             return Err("Parliament casting snapshot height differs from finality".into());
         }
         if !membership.verify(binding, &snapshot) {
             return Err("Parliament casting context membership proof is invalid".into());
         }
-        Ok(Some(binding))
+        Ok((Some(binding), page.into_checkpoint()))
     }
+}
+
+fn require_casting_finality_chain_count(proofs: &[SumeragiFinalityProof]) -> Result<(), String> {
+    if proofs.is_empty() || proofs.len() > PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_PROOFS_V1
+    {
+        return Err("Parliament casting finality chain is empty or exceeds 64 proofs".into());
+    }
+    Ok(())
 }
 
 fn parliament_casting_exact_lower_hex_32(label: &str, value: &str) -> Result<[u8; 32], String> {
@@ -1483,9 +1456,7 @@ mod tests {
             context_membership_proof: None,
             casting_witness: None,
             finality_chain: Vec::new(),
-            evaluated_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [3; 32],
-            ))),
+            evaluated_context_id: Hash::prehashed([3; 32]),
             evaluated_block_height: 17,
             evaluated_block_hash: hex::encode([5; 32]),
             observed_ledger_tip_height: 17,
@@ -1510,31 +1481,8 @@ mod tests {
                 .expect("decode casting proof request"),
             request
         );
-        let network_id =
-            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([1; 32])));
-        let context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([3; 32])));
-        let response = ParliamentTimedOvnCastingProofResponseV1 {
-            version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
-            casting_context_archive: None,
-            casting_context_binding: None,
-            context_membership_proof: None,
-            casting_witness: None,
-            finality_chain: Vec::new(),
-            evaluated_context_id: context,
-            evaluated_block_height: 17,
-            evaluated_block_hash: hex::encode([5; 32]),
-            observed_ledger_tip_height: 17,
-            more_available: false,
-        };
         assert_eq!(
-            response
-                .verify_consensus_page_against(
-                    network_id,
-                    17,
-                    [3; 32],
-                    BallotAttemptId::new([7; 32]),
-                )
-                .expect_err("empty finality chain must fail closed"),
+            require_casting_finality_chain_count(&[]).unwrap_err(),
             "Parliament casting finality chain is empty or exceeds 64 proofs"
         );
     }

@@ -1,6 +1,7 @@
 //! Genuine lane admission, native quorum and global execution controls.
 use super::*;
 use crate::kura::scaling_evidence::fixture::producer::{LaneProducer, resign_lane};
+use iroha_core::state::StateReadOnly as _;
 #[test]
 fn actual_lane_execution_and_quorum_feed_original_global_worker_merge() {
     for lanes in [1, 4] {
@@ -33,13 +34,13 @@ fn actual_lane_execution_and_quorum_feed_original_global_worker_merge() {
             assert_eq!(source.source.anchor_height, 3);
             assert_eq!(source.source.batch_index, 0);
             assert_ne!(source.source.block_hash, [0; 32]);
-            assert_eq!(
+            assert!(
                 block
                     .network_output_at(u32::try_from(index).unwrap())
                     .unwrap()
                     .1
-                    .result,
-                Ok(())
+                    .result
+                    .is_ok()
             );
             let context = block
                 .execution_context()

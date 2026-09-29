@@ -144,14 +144,12 @@ class NativeVectorCollection:
             _require(0 < trial_deadline_ns - time.monotonic_ns() <= MAX_TRIAL_NS)
             # Own every admitted scalar before any callback. Later caller dataclass changes
             # cannot retarget native commands or increase these original reservations.
-            self._store, self._merge, self._reader_args = _reader_snapshot(stopped)
+            self._store, self._reader_args = _reader_snapshot(stopped)
             self._limits = _limits(limits)
-            first, last, blocks, data, carrier_limit, merge_bytes, frames, input_bytes, value_decode, uid = self._reader_args
+            first, last, blocks, data, carrier_limit, input_bytes, value_decode, uid = self._reader_args
             _require(first == 1 and last >= 2 and uid == os.geteuid())
             _integer(data, 1, 2 * 1024 * _MIB)
             _integer(carrier_limit, 1, 32 * _MIB)
-            _integer(merge_bytes, 1, 256 * _MIB)
-            _integer(frames, 1, blocks)
             _integer(input_bytes, 1, 256 * _MIB)
             _integer(value_decode, 1, self._limits[6])
             inputs.validate(); outputs.validate(); image.validate()
@@ -162,8 +160,7 @@ class NativeVectorCollection:
             self._input_binding = self._snapshot_inputs()
             self._output_binding = (outputs.directory, outputs.path('carrier'), outputs.path('queries'),
                                     outputs.allocation('carrier'), outputs.allocation('queries'))
-            _require(self._store == str(inputs.roles[3].primary_block_store)
-                     and self._merge == str(inputs.roles[3].primary_merge_log))
+            _require(self._store == str(inputs.roles[3].primary_block_store))
             _require(outputs.directory != inputs.input_directory
                      and inputs.input_directory not in outputs.directory.parents
                      and outputs.directory not in inputs.input_directory.parents)
@@ -208,7 +205,7 @@ class NativeVectorCollection:
         self._check()
 
     def _argv(self, invocation):
-        first, last, blocks, data, carrier_limit, merge_bytes, frames, input_bytes, value_decode, uid = self._reader_args
+        first, last, blocks, data, carrier_limit, input_bytes, value_decode, uid = self._reader_args
         genesis_cap, context_cap, total, reply, leaves, carrier_leaves, _ = self._limits
         context, context_sha, _ = self._context
         genesis, genesis_sha, _ = self._genesis
@@ -216,13 +213,12 @@ class NativeVectorCollection:
         fields = (('invocation-id', invocation), ('chain-id', self._input_binding[7]),
             ('network-id', self._input_binding[4]), ('genesis-epoch-context-id', self._input_binding[3]),
             ('signed-genesis', genesis), ('signed-genesis-sha256', genesis_sha),
-            ('signed-genesis-max-bytes', genesis_cap), ('block-store', self._store), ('merge-log', self._merge),
+            ('signed-genesis-max-bytes', genesis_cap), ('block-store', self._store),
             ('context', context), ('context-sha256', context_sha), ('context-max-bytes', context_cap),
             ('carrier-out', carrier), ('queries-out', queries), ('carrier-max-bytes', carrier_cap),
             ('queries-max-bytes', queries_cap), ('total-max-bytes', total), ('reply-max-bytes', reply),
             ('first-height', first), ('last-height', last), ('max-committed-blocks', blocks),
             ('max-store-data-bytes', data), ('max-carrier-bytes', carrier_limit),
-            ('max-merge-log-bytes', merge_bytes), ('max-merge-frames', frames),
             ('reader-max-output-bytes', input_bytes), ('max-total-leaves', leaves),
             ('max-leaves-per-carrier', carrier_leaves), ('max-decode-allocation-bytes', value_decode),
             ('owner-uid', uid))

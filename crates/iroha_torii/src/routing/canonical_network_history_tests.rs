@@ -96,7 +96,6 @@ fn carrier() -> SignedBlock {
             vec![],
             Default::default(),
             Default::default(),
-            vec![],
             &ExecutionOutputLimits {
                 max_outputs: 4,
                 max_output_bytes: 65536,
