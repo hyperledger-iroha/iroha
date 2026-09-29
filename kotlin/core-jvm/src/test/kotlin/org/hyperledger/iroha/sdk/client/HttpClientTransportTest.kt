@@ -392,7 +392,7 @@ class HttpClientTransportTest {
             }
         }
 
-        for (backend in listOf(" bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
+        for (backend in listOf(" bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1")) {
             assertRejects(receiptJson(backend = backend))
         }
         for (mode in listOf(" signed", "signed ", "Signed")) {
@@ -524,7 +524,7 @@ class HttpClientTransportTest {
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                       "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-                      "backend": "bfv-affine-sha3-256-v1",
+                      "backend": "bfv-affine-v1",
                       "input_encryption": "bfv-v1",
                       "input_encryption_public_parameters": "ABCD",
                       "input_encryption_public_parameters_decoded": {
@@ -579,8 +579,8 @@ class HttpClientTransportTest {
                 "\"normalization\": \"Phone_E164\"",
             ),
             "identifier policy list.items[0].backend" to canonical.replace(
-                "\"backend\": \"bfv-affine-sha3-256-v1\"",
-                "\"backend\": \"bfv-affine-sha3-256-v1 \"",
+                "\"backend\": \"bfv-affine-v1\"",
+                "\"backend\": \"bfv-affine-v1 \"",
             ),
             "identifier policy list.items[0].input_encryption" to canonical.replace(
                 "\"input_encryption\": \"bfv-v1\"",
@@ -799,7 +799,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.EXACT,
             resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            backend = "bfv-programmed-sha3-256-v1",
+            backend = "bfv-programmed-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = bfvParametersFromFixture(
@@ -2364,7 +2364,7 @@ class HttpClientTransportTest {
                 "\"resolver_public_key\": \" ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\"",
             ),
             "ram-lfe program policy list.items[0].backend" to canonical.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
                 "\"backend\": \"BFV-programmed-sha3-256-v1\"",
             ),
             "ram-lfe program policy list.items[0].verification_mode" to canonical.replace(
@@ -2418,7 +2418,7 @@ class HttpClientTransportTest {
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_encryption": "bfv-v1",
                   "input_encryption_public_parameters": "ABCD",
@@ -2471,7 +2471,6 @@ class HttpClientTransportTest {
         assertEquals("identifier_lookup_retail", execute.programId)
         assertEquals("44".repeat(32), execute.outputHash)
         assertEquals("abcd", execute.outputCiphertext)
-        assertEquals("identifier_lookup_retail", execute.outputOpening.payload.programId)
         assertEquals("signed", execute.verificationMode)
         assertTrue(execute.receipt.containsKey("payload"))
 
@@ -2523,7 +2522,7 @@ class HttpClientTransportTest {
         val receipt = linkedMapOf<String, Any>(
             "payload" to linkedMapOf<String, Any?>(
                 "program_id" to mapOf("name" to "identifier_lookup_retail"),
-                "backend" to "bfv-programmed-sha3-256-v1",
+                "backend" to "bfv-programmed-v1",
                 "verification_mode" to mapOf("mode" to "Signed", "value" to null),
                 "program_digest" to "hash:${"11".repeat(32).uppercase()}#ABCD",
                 "output_hash" to "hash:${"22".repeat(32).uppercase()}#BCDE",
@@ -2557,10 +2556,7 @@ class HttpClientTransportTest {
                 "\"output_ciphertext\": \"abcd\",",
                 "",
             ),
-            "output_opening" to canonicalExecute.replace(
-                "\"output_opening\": {",
-                "\"removed_output_opening\": {",
-            ),
+            "output_opening" to canonicalExecute.replaceFirst("{", "{\"output_opening\":{},"),
             "program_id" to canonicalExecute.replace(
                 "\"program_id\": \"identifier_lookup_retail\"",
                 "\"program_id\": \" identifier_lookup_retail\"",
@@ -2582,8 +2578,8 @@ class HttpClientTransportTest {
                 "\"associated_data_hash\": \"${"55".repeat(32)} \"",
             ),
             "backend" to canonicalExecute.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
-                "\"backend\": \" bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
+                "\"backend\": \" bfv-programmed-v1\"",
             ),
             "verification_mode" to canonicalExecute.replace(
                 "\"verification_mode\": \"signed\"",
@@ -2615,7 +2611,7 @@ class HttpClientTransportTest {
                 "\"program_id\": \"identifier_lookup_retail \"",
             ),
             "backend" to canonicalVerify.replace(
-                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"bfv-programmed-v1\"",
                 "\"backend\": \"BFV-programmed-sha3-256-v1\"",
             ),
             "verification_mode" to canonicalVerify.replace(
@@ -5442,7 +5438,7 @@ class HttpClientTransportTest {
             execution = IdentifierResolutionExecutionPayload(
                 programId = "identifier_lookup_retail",
                 programDigest = "44".repeat(32),
-                backend = "bfv-programmed-sha3-256-v1",
+                backend = "bfv-programmed-v1",
                 verificationMode = "signed",
                 inputCiphertextHash = "55".repeat(32),
                 outputCiphertextHash = outputCiphertextHash,
@@ -5471,7 +5467,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.PHONE_E164,
             resolverPublicKey = resolverPublicKey,
-            backend = "bfv-programmed-sha3-256-v1",
+            backend = "bfv-programmed-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
@@ -6123,7 +6119,7 @@ class HttpClientTransportTest {
             active = true,
             normalization = IdentifierNormalization.EXACT,
             resolverPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            backend = "bfv-affine-sha3-256-v1",
+            backend = "bfv-affine-v1",
             inputEncryption = "bfv-v1",
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = parameters,

@@ -2708,6 +2708,13 @@ are generated locally over the exact method, path, query, and body; callers
 cannot supply precomputed headers or inline body secrets, and signed requests
 are never redirected or retried.
 
+RAM execution responses contain the output ciphertext and its execution receipt.
+They do not contain a plaintext opening. Identifier resolution requires a separate,
+independently authenticated plaintext opening supplied through `outputOpening`.
+The current `bfv-affine-v1` and `bfv-programmed-v1` profiles are insecure and are
+rejected by production execution and admission; private identifier execution
+remains unavailable until a secure encryption profile is implemented and qualified.
+
 ## Sora VPN lease receipts
 
 `submitVpnReceipt` returns earned/refund XOR fields and the native

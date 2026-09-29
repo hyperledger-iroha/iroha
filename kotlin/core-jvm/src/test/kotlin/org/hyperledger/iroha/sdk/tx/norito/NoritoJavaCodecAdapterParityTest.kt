@@ -158,7 +158,6 @@ class NoritoJavaCodecAdapterParityTest {
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
                 feePayment = expectedFeePayment,
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             ),
         )
         val decoded = adapter.decodeTransaction(encoded)

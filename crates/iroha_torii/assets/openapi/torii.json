@@ -35497,10 +35497,6 @@
             "description": "Hash of the encrypted output ciphertext bytes.",
             "type": "string"
           },
-          "output_opening": {
-            "$ref": "#/components/schemas/RamLfeOutputOpening",
-            "description": "Signed opening over the encrypted output hash. Clients reuse this with the same encrypted input when resolving or claiming identifiers."
-          },
           "program_id": {
             "description": "RAM-LFE program identifier.",
             "type": "string"
@@ -35527,8 +35523,7 @@
           "executed_at_ms",
           "backend",
           "verification_mode",
-          "receipt",
-          "output_opening"
+          "receipt"
         ],
         "type": "object"
       },

@@ -533,7 +533,7 @@ fn realistic_ram_lfe_email_policy_bundle(
     let program_policy = RamLfeProgramPolicy::new(
         program_id.clone(),
         owner.clone(),
-        RamLfeBackend::BfvProgrammedSha3_256V1,
+        RamLfeBackend::BfvProgrammedV1,
         RamLfeVerificationMode::Signed,
         commitment,
         resolver.public_key().clone(),

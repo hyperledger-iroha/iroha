@@ -238,7 +238,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
     );
     assert_eq!(values.last(), Some(&F::ZERO));
     let mut changed = 0;
-    for row in &mut material.family_rows[ZkX509Rfc5280StarkFamilyV1::FixedByte as usize] {
+    for row in material.family_rows[ZkX509Rfc5280StarkFamilyV1::FixedByte as usize].iter_mut() {
         if row[BASE_ROLE] == F(13) {
             assert_eq!(row[BASE_CHILD], F::ONE);
             row[BASE_CHILD] = F::ZERO;
@@ -463,7 +463,7 @@ fn authenticated_temporal_census_rejects_omission_duplication_and_changed_timest
             9 * numeric::RELATION_PHASES_V1,
         ),
     ] {
-        for row in &mut omitted.family_rows[family as usize][start..] {
+        for row in omitted.family_rows[family as usize].iter_mut().skip(start) {
             zeroize_fields_v1(row);
         }
     }
@@ -483,8 +483,9 @@ fn authenticated_temporal_census_rejects_omission_duplication_and_changed_timest
         BASE_G,
     ] {
         let mut changed = original.clone();
-        for row in &mut changed.family_rows[ZkX509Rfc5280StarkFamilyV1::Calendar as usize]
-            [..numeric::CALENDAR_PHASES_V1]
+        for row in changed.family_rows[ZkX509Rfc5280StarkFamilyV1::Calendar as usize]
+            .iter_mut()
+            .take(numeric::CALENDAR_PHASES_V1)
         {
             row[field] = row[field].add(F::ONE);
         }
@@ -497,8 +498,14 @@ fn authenticated_temporal_census_rejects_omission_duplication_and_changed_timest
     let mut duplicated = original.clone();
     for phase in 0..numeric::CALENDAR_PHASES_V1 {
         duplicated.family_rows[ZkX509Rfc5280StarkFamilyV1::Calendar as usize]
-            [numeric::CALENDAR_PHASES_V1 + phase] =
-            original.family_rows[ZkX509Rfc5280StarkFamilyV1::Calendar as usize][phase];
+            .iter_mut()
+            .nth(numeric::CALENDAR_PHASES_V1 + phase)
+            .unwrap()
+            .copy_from_slice(
+                &original.family_rows[ZkX509Rfc5280StarkFamilyV1::Calendar as usize]
+                    .get(phase)
+                    .unwrap(),
+            );
     }
     assert_eq!(
         assert_bound_numeric_census_v1(&duplicated),

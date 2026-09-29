@@ -3624,7 +3624,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "identifier policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("identifier policy list endpoint returned no payload");
     }
@@ -3647,7 +3652,12 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "ram-lfe program policy list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("ram-lfe program policy list endpoint returned no payload");
     }
@@ -24697,7 +24707,7 @@ function normalizeRamLfeProgramProfile(payload, context) {
   }
   const dimension = (field, maximum) => {
     const name = `${context}.${field}`;
-    const value = requireBfvUint(record[field], name, { allowZero: false });
+    const value = BigInt(normalizeGovernanceUint64Integer(record[field], name, { allowZero: false }));
     if (value > maximum) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -25182,7 +25192,6 @@ function normalizeRamLfeExecuteResponse(
       "backend",
       "verification_mode",
       "receipt",
-      "output_opening",
     ]),
     context,
   );
@@ -25249,10 +25258,6 @@ function normalizeRamLfeExecuteResponse(
         `${context}.receipt.attestation`,
       ),
     },
-    output_opening: normalizeRamLfeOutputOpening(
-      record.output_opening,
-      `${context}.output_opening`,
-    ),
   };
   const receiptPayload = normalized.receipt.payload;
   const matchingTopLevelFields = [
@@ -25272,30 +25277,6 @@ function normalizeRamLfeExecuteResponse(
         `${context}.${field}`,
       );
     }
-  }
-  const openingPayload = normalized.output_opening.payload;
-  const matchingOpeningFields = [
-    "program_id",
-    "input_ciphertext_hash",
-    "output_ciphertext_hash",
-    "parameter_digest",
-    "evaluation_key_digest",
-  ];
-  for (const field of matchingOpeningFields) {
-    if (openingPayload[field] !== receiptPayload[field]) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.output_opening.payload.${field} does not match ${context}.receipt.payload.${field}`,
-        `${context}.output_opening.payload.${field}`,
-      );
-    }
-  }
-  if (openingPayload.opened_output_hash !== receiptPayload.output_hash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.output_opening.payload.opened_output_hash does not match ${context}.receipt.payload.output_hash`,
-      `${context}.output_opening.payload.opened_output_hash`,
-    );
   }
   return normalized;
 }
@@ -32896,9 +32877,9 @@ function identifierBackendTag(raw) {
   switch (tag) {
     case "hkdf-sha3-512-prf-v1":
       return 0;
-    case "bfv-affine-sha3-256-v1":
+    case "bfv-affine-v1":
       return 1;
-    case "bfv-programmed-sha3-256-v1":
+    case "bfv-programmed-v1":
       return 2;
     default:
       rejectError(`unsupported RAM-LFE backend: ${raw}`);

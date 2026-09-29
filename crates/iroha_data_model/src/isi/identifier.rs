@@ -178,7 +178,7 @@ mod tests {
             execution: RamLfeExecutionReceiptPayload {
                 program_id: program_id(),
                 program_digest: Hash::new(b"program"),
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: RamLfeBackend::BfvProgrammedV1,
                 verification_mode: RamLfeVerificationMode::Signed,
                 input_ciphertext_hash: Hash::new(b"input-ciphertext"),
                 output_ciphertext_hash: Hash::new(b"output-ciphertext"),

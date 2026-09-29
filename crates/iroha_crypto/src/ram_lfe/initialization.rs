@@ -18,7 +18,7 @@ const CONTEXT: &str = "iroha.ram_lfe.bfv_program.initial_state.v1";
 pub const RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES: usize = 512;
 
 /// Exact first-release initializer and secret-commitment contract.
-pub const BFV_PROGRAM_INITIALIZER_DESCRIPTOR: &[u8] = b"iroha.ram_lfe.bfv_program.initializer.v1;policy-secret=blake3-derive-key(context=iroha.ram_lfe.policy_secret.v1,schema=iroha_crypto::ram_lfe::PolicySecretInputV1,canonical-norito-v1-flags2(backend,secret),raw32);hidden-program=Hash(iroha.ram_lfe.bfv_program.digest.v1||blake3-derive-key(context=iroha.ram_lfe.bfv_program.secret_tape.v1,canonical-norito-v1-flags2(schema=iroha_crypto::ram_lfe::HiddenRamFheProgram),raw32));initializer=blake3-derive-key-xof;context=iroha.ram_lfe.bfv_program.initial_state.v1;frame=canonical-norito-v1-flags2;schema=iroha_crypto::ram_lfe::ProgramInitializationInputV1;fields=initializer_descriptor_hash,policy_hash,secret,associated_data;secret-bytes=1..4096;associated-data-bytes=0..512;stream-bytes=1024;lanes=32;bytes-per-lane=32;lane-order=ascending-contiguous;integer=unsigned-big-endian;modulus=257;reduction=32-fixed-byte-folds(x=byte+257-r,conditional-subtract257);ciphertext-ring-degree=64;state-c0-first=residue;state-other-coefficients=0;registers=4-zero-ciphertexts";
+pub const BFV_PROGRAM_INITIALIZER_DESCRIPTOR: &[u8] = b"iroha.ram_lfe.bfv_program.initializer.v1;policy-secret=blake3-derive-key(context=iroha.ram_lfe.policy_secret.v1,schema=iroha_crypto::ram_lfe::PolicySecretInputV1,canonical-norito-v1-flags2(backend,secret),raw32);hidden-program=Hash(iroha.ram_lfe.bfv_program.digest.v1||blake3-derive-key(context=iroha.ram_lfe.bfv_program.secret_tape.v1,canonical-norito-v1-flags2(schema=iroha_crypto::ram_lfe::HiddenRamFheProgramV1,fields=version,register_count,memory_lane_count,tape,slots=1..256*48bytes,words=6*u64le,opcodes=0..10,unused-words=zero),raw32));initializer=blake3-derive-key-xof;context=iroha.ram_lfe.bfv_program.initial_state.v1;frame=canonical-norito-v1-flags2;schema=iroha_crypto::ram_lfe::ProgramInitializationInputV1;fields=initializer_descriptor_hash,policy_hash,secret,associated_data;secret-bytes=1..4096;associated-data-bytes=0..512;stream-bytes=1024;lanes=32;bytes-per-lane=32;lane-order=ascending-contiguous;integer=unsigned-big-endian;modulus=257;reduction=32-fixed-byte-folds(x=byte+257-r,conditional-subtract257);ciphertext-ring-degree=64;state-c0-first=residue;state-other-coefficients=0;registers=4-zero-ciphertexts";
 
 /// Return the digest of the compiled initializer contract published in every profile.
 #[must_use]
@@ -28,7 +28,10 @@ pub fn bfv_program_initializer_descriptor_hash() -> Hash {
 
 // Borrowed fields stream directly to the hasher; no secret preimage Vec is created.
 #[derive(Encode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_crypto::ram_lfe::ProgramInitializationInputV1")]
+#[norito_schema(
+    name = "iroha_crypto::ram_lfe::ProgramInitializationInputV1",
+    frame = "iroha_crypto::ram_lfe::ProgramInitializationInputV1"
+)]
 struct ProgramInitializationInputV1<'a> {
     initializer_descriptor_hash: Hash,
     policy_hash: Hash,

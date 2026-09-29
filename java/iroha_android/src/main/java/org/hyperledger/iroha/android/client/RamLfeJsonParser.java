@@ -86,6 +86,17 @@ public final class RamLfeJsonParser {
   public static RamLfeExecuteResponse parseExecuteResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "ram-lfe execute response"), "ram-lfe execute response");
+    for (final String field : root.keySet()) {
+      switch (field) {
+        case "program_id": case "opaque_hash": case "receipt_hash":
+        case "output_ciphertext": case "output_hash": case "associated_data_hash":
+        case "executed_at_ms": case "expires_at_ms": case "backend":
+        case "verification_mode": case "receipt":
+          break;
+        default:
+          throw new IllegalStateException("ram-lfe execute response." + field + " is not supported");
+      }
+    }
     return new RamLfeExecuteResponse(
         requiredExactString(root.get("program_id"), "ram-lfe execute response.program_id"),
         canonicalizeExactHash32(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash"),
@@ -103,10 +114,7 @@ public final class RamLfeJsonParser {
         requiredExactLowercaseString(root.get("backend"), "ram-lfe execute response.backend"),
         requiredExactLowercaseString(
             root.get("verification_mode"), "ram-lfe execute response.verification_mode"),
-        expectObject(root.get("receipt"), "ram-lfe execute response.receipt"),
-        IdentifierJsonParser.parseOutputOpening(
-            expectObject(root.get("output_opening"), "ram-lfe execute response.output_opening"),
-            "ram-lfe execute response.output_opening"));
+        expectObject(root.get("receipt"), "ram-lfe execute response.receipt"));
   }
 
   public static RamLfeReceiptVerifyResponse parseReceiptVerifyResponse(final byte[] payload) {

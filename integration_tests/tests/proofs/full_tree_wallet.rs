@@ -156,7 +156,7 @@ async fn four_validator_full_tree_wallet_proof_records_reject_corruption_and_rel
     let transfer_key = transfer_record
         .key
         .clone()
-        .expect("canonical inline transfer key");
+        .expect("canonical inline confidential-transfer key");
     let transfer_id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "full_tree_wrong_role_vk");
     let builder = NetworkBuilder::new()
         .with_peers(4)

@@ -14,3 +14,8 @@ categories = ["cryptography"]
 halo2curves = { workspace = true }
 once_cell = { workspace = true }
 poseidon-primitives = "0.2.0"
+zeroize = { workspace = true }
+
+[dev-dependencies]
+halo2curves-axiom = { version = "0.7.0", default-features = false }
+sha2 = "0.10.9"

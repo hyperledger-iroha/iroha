@@ -1,8 +1,9 @@
 //! Paired field-native Poseidon commitments for Kagemusha V1.
 //!
-//! The two Pasta scalar fields use the same reviewed width-3/rate-2 Pow5 construction and
+//! The two Pasta scalar fields use the same width-3/rate-2 Pow5 construction and
 //! independently generated field constants. A state or replay root is authoritative only as the
 //! pair authenticated by both recursive proofs. Canonical field encodings are little-endian.
+//! Parameter names and round counts are not independent security qualification.
 
 use ff::PrimeField;
 use halo2_base::{
@@ -21,9 +22,9 @@ use snark_verifier::{loader::native::LOADER, util::hash::Poseidon};
 pub(crate) const KAGEMUSHA_POSEIDON_WIDTH_V1: usize = 3;
 /// Sponge rate of the fixed Kagemusha V1 native Poseidon permutation.
 pub(crate) const KAGEMUSHA_POSEIDON_RATE_V1: usize = 2;
-/// Full rounds of the 128-bit-security Pow5 parameterization.
+/// Full rounds of the currently compiled Pow5 parameterization.
 pub(crate) const KAGEMUSHA_POSEIDON_FULL_ROUNDS_V1: usize = 8;
-/// Partial rounds of the 128-bit-security Pow5 parameterization.
+/// Partial rounds of the currently compiled Pow5 parameterization.
 pub(crate) const KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS_V1: usize = 57;
 /// Deterministic secure-MDS search selector.
 pub(crate) const KAGEMUSHA_POSEIDON_SECURE_MDS_V1: usize = 0;

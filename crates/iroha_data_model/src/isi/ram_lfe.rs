@@ -100,10 +100,10 @@ mod tests {
         RamLfeProgramPolicy::new(
             program_id(),
             account(0xE1),
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::BfvProgrammedV1,
             RamLfeVerificationMode::Signed,
             PolicyCommitment {
-                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                backend: RamLfeBackend::BfvProgrammedV1,
                 policy_hash: Hash::new(b"policy"),
                 public_parameters: vec![0x01, 0x02],
             },

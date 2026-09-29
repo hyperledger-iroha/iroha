@@ -17,8 +17,11 @@ fn captured_codec_schema_identities() {
     crate::captured_schema_tests::assert_bidirectional::<super::HiddenRamFheInstruction>(
         "iroha_crypto::ram_lfe::HiddenRamFheInstruction",
     );
-    // The private tape owner replaces the captured public instruction-vector
-    // layout. Its first-release identity and codec are checked in program_tests.
+    // Private owners expose only their bounded explicit decoder, not the generic
+    // archive reader whose alignment scratch is not a clearing secret owner.
+    crate::captured_schema_tests::assert_serialize::<super::HiddenRamFheProgram>(
+        "iroha_crypto::ram_lfe::HiddenRamFheProgramV1",
+    );
     crate::captured_schema_tests::assert_bidirectional::<super::BfvProgrammedPublicParameters>(
         "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters",
     );

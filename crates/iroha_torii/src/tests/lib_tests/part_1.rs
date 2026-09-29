@@ -8,24 +8,17 @@ use futures::executor;
 use iroha_config::parameters::actual;
 use iroha_core::{query::store::LiveQueryStore, state::State as IrohaState};
 use iroha_crypto::{
-    Algorithm, BfvEvaluationKeyBundle, BfvIdentifierPublicParameters, BfvParameters, Hash, KeyPair,
-    RamLfeBackend, RamLfeVerificationMode, Signature as IrohaSignature, SignatureOf,
-    bfv_affine_policy_commitment, bfv_programmed_policy_commitment_with_program,
-    default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-    encrypt_identifier_from_seed, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
-    try_bfv_programmed_public_parameters_with_program,
+    Algorithm, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode,
+    Signature as IrohaSignature, SignatureOf, ram_lfe_output_hash,
 };
 use iroha_data_model::{
     Identifiable, Registrable, ValidationFail,
     account::{Account, AccountId, rekey::AccountAlias},
     block::BlockHeader,
     domain::Domain,
-    identifier::{
-        IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
-        PhoneRetailCanonicalityAttestationV1, PhoneRetailCanonicalityPayloadV1,
-    },
+    identifier::{IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId},
     isi::{
-        identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
+        identifier::{ActivateIdentifierPolicy, RegisterIdentifierPolicy},
         ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
     },
     nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, UniversalAccountId},
@@ -1803,99 +1796,23 @@ fn sample_identifier_policy(
     signer: &KeyPair,
     policy_id: &IdentifierPolicyId,
 ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    sample_identifier_policy_with_backend(
-        owner,
-        signer,
-        policy_id,
-        RamLfeBackend::BfvAffineSha3_256V1,
-    )
-}
-fn sample_programmed_identifier_policy(
-    owner: &AccountId,
-    signer: &KeyPair,
-    policy_id: &IdentifierPolicyId,
-) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    sample_identifier_policy_with_backend(
-        owner,
-        signer,
-        policy_id,
-        RamLfeBackend::BfvProgrammedSha3_256V1,
-    )
-}
-fn sample_identifier_policy_with_backend(
-    owner: &AccountId,
-    signer: &KeyPair,
-    policy_id: &IdentifierPolicyId,
-    backend: RamLfeBackend,
-) -> (IdentifierPolicy, RamLfeProgramPolicy) {
     let program_id = sample_program_id(policy_id);
-    let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
-        &sample_identifier_bfv_parameters(backend),
-        63,
-        b"resolver-secret",
-        &identifier_resolution::program_id_bytes(&program_id),
-    )
-    .expect("identifier BFV parameters");
-    let program_policy = match backend {
-        RamLfeBackend::BfvAffineSha3_256V1 => RamLfeProgramPolicy::new(
-            program_id.clone(),
-            owner.clone(),
-            backend,
-            RamLfeVerificationMode::Signed,
-            bfv_affine_policy_commitment(
-                b"resolver-secret",
-                norito::to_bytes(&public_parameters).expect("encode BFV parameters"),
-            )
-            .expect("policy commitment"),
-            signer.public_key().clone(),
-        ),
-        RamLfeBackend::BfvProgrammedSha3_256V1 => {
-            let hidden_program = default_bfv_programmed_hidden_program();
-            let evaluation_keys = BfvEvaluationKeyBundle {
-                relinearization_key,
-                rotation_keys: Vec::new(),
-                galois_keys: Vec::new(),
-                bootstrap_key: None,
-            };
-            let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
-                public_parameters,
-                evaluation_keys,
-                &hidden_program,
-                RamLfeVerificationMode::Signed,
-                None,
-            )
-            .expect("build programmed BFV public parameters");
-            let encoded_public_parameters = norito::to_bytes(&programmed_public_parameters)
-                .expect("encode programmed BFV parameters");
-            RamLfeProgramPolicy::new(
-                program_id.clone(),
-                owner.clone(),
-                backend,
-                RamLfeVerificationMode::Signed,
-                bfv_programmed_policy_commitment_with_program(
-                    b"resolver-secret",
-                    &encoded_public_parameters,
-                    &hidden_program,
-                )
-                .expect("policy commitment"),
-                signer.public_key().clone(),
-            )
-        }
-        RamLfeBackend::HkdfSha3_512PrfV1 => unreachable!("sample BFV policy"),
-    };
-    let mut policy = IdentifierPolicy::new(
+    let commitment = iroha_crypto::policy_commitment(b"resolver-secret", Vec::new())
+        .expect("supported HKDF policy commitment");
+    let program_policy = RamLfeProgramPolicy::new(
+        program_id.clone(),
+        owner.clone(),
+        RamLfeBackend::HkdfSha3_512PrfV1,
+        RamLfeVerificationMode::Signed,
+        commitment,
+        signer.public_key().clone(),
+    );
+    let policy = IdentifierPolicy::new(
         policy_id.clone(),
         owner.clone(),
-        if policy_id.is_phone_retail() {
-            IdentifierNormalization::PhoneE164
-        } else {
-            IdentifierNormalization::EmailAddress
-        },
+        IdentifierNormalization::Exact,
         program_id,
     );
-    if policy_id.is_phone_retail() {
-        policy = policy.with_phone_retail_attestor_public_key(signer.public_key().clone());
-    }
     (policy, program_policy)
 }
 fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
@@ -1905,108 +1822,77 @@ fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
         .parse()
         .expect("program id")
 }
-fn sample_identifier_bfv_parameters(_backend: RamLfeBackend) -> BfvParameters {
-    ram_lfe_bfv_parameters_v1()
-}
-fn encrypted_identifier_ciphertext(
-    program_policy: &RamLfeProgramPolicy,
-    input: &[u8],
-    seed: &[u8],
-) -> iroha_crypto::BfvIdentifierCiphertext {
-    let public_parameters = identifier_resolution::decode_bfv_public_parameters(program_policy)
-        .expect("decode BFV public parameters");
-    encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt identifier")
-}
-fn encrypted_identifier_hex(
-    program_policy: &RamLfeProgramPolicy,
-    input: &[u8],
-    seed: &[u8],
-) -> String {
+// Public serialization fixture only; this is not encrypted data or an execution.
+fn synthetic_ciphertext_hex() -> String {
     hex::encode(
-        norito::to_bytes(&encrypted_identifier_ciphertext(
-            program_policy,
-            input,
-            seed,
-        ))
-        .expect("encode encrypted identifier"),
+        norito::encode_canonical(&iroha_crypto::BfvIdentifierCiphertext { slots: Vec::new() })
+            .expect("encode typed parser fixture"),
     )
 }
-fn output_opening_for_ciphertext(
-    resolver: &identifier_resolution::IdentifierResolutionService,
-    program_policy: &RamLfeProgramPolicy,
+fn registered_hkdf_identifier_app(
+    seed: u8,
+) -> (
+    SharedAppState,
+    AccountId,
+    KeyPair,
+    IdentifierPolicy,
+    RamLfeProgramPolicy,
+) {
+    let authority = checked_torii_test_account_id(seed, "HKDF identifier fixture owner");
+    let signer = checked_torii_test_ed25519_keypair(seed.wrapping_add(1), "HKDF fixture signer");
+    let domain_id = DomainId::try_new("directory", "universal").expect("domain id");
+    let account = Account::new(authority.clone())
+        .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
+            b"fixture-uaid",
+        ))))
+        .build(&authority);
+    let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
+    let mut app = mk_app_state_for_tests_with_world(world);
+    let policy_id = "string#retail".parse().expect("policy id");
+    let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
+    Arc::get_mut(&mut app)
+        .expect("unique app")
+        .identifier_resolver = Some(Arc::new(
+        identifier_resolution::IdentifierResolutionService::new(),
+    ));
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit fixture");
+    (app, authority, signer, policy, program_policy)
+}
+// Typed signed metadata for HTTP projection/error controls. It does not claim
+// that a private program executed or that any ciphertext has been decrypted.
+fn synthetic_execution_receipt(
+    program: &RamLfeProgramPolicy,
     signer: &KeyPair,
-    ciphertext: &iroha_crypto::BfvIdentifierCiphertext,
-) -> RamLfeOutputOpening {
-    let execution = resolver
-        .execute_encrypted(program_policy, ciphertext)
-        .expect("execute encrypted identifier input");
-    let payload = RamLfeOutputOpeningPayload {
-        program_id: program_policy.program_id.clone(),
-        input_ciphertext_hash: execution.input_ciphertext_hash,
-        output_ciphertext_hash: execution.output_ciphertext_hash,
-        parameter_digest: execution.parameter_digest,
-        evaluation_key_digest: execution.evaluation_key_digest,
-        opened_output_hash: ram_lfe_output_hash(&execution.output),
-        opened_at_ms: execution.executed_at_ms,
-        expires_at_ms: execution.expires_at_ms,
+    executed_at_ms: u64,
+    expires_at_ms: Option<u64>,
+) -> iroha_data_model::ram_lfe::RamLfeExecutionReceipt {
+    let payload = iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload {
+        program_id: program.program_id.clone(),
+        program_digest: Hash::new(b"synthetic-program"),
+        backend: program.backend,
+        verification_mode: program.verification_mode,
+        input_ciphertext_hash: Hash::new(b"synthetic-input-ciphertext"),
+        output_ciphertext_hash: ram_lfe_output_hash(b"synthetic-output-ciphertext"),
+        parameter_digest: Hash::new(b"synthetic-parameters"),
+        evaluation_key_digest: Hash::new(b"synthetic-evaluation-keys"),
+        output_hash: ram_lfe_output_hash(b"synthetic-output-ciphertext"),
+        associated_data_hash: Hash::new(b"synthetic-associated-data"),
+        executed_at_ms,
+        expires_at_ms,
     };
-    RamLfeOutputOpening {
-        signature: SignatureOf::try_new(signer.private_key(), &payload)
-            .expect("sign RAM-LFE output opening fixture")
-            .into(),
+    let signature = SignatureOf::try_new(signer.private_key(), &payload)
+        .expect("sign typed fixture")
+        .into();
+    iroha_data_model::ram_lfe::RamLfeExecutionReceipt {
         payload,
-    }
-}
-fn phone_retail_canonicality_for_ciphertext(
-    policy: &IdentifierPolicy,
-    program_policy: &RamLfeProgramPolicy,
-    signer: &KeyPair,
-    network_id: iroha_data_model::NetworkId,
-    uaid: UniversalAccountId,
-    account_id: &AccountId,
-    ciphertext: &iroha_crypto::BfvIdentifierCiphertext,
-    opening: &RamLfeOutputOpening,
-) -> PhoneRetailCanonicalityAttestationV1 {
-    let public_parameters = identifier_resolution::decode_bfv_public_parameters(program_policy)
-        .expect("public parameters");
-    let (_, decryption_key, _) = derive_identifier_key_material_from_seed(
-        &public_parameters.parameters,
-        public_parameters.max_input_bytes,
-        b"resolver-secret",
-        &identifier_resolution::program_id_bytes(&program_policy.program_id),
-    )
-    .expect("trusted attestor decryption key");
-    let nullifier = iroha_crypto::derive_phone_retail_nullifier_from_ciphertext_v1(
-        &public_parameters,
-        &decryption_key,
-        ciphertext,
-        &[0xC3; 32],
-        network_id.as_bytes(),
-    )
-    .expect("encrypted input is canonical E.164");
-    assert_eq!(
-        Hash::new(&norito::to_bytes(ciphertext).expect("encode attested phone ciphertext")),
-        opening.payload.input_ciphertext_hash,
-        "canonicality must bind the exact decrypted ciphertext",
-    );
-    let statement = PhoneRetailCanonicalityPayloadV1 {
-        network_id,
-        policy_id: policy.id.clone(),
-        program_id: program_policy.program_id.clone(),
-        input_ciphertext_hash: opening.payload.input_ciphertext_hash,
-        output_ciphertext_hash: opening.payload.output_ciphertext_hash,
-        opened_output_hash: opening.payload.opened_output_hash,
-        canonical_phone_nullifier: nullifier,
-        uaid,
-        account_id: account_id.clone(),
-        issued_at_ms: opening.payload.opened_at_ms,
-        expires_at_ms: opening.payload.expires_at_ms.unwrap_or(u64::MAX),
-    };
-    PhoneRetailCanonicalityAttestationV1 {
-        signature: SignatureOf::try_new(signer.private_key(), &statement)
-            .expect("sign canonicality statement")
-            .into(),
-        payload: statement,
+        attestation: iroha_data_model::ram_lfe::RamLfeReceiptAttestation::Signed(signature),
     }
 }
 fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
@@ -2028,73 +1914,6 @@ fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
             .into(),
         payload,
     }
-}
-fn shared_sdk_identifier_bfv_public_parameters(
-    policy_id: &IdentifierPolicyId,
-) -> BfvIdentifierPublicParameters {
-    let parameters = sample_identifier_bfv_parameters(RamLfeBackend::BfvProgrammedSha3_256V1);
-    let program_id = sample_program_id(policy_id);
-    let (derived, _, _) = derive_identifier_key_material_from_seed(
-        &parameters,
-        63,
-        b"resolver-secret",
-        &identifier_resolution::program_id_bytes(&program_id),
-    )
-    .expect("derive shared SDK BFV public parameters");
-    derived
-}
-fn sample_identifier_policy_with_public_parameters(
-    owner: &AccountId,
-    signer: &KeyPair,
-    policy_id: &IdentifierPolicyId,
-    normalization: IdentifierNormalization,
-    public_parameters: &BfvIdentifierPublicParameters,
-) -> (IdentifierPolicy, RamLfeProgramPolicy) {
-    let program_id = sample_program_id(policy_id);
-    let hidden_program = default_bfv_programmed_hidden_program();
-    let (derived, _, relinearization_key) = derive_identifier_key_material_from_seed(
-        &public_parameters.parameters,
-        public_parameters.max_input_bytes,
-        b"resolver-secret",
-        &identifier_resolution::program_id_bytes(&program_id),
-    )
-    .expect("derive programmed evaluation keys");
-    assert_eq!(&derived, public_parameters);
-    let evaluation_keys = BfvEvaluationKeyBundle {
-        relinearization_key,
-        rotation_keys: Vec::new(),
-        galois_keys: Vec::new(),
-        bootstrap_key: None,
-    };
-    let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
-        public_parameters.clone(),
-        evaluation_keys,
-        &hidden_program,
-        RamLfeVerificationMode::Signed,
-        None,
-    )
-    .expect("build programmed BFV public parameters");
-    let encoded_public_parameters =
-        norito::to_bytes(&programmed_public_parameters).expect("encode BFV parameters");
-    let program_policy = RamLfeProgramPolicy::new(
-        program_id.clone(),
-        owner.clone(),
-        RamLfeBackend::BfvProgrammedSha3_256V1,
-        RamLfeVerificationMode::Signed,
-        bfv_programmed_policy_commitment_with_program(
-            b"resolver-secret",
-            &encoded_public_parameters,
-            &hidden_program,
-        )
-        .expect("policy commitment"),
-        signer.public_key().clone(),
-    );
-    let mut policy =
-        IdentifierPolicy::new(policy_id.clone(), owner.clone(), normalization, program_id);
-    if policy_id.is_phone_retail() {
-        policy = policy.with_phone_retail_attestor_public_key(signer.public_key().clone());
-    }
-    (policy, program_policy)
 }
 fn register_and_activate_identifier_policy_bundle(
     authority: &AccountId,
@@ -2122,22 +1941,6 @@ fn register_and_activate_identifier_policy_bundle(
     }
     .execute(authority, tx)
     .expect("activate policy");
-}
-fn register_and_activate_program_policy(
-    authority: &AccountId,
-    tx: &mut iroha_core::state::StateTransaction<'_, '_>,
-    program_policy: &RamLfeProgramPolicy,
-) {
-    RegisterRamLfeProgramPolicy {
-        policy: program_policy.clone(),
-    }
-    .execute(authority, tx)
-    .expect("register program policy");
-    ActivateRamLfeProgramPolicy {
-        program_id: program_policy.program_id.clone(),
-    }
-    .execute(authority, tx)
-    .expect("activate program policy");
 }
 fn seed_proof_record_at_height(
     app: &SharedAppState,

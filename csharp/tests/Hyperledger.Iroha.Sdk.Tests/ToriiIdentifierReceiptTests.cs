@@ -36,7 +36,7 @@ public sealed class ToriiIdentifierReceiptTests
     [InlineData("payload.receipt_hash", " receipt-1 ")]
     [InlineData("payload.uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ")]
     [InlineData("payload.account_id", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
-    [InlineData("payload.execution.backend", " bfv-programmed-sha3-256-v1 ")]
+    [InlineData("payload.execution.backend", " bfv-programmed-v1 ")]
     [InlineData("attestation.signature", " ABCD ")]
     public void IdentifierResolveResponseRejectsPaddedReceiptFields(string field, string value)
     {
@@ -236,7 +236,7 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", receipt.AccountId);
         Assert.Equal(1710000000000L, receipt.ResolvedAtMilliseconds);
         Assert.Equal(1710003600000L, receipt.ExpiresAtMilliseconds);
-        Assert.Equal("bfv-programmed-sha3-256-v1", receipt.Backend);
+        Assert.Equal("bfv-programmed-v1", receipt.Backend);
         Assert.Equal("ABCD", receipt.Signature);
         Assert.Equal(string.Empty, receipt.SignaturePayloadHex);
         Assert.Equal("signed", receipt.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
@@ -476,7 +476,7 @@ public sealed class ToriiIdentifierReceiptTests
     [InlineData("owner", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
     [InlineData("normalization", " phone_e164 ")]
     [InlineData("resolver_public_key", " ed25519:0123456789abcdef ")]
-    [InlineData("backend", " bfv-programmed-sha3-256-v1 ")]
+    [InlineData("backend", " bfv-programmed-v1 ")]
     [InlineData("input_encryption", " bfv-v1 ")]
     [InlineData("input_encryption_public_parameters", " params-b64 ")]
     public void IdentifierPolicySummaryRejectsPaddedProofMetadata(string field, string value)
@@ -584,7 +584,7 @@ public sealed class ToriiIdentifierReceiptTests
             ["active"] = true,
             ["normalization"] = "phone_e164",
             ["resolver_public_key"] = "ed25519:0123456789abcdef",
-            ["backend"] = "bfv-programmed-sha3-256-v1",
+            ["backend"] = "bfv-programmed-v1",
             ["input_encryption"] = "bfv-v1",
             ["input_encryption_public_parameters"] = "params-b64",
             ["input_encryption_public_parameters_decoded"] = null,
@@ -602,7 +602,7 @@ public sealed class ToriiIdentifierReceiptTests
               "active": true,
               "normalization": "phone_e164",
               "resolver_public_key": "ed25519:0123456789abcdef",
-              "backend": "bfv-programmed-sha3-256-v1",
+              "backend": "bfv-programmed-v1",
               "input_encryption": "bfv-v1",
               "input_encryption_public_parameters": "params-b64",
               "input_encryption_public_parameters_decoded": {
@@ -642,7 +642,7 @@ public sealed class ToriiIdentifierReceiptTests
                 "execution": {
                   "program_id": "identifier_lookup_retail",
                   "program_digest": "program-digest",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_ciphertext_hash": "input-hash",
                   "output_ciphertext_hash": "output-hash",
@@ -682,8 +682,8 @@ public sealed class ToriiIdentifierReceiptTests
                 "execution": {
                   "program_id": "identifier_lookup_retail",
                   "program_digest": "program-digest",
-                  "backend": "bfv-programmed-sha3-256-v1",
-                  "backend": "bfv-programmed-sha3-256-v1",
+                  "backend": "bfv-programmed-v1",
+                  "backend": "bfv-programmed-v1",
                   "verification_mode": "signed",
                   "input_ciphertext_hash": "input-hash",
                   "output_ciphertext_hash": "output-hash",

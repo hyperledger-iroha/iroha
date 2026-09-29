@@ -1304,8 +1304,8 @@ public final class HttpClientTransportTests {
       {
         "identifier policy list.items[0].backend",
         canonical.replace(
-            "\"backend\":\"bfv-affine-sha3-256-v1\"",
-            "\"backend\":\"bfv-affine-sha3-256-v1 \"")
+            "\"backend\":\"bfv-affine-v1\"",
+            "\"backend\":\"bfv-affine-v1 \"")
       },
       {
         "identifier policy list.items[0].input_encryption",
@@ -1368,7 +1368,7 @@ public final class HttpClientTransportTests {
         + "\"active\":true,"
         + "\"normalization\":\"phone_e164\","
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
-        + "\"backend\":\"bfv-affine-sha3-256-v1\","
+        + "\"backend\":\"bfv-affine-v1\","
         + "\"input_encryption\":\"bfv-v1\","
         + "\"input_encryption_public_parameters\":\"ABCD\","
         + "\"input_encryption_public_parameters_decoded\":{"
@@ -1449,7 +1449,7 @@ public final class HttpClientTransportTests {
       {
         "ram-lfe program policy list.items[0].backend",
         canonical.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"bfv-programmed-v1\"",
             "\"backend\":\"BFV-programmed-sha3-256-v1\"")
       },
       {
@@ -1502,7 +1502,7 @@ public final class HttpClientTransportTests {
         + "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"active\":true,"
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
-        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"backend\":\"bfv-programmed-v1\","
         + "\"verification_mode\":\"signed\","
         + "\"input_encryption\":\"bfv-v1\","
         + "\"input_encryption_public_parameters\":\"ABCD\","
@@ -1697,7 +1697,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -1744,7 +1744,7 @@ public final class HttpClientTransportTests {
             true,
             IdentifierNormalization.PHONE_E164,
             signed.resolverPublicKey(),
-            "bfv-affine-sha3-256-v1",
+            "bfv-affine-v1",
             "bfv-v1",
             null,
             null,
@@ -1781,7 +1781,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "email_retail",
                 "44".repeat(32),
-                "bfv-programmed-sha3-256-v1",
+                "bfv-programmed-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -1832,7 +1832,7 @@ public final class HttpClientTransportTests {
             true,
             IdentifierNormalization.EMAIL_ADDRESS,
             signed.resolverPublicKey(),
-            "bfv-programmed-sha3-256-v1",
+            "bfv-programmed-v1",
             "bfv-v1",
             null,
             null,
@@ -2016,7 +2016,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "44".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -2111,8 +2111,6 @@ public final class HttpClientTransportTests {
     assert "abcd".equals(execute.outputCiphertext()) : "Output ciphertext mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
-    assert "identifier_lookup_retail".equals(execute.outputOpening().payload().programId())
-        : "Output opening must be parsed";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "RAM-LFE execute request must be captured";
@@ -2159,7 +2157,7 @@ public final class HttpClientTransportTests {
     verificationMode.put("value", null);
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("program_id", Map.of("name", "identifier_lookup_retail"));
-    payload.put("backend", "bfv-programmed-sha3-256-v1");
+    payload.put("backend", "bfv-programmed-v1");
     payload.put("verification_mode", verificationMode);
     payload.put("program_digest", "hash:" + "11".repeat(32).toUpperCase() + "#ABCD");
     payload.put("output_hash", "hash:" + "22".repeat(32).toUpperCase() + "#BCDE");
@@ -2197,6 +2195,10 @@ public final class HttpClientTransportTests {
   private static void ramLfeResponseParsersRejectNonExactFields() {
     final String canonicalExecute = ramLfeExecuteResponseJson();
     final String[][] executeCases = {
+      {
+        "output_opening",
+        canonicalExecute.replaceFirst("\\{", "{\"output_opening\":{},")
+      },
       {
         "program_id",
         canonicalExecute.replace(
@@ -2236,8 +2238,8 @@ public final class HttpClientTransportTests {
       {
         "backend",
         canonicalExecute.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\",\"verification_mode\"",
-            "\"backend\":\" bfv-programmed-sha3-256-v1\",\"verification_mode\"")
+            "\"backend\":\"bfv-programmed-v1\",\"verification_mode\"",
+            "\"backend\":\" bfv-programmed-v1\",\"verification_mode\"")
       },
       {
         "verification_mode",
@@ -2263,7 +2265,7 @@ public final class HttpClientTransportTests {
       {
         "backend",
         canonicalVerify.replace(
-            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"bfv-programmed-v1\"",
             "\"backend\":\"BFV-programmed-sha3-256-v1\"")
       },
       {
@@ -5835,7 +5837,7 @@ public final class HttpClientTransportTests {
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            "bfv-affine-sha3-256-v1",
+            "bfv-affine-v1",
             "bfv-v1",
             null,
             new IdentifierBfvPublicParameters(
@@ -5903,7 +5905,7 @@ public final class HttpClientTransportTests {
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-            "bfv-programmed-sha3-256-v1",
+            "bfv-programmed-v1",
             "bfv-v1",
             null,
             identifierBfvParametersFromFixture(
@@ -6141,7 +6143,7 @@ public final class HttpClientTransportTests {
         true,
         IdentifierNormalization.EXACT,
         "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-        "bfv-affine-sha3-256-v1",
+        "bfv-affine-v1",
         "bfv-v1",
         null,
         parameters,
@@ -7179,7 +7181,7 @@ public final class HttpClientTransportTests {
             new IdentifierResolutionExecutionPayload(
                 "identifier_lookup_retail",
                 "11".repeat(32),
-                "bfv-affine-sha3-256-v1",
+                "bfv-affine-v1",
                 "signed",
                 "aa".repeat(32),
                 "bb".repeat(32),
@@ -7206,7 +7208,7 @@ public final class HttpClientTransportTests {
             true,
             IdentifierNormalization.PHONE_E164,
             signed.resolverPublicKey(),
-            "bfv-affine-sha3-256-v1",
+            "bfv-affine-v1",
             "bfv-v1",
             null,
             null,
@@ -7278,7 +7280,7 @@ public final class HttpClientTransportTests {
 
     for (final String backend :
         new String[] {
-          " bfv-affine-sha3-256-v1", "bfv-affine-sha3-256-v1 ", "BFV-AFFINE-SHA3-256-V1"
+          " bfv-affine-v1", "bfv-affine-v1 ", "BFV-AFFINE-SHA3-256-V1"
         }) {
       expectRuntimeException(
           () ->
@@ -7624,7 +7626,7 @@ public final class HttpClientTransportTests {
         new IdentifierResolutionExecutionPayload(
             "identifier_lookup_retail",
             "44".repeat(32),
-            "bfv-programmed-sha3-256-v1",
+            "bfv-programmed-v1",
             "signed",
             "55".repeat(32),
             outputCiphertextByte.repeat(32),
@@ -7649,7 +7651,7 @@ public final class HttpClientTransportTests {
         true,
         IdentifierNormalization.PHONE_E164,
         resolverPublicKey,
-        "bfv-programmed-sha3-256-v1",
+        "bfv-programmed-v1",
         "bfv-v1",
         null,
         null,

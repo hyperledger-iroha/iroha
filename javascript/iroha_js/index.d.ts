@@ -1709,7 +1709,6 @@ export interface RamLfeExecuteResponse {
   backend: string;
   verification_mode: string;
   receipt: RamLfeExecutionReceipt;
-  output_opening: RamLfeOutputOpening;
 }
 
 export interface IdentifierResolutionRequestOptions {

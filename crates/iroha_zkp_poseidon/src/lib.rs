@@ -6,6 +6,7 @@
 //! so `iroha_data_model` does not depend on the full `iroha_zkp_halo2` engine.
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
+pub mod pasta;
 pub mod pasta_keys;
 pub mod poseidon;
 pub mod vega_constants;

@@ -725,6 +725,12 @@ Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify methods use
 the same required authentication contract; claim receipt additionally requires
 the exact canonical I105 path account to equal `canonicalAuth.accountId`.
 
+RAM execution responses contain ciphertext and an execution receipt. They do not
+supply a plaintext opening; identifier resolution requires the caller's independently
+authenticated `outputOpening`. Production rejects the insecure `bfv-affine-v1` and
+`bfv-programmed-v1` profiles. Private identifier execution remains unavailable until
+a secure encryption profile is implemented and qualified.
+
 ### Sora VPN native lease flow
 
 `ToriiClient` exposes the quote-first Sora VPN flow used by native XOR lease

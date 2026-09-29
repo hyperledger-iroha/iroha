@@ -91,9 +91,9 @@ fn framed_xof_binds_secret_policy_and_associated_data_without_split_aliases() {
     assert_eq!(
         *first,
         [
-            180, 45, 216, 139, 123, 250, 57, 134, 174, 12, 99, 154, 95, 195, 158, 139, 203, 6, 139,
-            57, 135, 189, 237, 111, 237, 4, 197, 196, 201, 221, 232, 49,
-        ],
+            201, 106, 100, 112, 35, 215, 86, 14, 188, 173, 5, 124, 71, 93, 12, 173, 208, 137, 8,
+            56, 84, 95, 78, 110, 52, 6, 34, 5, 55, 181, 253, 86
+        ]
     );
     let guard = norito::core::DecodeFlagsGuard::enter(0);
     assert_eq!(first, derive_residues(b"a", policy, b"bc").unwrap());
@@ -126,7 +126,7 @@ fn initializer_bounds_are_closed_and_profile_digest_is_compiled() {
     // and the Iroha marker, before any native KAT regeneration.
     assert_eq!(
         bfv_program_initializer_descriptor_hash().to_string(),
-        "e90e6314da02be784ba7d2d2a3e18ff171711135e80a8eddb7ad31d7b28d3d01"
+        "bb343e3afee77e875518c41910390d42ad81c9ea830446ec339e1f0810065f1f"
     );
     assert_eq!(
         profile.initializer_descriptor_hash,

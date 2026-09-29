@@ -3750,7 +3750,7 @@ mod tests {
         let policy = RamLfeProgramPolicy::new(
             program_id,
             owner.clone(),
-            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeBackend::BfvProgrammedV1,
             RamLfeVerificationMode::Signed,
             commitment,
             signer.public_key().clone(),

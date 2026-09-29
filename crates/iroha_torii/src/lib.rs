@@ -10763,6 +10763,8 @@ fn derive_ram_lfe_request_draft(
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::RamLfeExecuteRequestDto,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
+    identifier_resolution::require_supported_program_policy(program_policy)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     resolver
         .execute_encrypted(program_policy, &ciphertext)
@@ -10776,6 +10778,8 @@ fn derive_identifier_request_draft(
     request: &routing::IdentifierResolveRequestDto,
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
+    identifier_resolution::require_supported_program_policy(program_policy)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     let phone_like = policy.id.kind.as_ref() == "phone"
         || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
@@ -10808,15 +10812,16 @@ fn derive_identifier_request_draft(
         ));
     }
     match program_policy.commitment.backend {
-        iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
-        | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
-            .derive_encrypted(
-                policy,
-                program_policy,
-                &ciphertext,
-                request.output_opening.clone(),
-            )
-            .map_err(|err| identifier_internal_error(err.to_string())),
+        iroha_crypto::RamLfeBackend::BfvAffineV1 | iroha_crypto::RamLfeBackend::BfvProgrammedV1 => {
+            resolver
+                .derive_encrypted(
+                    policy,
+                    program_policy,
+                    &ciphertext,
+                    request.output_opening.clone(),
+                )
+                .map_err(|err| identifier_internal_error(err.to_string()))
+        }
         _ => Err(identifier_conversion_error(
             "identifier encrypted input requires a BFV-backed RAM-LFE program",
         )),
@@ -10985,7 +10990,6 @@ fn identifier_policy_summary_dto(
 fn ram_lfe_execute_response(
     receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
     draft: &identifier_resolution::RamLfeExecutionDraft,
-    output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
 ) -> routing::RamLfeExecuteResponseDto {
     routing::RamLfeExecuteResponseDto {
         program_id: receipt.payload.program_id.to_string(),
@@ -10999,7 +11003,6 @@ fn ram_lfe_execute_response(
         backend: draft.backend.as_str().to_owned(),
         verification_mode: ram_lfe_verification_mode_label(draft.verification_mode).to_owned(),
         receipt: ram_lfe_execution_receipt_dto(receipt),
-        output_opening,
     }
 }
 #[cfg(feature = "app_api")]
@@ -34076,6 +34079,8 @@ async fn handler_ram_lfe_execute(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    identifier_resolution::require_supported_program_policy(&program_policy)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
@@ -34083,10 +34088,7 @@ async fn handler_ram_lfe_execute(
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
         .map_err(|err| identifier_internal_error(err.to_string()))?;
-    let output_opening = resolver
-        .issue_output_opening(&program_policy, &draft)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
-    json_ok(ram_lfe_execute_response(&receipt, &draft, output_opening))
+    json_ok(ram_lfe_execute_response(&receipt, &draft))
 }
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_receipt_verify(
@@ -34133,6 +34135,22 @@ async fn handler_ram_lfe_receipt_verify(
             )),
         ));
     };
+    if let Err(error) = identifier_resolution::require_supported_program_policy(&program_policy)
+        .and_then(|()| {
+            request
+                .receipt
+                .payload
+                .backend
+                .require_production_support()
+                .map_err(Into::into)
+        })
+    {
+        return json_ok(ram_lfe_receipt_verify_response(
+            &request.receipt,
+            output_hash_matches,
+            Some(error.to_string()),
+        ));
+    }
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| {

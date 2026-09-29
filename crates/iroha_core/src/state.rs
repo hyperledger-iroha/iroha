@@ -20102,7 +20102,7 @@ impl World {
                         format!("Phone retail claim {opaque_id} lacks its pinned program")
                     })?;
                 if program.owner != policy.owner
-                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1
+                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedV1
                     || program.commitment.backend != program.backend
                     || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
                 {

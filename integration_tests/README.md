@@ -54,13 +54,15 @@ This crate hosts cross-component tests for Iroha.
   authenticates no ledger asset root, and moves no confidential value. Native proving
   and network execution are expensive, so the scenario is explicitly ignored by default.
 - The proof-backed execution rejection gate is
-  `cargo test --locked -p integration_tests --test core_api contracts::ivm_proved::four_validator_ivm_proved_rejects_unqualified_execution -- --exact --ignored --nocapture --test-threads=1`
+  `cargo test --locked -p integration_tests --test core_api contracts::ivm_proved::four_validator_ivm_proved_rejects_unavailable_execution_and_preserves_state -- --exact --ignored --nocapture --test-threads=1`
   with the same mandatory-network and same-candidate artifact environment. It
   deploys a real Kotodama counter and requires an ordinary authenticated call to
   increment it on all four validators. Each peer must reject IvmProved with the
-  exact unavailable-execution-relation reason for a genuine unrelated proof,
-  corrupted bytes, a retired circuit label, and a caller-supplied overlay. A
-  separately Applied barrier and unchanged counter distinguish rejection from
+  exact unavailable-execution-relation reason for empty and nonempty claimed
+  overlays and different caller-supplied commitments. Each signed request uses
+  its exact fee quote. Typed admission refusals are distinguished from committed
+  rejections, whose exact signed transaction and result must converge on every
+  peer. A separately Applied barrier and unchanged counter distinguish rejection from
   transport failure or a stalled network. This does not qualify proof-backed
   IVM execution: the complete native execution relation and State-owned anchor
   remain unfinished, and no derive or commitment-binding producer is restored.

@@ -1904,7 +1904,7 @@ state_test! { sync deserialize_rejects_invalid_ram_lfe_program_policy_storage
         "expected field path in error, got {message}"
     );
     assert!(
-        message.contains("cannot use proof verification"),
+        message.contains("RAM-LFE proof mode is unavailable"),
         "expected policy validation message, got {message}"
     );
 }

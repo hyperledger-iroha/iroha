@@ -2087,9 +2087,9 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         switch raw {
         case "hkdf-sha3-512-prf-v1":
             return 0
-        case "bfv-affine-sha3-256-v1":
+        case "bfv-affine-v1":
             return 1
-        case "bfv-programmed-sha3-256-v1":
+        case "bfv-programmed-v1":
             return 2
         default:
             throw ToriiClientError.invalidPayload(
@@ -2803,9 +2803,8 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
     public let backend: String
     public let verificationMode: String
     public let receipt: ToriiRamLfeExecutionReceipt
-    public let outputOpening: ToriiRamLfeOutputOpening
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case programId = "program_id"
         case opaqueHash = "opaque_hash"
         case receiptHash = "receipt_hash"
@@ -2817,10 +2816,14 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
         case backend
         case verificationMode = "verification_mode"
         case receipt
-        case outputOpening = "output_opening"
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            debugName: "ram-lfe execute response"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         programId = try ToriiIdentifierReceiptWireValue.exactString(
             from: container,
@@ -2865,7 +2868,6 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
             debugName: "ram-lfe execute response.verification_mode"
         )
         receipt = try container.decode(ToriiRamLfeExecutionReceipt.self, forKey: .receipt)
-        outputOpening = try container.decode(ToriiRamLfeOutputOpening.self, forKey: .outputOpening)
     }
 }
 
