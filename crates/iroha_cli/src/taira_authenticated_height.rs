@@ -55,11 +55,12 @@ impl VerifiedCommittedHeightV1 {
     /// This proves the historical capture; callers must bind its journal/wave custody.
     pub(crate) fn validate_retained(
         genesis: &iroha_genesis::ValidatedGenesisBundle,
+        chain: &str,
         peers: Vec<PeerV1>,
         value: json::Value,
     ) -> Result<Self> {
         let raw: RetainedCommittedHeightV1 = json::from_value(value)?;
-        let mut observer = AuthenticatedHeightObserverV1::new(genesis, peers)?;
+        let mut observer = AuthenticatedHeightObserverV1::new(genesis, chain, peers)?;
         require(
             raw.schema == "iroha.taira.authenticated-committed-height.v1"
                 && raw.network_id == observer.authority.network
@@ -230,6 +231,7 @@ impl AuthenticatedHeightObserverV1 {
     /// The opaque bundle can only be obtained through native signed-manifest validation.
     pub(crate) fn new(
         genesis: &iroha_genesis::ValidatedGenesisBundle,
+        chain: &str,
         peers: Vec<PeerV1>,
     ) -> Result<Self> {
         require(
@@ -245,6 +247,7 @@ impl AuthenticatedHeightObserverV1 {
         validate_peer_selection(&peers, &validators)?;
         Ok(Self {
             authority: Authority {
+                chain: chain.parse()?,
                 network: NetworkId::from_genesis_hash(genesis.expected_hash()),
                 genesis: genesis.expected_hash(),
                 trusted_genesis: genesis.block().clone(),

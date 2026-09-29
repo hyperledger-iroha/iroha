@@ -1,9 +1,9 @@
 //! Async DA spool batching for Torii ingest persistence.
 use super::ReceiptInsertOutcome;
 use crate::{panic_recovery, routing::MaybeTelemetry};
-use iroha_core::panic_hook::catch_unwind_suppressed;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::warn;
+use iroha_panic_hook::catch_unwind_suppressed;
 use std::{
     any::Any,
     sync::{

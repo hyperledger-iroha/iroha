@@ -6,21 +6,18 @@ index = 0
 alias = "core"
 description = "Primary execution lane"
 dataspace = "universal"
-metadata = {}
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
 dataspace = "universal"
-metadata = {}
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
 dataspace = "universal"
-metadata = {}
 
 [[nexus.dataspace_catalog]]
 alias = "universal"
@@ -35,11 +32,9 @@ default_dataspace = "universal"
 [[nexus.routing_policy.rules]]
 lane = 1
 dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "governance"
+matcher.instruction = "governance"
 
 [[nexus.routing_policy.rules]]
 lane = 2
 dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "smartcontract::deploy"
+matcher.instruction = "smartcontract::deploy"

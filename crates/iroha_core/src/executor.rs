@@ -24,6 +24,8 @@ use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
 use iroha_crypto::Hash;
 #[cfg(test)]
+use iroha_data_model::nexus::VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX;
+#[cfg(test)]
 use iroha_data_model::prelude::Domain;
 use iroha_data_model::{
     Identifiable as _, ValidationFail,
@@ -47,7 +49,7 @@ use iroha_data_model::{
         FeeSponsorMultisigOperation, FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
-        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
+        VerifiedFeeSponsorVaultAllocation,
     },
     parameter::CustomParameterId,
     permission::Permission,
@@ -1706,6 +1708,7 @@ impl NexusFeeAdmissionError {
         }
     }
 }
+#[cfg(test)]
 fn smart_contract_state_name(
     raw: String,
     context: &'static str,
@@ -1716,6 +1719,7 @@ fn smart_contract_state_name(
         ))
     })
 }
+#[cfg(test)]
 fn decode_verified_fee_sponsor_vault_allocation_state(
     payload: &[u8],
 ) -> Result<VerifiedFeeSponsorVaultAllocation, NexusFeeAdmissionError> {
@@ -1730,6 +1734,7 @@ fn decode_verified_fee_sponsor_vault_allocation_state(
         ))
     })
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1738,6 +1743,7 @@ fn fee_sponsor_vault_allocation_usage_state_key(
         "verified fee sponsor vault allocation usage",
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1746,6 +1752,7 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
         "settled verified fee sponsor vault allocation usage",
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_quantity_at(
     world: &impl WorldReadOnly,
     key: &StatePath,
@@ -1761,6 +1768,7 @@ fn fee_sponsor_vault_allocation_quantity_at(
         },
     )
 }
+#[cfg(test)]
 fn fee_sponsor_vault_allocation_spent(
     world: &impl WorldReadOnly,
     lease_id: &iroha_crypto::Hash,
@@ -7362,7 +7370,7 @@ impl Executor {
             .id()
             .starts_with(core::any::type_name::<Register<Trigger>>());
         let reg_trg = if is_reg_trigger {
-            crate::panic_hook::catch_unwind_suppressed(|| {
+            iroha_panic_hook::catch_unwind_suppressed(|| {
                 Register::<Trigger>::decode(&mut &instruction.dyn_encode()[..])
             })
             .ok()
@@ -8122,7 +8130,7 @@ fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Ass
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok()
     })
     .ok()
@@ -8145,7 +8153,7 @@ fn extract_transfer_asset(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Asset, Quantity, Account>::decode(&mut slice).ok()
     })
@@ -8169,7 +8177,7 @@ fn extract_transfer_domain(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, DomainId, Account>::decode(&mut slice).ok()
     })
@@ -8196,7 +8204,7 @@ fn extract_transfer_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, AssetDefinitionId, Account>::decode(&mut slice).ok()
     })
@@ -8224,7 +8232,7 @@ fn extract_transfer_nft(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Transfer::<Account, iroha_data_model::NftId, Account>::decode(&mut slice).ok()
     })
@@ -8308,7 +8316,7 @@ pub(crate) fn extract_register_asset_definition(
         return None;
     }
     let bytes = instruction.dyn_encode();
-    crate::panic_hook::catch_unwind_suppressed(|| {
+    iroha_panic_hook::catch_unwind_suppressed(|| {
         let mut slice = &bytes[..];
         Register::<AssetDefinition>::decode(&mut slice).ok()
     })
@@ -8792,7 +8800,7 @@ pub mod executor_norito {
     /// Returns an error if the byte slice does not represent a valid executor value.
     pub fn from_bytes(bytes: &[u8]) -> Result<Executor, String> {
         let decoded =
-            crate::panic_hook::catch_unwind_suppressed(|| norito::decode_from_bytes(bytes))
+            iroha_panic_hook::catch_unwind_suppressed(|| norito::decode_from_bytes(bytes))
                 .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
         let dto: ExecutorDto = decoded.map_err(|e| format!("executor decode failed: {e}"))?;
         match dto {
@@ -17673,7 +17681,7 @@ mod tests {
         .unwrap();
         let parameters = iroha_data_model::parameter::SmartContractParameters::default();
         assert!(
-            crate::panic_hook::catch_unwind_suppressed(std::panic::AssertUnwindSafe(|| {
+            iroha_panic_hook::catch_unwind_suppressed(std::panic::AssertUnwindSafe(|| {
                 let mut lease = loaded
                     .checkout_runtime_for_gas_limit(
                         parameters.fuel().get(),

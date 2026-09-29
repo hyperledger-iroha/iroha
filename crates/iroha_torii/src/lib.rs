@@ -6012,7 +6012,7 @@ async fn catch_handler_panics(
     let error_format =
         utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT))
             .unwrap_or(ResponseFormat::Json);
-    let handler = iroha_core::panic_hook::with_hook_suppressed_async(next.run(req));
+    let handler = iroha_panic_hook::with_hook_suppressed_async(next.run(req));
     match std::panic::AssertUnwindSafe(handler).catch_unwind().await {
         Ok(response) => Ok(response),
         Err(payload) => {

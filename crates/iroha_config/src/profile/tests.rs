@@ -128,8 +128,21 @@ fn sora_nexus_v1_carries_the_deployed_taira_shape() {
             .contains_key("registry")
     );
     assert_eq!(
-        integer_at(profile.static_config(), "sumeragi.queues.body_source_bytes"),
-        35_651_584
+        value_at(profile.static_config(), "sumeragi.keys.allowed_algorithms")
+            .as_array()
+            .unwrap(),
+        &[toml::Value::String("bls_normal".to_owned())]
+    );
+    assert!(
+        profile.static_config()["sumeragi"].get("queues").is_none(),
+        "retired consensus queue geometry must not return to node profiles"
+    );
+    assert!(
+        profile
+            .derived_config(&profile.derive(4).unwrap())
+            .get("sumeragi")
+            .is_none(),
+        "validator counts derive network capacity, not consensus node settings"
     );
     assert_eq!(profile.host().systemd_memory_max, "4G");
     assert_eq!(profile.host().systemd_cpu_quota, "200%");
@@ -533,9 +546,12 @@ fn digests_are_stable_across_loads_and_formatting() {
 #[test]
 fn digests_are_pinned() {
     let profile = sora();
+    // The native Sumeragi hard cut removed block/queue geometry from both the
+    // static profile and DerivedGeometryV1 (8a99f3f5ba). Pin the resulting first-
+    // release shape; retaining the removed queue fields would change semantics.
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "f6bfec243ab1b3989b79b2573230d0c6f3fbc83bdf49b46c1a14e6fd8274350d"
+        "5c692bfd005ade781836bc5bd6dccbb97e6fbaacf1c0fc5cbe82d70423b67efb"
     );
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
@@ -553,8 +569,8 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
     let mut changed = sora();
     set(
         &mut changed.static_config,
-        "sumeragi.queues.chunks",
-        toml::Value::Integer(4_097),
+        "nexus.lane_count",
+        toml::Value::Integer(5),
     );
     assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "static");
     assert_eq!(
@@ -715,12 +731,37 @@ fn genesis_recipe_rejects_retired_seat_band() {
 }
 
 #[test]
+fn chain_discriminant_cannot_be_overridden_by_policy_or_roles() {
+    for layer in [
+        "policy",
+        "role.validator",
+        "role.lane_validator",
+        "role.observer",
+    ] {
+        let mut table = sora_table();
+        set(
+            &mut table,
+            &format!("{layer}.chain_discriminant"),
+            toml::Value::Integer(753),
+        );
+        assert!(
+            matches!(
+                Profile::from_table(ProfileId::SoraNexusV1, table),
+                Err(ProfileError::StaticOverride { key, layer: found, .. })
+                    if key == "chain_discriminant" && found == layer
+            ),
+            "{layer} must not replace the profile's network identity"
+        );
+    }
+}
+
+#[test]
 fn consensus_keys_cannot_be_reached_by_later_layers() {
     let cases: [(&str, &str); 5] = [
-        ("policy.sumeragi.queues.chunks", "policy"),
+        ("policy.nexus.lane_count", "policy"),
         ("role.observer.nexus.lane_count", "role.observer"),
-        ("policy.sumeragi.queues.body_bytes", "policy"),
-        ("static.sumeragi.queues.commands", "derive(n)"),
+        ("policy.network.max_total_connections", "policy"),
+        ("static.network.max_total_connections", "derive(n)"),
         ("static.genesis.public_key", "node file"),
     ];
     for (key, layer) in cases {
@@ -786,12 +827,7 @@ fn malformed_profiles_are_rejected() {
         Err(ProfileError::Malformed { .. })
     ));
     let mut table = sora_table();
-    table
-        .get_mut("static")
-        .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .remove("sumeragi");
+    table.remove("static");
     assert!(matches!(
         Profile::from_table(ProfileId::SoraNexusV1, table),
         Err(ProfileError::Malformed { .. })
@@ -817,6 +853,8 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
     }
     for rejected in [
         "chainx",
+        "chain_discriminant",
+        "sumeragi.role",
         "genesisx",
         "logger.format",
         "torii.faucet.amount",
@@ -849,7 +887,12 @@ fn layers_are_ordered_static_derive_policy_role() {
             "<profile sora-nexus-v1>/role.observer",
         ]
     );
-    assert_eq!(layers[0].table(), profile.static_config());
+    let mut static_config = profile.static_config().clone();
+    static_config.insert(
+        "chain_discriminant".to_owned(),
+        toml::Value::Integer(i64::from(profile.chain_discriminant())),
+    );
+    assert_eq!(layers[0].table(), &static_config);
     assert_eq!(layers[1].table(), &profile.derived_config(&geometry));
     assert_eq!(layers[2].table(), profile.policy());
     assert_eq!(layers[3].table(), profile.role(ProfileRole::Observer));

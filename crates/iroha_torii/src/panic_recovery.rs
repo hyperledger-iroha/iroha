@@ -27,7 +27,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || iroha_core::panic_hook::catch_unwind_suppressed(operation))
+    tokio::task::spawn_blocking(move || iroha_panic_hook::catch_unwind_suppressed(operation))
 }
 
 /// Poll asynchronous request work in the current task with shutdown-hook
@@ -36,7 +36,7 @@ pub(crate) async fn catch_async_recoverable<F, T>(future: F) -> std::thread::Res
 where
     F: Future<Output = T>,
 {
-    let guarded = iroha_core::panic_hook::with_hook_suppressed_async(future);
+    let guarded = iroha_panic_hook::with_hook_suppressed_async(future);
     AssertUnwindSafe(guarded).catch_unwind().await
 }
 
@@ -67,14 +67,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn blocking_panic_is_controlled_and_suppression_clears() {
         let task = spawn_blocking_recoverable(|| {
-            assert!(iroha_core::panic_hook::is_suppressed());
+            assert!(iroha_panic_hook::is_suppressed());
             panic!("injected recoverable worker panic");
         });
         assert!(matches!(
             join_recoverable(task).await,
             Err(RecoverableTaskError::Panicked)
         ));
-        let stale = tokio::task::spawn_blocking(iroha_core::panic_hook::is_suppressed)
+        let stale = tokio::task::spawn_blocking(iroha_panic_hook::is_suppressed)
             .await
             .expect("blocking worker probe must join");
         assert!(!stale);
@@ -83,7 +83,7 @@ mod tests {
     #[tokio::test]
     async fn joined_async_panic_is_controlled() {
         let task = spawn_joined_recoverable(async {
-            assert!(iroha_core::panic_hook::is_suppressed());
+            assert!(iroha_panic_hook::is_suppressed());
             panic!("injected recoverable async panic");
         });
         assert!(matches!(
@@ -105,19 +105,19 @@ mod tests {
         let cleanup = CleanupProbe(std::sync::Arc::clone(&dropped));
         let result = catch_async_recoverable(async move {
             let _cleanup = cleanup;
-            assert!(iroha_core::panic_hook::is_suppressed());
+            assert!(iroha_panic_hook::is_suppressed());
             panic!("injected WebSocket upgrade callback panic");
         })
         .await;
         assert!(result.is_err());
         assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
-        assert!(!iroha_core::panic_hook::is_suppressed());
+        assert!(!iroha_panic_hook::is_suppressed());
     }
 
     #[test]
     fn ordinary_invariant_panics_remain_unsuppressed() {
         let result = std::panic::catch_unwind(|| {
-            assert!(!iroha_core::panic_hook::is_suppressed());
+            assert!(!iroha_panic_hook::is_suppressed());
             panic!("injected invariant panic");
         });
         assert!(result.is_err());

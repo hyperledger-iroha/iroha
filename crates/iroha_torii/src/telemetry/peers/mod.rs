@@ -805,7 +805,7 @@ mod tests {
         let mut workers: JoinSet<crate::ToriiCriticalWorkerExit> = JoinSet::new();
         workers.spawn(async move {
             worker_shutdown.send();
-            assert!(!iroha_core::panic_hook::is_suppressed());
+            assert!(!iroha_panic_hook::is_suppressed());
             panic!("injected peer telemetry worker panic");
         });
 

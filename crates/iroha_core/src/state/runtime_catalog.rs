@@ -267,6 +267,78 @@ fn runtime_catalog_transition_dataspaces_from_parameters(
 }
 
 impl StateTransaction<'_, '_> {
+    /// Prepare the native lane policy from the same authenticated manifest authority as the
+    /// physical catalog. Nothing is staged until every lane and live PoP has been admitted.
+    fn runtime_catalog_native_lane_policy(
+        &self,
+        additions: &[iroha_data_model::nexus::LaneConfig],
+        manifests: &LaneManifestRegistry,
+        authority_height: u64,
+    ) -> Result<iroha_data_model::sumeragi_lanes::SumeragiLanePolicy, LaneLifecycleError> {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
+        };
+
+        let mut policy = match self
+            .world
+            .parameters()
+            .custom()
+            .get(&SumeragiLanePolicy::parameter_id())
+        {
+            Some(custom) => SumeragiLanePolicy::from_custom_parameter(custom)
+                .ok_or_else(|| {
+                    runtime_catalog_invalid("native lane policy has another parameter identity")
+                })?
+                .map_err(runtime_catalog_invalid)?,
+            None => SumeragiLanePolicy::for_chain(self.world.parameters().sumeragi.clone()),
+        };
+        for lane in additions {
+            if lane.id == LaneId::SINGLE
+                || policy.fixed_lane(lane.id).is_some()
+                || policy.is_elastic(lane.id)
+                || self.world.sumeragi_lanes().lane(lane.id).is_some()
+            {
+                return Err(runtime_catalog_invalid(
+                    "runtime catalog lane conflicts with an existing native lane or elastic range",
+                ));
+            }
+            let rules = manifests.lane_rules(lane.id).ok_or_else(|| {
+                runtime_catalog_invalid("runtime catalog lane has no native committee manifest")
+            })?;
+            let mut committee = rules
+                .validator_bindings
+                .iter()
+                .map(|binding| {
+                    let pop = live_consensus_key_pop_for_peer_on_lane(
+                        &self.world,
+                        &binding.peer_id,
+                        authority_height,
+                        lane.id,
+                    )
+                    .ok_or_else(|| {
+                        runtime_catalog_invalid(
+                            "runtime catalog lane has no live committee proof of possession",
+                        )
+                    })?;
+                    Ok(SumeragiLaneMember {
+                        peer: binding.peer_id.clone(),
+                        pop,
+                    })
+                })
+                .collect::<Result<Vec<_>, LaneLifecycleError>>()?;
+            committee
+                .sort_by_key(|member| crate::sumeragi::schedule::consensus_key(&member.peer).ok());
+            policy.fixed.push(SumeragiFixedLane {
+                lane: lane.id,
+                dataspace: lane.dataspace_id,
+                committee,
+            });
+            policy.fixed.sort_by_key(|fixed| fixed.lane);
+        }
+        crate::sumeragi::lanes::step::validate_policy(&policy).map_err(runtime_catalog_invalid)?;
+        Ok(policy)
+    }
+
     /// Atomically stage one authorized additive physical DS/lane/manifest catalog transition.
     ///
     /// Every fallible preparation step precedes mutation of this transaction overlay. The parent
@@ -275,9 +347,7 @@ impl StateTransaction<'_, '_> {
         &mut self,
         payload: &iroha_data_model::nexus::NexusCatalogTransitionV1,
     ) -> Result<(), LaneLifecycleError> {
-        use iroha_data_model::nexus::{
-            NexusRuntimeCatalogV1,
-        };
+        use iroha_data_model::nexus::NexusRuntimeCatalogV1;
 
         payload
             .validate_structure()
@@ -464,6 +534,14 @@ impl StateTransaction<'_, '_> {
             )?;
         }
 
+        let native_policy = self.runtime_catalog_native_lane_policy(
+            &payload.lane_additions,
+            &updated_lane_manifests,
+            block_height.checked_add(2).ok_or_else(|| {
+                runtime_catalog_invalid("native lane activation height overflows")
+            })?,
+        )?;
+
         self.world.mark_axt_lane_incarnation_transitions(
             &self.lane_incarnations,
             &lifecycle_update.updated_lane_incarnations,
@@ -471,6 +549,9 @@ impl StateTransaction<'_, '_> {
         self.world.dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
         self.world.parameters.get_mut().set_parameter(
             iroha_data_model::parameter::Parameter::Custom(runtime_parameter),
+        );
+        self.world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(native_policy.into_custom_parameter()),
         );
         self.nexus = prospective_nexus;
         self.lane_manifests = Arc::clone(&updated_lane_manifests);

@@ -2,8 +2,9 @@
 //!
 //! One entry point, [`open_node_config`], serves both kinds of node file:
 //!
-//! - A **flat file** (no `profile` key) is read exactly as before, including `extends`.
-//! - A **profile node file** sets `profile`, `role_overlay` and `profile_roster_size`. Its
+//! - A **custom file** (no `profile` key) supplies its configuration directly, including `extends`.
+//! - A **profile node file** sets `profile` and `validators`, with an optional `role`
+//!   that defaults to `validator`. Its
 //!   sources are layered as code defaults, then the profile's `static`, `derive(n)`, `policy`
 //!   and role overlay, then the node file (later sources win). The node file may contain only
 //!   [`crate::profile::PROFILE_NODE_KEYS`] and the profile's `node_tunable` keys; anything
@@ -33,10 +34,10 @@ use thiserror::Error;
 
 /// Node-file key selecting a compiled profile.
 pub const PROFILE_KEY: &str = "profile";
-/// Node-file key selecting the role overlay.
-pub const ROLE_OVERLAY_KEY: &str = "role_overlay";
-/// Node-file key carrying the roster size `n` for `derive(n)`.
-pub const ROSTER_SIZE_KEY: &str = "profile_roster_size";
+/// Optional node-file key selecting the role; defaults to `validator`.
+pub const ROLE_KEY: &str = "role";
+/// Required node-file key carrying the validator count `n` for `derive(n)`.
+pub const VALIDATORS_KEY: &str = "validators";
 
 /// Tables that the node schema reads as one value, so layers contributing to them are merged
 /// into the last contributing layer. A `true` flag marks a section that exists only when the
@@ -186,21 +187,6 @@ pub enum NodeConfigError {
         /// Offending dotted keys.
         keys: Vec<String>,
     },
-    /// The node file's chain discriminant differs from the profile's account literals.
-    #[error(
-        "`{}`: chain_discriminant {actual} differs from profile `{profile}` ({expected})",
-        path.display()
-    )]
-    ChainDiscriminant {
-        /// Node file.
-        path: PathBuf,
-        /// Selected profile.
-        profile: ProfileId,
-        /// Profile discriminant.
-        expected: u16,
-        /// Node discriminant.
-        actual: i64,
-    },
     /// A profile node file has no `data_dir`.
     #[error("`{}`: a profile node file must set `data_dir`", .0.display())]
     MissingDataDir(PathBuf),
@@ -342,32 +328,57 @@ fn open_profile_node(
             message,
         })
     };
+    for (key, message) in [
+        (
+            "role_overlay",
+            "is retired; use top-level `role` or omit it for a validator",
+        ),
+        (
+            "profile_roster_size",
+            "is retired; set `validators` to the network's validator count",
+        ),
+        (
+            "chain_discriminant",
+            "is supplied by `profile`; remove this key",
+        ),
+    ] {
+        if table.contains_key(key) {
+            return Err(key_error(key, message.to_owned()));
+        }
+    }
+    if table_at(&table, &["sumeragi"]).is_some_and(|section| section.contains_key("role")) {
+        return Err(key_error(
+            "sumeragi.role",
+            "is selected by top-level `role`; remove this key".to_owned(),
+        ));
+    }
     let profile_id = match table.remove(PROFILE_KEY) {
         Some(toml::Value::String(name)) => name
             .parse::<ProfileId>()
             .map_err(|error| key_error(PROFILE_KEY, error.to_string()))?,
         _ => return Err(key_error(PROFILE_KEY, "must be a profile name".to_owned())),
     };
-    let role = match table.remove(ROLE_OVERLAY_KEY) {
+    let role = match table.remove(ROLE_KEY) {
+        None => ProfileRole::Validator,
         Some(toml::Value::String(name)) => name
             .parse::<ProfileRole>()
-            .map_err(|error| key_error(ROLE_OVERLAY_KEY, error.to_string()))?,
+            .map_err(|error| key_error(ROLE_KEY, error.to_string()))?,
         _ => {
             return Err(key_error(
-                ROLE_OVERLAY_KEY,
+                ROLE_KEY,
                 "must be `validator`, `lane_validator` or `observer`".to_owned(),
             ));
         }
     };
-    let roster_size = match table.remove(ROSTER_SIZE_KEY) {
+    let roster_size = match table.remove(VALIDATORS_KEY) {
         Some(toml::Value::Integer(size)) => usize::try_from(size)
             .ok()
             .filter(|size| *size > 0)
-            .ok_or_else(|| key_error(ROSTER_SIZE_KEY, "must be a positive integer".to_owned()))?,
+            .ok_or_else(|| key_error(VALIDATORS_KEY, "must be a positive integer".to_owned()))?,
         _ => {
             return Err(key_error(
-                ROSTER_SIZE_KEY,
-                "must be the validator roster size".to_owned(),
+                VALIDATORS_KEY,
+                "must be an explicit positive integer validator count (4, 7, ..., 31)".to_owned(),
             ));
         }
     };
@@ -383,20 +394,12 @@ fn open_profile_node(
             keys: disallowed,
         }));
     }
-    if let Some(discriminant) = table.get("chain_discriminant")
-        && discriminant.as_integer() != Some(i64::from(profile.chain_discriminant()))
-    {
-        return Err(Report::new(NodeConfigError::ChainDiscriminant {
-            path,
-            profile: profile_id,
-            expected: profile.chain_discriminant(),
-            actual: discriminant.as_integer().unwrap_or(-1),
-        }));
-    }
     if !table.contains_key("data_dir") {
         return Err(Report::new(NodeConfigError::MissingDataDir(path)));
     }
-    let geometry = profile.derive(roster_size).map_err(profile_error)?;
+    let geometry = profile
+        .derive(roster_size)
+        .map_err(|error| key_error(VALIDATORS_KEY, error.to_string()))?;
     let binding = ProfileBinding {
         profile: profile_id,
         role,

@@ -97,7 +97,6 @@ use norito::codec::Encode;
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-pub(crate) use router::matchers_match_with_world;
 #[cfg(test)]
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
@@ -109,6 +108,7 @@ pub use router::{
     evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
     resolve_query_routing_decision, resolve_routing_decision,
 };
+pub(crate) use router::{matchers_match_with_world, native_execution_target};
 #[cfg(test)]
 use std::sync::Barrier;
 use std::{

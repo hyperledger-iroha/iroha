@@ -84,7 +84,7 @@ async fn websocket_writer_panic_is_contained_and_disconnects_session() {
         let _endpoint_lease = endpoint_lease;
         drive_ws_halves(std::future::pending::<Result<(), String>>(), async {
             assert!(
-                iroha_core::panic_hook::is_suppressed(),
+                iroha_panic_hook::is_suppressed(),
                 "the physical writer future must run inside the session recovery boundary"
             );
             panic!("injected Connect websocket writer panic");
@@ -100,7 +100,7 @@ async fn websocket_writer_panic_is_contained_and_disconnects_session() {
         Err("connect websocket session panicked".to_owned())
     );
     assert!(
-        !iroha_core::panic_hook::is_suppressed(),
+        !iroha_panic_hook::is_suppressed(),
         "panic-hook suppression must not leak into the caller"
     );
     timeout(Duration::from_secs(1), async {

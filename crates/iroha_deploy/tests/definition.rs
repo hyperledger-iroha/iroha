@@ -210,6 +210,33 @@ fn committed_dataspace_examples_parse() {
 }
 
 #[test]
+fn committed_dpn_definition_contains_only_dataspace_decisions() {
+    let file = repo_root().join("dataspaces/dpn.toml");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let table: toml::Table = toml::from_str(&text).unwrap();
+    assert_eq!(
+        table.len(),
+        1,
+        "DPN must not contain node or network settings"
+    );
+    let section = table["dataspace"].as_table().unwrap();
+    let mut keys: Vec<_> = section.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["account_alias", "max_fee", "name", "network", "owner_key"]
+    );
+
+    let definition = DataspaceDefinition::load(&file).unwrap();
+    assert_eq!(definition.dataspace.name.as_str(), "dpn");
+    assert_eq!(definition.dataspace.visibility, Visibility::Restricted);
+    assert_eq!(definition.committee.source, CommitteeSource::Network);
+    assert!(definition.committee.nodes.is_empty());
+    assert!(definition.ssh.is_none());
+    assert!(definition.edge.is_none());
+}
+
+#[test]
 fn taira_fixture_parses() {
     let taira =
         NetworkDefinition::load_with_home(fixture("taira.toml"), Some(Path::new(HOME))).unwrap();
@@ -849,11 +876,91 @@ fn dataspace_defaults() {
 }
 
 #[test]
+fn omitted_committee_matches_explicit_parent_network_committee() {
+    let explicit = dataspace(DS_NETWORK).unwrap();
+    let absent = DS_NETWORK.replace("[committee]\nsource = \"network\"\n", "");
+    for text in [absent, DS_NETWORK.replace("source = \"network\"\n", "")] {
+        let implicit = dataspace(&text).unwrap();
+        assert_eq!(implicit.dataspace, explicit.dataspace);
+        assert_eq!(implicit.committee, explicit.committee);
+        assert_eq!(implicit.ssh, explicit.ssh);
+        assert_eq!(implicit.edge, explicit.edge);
+        assert!(!implicit.is_local());
+        assert_eq!(implicit.f(), None);
+    }
+}
+
+#[test]
+fn owner_nodes_require_explicit_owner_committee_source() {
+    let text = owner("").replace("source = \"owner\"\n", "");
+    assert_dataspace_issue(&text, "committee.node");
+    assert_dataspace_issue(&text, "ssh");
+    assert!(
+        dataspace(&text)
+            .unwrap_err()
+            .to_string()
+            .contains("committee.source = \"owner\"")
+    );
+}
+
+#[test]
+fn dataspace_rejects_global_node_and_network_configuration() {
+    for (section, setting) in [
+        ("network", "profile = \"sora-nexus-v1\""),
+        ("sumeragi", "role = \"validator\""),
+        ("nexus", "lane_count = 7"),
+        ("gov", "enabled = true"),
+        ("sorafs.storage", "enabled = true"),
+        ("soracloud_runtime", "production_mode = true"),
+        ("streaming", "enabled = true"),
+        ("taikai", "enabled = true"),
+        ("oracle", "enabled = true"),
+        ("zk.halo2", "enabled = true"),
+        ("confidential", "enabled = true"),
+        ("torii", "address = \"127.0.0.1:8080\""),
+        ("pipeline", "signature_batch_max_bls = 4"),
+        ("crypto", "allowed_signing = [\"ed25519\"]"),
+        ("genesis", "file = \"genesis.signed.nrt\""),
+    ] {
+        assert_read_error(
+            dataspace(&format!("{DS_NETWORK}\n[{section}]\n{setting}\n")),
+            DATASPACE_FILE,
+            &[section.split('.').next().unwrap()],
+        );
+    }
+    for (key, value) in [
+        ("profile", "\"sora-nexus-v1\""),
+        ("role", "\"validator\""),
+        ("validators", "4"),
+        ("data_dir", "\"/var/lib/iroha\""),
+    ] {
+        assert_read_error(
+            dataspace(&format!("{key} = {value}\n{DS_NETWORK}")),
+            DATASPACE_FILE,
+            &[key],
+        );
+    }
+}
+
+#[test]
 fn committee_source_is_network_or_owner() {
+    for value in ["\"validators\"", "\"\"", "true", "4", "[]", "{}"] {
+        assert_read_error(
+            dataspace(&DS_NETWORK.replace("\"network\"\n", &format!("{value}\n"))),
+            DATASPACE_FILE,
+            &["committee.source"],
+        );
+    }
     assert_read_error(
-        dataspace(&DS_NETWORK.replace("\"network\"\n", "\"validators\"\n")),
+        dataspace(&DS_NETWORK.replace("source =", "sorce =")),
         DATASPACE_FILE,
-        &["committee.source"],
+        &["committee.sorce"],
+    );
+    let no_committee = DS_NETWORK.replace("[committee]\nsource = \"network\"\n", "");
+    assert_read_error(
+        dataspace(&format!("committee = \"network\"\n{no_committee}")),
+        DATASPACE_FILE,
+        &["committee"],
     );
 }
 
@@ -887,8 +994,23 @@ fn local_rehearsals_run_under_a_network_definition() {
 }
 
 #[test]
+fn dataspace_operators_require_owner_committee() {
+    let with_operator = |text: &str| {
+        text.replace(
+            "max_fee",
+            &format!("operators = [\"{ED25519_KEY}\"]\nmax_fee"),
+        )
+    };
+    assert_dataspace_issue(&with_operator(DS_NETWORK), "dataspace.operators");
+    let implicit_network = DS_NETWORK.replace("[committee]\nsource = \"network\"\n", "");
+    assert_dataspace_issue(&with_operator(&implicit_network), "dataspace.operators");
+    let owner_definition = dataspace(&with_operator(&owner(""))).unwrap();
+    assert_eq!(owner_definition.dataspace.operators.len(), 1);
+}
+
+#[test]
 fn dataspace_operators_are_unique() {
-    let text = DS_NETWORK.replace(
+    let text = owner("").replace(
         "max_fee",
         &format!("operators = [\"{ED25519_KEY}\", \"{ED25519_KEY}\"]\nmax_fee"),
     );

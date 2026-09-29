@@ -198,22 +198,16 @@ fn render_profile_node(kagami: &KagamiTaira, peer: usize, root: &Path) -> PathBu
     let mut node = toml::Table::new();
     for (key, value) in [
         ("profile", ProfileId::SoraNexusV1.as_str()),
-        ("role_overlay", ProfileRole::Validator.as_str()),
+        ("role", ProfileRole::Validator.as_str()),
     ] {
         node.insert(key.into(), toml::Value::String(value.to_owned()));
     }
-    node.insert("profile_roster_size".into(), toml::Value::Integer(4));
+    node.insert("validators".into(), toml::Value::Integer(4));
     node.insert(
         "data_dir".into(),
         toml::Value::String(data_dir.root().to_string_lossy().into_owned()),
     );
-    for key in [
-        "chain",
-        "chain_discriminant",
-        "public_key",
-        "trusted_peers",
-        "trusted_peers_pop",
-    ] {
+    for key in ["chain", "public_key", "trusted_peers", "trusted_peers_pop"] {
         node.insert(key.into(), source[key].clone());
     }
     let pick = |section: &str, keys: &[&str]| {

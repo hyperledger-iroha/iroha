@@ -111,8 +111,6 @@ pub mod musubi_search;
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
-/// Panic hook suppression helpers shared across crates.
-pub mod panic_hook;
 /// Peer discovery and gossip.
 pub mod peers_gossiper;
 /// Pipeline helpers (access-set derivation, scheduler glue)
@@ -701,7 +699,7 @@ mod tests {
             ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
-    use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::block::BlockHeader;
     use iroha_data_model::role::RoleId;
     use iroha_data_model::transaction::{TransactionBuilder, TransactionEntrypoint};
@@ -714,7 +712,7 @@ mod tests {
     };
     use iroha_test_samples::gen_account_in;
     use norito::{codec::Encode, core as ncore};
-    use std::{cmp::Ordering, collections::BTreeMap, num::NonZeroU64, sync::Arc, time::Duration};
+    use std::{cmp::Ordering, collections::BTreeMap, sync::Arc, time::Duration};
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,

@@ -51,6 +51,7 @@ iroha_logger = { path = "crates/iroha_logger" }
 iroha_crypto = { path = "crates/iroha_crypto", default-features = false }
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
+iroha_panic_hook = { path = "crates/iroha_panic_hook" }
 iroha_genesis = { path = "crates/iroha_genesis" }
 iroha_sccp = { path = "crates/iroha_sccp" }
 iroha_sccp_rpc = { path = "crates/iroha_sccp_rpc" }
@@ -304,6 +305,7 @@ default-members = [
     "crates/iroha_config",
     "crates/iroha_logger",
     "crates/iroha_p2p",
+    "crates/iroha_panic_hook",
     "crates/iroha_core",
     "crates/iroha_torii_shared",
     "crates/iroha_torii",

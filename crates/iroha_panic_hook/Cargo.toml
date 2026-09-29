@@ -1,0 +1,25 @@
+[package]
+name = "iroha_panic_hook"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+description = "Process-wide panic-hook suppression scopes shared by Iroha node components"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# `rt` provides `task_local!`, which carries suppression across `.await` points.
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

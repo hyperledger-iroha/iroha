@@ -48,7 +48,7 @@ async fn panicked_http_connection_is_contained_to_its_socket() {
     let mut connections = JoinSet::new();
     connections.spawn(crate::panic_recovery::catch_async_recoverable(async move {
         assert!(
-            iroha_core::panic_hook::is_suppressed(),
+            iroha_panic_hook::is_suppressed(),
             "the physical connection future must run inside its recovery boundary"
         );
         panic!("injected attacker-controlled HTTP connection panic");
@@ -66,7 +66,7 @@ async fn panicked_http_connection_is_contained_to_its_socket() {
     observe_torii_connection_completion(completion)
         .expect("a panicked connection must not terminate the listener");
     assert!(
-        !iroha_core::panic_hook::is_suppressed(),
+        !iroha_panic_hook::is_suppressed(),
         "connection panic suppression must not leak into the listener"
     );
 }

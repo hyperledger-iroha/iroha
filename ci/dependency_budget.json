@@ -505,7 +505,7 @@
         "declared_local_packages": 62,
         "declared_path_packages": 3,
         "declared_workspace_packages": 59,
-        "required_dependency_edges": 706,
+        "required_dependency_edges": 708,
         "required_external_dependency_edges": 457,
         "required_external_packages": 145,
         "required_local_packages": 55,
