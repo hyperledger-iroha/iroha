@@ -21,6 +21,7 @@ kagami advanced kura <SUBCOMMAND> [OPTIONS]
 |      Command        |                             Description                              |
 | ------------------- | --------------------------------------------------------------------- |
 | [`print`](#print)   | Print the contents of a specified number of blocks                     |
+| [`finality`](#finality) | Verify native certificates over a complete locally anchored prefix |
 | [`sidecar`](#sidecar) | Print the pipeline recovery sidecar JSON for a given block height       |
 | `help`              | Print the help message for the tool or a subcommand                    |
 
@@ -46,6 +47,17 @@ An error in `print` occurs if one the following happens:
 - `kura` fails to read `block_store`
 - `kura` fails to print the `output`
 - `kura` tries to print the latest block and there is none
+
+## `finality`
+
+`kagami advanced kura finality <path> --chain-id <chain> --height <height>`
+checks the signed genesis and every native certificate through the selected
+height (1–4096), then emits the exact current `SumeragiFinalityProof`. Reads and
+JSON output are bounded; verification failure emits no partial report. The
+selected store supplies the genesis trust root, so `external_trust_anchor` is
+false. A height-one report sets `genesis_execution_authenticated` to false:
+only a verified successor authenticates the genesis execution result. Optional
+`--output` uses atomic publication outside the store.
 
 ## `sidecar`
 

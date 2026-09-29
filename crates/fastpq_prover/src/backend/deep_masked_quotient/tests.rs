@@ -196,7 +196,7 @@ fn full_relation_plan_uses_actual_degrees_and_refuses_budget_and_source_mismatch
     );
     let mut small = MaskedTraceReplay::arithmetic_fixture(&[&[1, 2, 3, 4]], 4, 1).unwrap();
     assert!(DeepQuotientPlan::new(&air, small.plan(), policy()).is_err());
-    assert!(plan.build(&mut small, &[F::ZERO; SLOT_COUNT]).is_err());
+    assert!(plan.build(&mut small, &vec![F::ZERO; SLOT_COUNT]).is_err());
 }
 
 #[test]

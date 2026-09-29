@@ -1,6 +1,9 @@
 //! Package build and test presentation with explicit network context and complete diagnostics.
 use super::*;
-use crate::{compiler::CompilerArtifactV1, test_runner::WorkspaceTestReportV1};
+use crate::{
+    compiler::{CompilerArtifactV1, CompilerExecutionV1},
+    test_runner::WorkspaceTestReportV1,
+};
 
 pub(super) fn run_build(
     explicit_manifest: Option<&Path>,
@@ -66,52 +69,67 @@ pub(super) fn run_build(
         if !report.is_success() {
             return Err(
                 Diagnostic::new(ErrorCode::Compiler, "Kotodama tests failed")
-                    .with_details(human, Value::Object(data)),
+                    .with_details(human, &Value::Object(data)),
             );
         }
     } else {
-        let _ = writeln!(
-            human,
-            "{command} completed: {} package(s), {} contract target(s), {} warning(s)",
-            execution.validated_packages, execution.contract_targets, execution.warnings
-        );
-        for artifact in &execution.artifacts {
-            human.push_str(&render_artifact(artifact));
-        }
-        if let [artifact] = execution.artifacts.as_slice() {
-            human.push_str(&deployment_next_step(
-                workspace.root_manifest_path(),
-                &network,
-                artifact,
-            ));
-        }
-        data.insert(
-            "artifacts".to_owned(),
-            Value::Array(execution.artifacts.iter().map(artifact_json).collect()),
-        );
-        data.insert(
-            "interfaces".to_owned(),
-            Value::Array(
-                execution
-                    .package_interfaces
-                    .iter()
-                    .map(|interface| {
-                        object([
-                            ("package", Value::from(interface.package.to_string())),
-                            (
-                                "digest",
-                                Value::from(hex::encode(interface.digest.as_bytes())),
-                            ),
-                        ])
-                    })
-                    .collect(),
-            ),
+        append_build_completion(
+            &mut human,
+            &mut data,
+            command,
+            &execution,
+            workspace.root_manifest_path(),
+            &network,
         );
     }
     Ok(Success {
         message: human,
         data: Value::Object(data),
     })
+}
+
+/// Append the build/check completion summary, artifacts and package interfaces.
+fn append_build_completion(
+    human: &mut String,
+    data: &mut Map,
+    command: &'static str,
+    execution: &CompilerExecutionV1,
+    manifest: &Path,
+    network: &network::SelectedNetwork,
+) {
+    let _ = writeln!(
+        human,
+        "{command} completed: {} package(s), {} contract target(s), {} warning(s)",
+        execution.validated_packages, execution.contract_targets, execution.warnings
+    );
+    for artifact in &execution.artifacts {
+        human.push_str(&render_artifact(artifact));
+    }
+    if let [artifact] = execution.artifacts.as_slice() {
+        human.push_str(&deployment_next_step(manifest, network, artifact));
+    }
+    data.insert(
+        "artifacts".to_owned(),
+        Value::Array(execution.artifacts.iter().map(artifact_json).collect()),
+    );
+    data.insert(
+        "interfaces".to_owned(),
+        Value::Array(
+            execution
+                .package_interfaces
+                .iter()
+                .map(|interface| {
+                    object([
+                        ("package", Value::from(interface.package.to_string())),
+                        (
+                            "digest",
+                            Value::from(hex::encode(interface.digest.as_bytes())),
+                        ),
+                    ])
+                })
+                .collect(),
+        ),
+    );
 }
 
 fn deployment_next_step(

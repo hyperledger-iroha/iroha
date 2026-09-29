@@ -56,8 +56,8 @@ impl WalletNetwork {
     ) -> Result<Self> {
         let network = Self {
             network_id,
-            chain_id: chain_id.to_string(),
-            torii_url: torii_url.to_string(),
+            chain_id: chain_id.into_inner().into_string(),
+            torii_url: String::from(torii_url),
             chain_discriminant,
         };
         network.validate()?;
@@ -240,7 +240,7 @@ impl WalletStore {
                     self.directory.revalidate()?;
                     return Ok(path);
                 }
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(error) => return Err(error.into()),
             }
         }
@@ -463,7 +463,11 @@ fn render_config(record: &WalletRecord, key: Option<&str>) -> Result<String> {
         quote(&record.public_key),
     );
     match key {
-        Some(key) => config.push_str(&format!("private_key = {}\n", quote(key))),
+        Some(key) => {
+            config.push_str("private_key = ");
+            config.push_str(&quote(key));
+            config.push('\n');
+        }
         None => config.push_str("private_key_file = \"private.key\"\n"),
     }
     if config.len() > MAX_CONFIG_BYTES {

@@ -33,7 +33,7 @@ import check_sorafs_production_readiness as CHECKER  # noqa: E402
 import sorafs_production_readiness_contract as CONTRACT  # noqa: E402
 import sorafs_software_signer_receipt as RECEIPT  # noqa: E402
 import sorafs_verifier_process as VERIFIER_PROCESS  # noqa: E402
-import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+import release_evidence_crypto as RELEASE_CRYPTO  # noqa: E402
 import sorafs_l1_lane_evidence_inventory as LANE_INVENTORY  # noqa: E402
 from sorafs_l1_lane_inventory_test_support import (  # noqa: E402
     inventory_cli_args,

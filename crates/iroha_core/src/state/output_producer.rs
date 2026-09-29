@@ -180,12 +180,6 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
         {
             let block = source.0;
             block.validate_proposal_commitments()?;
-            if block
-                .execution_context()
-                .is_some_and(|context| context.native_lane_decisions.is_some())
-            {
-                return Err("ordinary output source contains a competing native owner".into());
-            }
         }
         if source.header() != state._curr_block
             || plan.proposal != source.hash()

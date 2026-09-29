@@ -63,7 +63,8 @@ final class ConfidentialProverTests: XCTestCase {
         XCTAssertEqual(proof.outputCommitments.count, 0)
         XCTAssertFalse(driver.provedOnMainThread)
         XCTAssertEqual(driver.proveCount, 1)
-        XCTAssertEqual(driver.jobCloseCount, 0, "proof consumes its job exactly once")
+        XCTAssertEqual(driver.jobCloseCount, 1, "cleanup also covers failure before native consumption")
+        XCTAssertEqual(driver.activeJobs, 0)
         do {
             _ = try await prover.proveUnshield(tree: tree, inputs: [input], publicAmount: 7)
             XCTFail("closed wallet accepted a new job")
@@ -79,6 +80,18 @@ final class ConfidentialProverTests: XCTestCase {
         } catch { XCTAssertEqual(error as? ConfidentialProverError, .native(code: -20)) }
         XCTAssertEqual(driver.jobCloseCount, 1)
         XCTAssertEqual(driver.proveCount, 0)
+    }
+
+    func testDriverFailureBeforeNativeConsumptionClosesJob() async throws {
+        let driver = WalletDriver(); driver.rejectBeforeConsumption = true
+        let prover = try wallet(driver)
+        do {
+            _ = try await prover.proveUnshield(tree: tree, inputs: [try note()], publicAmount: 7)
+            XCTFail("driver failure was ignored")
+        } catch { XCTAssertEqual(error as? ConfidentialProverError, .bridgeUnavailable) }
+        XCTAssertEqual(driver.proveCount, 0)
+        XCTAssertEqual(driver.jobCloseCount, 1)
+        XCTAssertEqual(driver.activeJobs, 0)
     }
 
     func testTransferAndChangeSelectExactRelationsAndCounts() async throws {
@@ -112,7 +125,8 @@ final class ConfidentialProverTests: XCTestCase {
             XCTFail("wrong native proof relation was accepted")
         } catch { XCTAssertEqual(error as? ConfidentialProverError, .invalidNativeOutput) }
         XCTAssertEqual(driver.proveCount, 1)
-        XCTAssertEqual(driver.jobCloseCount, 0)
+        XCTAssertEqual(driver.jobCloseCount, 1)
+        XCTAssertEqual(driver.activeJobs, 0)
     }
 }
 
@@ -126,12 +140,14 @@ private final class WalletDriver: ConfidentialProverDriver, @unchecked Sendable 
     var gate: DispatchSemaphore?
     var entered: (() -> Void)?
     var rejectInput = false
+    var rejectBeforeConsumption = false
     var invalidResult = false
     var closeCount: Int { snapshot(0) }
     var jobCloseCount: Int { snapshot(1) }
     var proveCount: Int { snapshot(2) }
     var jobCreateCount: Int { snapshot(3) }
     var provedOnMainThread: Bool { lock.lock(); defer { lock.unlock() }; return mainThread }
+    var activeJobs: Int { lock.lock(); defer { lock.unlock() }; return jobs.count }
     private func snapshot(_ index: Int) -> Int { lock.lock(); defer { lock.unlock() }; return counters[index] }
     func create(network: NetworkId, asset: String, key: Data) throws -> UInt64 { 1 }
     func close(_ handle: UInt64) throws { lock.lock(); defer { lock.unlock() }; counters[0] += 1 }
@@ -151,6 +167,7 @@ private final class WalletDriver: ConfidentialProverDriver, @unchecked Sendable 
     }
     func evidence(_ job: UInt64, tree: ConfidentialTree) throws {}
     func prove(_ job: UInt64) throws -> Data {
+        if rejectBeforeConsumption { throw ConfidentialProverError.bridgeUnavailable }
         lock.lock()
         let request = jobs.removeValue(forKey: job)!
         counters[2] += 1; mainThread = Thread.isMainThread

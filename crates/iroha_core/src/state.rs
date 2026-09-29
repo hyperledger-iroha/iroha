@@ -46,9 +46,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::{
-        ConsensusMode, SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
-    },
+    block::consensus_v2::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, ExecKv, ExecWitness},
@@ -91,7 +89,6 @@ use iroha_data_model::{
         },
         settlement::{SettlementId, SettlementReceipt},
     },
-    merge::{LaneDrainFrontierV1, MergeLedgerEntry},
     musubi::{
         ArchiveId, MUSUBI_MAX_PENDING_INVITATIONS_V1, MusubiAliasHistoryEntryV1,
         MusubiAliasHistoryKeyV1, MusubiAliasNameV1, MusubiAliasRecordV1,
@@ -121,11 +118,11 @@ use iroha_data_model::{
         FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
         FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
-        FeeSponsorVault, FeeSponsorVaultKey, LaneCatalog, LaneLifecycleParameterV1, LaneRelayError,
-        MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1, PublicLaneRewardRecord,
-        PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId, VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
-        VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
+        FeeSponsorVault, FeeSponsorVaultKey, LaneCatalog, LaneLifecycleParameterV1,
+        LaneLifecyclePlan, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -236,8 +233,6 @@ const MERGE_EXECUTION_WRITE_SET_DOMAIN: &[u8] = b"iroha:merge:execution-write-se
 /// Maximum number of settled VPN lease receipts retained in each account's read projection.
 pub const VPN_SETTLED_RECEIPT_HISTORY_LIMIT: usize = 24;
 include!("state/vpn_lease_validation.rs");
-const MAX_MERGE_EXECUTION_RESERVATION_METADATA_BYTES: usize = 8 * 1024 * 1024;
-const MAX_MERGE_QC_BYTES: usize = iroha_data_model::merge::MAX_MERGE_QUORUM_CERTIFICATE_BYTES;
 const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
 fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -1418,7 +1413,6 @@ macro_rules! with_world_overlay_fields {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
-            sccp_light_client_checkpoint_expiry,
             ]
         }
     };
@@ -2480,12 +2474,6 @@ pub enum MergeLedgerCommitError {
     /// Merge staging was attempted after another block effect had already been staged.
     #[error("certified merge entry must be staged on a pristine pre-lifecycle block overlay")]
     ExecutionStageNotPristine,
-    /// Compact reference sidecar is not locally available for validation.
-    #[error("certified merge sidecar {entry_hash} is unavailable")]
-    MissingCertifiedMergeSidecar {
-        /// Canonical full-entry hash requested by the compact reference.
-        entry_hash: HashOf<MergeLedgerEntry>,
-    },
     /// Merge execution batch was certified for a different WSV base.
     #[error(
         "merge execution base mismatch: expected height={expected_height} hash={expected_hash}, actual height={actual_height} hash={actual_hash}"
@@ -2848,9 +2836,9 @@ pub enum LaneLifecycleError {
     /// A committed runtime catalog request or retained payload failed validation.
     #[error("invalid committed Nexus runtime catalog: {0}")]
     RuntimeCatalog(String),
-    /// Prospective geometry must leave room for a complete merge execution transcript.
-    #[error(transparent)]
-    MergeAuthorityGeometry(#[from] iroha_data_model::merge::MergeLaneAuthorityGeometryError),
+    /// A lane has no valid authenticated committee geometry.
+    #[error("invalid lane committee geometry: {0}")]
+    CommitteeGeometry(String),
     /// Lifecycle plans must add or retire at least one lane.
     #[error("lane lifecycle plan must add or retire at least one lane")]
     EmptyPlan,
@@ -4611,10 +4599,6 @@ pub struct WorldData {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         Storage<(iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    #[norito(skip)]
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        Storage<(u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -5654,10 +5638,6 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         StorageField<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    #[norito(skip)]
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageField<'world, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Block-local buffer of events pending publication to external subscribers.
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
@@ -6320,7 +6300,6 @@ impl WorldBlock<'_> {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
-            sccp_light_client_checkpoint_expiry,
         );
         out
     }
@@ -7256,9 +7235,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageTransaction<'block, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageTransaction<'block, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Parent block buffer that receives transaction-local external events on apply.
     pub(crate) external_event_sink: &'block mut Vec<EventBox>,
     /// Transaction-local buffer of external events. Dropping a transaction drops its events.
@@ -9074,9 +9050,6 @@ pub struct WorldView<'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageView<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageView<'world, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageView<'world, Hash, EvidenceRecord>,
     /// Contract manifests
@@ -12077,13 +12050,6 @@ pub struct State {
     pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain derived from `genesis.expected_hash`; binds VRF prehashes.
     pub network_id: iroha_data_model::NetworkId,
-    /// Typed v2 trust root parsed from a snapshot but not yet authorized by snapshot policy.
-    snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
-    /// Snapshot-policy-authorized and WSV-validated v2 trust root.
-    authenticated_snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
-    /// Non-forgeable outer snapshot authentication proof retained for startup upgrade.
-    authenticated_snapshot_bootstrap_payload:
-        Option<crate::snapshot::AuthenticatedSnapshotBootstrapPayload>,
     /// State telemetry sink mirrored from data events.
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
@@ -12125,10 +12091,7 @@ fn load_state_journals(
     // remove stale files. Snapshot bootstrap opens the whole Kura tree as an
     // authenticated read-only candidate, so retain process-local empty
     // journals until the token-consuming Kura finalizer has completed.
-    if !allow_durable_recovery
-        || kura.provisional_snapshot_bootstrap_pending()
-        || kura.emergency_fast_startup_enabled()
-    {
+    if !allow_durable_recovery || kura.emergency_fast_startup_enabled() {
         let mut query_index = QueryIndexJournal::new(QueryIndexJournal::journal_path(&store_root));
         if let Some(status) = canonical_query_index_status {
             query_index.set_latest(status.indexed_height, status.indexed_block_hash);
@@ -16498,18 +16461,10 @@ mod stake_snapshot_tests {
         );
         assert!(roster.contains(&peer_b));
         assert!(extra_peers.iter().all(|peer| roster.contains(peer)));
-        let active_lane_ids = BTreeSet::from([LaneId::SINGLE, secondary_lane]);
-        let powers = crate::sumeragi::stake_snapshot::strict_v2_voting_roster(
-            sv.world(),
-            &roster,
-            Some(&active_lane_ids),
-            1,
-        )
-        .expect("strict voting powers");
-        assert_eq!(powers.len(), 4);
-        assert!(
-            powers.iter().all(|entry| entry.power == 1),
-            "stake elects committee members but every selected validator has one consensus vote"
+        assert_eq!(
+            roster.len(),
+            4,
+            "each elected validator occupies one roster slot"
         );
     }
     #[test]
@@ -18863,7 +18818,8 @@ impl World {
     {
         Self::with_assets(domains, accounts, asset_definitions, [], [])
     }
-    /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
+    /// Creates a World whose asset supplies equal the supplied initial balances.
+    /// Repeated asset identities retain their last supplied balance.
     pub fn with_assets<D, A, Ad, As, N>(
         domains: D,
         accounts: A,
@@ -18987,13 +18943,30 @@ impl World {
             definition_pairs.insert(definition_id, definition);
         }
         drop(domain_view);
+        let asset_pairs = assets
+            .into_iter()
+            .map(IntoKeyValue::into_key_value)
+            .collect::<BTreeMap<AssetId, AssetValue>>();
+        for definition in definition_pairs.values_mut() {
+            definition.total_quantity = Quantity::zero();
+        }
+        for (id, quantity) in &asset_pairs {
+            let definition = definition_pairs
+                .get_mut(id.definition())
+                .expect("initial asset must have its original definition");
+            ensure_asset_quantity_value(&quantity.0, definition.spec())
+                .expect("initial asset quantity must satisfy its definition");
+            definition.total_quantity = definition
+                .total_quantity
+                .checked_add(&quantity.0)
+                .expect("initial asset supply must fit its quantity representation");
+            ensure_asset_quantity_value(&definition.total_quantity, definition.spec())
+                .expect("initial asset supply must satisfy its definition");
+        }
         let asset_definitions = definition_pairs.into_iter().collect();
         let asset_definition_alias_bindings = definition_alias_bindings.into_iter().collect();
         let asset_definition_domains = definition_domains.into_iter().collect();
-        let assets = assets
-            .into_iter()
-            .map(IntoKeyValue::into_key_value)
-            .collect();
+        let assets = asset_pairs.into_iter().collect();
         let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
         let mut world = Self(Box::new(WorldData {
             domains,
@@ -21328,8 +21301,6 @@ macro_rules! world_ro_accessors {
             storage sccp_light_client_checkpoints: (iroha_data_model::bridge::SccpNetworkV1, u64) => iroha_data_model::sccp::light_client::SccpLcCheckpointV1;
             /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
             storage sccp_light_client_stride_index: (iroha_data_model::bridge::SccpNetworkV1, u64) => u64;
-            /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-            storage sccp_light_client_checkpoint_expiry: (u64, iroha_data_model::bridge::SccpNetworkV1, u64) => ();
         );
     };
 }
@@ -24868,7 +24839,6 @@ impl<'block> WorldTransaction<'block, '_> {
             sccp_light_client_sets: _,
             sccp_light_client_checkpoints: _,
             sccp_light_client_stride_index: _,
-            sccp_light_client_checkpoint_expiry: _,
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
@@ -25191,7 +25161,6 @@ impl<'block> WorldTransaction<'block, '_> {
         self.sccp_light_client_sets.apply();
         self.sccp_light_client_checkpoints.apply();
         self.sccp_light_client_stride_index.apply();
-        self.sccp_light_client_checkpoint_expiry.apply();
         self.peers.apply();
         self.consensus_schedule.apply();
         self.parameters.apply();
@@ -25820,173 +25789,6 @@ mod recorded_carrier_scope;
 mod state_block_construction;
 mod uaid_dataspace_restore;
 impl State {
-    /// Return the authenticated Sumeragi-v2 snapshot bootstrap trust root, if this state was
-    /// restored from an explicitly authorized audited snapshot boundary.
-    #[must_use]
-    pub fn authenticated_snapshot_v2_bootstrap(&self) -> Option<&SnapshotV2BootstrapRecord> {
-        self.authenticated_snapshot_v2_bootstrap.as_ref()
-    }
-    pub(crate) fn authenticated_snapshot_bootstrap_payload(
-        &self,
-    ) -> Option<&crate::snapshot::AuthenticatedSnapshotBootstrapPayload> {
-        self.authenticated_snapshot_bootstrap_payload.as_ref()
-    }
-    pub(crate) fn install_authenticated_snapshot_bootstrap_payload(
-        &mut self,
-        payload: crate::snapshot::AuthenticatedSnapshotBootstrapPayload,
-    ) -> core::result::Result<(), String> {
-        if self.authenticated_snapshot_v2_bootstrap.as_ref() != Some(payload.record())
-            || !self.committed_block_hashes_match(payload.block_hashes())
-        {
-            return Err(
-                "outer snapshot authentication payload differs from validated restored State"
-                    .to_owned(),
-            );
-        }
-        self.authenticated_snapshot_bootstrap_payload = Some(payload);
-        Ok(())
-    }
-    #[cfg(test)]
-    pub(crate) fn set_authenticated_snapshot_v2_bootstrap_for_testing(
-        &mut self,
-        record: SnapshotV2BootstrapRecord,
-    ) {
-        self.snapshot_v2_bootstrap_candidate = None;
-        self.authenticated_snapshot_v2_bootstrap = Some(record.clone());
-        self.authenticated_snapshot_bootstrap_payload = Some(
-            crate::snapshot::AuthenticatedSnapshotBootstrapPayload::for_testing(
-                record,
-                self.committed_block_hashes_snapshot(),
-            ),
-        );
-    }
-    #[cfg(test)]
-    pub(crate) fn set_snapshot_v2_bootstrap_candidate_for_testing(
-        &mut self,
-        record: SnapshotV2BootstrapRecord,
-    ) {
-        self.snapshot_v2_bootstrap_candidate = Some(record);
-    }
-    pub(crate) fn has_snapshot_v2_bootstrap_candidate(&self) -> bool {
-        self.snapshot_v2_bootstrap_candidate.is_some()
-    }
-    pub(crate) fn authenticate_snapshot_v2_bootstrap_candidate(
-        &mut self,
-        authority: crate::snapshot::SnapshotBootstrapLineageAuthority,
-    ) -> core::result::Result<(), String> {
-        let Some(record) = self.snapshot_v2_bootstrap_candidate.as_ref() else {
-            return Ok(());
-        };
-        record
-            .validate()
-            .map_err(|error| format!("invalid snapshot bootstrap structure: {error}"))?;
-        let anchor = record
-            .context
-            .snapshot_bootstrap
-            .as_ref()
-            .expect("validated snapshot bootstrap record must contain an anchor");
-        if record.context.network_id != self.network_id {
-            return Err(format!(
-                "bootstrap context network id {} differs from snapshot network id {}",
-                record.context.network_id, self.network_id
-            ));
-        }
-        let snapshot_height = u64::try_from(self.committed_height())
-            .map_err(|_| "snapshot height exceeds the canonical u64 height domain".to_owned())?;
-        if anchor.snapshot_height > snapshot_height {
-            return Err(format!(
-                "bootstrap anchor height {} exceeds snapshot height {snapshot_height}",
-                anchor.snapshot_height
-            ));
-        }
-        if anchor.snapshot_height < snapshot_height && !authority.permits_carried_lineage() {
-            return Err(
-                "a signature-bypassed snapshot cannot advance beyond its audited bootstrap anchor"
-                    .to_owned(),
-            );
-        }
-        let anchor_block_hash = self
-            .committed_block_hash_at_height(anchor.snapshot_height)
-            .ok_or_else(|| {
-                "bootstrap anchor block hash is absent from snapshot history".to_owned()
-            })?;
-        if anchor.snapshot_block_hash != anchor_block_hash {
-            return Err(format!(
-                "bootstrap anchor block hash {} differs from snapshot history {anchor_block_hash}",
-                anchor.snapshot_block_hash
-            ));
-        }
-        verify_validator_power_roster_pops(&record.context.roster, &record.validator_set_pops)
-            .map_err(|error| format!("invalid bootstrap validator proof of possession: {error}"))?;
-        if anchor.snapshot_height == snapshot_height {
-            let snapshot_state_hash = crate::snapshot::canonical_state_snapshot_hash(self)
-                .map_err(|error| error.to_string())?;
-            if anchor.snapshot_state_hash != snapshot_state_hash {
-                return Err(format!(
-                    "bootstrap anchor state hash {:?} differs from canonical snapshot WSV {:?}",
-                    anchor.snapshot_state_hash, snapshot_state_hash
-                ));
-            }
-            let commit_topology = self.commit_topology.view();
-            let roster_matches_topology = record.context.roster.len() == commit_topology.len()
-                && record
-                    .context
-                    .roster
-                    .iter()
-                    .zip(commit_topology.iter())
-                    .all(|(entry, peer)| entry.validator == *peer);
-            if !roster_matches_topology {
-                return Err(
-                    "bootstrap roster does not exactly match the snapshot commit topology"
-                        .to_owned(),
-                );
-            }
-            let world = self.world.view();
-            for (index, (entry, expected_pop)) in record
-                .context
-                .roster
-                .iter()
-                .zip(&record.validator_set_pops)
-                .enumerate()
-            {
-                let live_pop = live_consensus_key_pop_for_peer_with_role(
-                    &world,
-                    &entry.validator,
-                    record.context.height,
-                    ConsensusKeyRole::Validator,
-                )
-                .ok_or_else(|| {
-                    format!(
-                        "bootstrap validator {index} has no live consensus key proof at height {}",
-                        record.context.height
-                    )
-                })?;
-                if live_pop != *expected_pop {
-                    return Err(format!(
-                        "bootstrap validator {index} proof does not match the live consensus key"
-                    ));
-                }
-            }
-            drop(world);
-            drop(commit_topology);
-            // The authenticated payload fixes World, lane ownership, roster and lineage here.
-            // Process-local Nexus, manifests and compliance are still decode placeholders. Their
-            // two context commitments are checked by V2SnapshotStartupPolicy before the typed
-            // startup authorization can finalize provisional Kura or permit executable replay.
-        }
-        let promoted = self
-            .snapshot_v2_bootstrap_candidate
-            .take()
-            .expect("validated snapshot bootstrap candidate must remain available");
-        let previous_authenticated = self.authenticated_snapshot_v2_bootstrap.replace(promoted);
-        if let Err(error) = self.validate_kaigi_account_dependencies_at_authenticated_time() {
-            let rejected = self.authenticated_snapshot_v2_bootstrap.take();
-            self.authenticated_snapshot_v2_bootstrap = previous_authenticated;
-            self.snapshot_v2_bootstrap_candidate = rejected;
-            return Err(error);
-        }
-        Ok(())
-    }
     fn disable_nexus_fees_for_testing(&mut self) {
         let nexus = self.nexus.get_mut();
         nexus.fees.base_fee = Quantity::zero();
@@ -27735,9 +27537,6 @@ impl State {
             da_indexes_hydrated: PublicationRwLock::new(None),
             chain_id,
             network_id,
-            snapshot_v2_bootstrap_candidate: None,
-            authenticated_snapshot_v2_bootstrap: None,
-            authenticated_snapshot_bootstrap_payload: None,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -28638,8 +28437,6 @@ impl State {
             store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             native_context_archive_max_bytes:
                 iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
@@ -28648,7 +28445,6 @@ impl State {
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
@@ -30120,7 +29916,7 @@ impl State {
     ///
     /// Unlike [`StateReadOnly::latest_block`], this never loads or decodes a
     /// block body from Kura when a query needs only deterministic ledger time.
-    /// A hash-only snapshot bootstrap falls back to its authenticated anchor.
+    /// The original authenticated native execution tip supplies missing cached headers.
     #[must_use]
     pub fn latest_block_creation_time_ms_fast(&self) -> Option<u64> {
         let latest_hash = self.latest_block_hash_fast();
@@ -30136,14 +29932,10 @@ impl State {
             .filter(|header| Some(header.hash()) == latest_hash)
             .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX));
         cached.or_else(|| {
-            let anchor = self
-                .authenticated_snapshot_v2_bootstrap
-                .as_ref()?
-                .context
-                .snapshot_bootstrap
-                .as_ref()?;
-            (Some(anchor.snapshot_block_hash) == latest_hash)
-                .then_some(anchor.snapshot_block_creation_time_ms)
+            let tip = (*self.native_execution_tip.view().get())?;
+            (Some(tip.iroha_hash()) == latest_hash
+                && usize::try_from(tip.height()).ok() == Some(self.block_hashes.view().len()))
+            .then_some(tip.creation_time_ms())
         })
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -30541,13 +30333,6 @@ impl State {
     #[track_caller]
     pub fn zk_snapshot(&self) -> iroha_config::parameters::actual::Zk {
         self.zk.clone()
-    }
-    /// Return the SCCP policy identity appropriate for peer capability matching.
-    ///
-    /// SCCP v1 has no node-local or registry-derived policy input; see [`sccp_policy_hash_v1`].
-    #[must_use]
-    pub fn sccp_policy_hash_snapshot(&self) -> [u8; 32] {
-        sccp_policy_hash_v1()
     }
     /// Snapshot the current pipeline configuration.
     ///
@@ -31124,8 +30909,6 @@ impl State {
     ) -> Result<(), LaneLifecycleError> {
         if !self.kura.emergency_fast_startup_enabled()
             || self.provisional_emergency_lane_manifests_consumed
-            || self.authenticated_snapshot_v2_bootstrap.is_some()
-            || self.authenticated_snapshot_bootstrap_payload.is_some()
         {
             return Err(runtime_catalog_invalid(
                 "provisional emergency lane manifests require the one-shot pre-authentication phase",
@@ -31415,7 +31198,7 @@ impl State {
         pool: &[PeerId],
         committee_size: usize,
         seed: [u8; 32],
-    ) -> Result<Vec<PeerId>, LaneRelayError> {
+    ) -> Result<Vec<PeerId>, norito::Error> {
         let mut scored = Vec::with_capacity(pool.len());
         for peer in pool {
             let mut buffer = Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
@@ -32070,10 +31853,7 @@ impl State {
             });
         }
         nexus = self.nexus_with_committed_catalog(nexus)?;
-        iroha_data_model::merge::validate_merge_lane_authority_geometry(
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-        )?;
+        validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog)?;
         if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
             let restored_nexus = self.nexus_snapshot();
             Self::ensure_emergency_fast_restored_catalogs_match(&restored_nexus, &nexus)?;
@@ -32250,10 +32030,7 @@ impl State {
             != self.stake_index_budget.limit_bytes())
         .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
         let mut releases = LaneLifecycleReleases::new(self);
-        iroha_data_model::merge::validate_merge_lane_authority_geometry(
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-        )?;
+        validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog)?;
         nexus.configured_lane_catalog = configured_lane_catalog;
         let previous_nexus = self.nexus_snapshot().clone();
         ensure_physical_lane_ids_retained(
@@ -33141,13 +32918,7 @@ impl State {
         self: &Arc<Self>,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     ) -> core::result::Result<(), LaneLifecycleError> {
-        let result = self.apply_lane_lifecycle(plan);
-        #[cfg(feature = "telemetry")]
-        {
-            let label = if result.is_ok() { "ok" } else { "error" };
-            self.telemetry.record_lane_lifecycle_outcome(label);
-        }
-        result
+        self.apply_lane_lifecycle(plan)
     }
     fn apply_lane_geometry_updates(
         &self,
@@ -33888,10 +33659,7 @@ fn prepare_lane_lifecycle_update(
         return Err(LaneLifecycleError::PhysicalPrimaryReplacement);
     }
     let updated_catalog = nexus.lane_catalog.apply_lifecycle(plan)?;
-    iroha_data_model::merge::validate_merge_lane_authority_geometry(
-        &updated_catalog,
-        &nexus.dataspace_catalog,
-    )?;
+    validate_lane_authority_geometry(&updated_catalog, &nexus.dataspace_catalog)?;
     let added_lane_ids: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
     ensure_catalog_autoscale_lanes_consistent(
         nexus,
@@ -34734,10 +34502,15 @@ fn lanes_requiring_state_prune(
         .collect()
 }
 fn merge_lane_config_hash(lane: &iroha_data_model::nexus::LaneConfig) -> Hash {
-    crate::merge::merge_lane_config_hash(lane)
+    let encoded = lane.consensus_projection().encode();
+    Hash::new_from_chunks(&[b"iroha:merge:lane-config:v2\0", encoded.as_slice()])
 }
 fn merge_lane_consensus_catalog_hash(catalog: &LaneCatalog) -> Hash {
-    crate::merge::merge_lane_consensus_catalog_hash(catalog)
+    let encoded = catalog.consensus_projection().encode();
+    Hash::new_from_chunks(&[
+        b"iroha:merge:lane-consensus-catalog:v1\0",
+        encoded.as_slice(),
+    ])
 }
 fn lane_consensus_identity_matches(
     previous: &iroha_data_model::nexus::LaneConfig,
@@ -35170,7 +34943,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
     }
     /// Visit every canonical slot in the chain from `start`.
     ///
-    /// The first unavailable, hash-only, or corrupt body is returned as a
+    /// The first unavailable or corrupt body is returned as a
     /// typed error and terminates the cursor; canonical gaps are never skipped.
     fn all_blocks(&self, start: NonZeroUsize) -> CanonicalHistoryCursor<'_> {
         self.canonical_history().cursor(start)
@@ -35180,11 +34953,6 @@ pub trait StateReadOnly: WorldStateSnapshot {
     #[inline]
     fn genesis_timestamp(&self) -> Option<Duration> {
         if self.block_hashes().is_empty() {
-            None
-        } else if self.kura().is_hash_only_block_height(nonzero!(1_usize)) {
-            debug!(
-                "genesis block body is hash-only from snapshot bootstrap; uptime timestamp unavailable"
-            );
             None
         } else {
             let opt = self
@@ -35861,12 +35629,12 @@ fn zk_policy_put_option_vk_ref(
 }
 /// SCCP input of the confidential consensus policy hash.
 ///
-/// The retired governed SCCP registry is gone: SCCP v1 consensus parameters live in world state
-/// and change only through Parliament enactment (`specs/sccp.md` §4.1), and the `[zk.sccp]` native
-/// verifier work limits are bound through [`compute_zk_consensus_policy_hash`]. The SCCP input
-/// binds the compiled light-client chain profiles and verifier bounds
-/// (`iroha_sccp::light_client::profile::policy_hash_contribution`), so peers that would verify
-/// source-chain proofs differently cannot agree on a policy (`specs/sccp.md` §4.13).
+/// SCCP v1 consensus parameters live in world state and change only through Parliament enactment
+/// (`specs/sccp.md` §4.1), and the `[zk.sccp]` native verifier work limits are bound through
+/// [`compute_zk_consensus_policy_hash`]. The SCCP input binds the compiled light-client chain
+/// profiles and verifier bounds (`iroha_sccp::light_client::profile::policy_hash_contribution`),
+/// so peers that would verify source-chain proofs differently cannot agree on a policy
+/// (`specs/sccp.md` §4.13).
 #[must_use]
 pub fn sccp_policy_hash_v1() -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -39666,12 +39434,11 @@ mod fastpq_tx_set_hash_tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-        state
-            .seed_genesis_for_testing()
-            .expect("publish genesis before ordinary FASTPQ sources");
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+            crate::sumeragi::test_chain::TestChainConfig::new(world, 0),
+        )
+        .expect("publish original genesis before ordinary FASTPQ sources");
+        let state = chain.state();
         let mut builder = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -39698,10 +39465,11 @@ mod fastpq_tx_set_hash_tests {
             .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
-        let header = new_block.header();
-        let mut state_block = state.block(header);
+        let (mut state_block, guard) =
+            crate::block::ValidBlock::start_component_execution(new_block.as_ref(), state)
+                .expect("original recorder before execution");
         let _ = new_block
-            .validate_and_record_transactions(&mut state_block)
+            .validate_and_record_transactions(&mut state_block, guard)
             .unpack(|_| {});
         let entrypoints = [
             TransactionEntrypoint::External(tx1),
@@ -43529,10 +43297,8 @@ mod npos_effect_application_tests {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::{
-    authenticated_native_source_for_lifecycle_fixture, finalized_lane_relay_registration_fixture,
-    prove_finalized_lane_relay_for_registration,
-};
+#[path = "state/world_initial_supply_tests.rs"]
+mod world_initial_supply_tests;
 
 mod telemetry_status;
 pub(crate) use telemetry_status::{

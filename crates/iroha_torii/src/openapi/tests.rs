@@ -3,7 +3,7 @@
 use super::*;
 use crate::utils;
 use iroha_torii_shared::{
-    route_catalog::{ApiSurface, musubi as musubi_routes},
+    route_catalog::{self, ApiSurface, musubi as musubi_routes},
     sorafs_hedging_billing_api::{
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
@@ -13,7 +13,6 @@ use iroha_torii_shared::{
         SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
         SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1,
     },
-    uri,
 };
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -426,10 +425,10 @@ fn expected_operator_operation(method: &str, path: &str) -> bool {
         return false;
     }
     path.starts_with("/v1/operator/")
+        || path == route_catalog::core::CONFIGURATION_GET.path()
         || matches!(
             path,
-            uri::CONFIGURATION
-                | "/v1/internal/torii/proxy"
+            "/v1/internal/torii/proxy"
                 | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/gov/protected-namespaces"
@@ -438,11 +437,11 @@ fn expected_operator_operation(method: &str, path: &str) -> bool {
 fn expected_read_operation(method: &str, path: &str) -> bool {
     matches!(method, "get" | "head" | "options")
         || (method == "post" && path.starts_with("/v1/musubi/queries/"))
+        || (method == "post" && path == route_catalog::pipeline::QUERY.path())
         || (method == "post"
             && matches!(
                 path,
-                uri::QUERY
-                    | "/v1/accounts/query"
+                "/v1/accounts/query"
                     | "/v1/accounts/faucet/prepare"
                     | "/v1/accounts/onboard/plan"
                     | "/v1/accounts/onboard/prepare"
@@ -2048,7 +2047,7 @@ fn compiled_projection_matches_served_bytes() {
     );
 }
 #[test]
-fn transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl() {
+fn transaction_payload_schema_requires_closed_domain_and_positive_ttl() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
     assert_strict_object_schema(
@@ -2070,11 +2069,9 @@ fn transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl(
         properties["domain"].get("$ref").and_then(Value::as_str),
         Some("#/components/schemas/TransactionDomain")
     );
-    assert_eq!(
-        properties["admission_intent"]
-            .get("$ref")
-            .and_then(Value::as_str),
-        Some("#/components/schemas/TransactionAdmissionIntent")
+    assert!(
+        !properties.contains_key("admission_intent"),
+        "retired admission intent is not part of first-release transactions"
     );
     assert_eq!(
         properties["time_to_live_ms"]
@@ -2118,85 +2115,7 @@ fn transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl(
     );
     assert!(variants[1]["properties"].get("value").is_none());
 
-    let admission_schema = schemas["TransactionAdmissionIntent"]
-        .as_object()
-        .expect("TransactionAdmissionIntent schema");
-    assert_eq!(
-        admission_schema
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["oneOf"]),
-        "TransactionAdmissionIntent must expose only its closed union"
-    );
-    let admission_variants = admission_schema["oneOf"]
-        .as_array()
-        .expect("TransactionAdmissionIntent variants");
-    let admission_labels =
-        openapi_contract_strings("openapi.transaction_admission_intent.labels").collect::<Vec<_>>();
-    assert_eq!(admission_variants.len(), admission_labels.len());
-    for (variant, expected_label) in admission_variants.iter().zip(admission_labels) {
-        let variant = variant
-            .as_object()
-            .expect("TransactionAdmissionIntent object variant");
-        assert_eq!(
-            variant.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-            BTreeSet::from(["additionalProperties", "properties", "required", "type"]),
-            "TransactionAdmissionIntent variant shape"
-        );
-        assert_eq!(variant.get("type").and_then(Value::as_str), Some("object"));
-        assert_eq!(
-            variant.get("additionalProperties").and_then(Value::as_bool),
-            Some(false)
-        );
-        let required = variant["required"]
-            .as_array()
-            .expect("TransactionAdmissionIntent required fields")
-            .iter()
-            .map(|field| field.as_str().expect("required field name"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(required, BTreeSet::from(["intent", "value"]));
-        let intent_properties = variant["properties"]
-            .as_object()
-            .expect("TransactionAdmissionIntent properties");
-        assert_eq!(
-            intent_properties
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["intent", "value"])
-        );
-        assert_eq!(
-            intent_properties["intent"]
-                .get("const")
-                .and_then(Value::as_str),
-            Some(expected_label)
-        );
-        assert_eq!(
-            intent_properties["intent"]
-                .as_object()
-                .expect("TransactionAdmissionIntent intent property")
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["const"])
-        );
-        assert_eq!(
-            intent_properties["value"]
-                .get("type")
-                .and_then(Value::as_str),
-            Some("null")
-        );
-        assert_eq!(
-            intent_properties["value"]
-                .as_object()
-                .expect("TransactionAdmissionIntent value property")
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["type"])
-        );
-    }
+    assert!(!schemas.contains_key("TransactionAdmissionIntent"));
 }
 #[test]
 fn authenticated_transaction_nullable_fields_are_required_and_nullable() {
@@ -3061,6 +2980,5 @@ fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
 
 #[path = "tests/privacy_release_qualification.rs"]
 mod privacy_release_qualification;
-
 #[path = "tests/validator_committee_contract.rs"]
 mod validator_committee_contract;

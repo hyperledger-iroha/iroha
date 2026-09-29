@@ -1150,17 +1150,18 @@ class TairaPrepareTests(unittest.TestCase):
     def test_source_lane_and_nested_capture_are_private_before_freeze_under_permissive_umask(self):
         entries = self.source_entries({"crates/deep/module/source.rs": ("100644", b"signed source"),
                                        "nested/modules/iroha-docs": ("160000", b"")})
-        freeze = release.freeze
+        seal = release.PrivateSourceTree.seal
         observed = []
-        def checked_freeze(path, *, directory=False):
-            if directory:
+        def checked_seal(writer, previous, unchanged):
+            for relative in writer.directories:
+                path = writer.root / relative
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
                 observed.append(path)
-            return freeze(path, directory=directory)
+            return seal(writer, previous, unchanged)
         original_umask = os.umask(0o002)
         try:
             with release.source_lane(self.root, self.target) as (source, _fd), \
-                 patch.object(release, "freeze", side_effect=checked_freeze):
+                 patch.object(release.PrivateSourceTree, "seal", new=checked_seal):
                 self.assertEqual(stat.S_IMODE(source.parent.stat().st_mode), 0o700)
                 self.assertEqual(stat.S_IMODE(source.parent.parent.stat().st_mode), 0o700)
                 release.capture_source(self.root, source, self.target, "a" * 40, entries)
@@ -2236,6 +2237,209 @@ class TairaPrepareTests(unittest.TestCase):
             pass
         with release.source_lane(repo, repo / "target"):
             pass
+
+
+    def test_private_source_final_metadata_precedes_single_file_and_bottom_up_directory_sync(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        previous = self.root / 'previous'
+        (previous / 'deep/nested').mkdir(parents=True)
+        stamp = 1_600_000_000_123_456_789
+        os.utime(previous / 'deep/nested', ns=(stamp, stamp))
+        synced = []
+        fsync = release.os.fsync
+        with release.PrivateSourceTree(pending) as writer:
+            def observe(fd):
+                info = os.fstat(fd)
+                if stat.S_ISREG(info.st_mode):
+                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o500)
+                    self.assertEqual(info.st_mtime_ns, stamp)
+                    self.assertEqual(info.st_nlink, 1)
+                    synced.append(('file', None))
+                else:
+                    relative = next(path for path, identity in writer.directories.items()
+                                    if writer.identity(info) == identity)
+                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o500)
+                    if relative == Path('deep/nested'):
+                        self.assertEqual(info.st_mtime_ns, stamp)
+                    synced.append(('directory', str(relative)))
+                fsync(fd)
+            with patch.object(release.os, 'fsync', side_effect=observe):
+                writer.write(Path('deep/nested/run'), b'executable', executable=True,
+                             timestamps=(stamp, stamp))
+                writer.seal(previous, {Path('deep/nested')})
+        self.assertEqual(synced, [('file', None), ('directory', 'deep/nested'),
+                                 ('directory', 'deep'), ('directory', '.')])
+        self.assertEqual((pending / 'deep/nested/run').read_bytes(), b'executable')
+
+    def test_private_source_root_permission_drift_is_never_repaired(self):
+        for mode in (0o755, 0o777, 0o500):
+            for operation in ('write', 'seal'):
+                with self.subTest(mode=oct(mode), operation=operation):
+                    pending = self.root / ('pending-' + str(mode) + operation)
+                    pending.mkdir(mode=0o700)
+                    with release.PrivateSourceTree(pending) as writer:
+                        pending.chmod(mode)
+                        with self.assertRaises((release.PrepareError, release.ReleaseArtifactError)):
+                            if operation == 'write':
+                                writer.write(Path('source'), b'refused', executable=False)
+                            else:
+                                writer.seal(self.root, set())
+                    self.assertEqual(stat.S_IMODE(pending.stat().st_mode), mode)
+                    self.assertFalse((pending / 'source').exists())
+
+    def test_private_source_short_writes_complete_before_durable_freeze(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        write = release.os.write
+        with release.PrivateSourceTree(pending) as writer, \
+             patch.object(release.os, 'write', side_effect=lambda fd, data: write(fd, data[:2])):
+            writer.write(Path('source'), b'complete signed payload', executable=False)
+            writer.seal(self.root, set())
+        self.assertEqual((pending / 'source').read_bytes(), b'complete signed payload')
+        self.assertEqual(stat.S_IMODE((pending / 'source').stat().st_mode), 0o400)
+
+    def test_private_source_hardlink_race_scrubs_original_and_refuses_seal(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        alternate = self.root / 'alternate'
+        fsync = release.os.fsync
+        attacked = False
+        def add_link(fd):
+            nonlocal attacked
+            if stat.S_ISREG(os.fstat(fd).st_mode) and not attacked:
+                attacked = True
+                os.link(pending / 'source', alternate)
+            fsync(fd)
+        with release.PrivateSourceTree(pending) as writer, \
+             patch.object(release.os, 'fsync', side_effect=add_link):
+            with self.assertRaisesRegex(release.PrepareError, 'file changed before sealing'):
+                writer.write(Path('source'), b'must not survive failed custody', executable=False)
+        self.assertTrue(attacked)
+        self.assertFalse((pending / 'source').exists())
+        self.assertEqual(alternate.read_bytes(), b'')
+
+    def test_private_source_named_file_substitution_preserves_foreign_name(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        fsync = release.os.fsync
+        attacked = False
+        def substitute(fd):
+            nonlocal attacked
+            if stat.S_ISREG(os.fstat(fd).st_mode) and not attacked:
+                attacked = True
+                (pending / 'source').rename(pending / 'original')
+                (pending / 'source').write_bytes(b'foreign name survives')
+            fsync(fd)
+        with release.PrivateSourceTree(pending) as writer, \
+             patch.object(release.os, 'fsync', side_effect=substitute):
+            with self.assertRaisesRegex(release.PrepareError, 'file changed before sealing'):
+                writer.write(Path('source'), b'original source', executable=False)
+        self.assertEqual((pending / 'source').read_bytes(), b'foreign name survives')
+        self.assertEqual((pending / 'original').read_bytes(), b'')
+
+    def test_private_source_replaced_root_and_nested_directory_refuse_publication(self):
+        for relative in (Path('.'), Path('deep')):
+            with self.subTest(relative=relative):
+                pending = self.root / ('pending-' + ('root' if relative == Path('.') else 'nested'))
+                pending.mkdir(mode=0o700)
+                with release.PrivateSourceTree(pending) as writer:
+                    writer.write(Path('deep/source'), b'signed source', executable=False)
+                    selected = pending / relative
+                    retained = selected.with_name(selected.name + '-retained')
+                    selected.rename(retained)
+                    selected.mkdir(mode=0o700)
+                    with self.assertRaisesRegex(release.PrepareError, 'replaced|custody changed'):
+                        writer.seal(self.root, set())
+                self.assertEqual((retained / ('deep/source' if relative == Path('.') else 'source')).read_bytes(),
+                                 b'signed source')
+
+    def test_private_source_directory_replacement_during_sync_is_rejected(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        with release.PrivateSourceTree(pending) as writer:
+            writer.write(Path('deep/source'), b'signed', executable=False)
+            fsync = release.os.fsync
+            attacked = False
+            def substitute(fd):
+                nonlocal attacked
+                if writer.identity(os.fstat(fd)) == writer.directories[Path('deep')] and not attacked:
+                    attacked = True
+                    (pending / 'deep').rename(pending / 'old-deep')
+                    (pending / 'deep').mkdir(mode=0o500)
+                fsync(fd)
+            with patch.object(release.os, 'fsync', side_effect=substitute):
+                with self.assertRaisesRegex(release.PrepareError, 'directory path changed'):
+                    writer.seal(self.root, set())
+            self.assertTrue(attacked)
+
+    def test_private_source_file_and_directory_sync_failures_keep_previous_capture(self):
+        before = self.source_entries({'nested/source': ('100644', b'old')})
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, 'a' * 40, before)
+            old_inode = source.stat().st_ino
+            after = self.source_entries({'nested/source': ('100644', b'new')})
+            for stage in ('file', 'directory'):
+                with self.subTest(stage=stage):
+                    fsync = release.os.fsync
+                    failed = False
+                    def fail(fd):
+                        nonlocal failed
+                        info = os.fstat(fd)
+                        expected = stat.S_ISREG(info.st_mode) if stage == 'file' else stat.S_ISDIR(info.st_mode)
+                        if expected and stat.S_IMODE(info.st_mode) in (0o400, 0o500) and not failed:
+                            failed = True
+                            raise OSError('injected ' + stage + ' durability failure')
+                        fsync(fd)
+                    with patch.object(release, 'commit_entries', return_value=before), \
+                         patch.object(release.os, 'fsync', side_effect=fail), \
+                         patch.object(release, 'retire_source_capture') as retire:
+                        with self.assertRaisesRegex(OSError, 'durability failure'):
+                            release.capture_source(self.root, source, self.target, 'b' * 40, after)
+                        retire.assert_not_called()
+                    self.assertTrue(failed)
+                    self.assertEqual(source.stat().st_ino, old_inode)
+                    self.assertEqual((source / 'nested/source').read_bytes(), b'old')
+                    self.assertEqual(release.read_record(source.parent / 'source-state.json'), {'commit': 'a' * 40})
+                    self.assertFalse(list(source.parent.glob('source.retained-*')))
+                    release.frozen_snapshot(source, before, self.target)
+
+    def test_private_source_signed_byte_check_still_precedes_old_source_rename(self):
+        before = self.source_entries({'source': ('100644', b'old')})
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, 'a' * 40, before)
+            after = self.source_entries({'source': ('100644', b'new')})
+            seal = release.PrivateSourceTree.seal
+            def corrupt(writer, previous, unchanged):
+                path = writer.root / 'source'
+                path.chmod(0o600)
+                path.write_bytes(b'forged')
+                path.chmod(0o400)
+                seal(writer, previous, unchanged)
+            with patch.object(release, 'commit_entries', return_value=before), \
+                 patch.object(release.PrivateSourceTree, 'seal', new=corrupt), \
+                 patch.object(release.os, 'rename') as rename:
+                with self.assertRaisesRegex(release.PrepareError, 'bytes differ from the index'):
+                    release.capture_source(self.root, source, self.target, 'b' * 40, after)
+                rename.assert_not_called()
+            self.assertEqual((source / 'source').read_bytes(), b'old')
+            self.assertEqual(release.read_record(source.parent / 'source-state.json'), {'commit': 'a' * 40})
+
+    def test_private_source_unknown_directory_and_symlink_are_not_adopted(self):
+        pending = self.root / 'pending'
+        pending.mkdir(mode=0o700)
+        for kind in ('directory', 'symlink'):
+            with self.subTest(kind=kind):
+                selected = pending / kind
+                if kind == 'directory':
+                    selected.mkdir(mode=0o700)
+                else:
+                    selected.symlink_to(self.target, target_is_directory=True)
+                with release.PrivateSourceTree(pending) as writer:
+                    with self.assertRaises(FileExistsError):
+                        writer.write(Path(kind) / 'source', b'must refuse', executable=False)
+                self.assertFalse((selected / 'source').exists())
+
 
 
 if __name__ == "__main__":

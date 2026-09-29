@@ -426,8 +426,13 @@ mod tests {
     }
     #[test]
     fn canonical_catalog_retires_direct_sumeragi_mutation_and_vrf_snapshot_routes() {
-        assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
-        assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
+        // Consensus evidence is log and telemetry only: no route reads or submits it.
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| route.path() != "/v1/sumeragi/evidence"
+                    && route.path() != "/v1/sumeragi/evidence/count")
+        );
         for (stable_route_id, path) in [
             ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
             ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
@@ -618,41 +623,11 @@ mod tests {
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
-            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            "/v1/gov/proposals/sccp-route-governance"
         );
     }
     #[test]
-    fn retired_sccp_routes_are_absent_and_the_parliament_draft_route_is_kept() {
-        // specs/sccp.md §6 and §10: the retired proof, replay, registry, discovery and submit
-        // routes are gone; only the Parliament draft route survives the purge.
-        for route in CATALOGED_ROUTES {
-            let path = route.path();
-            for retired_prefix in [
-                "/v1/sccp/proofs/",
-                "/v1/sccp/proof-requests/",
-                "/v1/sccp/replay/",
-                "/v1/sccp/routes/",
-                "/v1/bridge/proofs/submit",
-                "/v1/bridge/messages",
-            ] {
-                assert!(
-                    !path.starts_with(retired_prefix),
-                    "{} keeps the retired SCCP path {path}",
-                    route.stable_route_id()
-                );
-            }
-            for retired_id in [
-                "sccp.message_proof.read",
-                "sccp.proof_request.read",
-                "sccp.replay.root.read",
-                "sccp.replay.witness.read",
-                "sccp.sora_outbound_material.read",
-                "contracts.bridge_proofs_submit_post",
-                "contracts.bridge_messages_post",
-            ] {
-                assert_ne!(route.stable_route_id(), retired_id);
-            }
-        }
+    fn sccp_parliament_draft_route_is_cataloged() {
         assert!(CATALOGED_ROUTES.contains(&runtime_governance::GOV_PROPOSE_SCCP));
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.stable_route_id(),
@@ -813,7 +788,6 @@ mod tests {
             );
         }
         assert!(CATALOGED_ROUTES.contains(&diagnostic::OPENAPI_JSON));
-        assert!(CATALOGED_ROUTES.contains(&core::NEXUS_LIFECYCLE_GET));
         assert!(CATALOGED_ROUTES.contains(&core::NEXUS_VALIDATOR_COMMITTEE_GET));
         assert!(
             CATALOGED_ROUTES
@@ -1726,8 +1700,6 @@ mod tests {
             sumeragi::BLS_KEYS,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::PARAMETERS,
-            sumeragi::EVIDENCE_COUNT,
-            sumeragi::EVIDENCE_LIST,
         ] {
             assert_eq!(route.surface(), ApiSurface::Operator, "{}", route.path());
             assert_eq!(
@@ -1787,7 +1759,7 @@ mod tests {
         assert!(
             without_features
                 .iter()
-                .any(|route| route.stable_route_id() == sumeragi::EVIDENCE_LIST.stable_route_id())
+                .any(|route| route.stable_route_id() == sumeragi::BRIDGE_FINALITY.stable_route_id())
         );
         assert!(without_features.iter().all(|route| {
             route.stable_route_id() != sumeragi::STATUS.stable_route_id()

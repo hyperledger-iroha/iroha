@@ -299,7 +299,7 @@ fn validate_parent(path: &Path) -> Result<ValidatedParent, ModerationProvenanceS
     let canonical = fs::canonicalize(parent).map_err(|source| io_error(parent, source))?;
     let mut options = OpenOptions::new();
     options.read(true);
-    set_no_follow(&mut options);
+    sorafs_car::set_no_follow_flag(&mut options);
     let handle = options
         .open(&canonical)
         .map_err(|source| io_error(&canonical, source))?;
@@ -377,7 +377,7 @@ fn read_log(
 ) -> Result<Option<ModerationProvenanceLogV1>, ModerationProvenanceStoreError> {
     let mut options = OpenOptions::new();
     options.read(true);
-    set_no_follow(&mut options);
+    sorafs_car::set_no_follow_flag(&mut options);
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -485,7 +485,7 @@ fn persist_log(
         ));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
-        set_no_follow(&mut options);
+        sorafs_car::set_no_follow_flag(&mut options);
         match options.open(&candidate) {
             Ok(file) => {
                 temporary = Some((candidate, file));
@@ -552,29 +552,6 @@ fn file_identity(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64) {
 #[cfg(unix)]
 fn parent_identity(metadata: &fs::Metadata) -> ParentIdentity {
     (metadata.dev(), metadata.ino())
-}
-#[cfg(unix)]
-fn set_no_follow(options: &mut OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const fn platform_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
 }
 fn io_error(path: &Path, source: io::Error) -> ModerationProvenanceStoreError {
     ModerationProvenanceStoreError::Io {

@@ -1484,7 +1484,9 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
             && tool
                 .route_backing()
                 .is_some_and(|(_, method, path_template)| {
-                    method == &Method::POST && path_template == iroha_torii_shared::uri::TRANSACTION
+                    method == &Method::POST
+                        && path_template
+                            == iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path()
                 })
     }));
 }

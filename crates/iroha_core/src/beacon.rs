@@ -14,9 +14,6 @@
 pub mod ceremony;
 /// Runtime credential codec for global-beacon seat shares.
 pub mod credential;
-/// Height-bound production readiness, separate from consensus admission.
-pub mod readiness;
-
 /// Proof-bearing custody of every exact prepared target seat.
 pub mod seat_readiness;
 

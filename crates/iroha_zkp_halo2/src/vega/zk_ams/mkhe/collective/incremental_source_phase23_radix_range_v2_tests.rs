@@ -173,10 +173,15 @@ fn exact_15_bit_decomposition_complement_and_centering_boundaries_hold() {
         assert_eq!(witness.m, witness.b_d * witness.beta[16]);
         assert_eq!(witness.beta[17], witness.beta[16] - witness.m);
         let mut previous_borrow = 0_i64;
-        for limb in 0..RADIX_LOW_LIMBS_V2 {
-            let d = i64::from(witness.d_low[limb]);
-            let k = i64::from(threshold_digits[limb]);
-            let borrow = i64::from(witness.beta[limb]);
+        for ((d_low, threshold), beta) in witness
+            .d_low
+            .iter()
+            .zip(threshold_digits.iter())
+            .zip(witness.beta.iter())
+        {
+            let d = i64::from(*d_low);
+            let k = i64::from(*threshold);
+            let borrow = i64::from(*beta);
             let delta = d + i64::from(RADIX_BASE_V2) * borrow - k - previous_borrow;
             assert!((0..i64::from(RADIX_BASE_V2)).contains(&delta));
             assert_eq!(

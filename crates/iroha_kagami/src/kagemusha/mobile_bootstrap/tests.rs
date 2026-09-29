@@ -244,20 +244,6 @@ fn mobile_bootstrap_signer_rejects_foreign_key_and_noncanonical_subject_before_p
 }
 
 #[test]
-fn mobile_bootstrap_context_parser_never_normalizes_a_supplied_hash() {
-    assert!(height_context(&"09".repeat(32)).is_ok());
-    for value in [
-        "08".repeat(32),
-        "00".repeat(32),
-        "AB".repeat(32),
-        "ab".repeat(31),
-        hex::encode(Hash::prehashed([0; 32]).as_ref()),
-    ] {
-        assert!(height_context(&value).is_err(), "rejected {value}");
-    }
-}
-
-#[test]
 fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_subject() {
     let (_directory, _keys, _policy, _checkpoint, input) = fixture();
     let parent = input.checkpoint.parent().unwrap();

@@ -2590,7 +2590,7 @@ mod tests {
         chain
     }
     fn pristine_push_state(kura: Arc<Kura>) -> Arc<State> {
-        Arc::new(State::new(
+        Arc::new(State::new_for_testing(
             iroha_core::state::World::new(),
             kura,
             iroha_core::query::store::LiveQueryStore::start_test(),

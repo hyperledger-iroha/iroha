@@ -169,8 +169,11 @@ impl MusubiPublicationPinTransactionSignerV1 {
         .with_instructions([RegisterPinManifest::new(payload, None, None)]);
         let route = self
             .queue
-            .route_payload_with_state(draft.payload(), self.state.as_ref())
+            .route_payload_plan_with_state(draft.payload(), self.state.as_ref())
             .map_err(|_| Error::TransactionFee)?;
+        let iroha_core::queue::RoutingPlan::Single(route) = route else {
+            return Err(Error::TransactionFee);
+        };
         let view = self.state.query_view();
         let current = self
             .finalized_reader
@@ -196,7 +199,7 @@ impl MusubiPublicationPinTransactionSignerV1 {
             draft.payload(),
             observation_time_ms,
             next_height,
-            Some(route.dataspace_id),
+            Some(route.route.dataspace_id),
         )
         .map_err(|_| Error::TransactionFee)?;
         require_combined_pin_funding(

@@ -1,7 +1,53 @@
-// Real State/Kura receipts exercise the shared ordinary tail. The unrelated
-// admitted fixture group stays pending; this test grants no native publication.
+// Actual genesis and monetary World for ordinary output-owner component tests.
+struct OrdinaryEconomicFixture {
+    state: Arc<State>,
+    parent: SignedBlock,
+    source: AssetId,
+    destination: AssetId,
+    _chain: crate::sumeragi::test_chain::CertifiedTestChain,
+}
+fn ordinary_economic_fixture() -> Box<OrdinaryEconomicFixture> {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
+    let owner = AccountId::new(key.public_key().clone());
+    let recipient = AccountId::new(
+        KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .unwrap()
+            .public_key()
+            .clone(),
+    );
+    let domain = DomainId::try_new("ordinary", "universal").unwrap();
+    let definition =
+        AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    let source = AssetId::new(definition.clone(), owner);
+    let destination = AssetId::new(definition.clone(), recipient.clone());
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    config.genesis_key = key;
+    config.genesis_instructions = vec![
+        Register::domain(Domain::new(domain.clone())).into(),
+        Register::account(Account::new(recipient)).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            definition,
+            "coin",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain),
+        ))
+        .into(),
+        Mint::asset_quantity(100_u32, source.clone()).into(),
+    ];
+    let chain = CertifiedTestChain::start(config).unwrap();
+    Box::new(OrdinaryEconomicFixture {
+        state: Arc::clone(chain.state()),
+        parent: chain.genesis().clone(),
+        source,
+        destination,
+        _chain: chain,
+    })
+}
+// Original native State/Kura receipts exercise the shared ordinary execution tail.
+// These speculative overlays grant no publication authority.
 
-fn ordinary_tail_batch(fixture: &NativeEconomicFixture) -> TransferAssetBatch {
+fn ordinary_tail_batch(fixture: &OrdinaryEconomicFixture) -> TransferAssetBatch {
     TransferAssetBatch::independent(vec![
         TransferAssetBatchEntry::with_leg_id(
             "applied",
@@ -20,7 +66,7 @@ fn ordinary_tail_batch(fixture: &NativeEconomicFixture) -> TransferAssetBatch {
     ])
 }
 
-fn install_ordinary_tail_repeating_trigger(fixture: &NativeEconomicFixture, period_ms: u64) {
+fn install_ordinary_tail_repeating_trigger(fixture: &OrdinaryEconomicFixture, period_ms: u64) {
     let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "__registered_block_height".parse::<Name>().unwrap(),
@@ -37,7 +83,7 @@ fn install_ordinary_tail_repeating_trigger(fixture: &NativeEconomicFixture, peri
             Repeats::Exactly(2),
             fixture.source.account().clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(Schedule {
-                start_ms: fixture.native.block.header().creation_time_ms,
+                start_ms: fixture.parent.header().creation_time_ms,
                 period_ms: Some(period_ms),
             })),
         )
@@ -47,7 +93,7 @@ fn install_ordinary_tail_repeating_trigger(fixture: &NativeEconomicFixture, peri
     // Register through the same trigger-storage owner used by existing Time
     // execution tests, after the authenticated genesis/admission fixture. This
     // prevents fixture setup blocks from consuming this test's two invocations.
-    let mut block = fixture.native.state.world.triggers.block();
+    let mut block = fixture.state.world.triggers.block();
     let mut transaction = block.transaction();
     transaction
         .add_time_trigger(trigger.try_into().unwrap())
@@ -63,8 +109,8 @@ fn run_ordinary_tail_independent_batches(
     leftover_call: bool,
 ) {
     use iroha_data_model::events::data::prelude::AssetBatchTransferLegStatus;
-    let fixture = native_economic_fixture(&[NativeEconomicCase::Transfer(25)], false);
-    let state = &fixture.native.state;
+    let fixture = ordinary_economic_fixture();
+    let state = &fixture.state;
     let cadence = state
         .world
         .parameters
@@ -77,10 +123,10 @@ fn run_ordinary_tail_independent_batches(
     }
     let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let header = BlockHeader::new(
-        NonZeroU64::new(fixture.native.block.header().height().get() + 1).unwrap(),
-        Some(fixture.native.block.hash()),
+        NonZeroU64::new(fixture.parent.header().height().get() + 1).unwrap(),
+        Some(fixture.parent.hash()),
         None,
-        fixture.native.block.header().creation_time_ms + 2 * cadence,
+        fixture.parent.header().creation_time_ms + 2 * cadence,
         0,
     );
     let mut transaction = TransactionBuilder::new(
@@ -123,24 +169,11 @@ fn run_ordinary_tail_independent_batches(
                 .sign(key.private_key()),
         );
         assert_ne!(extra.execution_call_hash(), entry.execution_call_hash());
-        let accepted = crate::tx::AcceptedTransaction::accept_entrypoint_at_time(
-            extra,
-            &state.network_id,
-            overlay.world.parameters().sumeragi().max_clock_drift(),
-            overlay.world.parameters().transaction(),
-            overlay.crypto.as_ref(),
-            header.creation_time(),
-        )
-        .unwrap();
-        let (_, result) = overlay
-            .validate_transaction_with_entrypoint_index_and_routing_context(
-                accepted,
-                &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
-                1,
-                route,
-            )
-            .expect("local execution completes");
-        assert!(result.is_ok());
+        let mut other =
+            iroha_data_model::block::builder::BlockBuilder::new(header).build(BTreeSet::new());
+        other.set_external_entrypoints(vec![extra]);
+        ValidBlock::execute_block_outputs_for_test(&mut other, &mut overlay, None)
+            .expect("other original source completes on this overlay");
         let before = carrier.encode_wire().unwrap();
         assert!(
             crate::block::ValidBlock::execute_block_outputs_for_test(

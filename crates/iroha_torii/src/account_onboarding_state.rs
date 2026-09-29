@@ -254,33 +254,20 @@ mod tests {
         mk_app_state_for_tests_with_world(iroha_core::state::World::with([], accounts, []))
     }
 
-    fn anchor_state(app: &SharedAppState, creation_time_ms: u64) -> HashOf<BlockHeader> {
-        let signer = checked_torii_test_ed25519_keypair(
-            0xe1,
-            "derive account-onboarding current-state anchor key",
-        );
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero block height"),
-            None,
-            None,
-            creation_time_ms,
-            0,
-        );
-        let signed_block = BlockBuilder::new(header).build_with_signature(0, signer.private_key());
-        let header = signed_block.header();
-        let block_hash = signed_block.hash();
-        app.kura
-            .store_block(Arc::new(signed_block))
-            .expect("store account-onboarding current-state anchor");
-        app.state
-            .update_latest_block_header_cache_for_tests(header.clone());
-        app.state
-            .block(header)
-            .commit_empty_block_for_testing()
-            .expect("commit account-onboarding current-state anchor");
-        block_hash
+    fn anchor_state(app: &mut SharedAppState, creation_time_ms: u64) -> HashOf<BlockHeader> {
+        let app = Arc::get_mut(app).expect("unique onboarding app");
+        let state = Arc::get_mut(&mut app.state).expect("unique onboarding fixture world");
+        let world = std::mem::take(&mut state.world);
+        let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1),
+        )
+        .expect("original onboarding snapshot genesis");
+        chain.commit_at(creation_time_ms, Vec::new());
+        let hash = chain.committed(2).block_hash();
+        app.state = chain.state().clone();
+        app.kura = chain.kura().clone();
+        hash
     }
-
     fn request(account_id: &AccountId, alias: &str) -> AccountOnboardingCurrentStateRequestV1 {
         let alias = alias
             .parse::<AccountAliasName>()
@@ -307,10 +294,10 @@ mod tests {
             "derive account-onboarding current-state account key",
         );
         let account_id = AccountId::new(account_key.public_key().clone());
-        let app = fixture_app(Some(&account_id));
+        let mut app = fixture_app(Some(&account_id));
         let alias = "merchant@banka.universal";
         bind_account_alias_for_test(&app, &account_id, alias);
-        let observed_block_hash = anchor_state(&app, 1_234);
+        let observed_block_hash = anchor_state(&mut app, 1_234);
 
         let exact_request = request(&account_id, alias);
         let response = read_account_onboarding_current_state(
@@ -353,7 +340,7 @@ mod tests {
             "derive unanchored account-onboarding current-state account key",
         );
         let account_id = AccountId::new(account_key.public_key().clone());
-        let app = fixture_app(Some(&account_id));
+        let mut app = fixture_app(Some(&account_id));
         let exact_request = request(&account_id, "merchant@universal");
         assert!(matches!(
             read_account_onboarding_current_state(&app, &exact_request, None),
@@ -361,7 +348,7 @@ mod tests {
         ));
 
         bind_account_alias_for_test(&app, &account_id, "merchant@universal");
-        anchor_state(&app, 2_000);
+        anchor_state(&mut app, 2_000);
         assert!(matches!(
             read_account_onboarding_current_state(
                 &app,
@@ -381,7 +368,7 @@ mod tests {
             "derive routed account-onboarding current-state account key",
         );
         let account_id = AccountId::new(account_key.public_key().clone());
-        let app = fixture_app(None);
+        let mut app = fixture_app(None);
         let request = request(&account_id, "merchant@banka.universal");
         let request_body = norito::json::to_vec(&request).expect("request JSON");
         let response = AccountOnboardingCurrentStateResponseV1 {

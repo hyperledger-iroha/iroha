@@ -2,12 +2,9 @@
 use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
-use iroha_config::parameters::{
-    actual::{
-        Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline,
-        Root as ActualRoot, Zk as ActualZk,
-    },
-    defaults,
+use iroha_config::parameters::actual::{
+    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
+    Zk as ActualZk,
 };
 use iroha_core::{
     block::ValidBlock,
@@ -194,11 +191,6 @@ pub fn base_iroha_config() -> Table {
         .write(
             ["nexus", "storage", "local_budget_bytes"],
             1_073_741_824_i64,
-        )
-        .write(
-            ["kura", "lane_history_retention"],
-            i64::try_from(defaults::kura::LANE_HISTORY_RETENTION.get())
-                .expect("Kura lane-history retention default fits a TOML integer"),
         )
         // Default to broadcasting blocks to the entire test topology so small networks
         // do not stall waiting for block sync retries when some peers miss a gossip hop.
@@ -1708,7 +1700,7 @@ mod tests {
             );
             assert_eq!(
                 actual.nexus.storage.budget_enforce_interval_blocks,
-                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS
+                iroha_config::parameters::defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS
             );
         }
     }

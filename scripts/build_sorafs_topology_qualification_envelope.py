@@ -27,8 +27,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from sccp_release_common import (  # noqa: E402
-    SccpReleaseError,
+from release_evidence_crypto import (  # noqa: E402
+    ReleaseEvidenceError,
     canonical_json_file_bytes,
     parse_json_bytes,
     require_canonical_json_file,
@@ -951,7 +951,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except TopologyEnvelopePreflightError as error:
         emit_checker_error_lines((str(error),))
         return 2
-    except (InventoryError, SccpReleaseError, TopologyEnvelopeError, ValueError) as error:
+    except (InventoryError, ReleaseEvidenceError, TopologyEnvelopeError, ValueError) as error:
         emit_checker_exception(error)
         return 1
 

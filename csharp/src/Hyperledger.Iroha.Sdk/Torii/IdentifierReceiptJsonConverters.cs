@@ -295,7 +295,7 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
         string? inputEncryption = null;
         string? inputEncryptionPublicParameters = null;
         JsonNode? inputEncryptionPublicParametersDecoded = null;
-        JsonNode? ramFheProfile = null;
+        ToriiRamFheProfile? ramFheProfile = null;
         string? note = null;
 
         while (reader.Read())
@@ -368,7 +368,9 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
                         "policy.input_encryption_public_parameters_decoded");
                     break;
                 case "ram_fhe_profile":
-                    ramFheProfile = ToriiIdentifierJson.ReadOptionalNode(ref reader, "policy.ram_fhe_profile");
+                    ramFheProfile = reader.TokenType == JsonTokenType.Null
+                        ? null
+                        : JsonSerializer.Deserialize<ToriiRamFheProfile>(ref reader, options);
                     break;
                 case "note":
                     if (reader.TokenType == JsonTokenType.Null)
@@ -410,7 +412,15 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
         WriteNullableString(writer, "input_encryption", value.InputEncryption);
         WriteNullableString(writer, "input_encryption_public_parameters", value.InputEncryptionPublicParameters);
         WriteNullableNode(writer, "input_encryption_public_parameters_decoded", value.InputEncryptionPublicParametersDecoded, options);
-        WriteNullableNode(writer, "ram_fhe_profile", value.RamFheProfile, options);
+        writer.WritePropertyName("ram_fhe_profile");
+        if (value.RamFheProfile is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            JsonSerializer.Serialize(writer, value.RamFheProfile, options);
+        }
         WriteNullableString(writer, "note", value.Note);
         writer.WriteEndObject();
     }

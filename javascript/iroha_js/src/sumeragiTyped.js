@@ -85,14 +85,14 @@ function halt(value) {
   if (UNIT_REASONS.has(r.reason) && r.details === null) return Object.freeze({ reason: r.reason, details: null });
   throw new TypeError("invalid native halt reason or details");
 }
-/** Validate an immutable protocol-8 observation, never a finality proof. */
+/** Validate an immutable protocol-1 observation, never a finality proof. */
 export function parseSumeragiStatusPayload(payload) {
   const r = record(payload, FIELDS, "native status");
-  if (uint(r.protocol_version, 16) !== 8 || uint(r.stage, 16) > 2) throw new TypeError("unsupported native status protocol or stage");
+  if (uint(r.protocol_version, 16) !== 1 || uint(r.stage, 16) > 2) throw new TypeError("unsupported native status protocol or stage");
   if (typeof r.instance !== "string" || !/^[0-9a-f]{64}$/.test(r.instance)) throw new TypeError("native instance must be lowercase 32-byte hex");
   const f = record(r.footprint, FOOTPRINT, "native footprint");
   return Object.freeze({
-    protocol_version: 8, config_fingerprint: hash(r.config_fingerprint), beacon_horizon: horizon(r.beacon_horizon),
+    protocol_version: 1, config_fingerprint: hash(r.config_fingerprint), beacon_horizon: horizon(r.beacon_horizon),
     instance: r.instance, height: uint(r.height), view: uint(r.view), stage: Number(r.stage),
     leader: publicKey(r.leader), proxy_tail: publicKey(r.proxy_tail), high_qc_view: optionalUint(r.high_qc_view),
     level: uint(r.level, 32), start_level: uint(r.start_level, 32), t_retx_ms: uint(r.t_retx_ms),

@@ -1933,16 +1933,6 @@ impl StateTelemetry {
         self.refresh_lane_metadata_cache();
         self.record_lane_governance_statuses(&statuses);
     }
-    /// Record the outcome of applying a Nexus lane lifecycle plan.
-    pub fn record_lane_lifecycle_outcome(&self, result: &str) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .nexus_lane_lifecycle_applied_total
-            .with_label_values(&[result])
-            .inc();
-    }
     /// Update telemetry gauges reflecting governance seal status per lane.
     pub fn record_lane_governance_statuses(&self, statuses: &[LaneManifestStatus]) {
         if !self.enabled {
@@ -3081,17 +3071,6 @@ impl StateTelemetry {
                 .fraud_psp_missing_assessment_total
                 .with_label_values(&labels)
                 .inc();
-        }
-    }
-    #[cfg(test)]
-    /// Record that a merge-ledger entry was committed.
-    pub fn record_merge_ledger_entry(&self, epoch_id: u64, global_state_root: &iroha_crypto::Hash) {
-        if self.is_enabled() {
-            self.metrics.merge_ledger_entries_total.inc();
-            self.metrics.merge_ledger_latest_epoch.set(epoch_id);
-            if let Ok(mut guard) = self.metrics.merge_ledger_latest_root_hex.write() {
-                *guard = Some(global_state_root.to_string());
-            }
         }
     }
     /// Record a Kaigi relay registration event.
@@ -6568,7 +6547,7 @@ impl Actor {
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
             let genesis_timestamp = NonZeroUsize::new(1).and_then(|index| {
-                if self.kura.is_hash_only_block_height(index) {
+                if self.kura.is_canonical_body_missing(index) {
                     return None;
                 }
                 self.kura
@@ -6585,7 +6564,7 @@ impl Actor {
                         .try_into()
                         .expect("Timestamp should fit into u64"),
                 );
-            } else if !self.kura.is_hash_only_block_height(
+            } else if !self.kura.is_canonical_body_missing(
                 NonZeroUsize::new(1).expect("genesis height is non-zero"),
             ) {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
@@ -7331,9 +7310,9 @@ mod tests {
     }
     #[tokio::test]
     async fn metrics_sync_reconciles_last_reported_block_without_blocking_runtime() {
-        let sut = SystemUnderTest::new();
+        let sut = SystemUnderTest::new_native();
         let block = sut.commit_block(sut.create_block());
-        let header = block.as_ref().header();
+        let header = block.block().header();
         let stale_header = BlockHeader::new(
             header.height(),
             None,
@@ -8179,8 +8158,7 @@ mod tests {
         network_id: NetworkId,
         account_id: AccountId,
         account_keypair: KeyPair,
-        leader_private_key: PrivateKey,
-        finality_keys: Vec<KeyPair>,
+        native_chain: Mutex<Option<crate::sumeragi::test_chain::CertifiedTestChain>>,
     }
     #[test]
     fn lane_manifest_readiness_exposed() {
@@ -10101,16 +10079,14 @@ mod tests {
         use super::*;
         include!("telemetry/classified_status_tests.rs");
     }
-    mod finality_test_fixture {
-        use super::*;
-        include!("telemetry/finality_test_fixture.rs");
-    }
-    mod output_publication_authorization_tests {
-        use super::*;
-        include!("telemetry/output_publication_authorization_tests.rs");
-    }
     impl SystemUnderTest {
         fn new() -> Self {
+            Self::with_native_chain(false)
+        }
+        fn new_native() -> Self {
+            Self::with_native_chain(true)
+        }
+        fn with_native_chain(native: bool) -> Self {
             let metrics = Arc::new(Metrics::default());
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -10122,7 +10098,6 @@ mod tests {
                 .collect::<Vec<_>>();
             finality_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let local_peer_id = PeerId::new(finality_keys[0].public_key().clone());
-            let leader_private_key = finality_keys[0].private_key().clone();
             let (account_id, account_keypair) = gen_account_in("wonderland");
             let account = Account::new(account_id.clone()).build(&account_id);
             let world = World::with([], [account], []);
@@ -10135,12 +10110,34 @@ mod tests {
                 );
                 peers_block.commit();
             }
-            let state = Arc::new(State::with_telemetry(
-                world,
-                kura.clone(),
-                query_handle,
-                StateTelemetry::new(metrics.clone(), true),
-            ));
+            let (state, kura, native_chain) = if native {
+                let mut prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(
+                    crate::sumeragi::test_chain::TestChainConfig::new(world, 1),
+                )
+                .expect("authentic telemetry genesis");
+                Arc::get_mut(&mut prepared.state)
+                    .expect("exclusive prepared State")
+                    .telemetry = StateTelemetry::new(metrics.clone(), true);
+                let chain =
+                    crate::sumeragi::test_chain::CertifiedTestChain::from_prepared(prepared)
+                        .expect("execute original telemetry genesis");
+                (
+                    Arc::clone(chain.state()),
+                    Arc::clone(chain.kura()),
+                    Some(chain),
+                )
+            } else {
+                (
+                    Arc::new(State::with_telemetry(
+                        world,
+                        kura.clone(),
+                        query_handle,
+                        StateTelemetry::new(metrics.clone(), true),
+                    )),
+                    kura,
+                    None,
+                )
+            };
             let (peers_tx, peers_rx) = watch::channel(<_>::default());
             let (mock_time_handle, time_source) = TimeSource::new_mock(Duration::default());
             let queue = Arc::new(Queue::test(
@@ -10175,8 +10172,7 @@ mod tests {
                 online_peers_tx: peers_tx,
                 account_id,
                 account_keypair,
-                leader_private_key,
-                finality_keys,
+                native_chain: Mutex::new(native_chain),
             }
         }
         fn accepted_transaction<I>(
@@ -10230,51 +10226,41 @@ mod tests {
             )
             .unwrap()
         }
-        fn build_block(&self, transactions: Vec<AcceptedTransaction<'static>>) -> NewBlock {
-            let signing_key = if self.state.committed_height() == 0 {
-                self.account_keypair.private_key()
-            } else {
-                &self.leader_private_key
-            };
-            BlockBuilder::new_with_time_source(transactions, self.time_source.clone())
-                .chain(0, self.state.view().latest_block().as_deref())
-                .sign(signing_key)
-                .unpack(|_| {})
+        fn build_block(
+            &self,
+            transactions: Vec<AcceptedTransaction<'static>>,
+        ) -> iroha_data_model::block::SignedBlock {
+            self.native_chain
+                .lock()
+                .expect("native chain mutex")
+                .as_ref()
+                .expect("native fixture")
+                .proposal(
+                    None,
+                    transactions
+                        .into_iter()
+                        .map(iroha_data_model::transaction::SignedTransaction::from)
+                        .collect(),
+                )
         }
-        fn create_block(&self) -> NewBlock {
+        fn create_block(&self) -> iroha_data_model::block::SignedBlock {
             let tx = self.accepted_transaction([Log::new(Level::DEBUG, "meow".to_string())]);
             self.build_block(vec![tx])
         }
-        fn commit_block(&self, block: NewBlock) -> CommittedBlock {
-            let mut state_block = self.state.block(block.header());
-            let block = self.validate_block(block, &mut state_block);
-            let _events = state_block
-                .apply_without_execution_with_verified_v2_finality(&block)
-                .expect("telemetry fixture prepares exact finality-authorized publication");
-            state_block.commit().unwrap();
-            self.promote_finality(&block);
-            block
-        }
-        fn validate_block(
+        fn commit_block(
             &self,
-            block: NewBlock,
-            state_block: &mut crate::state::StateBlock<'_>,
-        ) -> CommittedBlock {
-            let mut context = self.finality_context(&block.header());
-            let genesis = block.header().is_genesis();
-            let mut signed: iroha_data_model::block::SignedBlock = block.into();
-            crate::block::ValidBlock::execute_block_outputs_and_capture_for_test(
-                &mut signed,
-                state_block,
-                genesis.then_some(&self.account_id),
-                &mut context,
-            )
-            .expect("telemetry fixture executes exact authenticated transaction sources");
-            if genesis {
-                crate::block::check_genesis_block(&signed, &self.account_id)
-                    .expect("genesis execution retains canonical signed admission and outputs");
-            }
-            self.finalize_block(signed, state_block, context)
+            block: iroha_data_model::block::SignedBlock,
+        ) -> crate::sumeragi::certified_chain::CommittedBlock {
+            self.native_chain
+                .lock()
+                .expect("native chain mutex")
+                .as_mut()
+                .expect("native fixture")
+                .commit_proposal(
+                    block,
+                    crate::sumeragi::test_chain::Signers::Quorum,
+                    iroha_sumeragi::types::ControlWitness::default(),
+                )
         }
         async fn report_commit_block(&self, block_header: &BlockHeader) {
             let handle = self.telemetry.clone();
@@ -10673,7 +10659,7 @@ mod tests {
     async fn metrics_sync_excludes_unpublished_kura_blocks_and_catches_up_once() {
         for already_applied in [false, true] {
             for report_before_publication in [false, true] {
-                let sut = SystemUnderTest::new();
+                let sut = SystemUnderTest::new_native();
                 if already_applied {
                     sut.commit_block(sut.create_block());
                 }
@@ -10685,15 +10671,23 @@ mod tests {
                 let old_rejected = metrics.txs.with_label_values(&["rejected"]).get();
                 let old_total = metrics.txs.with_label_values(&["total"]).get();
                 let old_observed = metrics.last_block_committed_at_ms.get();
-                assert_eq!(old_height, u64::from(already_applied));
+                assert_eq!(old_height, 1 + u64::from(already_applied));
 
                 let candidate = sut.create_block();
-                let mut state_block = sut.state.block(candidate.header());
-                let committed = sut.validate_block(candidate, &mut state_block);
-                let external_count = committed.as_ref().external_transactions().len() as u64;
+                let mut chain = sut.native_chain.lock().expect("native chain mutex");
+                let mut pending = chain
+                    .as_mut()
+                    .unwrap()
+                    .begin_proposal(candidate, iroha_sumeragi::types::ControlWitness::default())
+                    .expect("original unpublished execution");
+                let unsigned = pending.inspect(|view| view.block.as_ref().clone()).unwrap();
+                let external_count = unsigned.external_transactions().len() as u64;
+                sut.kura
+                    .store_block(unsigned.clone())
+                    .expect("unpublished exact Kura body");
                 sut.mock_time_handle.advance(Duration::from_millis(100));
                 if report_before_publication {
-                    sut.report_commit_block(&committed.as_ref().header()).await;
+                    sut.report_commit_block(&unsigned.header()).await;
                 }
                 sut.force_sync().await;
                 assert_eq!(sut.state.committed_height() as u64, old_height);
@@ -10722,13 +10716,11 @@ mod tests {
                     assert_eq!(status.blocks_non_empty, old_non_empty);
                 }
 
-                let _events = state_block
-                    .apply_without_execution_with_verified_v2_finality(&committed)
-                    .expect("telemetry fixture prepares exact persisted carrier publication");
-                state_block
-                    .commit()
-                    .expect("publish the exact persisted block");
-                sut.promote_finality(&committed);
+                pending
+                    .publish(crate::sumeragi::test_chain::Signers::Quorum)
+                    .expect("publish original execution with its native certificate");
+                drop(pending);
+                drop(chain);
                 sut.force_sync().await;
                 assert_eq!(metrics.block_height.get(), old_height + 1);
                 assert_eq!(metrics.block_height_non_empty.get(), old_non_empty + 1);
@@ -10752,17 +10744,25 @@ mod tests {
     #[tokio::test]
     async fn commit_blocks() {
         // this indicates time padding applied in the block builder
-        const CORRECTION: u64 = 1;
-        let sut = SystemUnderTest::new();
-        // commit first (genesis) block
+        let sut = SystemUnderTest::new_native();
+        // Commit the first ordinary block after original genesis.
         let block = sut.create_block();
         sut.mock_time_handle.advance(Duration::from_millis(100));
         let block = sut.commit_block(block);
-        sut.report_commit_block(&block.as_ref().header()).await;
+        sut.report_commit_block(&block.block().header()).await;
         let metrics = sut.telemetry.metrics_fresh().await;
-        assert_eq!(metrics.block_height.get(), 1);
-        assert_eq!(metrics.block_height_non_empty.get(), 1);
-        assert_eq!(metrics.last_commit_time_ms.get(), 0); // zero for genesis
+        assert_eq!(metrics.block_height.get(), 2);
+        assert_eq!(metrics.block_height_non_empty.get(), 2);
+        assert_eq!(
+            metrics.last_commit_time_ms.get(),
+            u64::try_from(
+                sut.time_source
+                    .get_unix_time()
+                    .saturating_sub(block.block().header().creation_time())
+                    .as_millis()
+            )
+            .unwrap()
+        ); // zero for genesis
         assert_eq!(metrics.last_block_committed_at_ms.get(), 100);
         assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 100);
         let first_accepted = metrics.txs.with_label_values(&["accepted"]).get();
@@ -10774,16 +10774,25 @@ mod tests {
         let block = sut.create_block();
         sut.mock_time_handle.advance(Duration::from_millis(150));
         let block = sut.commit_block(block);
-        sut.report_commit_block(&block.as_ref().header()).await;
+        sut.report_commit_block(&block.block().header()).await;
         let metrics = sut.telemetry.metrics_fresh().await;
-        assert_eq!(metrics.block_height.get(), 2);
-        assert_eq!(metrics.block_height_non_empty.get(), 2);
-        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.block_height.get(), 3);
+        assert_eq!(metrics.block_height_non_empty.get(), 3);
+        assert_eq!(
+            metrics.last_commit_time_ms.get(),
+            u64::try_from(
+                sut.time_source
+                    .get_unix_time()
+                    .saturating_sub(block.block().header().creation_time())
+                    .as_millis()
+            )
+            .unwrap()
+        );
         assert_eq!(metrics.last_block_committed_at_ms.get(), 250);
         assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 250);
         assert_eq!(
             metrics.slot_duration_ms_latest.get(),
-            150 - CORRECTION,
+            metrics.last_commit_time_ms.get(),
             "slot-duration gauge should mirror last commit latency"
         );
         assert_eq!(
@@ -10804,19 +10813,31 @@ mod tests {
         let block = sut.create_block();
         sut.mock_time_handle.advance(Duration::from_millis(170));
         let block = sut.commit_block(block);
-        sut.report_commit_block(&block.as_ref().header()).await;
+        sut.report_commit_block(&block.block().header()).await;
         let metrics = sut.telemetry.metrics_fresh().await;
-        assert_eq!(metrics.block_height.get(), 3);
-        assert_eq!(metrics.block_height_non_empty.get(), 3);
-        assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
+        assert_eq!(metrics.block_height.get(), 4);
+        assert_eq!(metrics.block_height_non_empty.get(), 4);
+        assert_eq!(
+            metrics.last_commit_time_ms.get(),
+            u64::try_from(
+                sut.time_source
+                    .get_unix_time()
+                    .saturating_sub(block.block().header().creation_time())
+                    .as_millis()
+            )
+            .unwrap()
+        );
         assert_eq!(metrics.last_block_committed_at_ms.get(), 420);
         assert_eq!(metrics.last_non_empty_block_committed_at_ms.get(), 420);
-        assert_eq!(metrics.slot_duration_ms_latest.get(), 170 - CORRECTION);
+        assert_eq!(
+            metrics.slot_duration_ms_latest.get(),
+            metrics.last_commit_time_ms.get()
+        );
         assert_eq!(metrics.slot_duration_ms.get_sample_count(), 3);
     }
     #[tokio::test]
     async fn tx_counters_ignore_time_trigger_failures() {
-        let sut = SystemUnderTest::new();
+        let sut = SystemUnderTest::new_native();
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
         let missing_def: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -10840,7 +10861,7 @@ mod tests {
         let register_block = sut.build_block(vec![register_tx]);
         sut.mock_time_handle.advance(Duration::from_millis(100));
         let register_block = sut.commit_block(register_block);
-        sut.report_commit_block(&register_block.as_ref().header())
+        sut.report_commit_block(&register_block.block().header())
             .await;
         let metrics = sut.telemetry.metrics_fresh().await;
         let base_accepted = metrics.txs.with_label_values(&["accepted"]).get();
@@ -10850,13 +10871,13 @@ mod tests {
         let block = sut.build_block(vec![tx]);
         sut.mock_time_handle.advance(Duration::from_millis(150));
         let block = sut.commit_block(block);
-        let mut errors = block.as_ref().failed_outputs();
+        let mut errors = block.block().failed_outputs();
         let (idx, _) = errors
             .next()
             .expect("time trigger should fail in telemetry test");
         assert_eq!(idx, 1, "time trigger failure should follow external tx");
         assert!(errors.next().is_none(), "only time trigger should fail");
-        sut.report_commit_block(&block.as_ref().header()).await;
+        sut.report_commit_block(&block.block().header()).await;
         let metrics = sut.telemetry.metrics_fresh().await;
         let accepted = metrics.txs.with_label_values(&["accepted"]).get();
         let rejected = metrics.txs.with_label_values(&["rejected"]).get();
@@ -10875,11 +10896,11 @@ mod tests {
     }
     #[tokio::test]
     async fn da_quorum_ratio_tracks_committed_slots() {
-        let sut = SystemUnderTest::new();
+        let sut = SystemUnderTest::new_native();
         let block = sut.create_block();
         sut.mock_time_handle.advance(Duration::from_millis(100));
         let block = sut.commit_block(block);
-        sut.report_commit_block(&block.as_ref().header()).await;
+        sut.report_commit_block(&block.block().header()).await;
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.last_commit_time_ms.get(), 0);
         assert!(

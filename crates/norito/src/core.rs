@@ -31,12 +31,9 @@ use std::{
 };
 mod encoder;
 pub use encoder::Encoder;
-mod encode_fields;
 mod encode_frames;
 mod encode_writers;
 mod fixed_frame;
-#[doc(hidden)]
-pub use encode_fields::{PackedField, write_packed_fields};
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
 pub use encode_frames::write_frame_with_prefix;
@@ -265,24 +262,16 @@ pub(crate) fn payload_without_leading_padding_exact(
 const TYPE_NAME_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:type-name\0";
 #[cfg(feature = "schema-structural")]
 const STRUCTURAL_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:structural-schema\0";
-/// CRC64 polynomial used to compute integrity checks.
 /// Header flags stored in the final padding byte.
 pub mod header_flags {
-    /// Packed sequence layouts are used for variable-sized collections.
-    pub const PACKED_SEQ: u8 = 0x01;
     /// Compact varint lengths are used for per-field/element length prefixes (including string/blob
-    /// lengths). Does not affect packed-seq offsets or the outer sequence length header.
+    /// lengths). Does not affect the fixed u64 sequence count header.
     pub const COMPACT_LEN: u8 = 0x02;
-    /// Packed struct layout (offsets + data) for derive-generated types.
+    /// Retired packed-struct bit (`0x04`). It is reserved in v1: decoders reject
+    /// it in headers, encoders never emit it, and ambient layout guards mask it.
+    // TODO: delete once the remaining Sumeragi test reference
+    // (`iroha_core/src/sumeragi/v2_lane_work.rs`) stops naming it.
     pub const PACKED_STRUCT: u8 = 0x04;
-    /// Reserved in v1; packed sequences always use fixed u64 offsets.
-    pub const VARINT_OFFSETS: u8 = 0x08;
-    /// Reserved in v1; sequence length headers are fixed u64.
-    pub const COMPACT_SEQ_LEN: u8 = 0x10;
-    /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
-    /// and prefixes a compact bitset indicating which fields carry an explicit size.
-    /// Applies only when packed-struct and compact-len are enabled.
-    pub const FIELD_BITSET: u8 = 0x20;
 }
 fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
     let mut hasher = Sha256::new();
@@ -452,19 +441,10 @@ thread_local! {
     static ENCODE_CONTEXT_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 thread_local! {
-    static ENCODE_PACKED_FIXED_USED: Cell<bool> = const { Cell::new(false) };
-}
-thread_local! {
-    static ENCODE_FIELD_BITSET_USED: Cell<bool> = const { Cell::new(false) };
-}
-thread_local! {
     static ENCODE_COMPACT_LEN_USED: Cell<bool> = const { Cell::new(false) };
 }
 thread_local! {
     static ENCODE_VALUE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-thread_local! {
-    static FORCE_SEQUENTIAL: Cell<bool> = const { Cell::new(false) };
 }
 #[derive(Debug, Default)]
 struct DecodeBudgetCounters {
@@ -742,8 +722,6 @@ fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
 }
 pub(crate) struct EncodeContextGuard {
     prev_active: bool,
-    prev_fixed_used: bool,
-    prev_field_bitset_used: bool,
     prev_compact_len_used: bool,
 }
 impl EncodeContextGuard {
@@ -753,16 +731,6 @@ impl EncodeContextGuard {
             cell.set(true);
             prev
         });
-        let prev_fixed_used = ENCODE_PACKED_FIXED_USED.with(|cell| {
-            let prev = cell.get();
-            cell.set(false);
-            prev
-        });
-        let prev_field_bitset_used = ENCODE_FIELD_BITSET_USED.with(|cell| {
-            let prev = cell.get();
-            cell.set(false);
-            prev
-        });
         let prev_compact_len_used = ENCODE_COMPACT_LEN_USED.with(|cell| {
             let prev = cell.get();
             cell.set(false);
@@ -770,59 +738,15 @@ impl EncodeContextGuard {
         });
         Self {
             prev_active,
-            prev_fixed_used,
-            prev_field_bitset_used,
             prev_compact_len_used,
         }
-    }
-}
-pub struct SequentialOverrideGuard {
-    prev: bool,
-}
-impl SequentialOverrideGuard {
-    pub fn enter() -> Self {
-        let prev = FORCE_SEQUENTIAL.with(|cell| {
-            let prev = cell.get();
-            cell.set(true);
-            prev
-        });
-        #[cfg(debug_assertions)]
-        if crate::debug_trace_enabled() {
-            eprintln!("SequentialOverrideGuard::enter prev={prev}");
-        }
-        Self { prev }
-    }
-}
-impl Drop for SequentialOverrideGuard {
-    fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        if crate::debug_trace_enabled() {
-            eprintln!(
-                "SequentialOverrideGuard::drop restoring prev={prev}",
-                prev = self.prev
-            );
-        }
-        FORCE_SEQUENTIAL.with(|cell| cell.set(self.prev));
     }
 }
 impl Drop for EncodeContextGuard {
     fn drop(&mut self) {
         ENCODE_CONTEXT_ACTIVE.with(|cell| cell.set(self.prev_active));
-        ENCODE_PACKED_FIXED_USED.with(|cell| cell.set(self.prev_fixed_used));
-        ENCODE_FIELD_BITSET_USED.with(|cell| cell.set(self.prev_field_bitset_used));
         ENCODE_COMPACT_LEN_USED.with(|cell| cell.set(self.prev_compact_len_used));
     }
-}
-fn mark_fixed_offsets_used_if_encoding() {
-    ENCODE_CONTEXT_ACTIVE.with(|active| {
-        if active.get() {
-            ENCODE_PACKED_FIXED_USED.with(|flag| flag.set(true));
-        }
-    });
-}
-/// Record that a packed sequence emitted fixed-width offsets in the current encode pass.
-pub fn note_fixed_offsets_emitted() {
-    mark_fixed_offsets_used_if_encoding();
 }
 fn mark_compact_len_used_if_encoding() {
     ENCODE_CONTEXT_ACTIVE.with(|active| {
@@ -831,6 +755,7 @@ fn mark_compact_len_used_if_encoding() {
         }
     });
 }
+/// Record that a compact length prefix was emitted in the current encode pass.
 pub fn note_compact_len_emitted() {
     mark_compact_len_used_if_encoding();
     #[cfg(debug_assertions)]
@@ -841,49 +766,17 @@ pub fn note_compact_len_emitted() {
         );
     }
 }
-pub fn mark_field_bitset_used_if_encoding() {
-    ENCODE_CONTEXT_ACTIVE.with(|active| {
-        if active.get() {
-            ENCODE_FIELD_BITSET_USED.with(|flag| flag.set(true));
-        }
-    });
-}
-pub(crate) fn fixed_offsets_used() -> bool {
-    ENCODE_PACKED_FIXED_USED.with(|flag| flag.get())
-}
-/// Return whether field bitsets were emitted during the current encode pass.
-pub(crate) fn field_bitset_used() -> bool {
-    ENCODE_FIELD_BITSET_USED.with(|flag| flag.get())
-}
 pub(crate) fn compact_len_used() -> bool {
     ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
 }
 #[inline]
-pub(crate) fn finalized_encode_flags(
-    base_flags: u8,
-    fixed_offsets_used: bool,
-    field_bitset_used: bool,
-    compact_len_used: bool,
-) -> u8 {
+pub(crate) fn finalized_encode_flags(base_flags: u8, compact_len_used: bool) -> u8 {
     debug_assert!(validate_header_flags(base_flags).is_ok());
-    let mut final_flags = base_flags;
-    if fixed_offsets_used {
-        final_flags |= header_flags::PACKED_SEQ;
+    if compact_len_used {
+        base_flags | header_flags::COMPACT_LEN
     } else {
-        final_flags &= !header_flags::PACKED_SEQ;
+        base_flags & !header_flags::COMPACT_LEN
     }
-    if field_bitset_used {
-        final_flags |=
-            header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
-    } else {
-        final_flags &= !header_flags::FIELD_BITSET;
-        if compact_len_used {
-            final_flags |= header_flags::COMPACT_LEN;
-        } else {
-            final_flags &= !header_flags::COMPACT_LEN;
-        }
-    }
-    final_flags
 }
 // Thread-local payload context: base pointer, length, and optional schema hash.
 thread_local! {
@@ -1417,148 +1310,17 @@ pub fn effective_decode_flags() -> Option<u8> {
     current_decode_flags_effective()
 }
 #[inline]
-fn sequential_override_active() -> bool {
-    FORCE_SEQUENTIAL.with(|flag| flag.get())
-}
-#[inline]
 fn effective_layout_flags() -> u8 {
     current_decode_flags_effective().unwrap_or_else(default_encode_flags)
 }
-#[inline]
-fn layout_flag_enabled(flag: u8) -> bool {
-    if sequential_override_active() {
-        return (default_encode_flags() & flag) != 0;
-    }
-    (effective_layout_flags() & flag) != 0
-}
-#[inline]
-fn layout_flag_enabled_for_flags(flags: u8, flag: u8) -> bool {
-    if sequential_override_active() {
-        return (default_encode_flags() & flag) != 0;
-    }
-    (sanitize_layout_flags(flags) & flag) != 0
-}
-/// True if packed sequence layouts are enabled for the current decode.
-pub fn use_packed_seq() -> bool {
-    layout_flag_enabled(header_flags::PACKED_SEQ)
-}
-/// True if packed sequence layouts are enabled in an explicit flag snapshot.
-#[doc(hidden)]
-pub fn packed_seq_enabled_for_flags(flags: u8) -> bool {
-    layout_flag_enabled_for_flags(flags, header_flags::PACKED_SEQ)
-}
 /// True if compact varint length encoding is enabled for the current decode.
 pub fn use_compact_len() -> bool {
-    layout_flag_enabled(header_flags::COMPACT_LEN)
+    effective_layout_flags() & header_flags::COMPACT_LEN != 0
 }
 /// True if compact length encoding is enabled in an explicit flag snapshot.
 #[doc(hidden)]
 pub fn compact_len_enabled_for_flags(flags: u8) -> bool {
-    layout_flag_enabled_for_flags(flags, header_flags::COMPACT_LEN)
-}
-/// True if packed struct layout is enabled for the current decode.
-pub fn use_packed_struct() -> bool {
-    layout_flag_enabled(header_flags::PACKED_STRUCT)
-}
-/// True if packed-struct encodes a bitset selecting fields with explicit sizes.
-pub fn use_field_bitset() -> bool {
-    layout_flag_enabled(header_flags::FIELD_BITSET)
-}
-/// Decode packed-struct offsets when the layout is enabled.
-///
-/// Returns the computed offsets, number of header bytes consumed, packed data
-/// length, and packed tail length.
-pub fn decode_packed_offsets_slice(
-    slice: &[u8],
-    count: usize,
-) -> Result<(Vec<usize>, usize, usize, usize), Error> {
-    if count == 0 {
-        if slice.len() < 8 {
-            return Err(Error::LengthMismatch);
-        }
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&slice[..8]);
-        if u64::from_le_bytes(buf) != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        return Ok((vec![0], 8, 0, 0));
-    }
-    let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-    let bytes_needed = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-    if slice.len() < bytes_needed {
-        return Err(Error::LengthMismatch);
-    }
-    let mut offsets: Vec<usize> = try_decode_vec_with_capacity(entries)?;
-    for idx in 0..entries {
-        let start = idx * 8;
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&slice[start..start + 8]);
-        let raw = u64::from_le_bytes(buf);
-        let off = usize::try_from(raw).map_err(|_| Error::LengthMismatch)?;
-        if idx == 0 {
-            if off != 0 {
-                return Err(Error::LengthMismatch);
-            }
-        } else if off < *offsets.last().unwrap() {
-            return Err(Error::LengthMismatch);
-        }
-        offsets.push(off);
-    }
-    let data_len = *offsets.last().unwrap_or(&0);
-    let available_data = slice
-        .len()
-        .checked_sub(bytes_needed)
-        .ok_or(Error::LengthMismatch)?;
-    if data_len > available_data {
-        return Err(Error::LengthMismatch);
-    }
-    Ok((offsets, bytes_needed, data_len, 0))
-}
-/// Decode a packed-struct offset table relative to an active payload context.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_packed_offsets(
-    ptr: *const u8,
-    count: usize,
-) -> Result<(Vec<usize>, usize, usize, usize), Error> {
-    let payload = payload_slice_from_ptr(ptr)?;
-    decode_packed_offsets_slice(payload, count)
-}
-/// Decode and validate a packed-struct field bitset and its dynamic sizes.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_packed_header(
-    ptr: *const u8,
-    field_count: usize,
-    expected_bitset: &[u8],
-) -> Result<(&'static [u8], Vec<usize>, usize), Error> {
-    let bitset_len = field_count.div_ceil(8);
-    if expected_bitset.len() != bitset_len {
-        return Err(Error::LengthMismatch);
-    }
-    let bitset = payload_range_from_ptr(ptr, bitset_len)?;
-    if bitset != expected_bitset {
-        return Err(Error::NonCanonicalEncoding);
-    }
-
-    let mut offset = bitset_len;
-    let mut sizes = Vec::new();
-    for field_index in 0..field_count {
-        let needs_size = bitset
-            .get(field_index / 8)
-            .is_some_and(|byte| ((byte >> (field_index % 8)) & 1) != 0);
-        if !needs_size {
-            continue;
-        }
-        let payload = payload_slice_from_ptr(ptr)?;
-        let size_bytes = payload.get(offset..).ok_or(Error::LengthMismatch)?;
-        let (size, header_len) = read_len_dyn_slice(size_bytes)?;
-        offset = offset
-            .checked_add(header_len)
-            .ok_or(Error::LengthMismatch)?;
-        sizes.push(size);
-    }
-    Ok((bitset, sizes, offset))
+    flags & header_flags::COMPACT_LEN != 0
 }
 /// Byte range for a planned binary sequence element.
 #[doc(hidden)]
@@ -1602,55 +1364,24 @@ pub struct SequencePlan {
     /// Total bytes consumed from the source sequence payload.
     pub used: usize,
 }
-/// Binary sequence layout to plan.
-#[doc(hidden)]
-#[repr(u32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinarySequenceLayout {
-    /// Sequence is encoded as `[count_u64][len][payload]...`.
-    LengthPrefixed = 0,
-    /// Sequence is encoded as `[count_u64][(count + 1) u64 offsets][payloads...]`.
-    FixedOffsets = 1,
-}
-impl BinarySequenceLayout {
-    /// Resolve the sequence layout advertised by Norito header flags.
-    #[doc(hidden)]
-    #[inline]
-    pub fn from_flags(flags: u8) -> Self {
-        if (flags & header_flags::PACKED_SEQ) != 0 {
-            Self::FixedOffsets
-        } else {
-            Self::LengthPrefixed
-        }
-    }
-    #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
-    #[inline]
-    fn abi_kind(self) -> u32 {
-        self as u32
-    }
-}
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 const SEQUENCE_GPU_MIN_BYTES: usize = 1 << 20;
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
 /// Plan element byte spans for a Norito binary sequence without materializing values.
 ///
-/// The input starts at the sequence count header. Returned spans are byte offsets into the same
+/// The input starts at the sequence count header. Every element carries its own length prefix,
+/// sized per `flags` (`COMPACT_LEN` or fixed-width). Returned spans are byte offsets into the same
 /// input slice, and `used` is the total sequence payload length consumed from the front of `bytes`.
 #[doc(hidden)]
-pub fn plan_binary_sequence(
-    bytes: &[u8],
-    flags: u8,
-    layout: BinarySequenceLayout,
-) -> Result<SequencePlan, Error> {
+pub fn plan_binary_sequence(bytes: &[u8], flags: u8) -> Result<SequencePlan, Error> {
     validate_header_flags(flags)?;
     let (count, _) = read_seq_len_slice(bytes)?;
-    plan_binary_sequence_with_count(bytes, flags, layout, count)
+    plan_binary_sequence_with_count(bytes, flags, count)
 }
 fn plan_binary_sequence_with_count(
     bytes: &[u8],
     flags: u8,
-    layout: BinarySequenceLayout,
     count: usize,
 ) -> Result<SequencePlan, Error> {
     validate_header_flags(flags)?;
@@ -1658,175 +1389,92 @@ fn plan_binary_sequence_with_count(
     if !decode_limits_active()
         && bytes.len() >= SEQUENCE_GPU_MIN_BYTES
         && count >= SEQUENCE_GPU_MIN_ELEMENTS
-        && let Some(plan) = sequence_gpu::try_plan_binary_sequence(bytes, flags, layout)
+        && let Some(plan) = sequence_gpu::try_plan_binary_sequence(bytes, flags)
     {
         note_payload_access(bytes, plan.used);
         return Ok(plan);
     }
-    let plan = plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)?;
+    let plan = plan_binary_sequence_scalar_with_count(bytes, flags, count)?;
     note_payload_access(bytes, plan.used);
     Ok(plan)
 }
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
-fn plan_binary_sequence_scalar(
-    bytes: &[u8],
-    flags: u8,
-    layout: BinarySequenceLayout,
-) -> Result<SequencePlan, Error> {
+fn plan_binary_sequence_scalar(bytes: &[u8], flags: u8) -> Result<SequencePlan, Error> {
     validate_header_flags(flags)?;
     let (count, _) = read_seq_len_slice(bytes)?;
-    plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)
+    plan_binary_sequence_scalar_with_count(bytes, flags, count)
 }
 fn plan_binary_sequence_scalar_with_count(
     bytes: &[u8],
     flags: u8,
-    layout: BinarySequenceLayout,
     count: usize,
 ) -> Result<SequencePlan, Error> {
-    validate_binary_sequence_reservation(bytes, flags, layout, count)?;
+    validate_binary_sequence_reservation(bytes, flags, count)?;
     let mut spans = try_decode_vec_with_capacity(count)?;
-    let used =
-        byte_sequence::visit_binary_sequence_with_count(bytes, flags, layout, count, |span| {
-            spans.push(span);
-            Ok(())
-        })?;
+    let used = byte_sequence::visit_binary_sequence_with_count(bytes, flags, count, |span| {
+        spans.push(span);
+        Ok(())
+    })?;
     Ok(SequencePlan { spans, used })
 }
 fn validate_binary_sequence_reservation(
     bytes: &[u8],
     flags: u8,
-    layout: BinarySequenceLayout,
     count: usize,
 ) -> Result<(), Error> {
     let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
     if declared_count != count {
         return Err(Error::LengthMismatch);
     }
-    match layout {
-        BinarySequenceLayout::LengthPrefixed => {
-            let minimum_prefix = if compact_len_enabled_for_flags(flags) {
-                1usize
-            } else {
-                8usize
-            };
-            let minimum_body = count
-                .checked_mul(minimum_prefix)
-                .ok_or(Error::LengthMismatch)?;
-            let minimum_end = offset
-                .checked_add(minimum_body)
-                .ok_or(Error::LengthMismatch)?;
-            if minimum_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-        }
-        BinarySequenceLayout::FixedOffsets => {
-            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            let table_end = offset.checked_add(table_len).ok_or(Error::LengthMismatch)?;
-            let offsets = bytes.get(offset..table_end).ok_or(Error::LengthMismatch)?;
-            // Refuse a malformed first offset before allocating a span plan.
-            if read_u64_le_at(offsets, 0)? != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            let data_len = read_u64_le_at(offsets, count)?
-                .try_into()
-                .map_err(|_| Error::LengthMismatch)?;
-            let data_end = table_end
-                .checked_add(data_len)
-                .ok_or(Error::LengthMismatch)?;
-            if data_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-        }
+    let minimum_prefix = if compact_len_enabled_for_flags(flags) {
+        1usize
+    } else {
+        8usize
+    };
+    let minimum_body = count
+        .checked_mul(minimum_prefix)
+        .ok_or(Error::LengthMismatch)?;
+    let minimum_end = offset
+        .checked_add(minimum_body)
+        .ok_or(Error::LengthMismatch)?;
+    if minimum_end > bytes.len() {
+        return Err(Error::LengthMismatch);
     }
     Ok(())
 }
 fn validate_current_sequence_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
-    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    let layout = if use_packed_seq() {
-        BinarySequenceLayout::FixedOffsets
-    } else {
-        BinarySequenceLayout::LengthPrefixed
-    };
-    validate_binary_sequence_reservation(bytes, flags, layout, count)
+    validate_binary_sequence_reservation(
+        bytes,
+        effective_decode_flags().unwrap_or_else(default_encode_flags),
+        count,
+    )
 }
 fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
     let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
     if declared_count != count {
         return Err(Error::LengthMismatch);
     }
-    if use_packed_seq() {
-        let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
-        let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-        let tables_len = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
-        let tables_end = offset
-            .checked_add(tables_len)
-            .ok_or(Error::LengthMismatch)?;
-        let key_offsets = bytes
-            .get(offset..offset + table_len)
-            .ok_or(Error::LengthMismatch)?;
-        let value_offsets = bytes
-            .get(offset + table_len..tables_end)
-            .ok_or(Error::LengthMismatch)?;
-        let key_total = validate_fixed_offset_table(key_offsets, entries)?;
-        let value_total = validate_fixed_offset_table(value_offsets, entries)?;
-        let data_end = tables_end
-            .checked_add(key_total)
-            .and_then(|end| end.checked_add(value_total))
-            .ok_or(Error::LengthMismatch)?;
-        if data_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
+    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    let prefix = if compact_len_enabled_for_flags(flags) {
+        1usize
     } else {
-        let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-        let prefix = if compact_len_enabled_for_flags(flags) {
-            1usize
-        } else {
-            8usize
-        };
-        let minimum_body = count
-            .checked_mul(prefix)
-            .and_then(|bytes| bytes.checked_mul(2))
-            .ok_or(Error::LengthMismatch)?;
-        let minimum_end = offset
-            .checked_add(minimum_body)
-            .ok_or(Error::LengthMismatch)?;
-        if minimum_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
+        8usize
+    };
+    let minimum_body = count
+        .checked_mul(prefix)
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or(Error::LengthMismatch)?;
+    let minimum_end = offset
+        .checked_add(minimum_body)
+        .ok_or(Error::LengthMismatch)?;
+    if minimum_end > bytes.len() {
+        return Err(Error::LengthMismatch);
     }
     Ok(())
 }
-#[inline]
-fn read_u64_le_at(bytes: &[u8], idx: usize) -> Result<u64, Error> {
-    let start = idx.checked_mul(8).ok_or(Error::LengthMismatch)?;
-    let end = start.checked_add(8).ok_or(Error::LengthMismatch)?;
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(bytes.get(start..end).ok_or(Error::LengthMismatch)?);
-    Ok(u64::from_le_bytes(buf))
-}
-#[inline]
-fn read_fixed_offset_usize_at(bytes: &[u8], idx: usize) -> Result<usize, Error> {
-    len_u64_to_usize(read_u64_le_at(bytes, idx)?)
-}
-fn validate_fixed_offset_table(bytes: &[u8], entries: usize) -> Result<usize, Error> {
-    let mut prev = 0usize;
-    for idx in 0..entries {
-        let off = read_fixed_offset_usize_at(bytes, idx)?;
-        if idx == 0 {
-            if off != 0 {
-                return Err(Error::LengthMismatch);
-            }
-        } else if off < prev {
-            return Err(Error::LengthMismatch);
-        }
-        prev = off;
-    }
-    Ok(prev)
-}
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 mod sequence_gpu {
-    use super::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
+    use super::{SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
     use std::{
         ffi::{c_char, c_int, c_void},
         path::PathBuf,
@@ -1842,7 +1490,6 @@ mod sequence_gpu {
         input_ptr: *const u8,
         input_len: usize,
         flags: u8,
-        layout_kind: u32,
         out_spans: *mut AbiSpan,
         out_capacity: usize,
         out_count: *mut usize,
@@ -1869,11 +1516,7 @@ mod sequence_gpu {
         Disabled,
     }
     static SEQUENCE_PLAN_LIB: OnceLock<Mutex<SequencePlanCache>> = OnceLock::new();
-    pub(super) fn try_plan_binary_sequence(
-        bytes: &[u8],
-        flags: u8,
-        layout: BinarySequenceLayout,
-    ) -> Option<SequencePlan> {
+    pub(super) fn try_plan_binary_sequence(bytes: &[u8], flags: u8) -> Option<SequencePlan> {
         let cache = SEQUENCE_PLAN_LIB.get_or_init(|| Mutex::new(SequencePlanCache::Unknown));
         let mut guard = cache.lock().expect("sequence GPU cache poisoned");
         if matches!(*guard, SequencePlanCache::Unknown) {
@@ -1884,10 +1527,10 @@ mod sequence_gpu {
         let SequencePlanCache::Loaded(lib) = &*guard else {
             return None;
         };
-        let plan = match unsafe { call_helper(lib.func, bytes, flags, layout) } {
+        let plan = match unsafe { call_helper(lib.func, bytes, flags) } {
             HelperOutcome::Planned(plan) => plan,
             HelperOutcome::InvalidInput => {
-                if plan_binary_sequence_scalar(bytes, flags, layout).is_ok() {
+                if plan_binary_sequence_scalar(bytes, flags).is_ok() {
                     *guard = SequencePlanCache::Disabled;
                 }
                 return None;
@@ -1898,7 +1541,7 @@ mod sequence_gpu {
             }
             HelperOutcome::BackendUnavailable => return None,
         };
-        match plan_binary_sequence_scalar(bytes, flags, layout) {
+        match plan_binary_sequence_scalar(bytes, flags) {
             Ok(scalar) if scalar == plan => Some(plan),
             Ok(_) | Err(_) => {
                 *guard = SequencePlanCache::Disabled;
@@ -1912,12 +1555,7 @@ mod sequence_gpu {
         BackendUnavailable,
         BackendFailure,
     }
-    unsafe fn call_helper(
-        func: SequencePlanHelperFn,
-        bytes: &[u8],
-        flags: u8,
-        layout: BinarySequenceLayout,
-    ) -> HelperOutcome {
+    unsafe fn call_helper(func: SequencePlanHelperFn, bytes: &[u8], flags: u8) -> HelperOutcome {
         let mut spans: Vec<AbiSpan> = Vec::new();
         let mut out_count = 0usize;
         let mut out_used = 0usize;
@@ -1926,7 +1564,6 @@ mod sequence_gpu {
                 bytes.as_ptr(),
                 bytes.len(),
                 flags,
-                layout.abi_kind(),
                 spans.as_mut_ptr(),
                 spans.capacity(),
                 &mut out_count,
@@ -1971,7 +1608,6 @@ mod sequence_gpu {
                 bytes.as_ptr(),
                 bytes.len(),
                 flags,
-                layout.abi_kind(),
                 spans.as_mut_ptr(),
                 spans.capacity(),
                 &mut out_count,
@@ -2030,17 +1666,16 @@ mod sequence_gpu {
     }
     fn sequence_plan_helper_self_test(func: SequencePlanHelperFn) -> bool {
         let flags = super::header_flags::COMPACT_LEN;
-        let layout = BinarySequenceLayout::LengthPrefixed;
-        let bytes = make_unpacked_case(flags);
-        let accel = match unsafe { call_helper(func, &bytes, flags, layout) } {
+        let bytes = make_case(flags);
+        let accel = match unsafe { call_helper(func, &bytes, flags) } {
             HelperOutcome::Planned(plan) => plan,
             HelperOutcome::InvalidInput
             | HelperOutcome::BackendUnavailable
             | HelperOutcome::BackendFailure => return false,
         };
-        plan_binary_sequence_scalar(&bytes, flags, layout).is_ok_and(|scalar| accel == scalar)
+        plan_binary_sequence_scalar(&bytes, flags).is_ok_and(|scalar| accel == scalar)
     }
-    fn make_unpacked_case(flags: u8) -> Vec<u8> {
+    fn make_case(flags: u8) -> Vec<u8> {
         let _guard = super::DecodeFlagsGuard::enter(flags);
         let mut out = Vec::new();
         super::write_seq_len(&mut out, 3).expect("write sequence length");
@@ -2095,7 +1730,7 @@ mod sequence_gpu {
     unsafe fn resolve_symbol(handle: *mut c_void) -> Option<SequencePlanHelperFn> {
         #[cfg(unix)]
         {
-            let sym = unsafe { dlsym(handle, c"norito_binary_sequence_plan".as_ptr()) };
+            let sym = unsafe { dlsym(handle, c"norito_length_prefixed_sequence_plan".as_ptr()) };
             if sym.is_null() {
                 return None;
             }
@@ -2209,86 +1844,11 @@ pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
     let used = encode_varint(value, &mut buf);
     out.extend_from_slice(&buf[..used]);
 }
-// A packed sequence always has one initial zero offset, including when empty.
-fn packed_sequence_table_len(len: usize) -> Result<usize, Error> {
-    len.checked_add(1)
-        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
-        .ok_or(Error::LengthMismatch)
-}
-/// Write the canonical packed-sequence offset table for counted payload lengths.
-///
-/// The table always starts at zero and contains one checked cumulative offset
-/// per payload. This is a codec-internal seam used after a fallible count pass.
-#[doc(hidden)]
-pub fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Result<(), Error> {
-    let mut offset = 0u64;
-    writer.write_all(&0u64.to_le_bytes())?;
-    for len in lengths {
-        let len_u64 = u64::try_from(*len).map_err(|_| Error::LengthMismatch)?;
-        offset = offset.checked_add(len_u64).ok_or(Error::LengthMismatch)?;
-        writer.write_all(&offset.to_le_bytes())?;
-    }
-    Ok(())
-}
-fn collect_payload_lengths<T, I>(len: usize, iter: I) -> Result<Vec<usize>, Error>
+fn encode_seq_payloads<T, I>(writer: &mut Encoder<'_>, items: I) -> Result<(), Error>
 where
     T: SerializePayload,
     I: IntoIterator,
-    I::Item: std::borrow::Borrow<T>,
-{
-    let mut lengths = Vec::new();
-    let allocation_bytes = len
-        .checked_mul(core::mem::size_of::<usize>())
-        .ok_or(Error::LengthMismatch)?;
-    lengths
-        .try_reserve_exact(len)
-        .map_err(|_| Error::AllocationFailed {
-            bytes: limit_to_u64(allocation_bytes),
-        })?;
-    for item in iter {
-        if lengths.len() == len {
-            return Err(Error::LengthMismatch);
-        }
-        let value: &T = std::borrow::Borrow::borrow(&item);
-        lengths.push(encoded_payload_len(value)?);
-    }
-    if lengths.len() != len {
-        return Err(Error::LengthMismatch);
-    }
-    Ok(lengths)
-}
-fn write_payloads_with_lengths<T, I>(
-    writer: &mut Encoder<'_>,
-    iter: I,
-    lengths: &[usize],
-) -> Result<(), Error>
-where
-    T: SerializePayload,
-    I: IntoIterator,
-    I::Item: std::borrow::Borrow<T>,
-{
-    let mut count = 0usize;
-    let mut expected_lengths = lengths.iter().copied();
-    for item in iter {
-        let expected_len = expected_lengths.next().ok_or(Error::LengthMismatch)?;
-        let value: &T = std::borrow::Borrow::borrow(&item);
-        write_counted_payload(value, writer, expected_len)?;
-        count += 1;
-    }
-    if count != lengths.len() || expected_lengths.next().is_some() {
-        return Err(Error::LengthMismatch);
-    }
-    Ok(())
-}
-fn encode_seq_payloads<T, I>(
-    writer: &mut Encoder<'_>,
-    items: I,
-    packed_byte_limit: Option<u64>,
-) -> Result<(), Error>
-where
-    T: SerializePayload,
-    I: IntoIterator,
-    I::IntoIter: ExactSizeIterator + Clone,
+    I::IntoIter: ExactSizeIterator,
     I::Item: std::borrow::Borrow<T>,
 {
     let iter = items.into_iter();
@@ -2297,102 +1857,59 @@ where
         writer,
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
-    if !use_packed_seq() {
-        let flags = effective_layout_flags();
-        let mut count = 0usize;
-        for item in iter {
-            if count == len {
-                return Err(Error::LengthMismatch);
-            }
-            let value: &T = std::borrow::Borrow::borrow(&item);
-            let encoded_len = encoded_payload_len(value)?;
-            write_len_with_flags(
-                writer,
-                u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-                flags,
-            )?;
-            write_counted_payload(value, writer, encoded_len)?;
-            count += 1;
+    let flags = effective_layout_flags();
+    let mut count = 0usize;
+    for item in iter {
+        if count == len {
+            return Err(Error::LengthMismatch);
         }
-        return (count == len).then_some(()).ok_or(Error::LengthMismatch);
+        let value: &T = std::borrow::Borrow::borrow(&item);
+        let encoded_len = encoded_payload_len(value)?;
+        write_len_with_flags(
+            writer,
+            u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
+            flags,
+        )?;
+        write_counted_payload(value, writer, encoded_len)?;
+        count += 1;
     }
-    // The offset table alone may exceed the packed bound (including for
-    // zero-sized elements). Reject that before allocating a length table or
-    // invoking any element serializer.
-    let table_bytes = packed_sequence_table_len(len)?;
-    if let Some(limit) = packed_byte_limit {
-        let length = u64::try_from(table_bytes).map_err(|_| Error::LengthMismatch)?;
-        if length > limit {
-            return Err(Error::ArchiveLengthExceeded { length, limit });
-        }
-    }
-    let lengths = collect_payload_lengths::<T, _>(len, iter.clone())?;
-    if let Some(limit) = packed_byte_limit {
-        let total = lengths.iter().try_fold(table_bytes, |total, &length| {
-            total.checked_add(length).ok_or(Error::LengthMismatch)
-        })?;
-        let length = u64::try_from(total).map_err(|_| Error::LengthMismatch)?;
-        if length > limit {
-            return Err(Error::ArchiveLengthExceeded { length, limit });
-        }
-    }
-    note_fixed_offsets_emitted();
-    write_fixed_offsets(writer, &lengths)?;
-    write_payloads_with_lengths::<T, _>(writer, iter, &lengths)
+    (count == len).then_some(()).ok_or(Error::LengthMismatch)
 }
 fn encode_slice_payloads<T>(writer: &mut Encoder<'_>, slice: &[T]) -> Result<(), Error>
 where
     T: SerializePayload,
 {
-    encode_seq_payloads::<T, _>(writer, slice.iter(), None)
+    encode_seq_payloads::<T, _>(writer, slice.iter())
 }
-/// Write an element sequence, bounding its packed offset table and payload.
+/// Write an element sequence with one length prefix per element.
 ///
 /// Each element uses its own serialization, including u8 elements; this does not use
 /// the raw-byte `Vec<u8>` specialization. The sequence count is fixed-width, and the
-/// active flags select length-prefixed elements or packed offsets. In packed mode,
-/// `packed_byte_limit` covers the offset table plus element payloads, excluding the
-/// sequence count. Measurement and emission have one codec owner. Items may borrow
-/// existing elements or contain projected views without collecting another sequence.
-/// The iterator's reported count is checked against its actual yields in both packed
-/// passes; its clone must reproduce the same ordered elements.
+/// active flags select compact or fixed-width element length prefixes. Measurement and
+/// emission have one codec owner. Items may borrow existing elements or contain projected
+/// views without collecting another sequence. The iterator's reported count is checked
+/// against its actual yields.
 ///
 /// # Errors
 ///
-/// Returns serialization/allocation errors, inconsistent iterator cardinality, a changed
-/// second-pass length, or [`Error::ArchiveLengthExceeded`] before writing an oversized
-/// packed table. Discard the incomplete destination after any error.
+/// Returns serialization errors, inconsistent iterator cardinality, or a changed
+/// second-pass length. Discard the incomplete destination after any error.
 #[doc(hidden)]
-pub fn write_element_sequence<T, I>(
-    writer: &mut Encoder<'_>,
-    items: I,
-    packed_byte_limit: u64,
-) -> Result<(), Error>
+pub fn write_element_sequence<T, I>(writer: &mut Encoder<'_>, items: I) -> Result<(), Error>
 where
     T: SerializePayload,
     I: IntoIterator,
-    I::IntoIter: ExactSizeIterator + Clone,
+    I::IntoIter: ExactSizeIterator,
     I::Item: std::borrow::Borrow<T>,
 {
-    encode_seq_payloads::<T, I>(writer, items, Some(packed_byte_limit))
+    encode_seq_payloads::<T, I>(writer, items)
 }
-fn sequence_encoded_len_hint<'a, T, I>(len: usize, items: I) -> Option<usize>
+fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
     let mut total = 8usize;
-    if use_packed_seq() {
-        let entries = len.checked_add(1)?;
-        total = total.checked_add(entries.checked_mul(8)?)?;
-        for item in items {
-            let elem_len = item
-                .encoded_len_exact()
-                .or_else(|| item.encoded_len_hint())?;
-            total = total.checked_add(elem_len)?;
-        }
-        return Some(total);
-    }
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item
@@ -2403,20 +1920,12 @@ where
     }
     Some(total)
 }
-fn sequence_encoded_len_exact<'a, T, I>(len: usize, items: I) -> Option<usize>
+fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
     let mut total = 8usize;
-    if use_packed_seq() {
-        let entries = len.checked_add(1)?;
-        total = total.checked_add(entries.checked_mul(8)?)?;
-        for item in items {
-            total = total.checked_add(item.encoded_len_exact()?)?;
-        }
-        return Some(total);
-    }
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item.encoded_len_exact()?;
@@ -2425,28 +1934,13 @@ where
     }
     Some(total)
 }
-fn map_encoded_len_hint<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
+fn map_encoded_len_hint<'a, K, V, I>(entries: I) -> Option<usize>
 where
     K: SerializePayload + 'a,
     V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
     let mut total = 8usize;
-    if use_packed_seq() {
-        let table_len = len
-            .checked_add(1)?
-            .checked_mul(core::mem::size_of::<u64>())?;
-        total = total.checked_add(table_len.checked_mul(2)?)?;
-        for (key, value) in entries {
-            let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
-            let value_len = value
-                .encoded_len_exact()
-                .or_else(|| value.encoded_len_hint())?;
-            total = total.checked_add(key_len)?;
-            total = total.checked_add(value_len)?;
-        }
-        return Some(total);
-    }
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
@@ -2460,24 +1954,13 @@ where
     }
     Some(total)
 }
-fn map_encoded_len_exact<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
+fn map_encoded_len_exact<'a, K, V, I>(entries: I) -> Option<usize>
 where
     K: SerializePayload + 'a,
     V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
     let mut total = 8usize;
-    if use_packed_seq() {
-        let table_len = len
-            .checked_add(1)?
-            .checked_mul(core::mem::size_of::<u64>())?;
-        total = total.checked_add(table_len.checked_mul(2)?)?;
-        for (key, value) in entries {
-            total = total.checked_add(key.encoded_len_exact()?)?;
-            total = total.checked_add(value.encoded_len_exact()?)?;
-        }
-        return Some(total);
-    }
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact()?;
@@ -2497,91 +1980,30 @@ fn encode_map_payloads<'a, K, V, I>(
 where
     K: SerializePayload + 'a,
     V: SerializePayload + 'a,
-    I: IntoIterator<Item = (&'a K, &'a V)> + Clone,
+    I: IntoIterator<Item = (&'a K, &'a V)>,
 {
     write_seq_len(
         writer,
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
-    if !use_packed_seq() {
-        let flags = effective_layout_flags();
-        let mut count = 0usize;
-        for (key, value) in entries {
-            if count == len {
-                return Err(Error::LengthMismatch);
-            }
-            for item in [key as &dyn SerializePayload, value as &dyn SerializePayload] {
-                let encoded_len = encoded_payload_len(item)?;
-                write_len_with_flags(
-                    writer,
-                    u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-                    flags,
-                )?;
-                write_counted_payload(item, writer, encoded_len)?;
-            }
-            count += 1;
+    let flags = effective_layout_flags();
+    let mut count = 0usize;
+    for (key, value) in entries {
+        if count == len {
+            return Err(Error::LengthMismatch);
         }
-        return (count == len).then_some(()).ok_or(Error::LengthMismatch);
-    }
-    note_fixed_offsets_emitted();
-    let key_lengths =
-        collect_payload_lengths::<K, _>(len, entries.clone().into_iter().map(|(key, _)| key))?;
-    let value_lengths =
-        collect_payload_lengths::<V, _>(len, entries.clone().into_iter().map(|(_, value)| value))?;
-    write_fixed_offsets(writer, &key_lengths)?;
-    write_fixed_offsets(writer, &value_lengths)?;
-    write_payloads_with_lengths::<K, _>(
-        writer,
-        entries.clone().into_iter().map(|(key, _)| key),
-        &key_lengths,
-    )?;
-    write_payloads_with_lengths::<V, _>(
-        writer,
-        entries.into_iter().map(|(_, value)| value),
-        &value_lengths,
-    )
-}
-#[cfg(test)]
-mod encode_seq_payloads_tests {
-    use super::{
-        DecodeFlagsGuard, Encoder, encode_seq_payloads, encode_slice_payloads, header_flags,
-        serialize_to_buffer, write_len_to_vec_with_flags,
-    };
-    #[test]
-    fn encode_seq_payloads_counts_and_keeps_layout() {
-        let items: Vec<Vec<u8>> = vec![vec![1, 2], vec![3], vec![4, 5, 6]];
-        for flags in [0, header_flags::COMPACT_LEN] {
-            let _guard = DecodeFlagsGuard::enter(flags);
-            let mut out = Vec::new();
-            let mut encoder = Encoder::for_buffer(&mut out);
-            encode_seq_payloads::<Vec<u8>, _>(&mut encoder, items.iter(), None)
-                .expect("encode length-prefixed seq");
-            let mut expected = (items.len() as u64).to_le_bytes().to_vec();
-            for item in &items {
-                let mut bytes = Vec::new();
-                serialize_to_buffer(item, &mut bytes).expect("encode expected item");
-                write_len_to_vec_with_flags(&mut expected, bytes.len() as u64, flags);
-                expected.extend_from_slice(&bytes);
-            }
-            assert_eq!(out, expected, "flags {flags:#04x}");
+        for item in [key as &dyn SerializePayload, value as &dyn SerializePayload] {
+            let encoded_len = encoded_payload_len(item)?;
+            write_len_with_flags(
+                writer,
+                u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
+                flags,
+            )?;
+            write_counted_payload(item, writer, encoded_len)?;
         }
+        count += 1;
     }
-    #[test]
-    fn encode_slice_payloads_matches_length_prefixed_layout() {
-        let items = [0x0102_u16, 0x0304_u16, 0x0506_u16];
-        for flags in [0, header_flags::COMPACT_LEN] {
-            let _guard = DecodeFlagsGuard::enter(flags);
-            let mut out = Vec::new();
-            let mut encoder = Encoder::for_buffer(&mut out);
-            encode_slice_payloads(&mut encoder, &items).expect("encode length-prefixed slice");
-            let mut expected = 3_u64.to_le_bytes().to_vec();
-            for item in items {
-                write_len_to_vec_with_flags(&mut expected, 2, flags);
-                expected.extend_from_slice(&item.to_le_bytes());
-            }
-            assert_eq!(out, expected, "flags {flags:#04x}");
-        }
-    }
+    (count == len).then_some(()).ok_or(Error::LengthMismatch)
 }
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
@@ -2589,25 +2011,6 @@ mod encode_seq_payloads_tests {
 /// back to a fixed 8-byte little-endian `u64` header.
 pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len(writer, value)
-}
-/// Write the canonical zero-based cumulative offset table for a packed struct.
-#[doc(hidden)]
-#[inline(never)]
-pub fn write_packed_offset_table(
-    writer: &mut Encoder<'_>,
-    field_lengths: &[usize],
-) -> Result<(), Error> {
-    let mut accumulated = 0usize;
-    writer.write_u64::<LittleEndian>(0)?;
-    for &field_length in field_lengths {
-        accumulated = accumulated
-            .checked_add(field_length)
-            .ok_or(Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(
-            u64::try_from(accumulated).map_err(|_| Error::LengthMismatch)?,
-        )?;
-    }
-    Ok(())
 }
 /// Append a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
@@ -2967,6 +2370,12 @@ where
     }
     Ok(out)
 }
+/// `NORITO_TRACE` diagnostic for generic element-sequence decoders.
+#[cold]
+#[inline(never)]
+fn trace_sequence_decode(type_name: &'static str, len: usize) {
+    eprintln!("Vec::<{type_name}>::decode len={len}");
+}
 fn decode_element_sequence_from_slice_with<'a, T, F>(
     bytes: &'a [u8],
     decode_planned: F,
@@ -2977,20 +2386,10 @@ where
 {
     let (len, _) = read_seq_len_slice(bytes)?;
     if crate::debug_trace_enabled() {
-        eprintln!(
-            "Vec::<{}>::decode len={} packed_seq={}",
-            core::any::type_name::<T>(),
-            len,
-            use_packed_seq()
-        );
+        trace_sequence_decode(core::any::type_name::<T>(), len);
     }
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    let layout = if use_packed_seq() {
-        BinarySequenceLayout::FixedOffsets
-    } else {
-        BinarySequenceLayout::LengthPrefixed
-    };
-    let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
+    let plan = plan_binary_sequence_with_count(bytes, flags, len)?;
     if let Some(out) = decode_planned(bytes, flags, &plan)? {
         return Ok((out, plan.used));
     }
@@ -3001,7 +2400,7 @@ where
 /// Decode a generic element sequence from the front of `bytes`.
 ///
 /// Unlike [`decode_vec_from_slice_serial`], this always uses the advertised
-/// packed or length-prefixed element layout, including when `T` is `u8`.
+/// length-prefixed element layout, including when `T` is `u8`.
 /// Callers whose wire type does not use `Vec<u8>`'s raw-byte optimization use
 /// this helper and decide separately whether trailing bytes are permitted.
 #[doc(hidden)]
@@ -3061,12 +2460,7 @@ where
 {
     let (len, _) = read_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    let layout = if use_packed_seq() {
-        BinarySequenceLayout::FixedOffsets
-    } else {
-        BinarySequenceLayout::LengthPrefixed
-    };
-    let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
+    let plan = plan_binary_sequence_with_count(bytes, flags, len)?;
     for span in &plan.spans {
         let element_slice = span.get(bytes)?;
         record_slice_access(element_slice, span.len());
@@ -3080,9 +2474,10 @@ where
 }
 impl<'a> DecodeFromSlice<'a> for &'a [u8] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, hdr) = read_len_dyn_slice(bytes)?;
+        let (len, hdr) = read_seq_len_slice(bytes)?;
         let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
         let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
+        record_slice_access(data, len);
         Ok((data, end))
     }
 }
@@ -3264,78 +2659,6 @@ where
     F: FnMut(K, V) -> Result<(), Error>,
 {
     let (len, mut offset) = read_seq_len_slice(bytes)?;
-    if use_packed_seq() {
-        let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-        let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-        let offsets_bytes = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
-        let header_end = offset
-            .checked_add(offsets_bytes)
-            .ok_or(Error::LengthMismatch)?;
-        if header_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
-        let key_offsets = bytes
-            .get(offset..offset + table_len)
-            .ok_or(Error::LengthMismatch)?;
-        let value_offsets_start = offset.checked_add(table_len).ok_or(Error::LengthMismatch)?;
-        let value_offsets = bytes
-            .get(value_offsets_start..header_end)
-            .ok_or(Error::LengthMismatch)?;
-        offset = header_end;
-        let key_total = validate_fixed_offset_table(key_offsets, entries)?;
-        let val_total = validate_fixed_offset_table(value_offsets, entries)?;
-        let key_data_start = offset;
-        let key_data_end = key_data_start
-            .checked_add(key_total)
-            .ok_or(Error::LengthMismatch)?;
-        let val_data_start = key_data_end;
-        let val_data_end = val_data_start
-            .checked_add(val_total)
-            .ok_or(Error::LengthMismatch)?;
-        if val_data_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
-        for idx in 0..len {
-            let key_start_offset = read_fixed_offset_usize_at(key_offsets, idx)?;
-            let key_end_offset = read_fixed_offset_usize_at(key_offsets, idx + 1)?;
-            let key_start = key_data_start
-                .checked_add(key_start_offset)
-                .ok_or(Error::LengthMismatch)?;
-            let key_end = key_data_start
-                .checked_add(key_end_offset)
-                .ok_or(Error::LengthMismatch)?;
-            if key_end > key_data_end || key_start > key_end {
-                return Err(Error::LengthMismatch);
-            }
-            let key_slice = bytes.get(key_start..key_end).ok_or(Error::LengthMismatch)?;
-            record_slice_access(key_slice, key_end - key_start);
-            let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
-            if key_used != key_end - key_start {
-                return Err(Error::LengthMismatch);
-            }
-            let value_start_offset = read_fixed_offset_usize_at(value_offsets, idx)?;
-            let value_end_offset = read_fixed_offset_usize_at(value_offsets, idx + 1)?;
-            let value_start = val_data_start
-                .checked_add(value_start_offset)
-                .ok_or(Error::LengthMismatch)?;
-            let value_end = val_data_start
-                .checked_add(value_end_offset)
-                .ok_or(Error::LengthMismatch)?;
-            if value_end > val_data_end || value_start > value_end {
-                return Err(Error::LengthMismatch);
-            }
-            let value_slice = bytes
-                .get(value_start..value_end)
-                .ok_or(Error::LengthMismatch)?;
-            record_slice_access(value_slice, value_end - value_start);
-            let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
-            if value_used != value_end - value_start {
-                return Err(Error::LengthMismatch);
-            }
-            on_entry(key, value)?;
-        }
-        return Ok((len, val_data_end));
-    }
     for _ in 0..len {
         let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
         offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
@@ -3419,10 +2742,10 @@ where
         encode_map_payloads(writer, self.len(), self.iter())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        map_encoded_len_hint(self.len(), self.iter())
+        map_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        map_encoded_len_exact(self.len(), self.iter())
+        map_encoded_len_exact(self.iter())
     }
 }
 
@@ -3471,10 +2794,10 @@ where
         encode_map_payloads(writer, entries.len(), entries.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        map_encoded_len_hint(self.len(), self.iter())
+        map_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        map_encoded_len_exact(self.len(), self.iter())
+        map_encoded_len_exact(self.iter())
     }
 }
 
@@ -3507,13 +2830,13 @@ where
     T: SerializePayload + Ord,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads::<T, _>(writer, self.iter(), None)
+        encode_seq_payloads::<T, _>(writer, self.iter())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -3557,13 +2880,13 @@ where
             })?;
         items.extend(self.iter());
         items.sort();
-        encode_seq_payloads::<T, _>(writer, items.iter().copied(), None)
+        encode_seq_payloads::<T, _>(writer, items.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -4229,11 +3552,11 @@ pub fn serialize_to_writer(
 }
 /// Serialize a value directly and reject a mismatch with its counted length.
 ///
-/// This is a codec-internal seam for packed containers that must emit offset tables before their
-/// payloads. Callers count the payloads first, then use this helper to ensure a stateful serializer
-/// cannot invalidate an emitted offset without retaining a second payload-sized buffer. A write
-/// beyond `expected_len` is rejected before it reaches `writer`; a shorter successful pass is
-/// rejected by the final equality check.
+/// This is a codec-internal seam used by counted length-prefixed writers (`write_counted_payload`).
+/// Callers count the payload first and emit its length, then use this helper to ensure a stateful
+/// serializer cannot invalidate the emitted length without retaining a second payload-sized buffer.
+/// A write beyond `expected_len` is rejected before it reaches `writer`; a shorter successful pass
+/// is rejected by the final equality check.
 #[doc(hidden)]
 pub fn serialize_to_writer_exact<W: Write>(
     value: &dyn SerializePayload,
@@ -6068,14 +5391,11 @@ pub mod stream {
             self.consumed
         }
     }
+    /// Streaming reader for the per-element length prefixes of one sequence.
     pub(crate) struct SeqLenDecoder {
         flags: u8,
         total: usize,
-        mode: SeqLenMode,
-    }
-    enum SeqLenMode {
-        Plain { remaining: usize },
-        Packed { lengths: Vec<usize>, index: usize },
+        remaining: usize,
     }
     impl SeqLenDecoder {
         #[inline]
@@ -6101,99 +5421,52 @@ pub mod stream {
             payload_len: usize,
         ) -> Result<Self, Error> {
             super::validate_header_flags(flags)?;
-            let packed = (flags & header_flags::PACKED_SEQ) != 0;
             let len = Self::read_u64_len(reader)?;
             super::enforce_decode_sequence_length(len)?;
             let total = u64_to_usize(len)?;
             let remaining_payload = payload_len
                 .checked_sub(reader.consumed())
                 .ok_or(Error::LengthMismatch)?;
-            let mode = if packed {
-                let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
-                let offsets_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-                if offsets_bytes > remaining_payload {
-                    return Err(Error::LengthMismatch);
-                }
-                let mut offsets = super::try_decode_vec_with_capacity(entries)?;
-                for _ in 0..entries {
-                    let raw = Self::read_u64_len(reader)?;
-                    offsets.push(u64_to_usize(raw)?);
-                }
-                if offsets.first().copied().unwrap_or(0) != 0 {
-                    return Err(Error::LengthMismatch);
-                }
-                if offsets.windows(2).any(|w| w[1] < w[0]) {
-                    return Err(Error::LengthMismatch);
-                }
-                let body_remaining = payload_len
-                    .checked_sub(reader.consumed())
-                    .ok_or(Error::LengthMismatch)?;
-                if offsets.last().copied().unwrap_or(0) > body_remaining {
-                    return Err(Error::LengthMismatch);
-                }
-                let mut lengths = super::try_decode_vec_with_capacity(total)?;
-                for pair in offsets.windows(2) {
-                    let length = pair[1] - pair[0];
-                    super::enforce_decode_field_length(
-                        u64::try_from(length).map_err(|_| Error::LengthMismatch)?,
-                    )?;
-                    lengths.push(length);
-                }
-                SeqLenMode::Packed { lengths, index: 0 }
+            let prefix_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
+                1usize
             } else {
-                let prefix_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
-                    1usize
-                } else {
-                    8usize
-                };
-                let minimum_headers = total
-                    .checked_mul(prefix_bytes)
-                    .ok_or(Error::LengthMismatch)?;
-                if minimum_headers > remaining_payload {
-                    return Err(Error::LengthMismatch);
-                }
-                SeqLenMode::Plain { remaining: total }
+                8usize
             };
-            Ok(Self { flags, total, mode })
+            let minimum_headers = total
+                .checked_mul(prefix_bytes)
+                .ok_or(Error::LengthMismatch)?;
+            if minimum_headers > remaining_payload {
+                return Err(Error::LengthMismatch);
+            }
+            Ok(Self {
+                flags,
+                total,
+                remaining: total,
+            })
         }
         pub(crate) fn next_len<R: Read>(
             &mut self,
             reader: &mut DigestingReader<R>,
         ) -> Result<Option<usize>, Error> {
-            match &mut self.mode {
-                SeqLenMode::Plain { remaining } => {
-                    if *remaining == 0 {
-                        return Ok(None);
-                    }
-                    let len = if (self.flags & header_flags::COMPACT_LEN) != 0 {
-                        let len = reader.read_varint_len().map_err(Self::map_unexpected_eof)?;
-                        super::enforce_decode_field_length(
-                            u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
-                        )?;
-                        len
-                    } else {
-                        let raw = Self::read_u64_len(reader)?;
-                        super::enforce_decode_field_length(raw)?;
-                        super::len_u64_to_usize(raw)?
-                    };
-                    *remaining -= 1;
-                    Ok(Some(len))
-                }
-                SeqLenMode::Packed { lengths, index } => {
-                    if *index >= lengths.len() {
-                        return Ok(None);
-                    }
-                    let len = lengths[*index];
-                    *index += 1;
-                    Ok(Some(len))
-                }
+            if self.remaining == 0 {
+                return Ok(None);
             }
+            let len = if (self.flags & header_flags::COMPACT_LEN) != 0 {
+                let len = reader.read_varint_len().map_err(Self::map_unexpected_eof)?;
+                super::enforce_decode_field_length(
+                    u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                len
+            } else {
+                let raw = Self::read_u64_len(reader)?;
+                super::enforce_decode_field_length(raw)?;
+                super::len_u64_to_usize(raw)?
+            };
+            self.remaining -= 1;
+            Ok(Some(len))
         }
         pub(crate) fn remaining(&self) -> usize {
-            match &self.mode {
-                SeqLenMode::Plain { remaining } => *remaining,
-                SeqLenMode::Packed { lengths, index } => lengths.len().saturating_sub(*index),
-            }
+            self.remaining
         }
         pub(crate) fn total_len(&self) -> usize {
             self.total
@@ -6213,13 +5486,13 @@ pub mod stream {
 
 impl<T: SerializePayload> SerializePayload for VecDeque<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads::<T, _>(writer, self.iter(), None)
+        encode_seq_payloads::<T, _>(writer, self.iter())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -6248,13 +5521,13 @@ where
 
 impl<T: SerializePayload> SerializePayload for LinkedList<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        encode_seq_payloads::<T, _>(writer, self.iter(), None)
+        encode_seq_payloads::<T, _>(writer, self.iter())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -6298,13 +5571,13 @@ where
             })?;
         items.extend(self.iter());
         items.sort();
-        encode_seq_payloads::<T, _>(writer, items.iter().copied(), None)
+        encode_seq_payloads::<T, _>(writer, items.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -6425,16 +5698,32 @@ where
     }
 }
 
+// Borrowed bytes use the same fixed-count payload as Vec<u8>, without copying
+// private preimages into an additional owned allocation.
+impl SerializePayload for &[u8] {
+    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+        let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
+        write_seq_len(writer, len)?;
+        writer.write_all(self)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.len().checked_add(8)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.len().checked_add(8)
+    }
+}
+
 impl<T: SerializePayload> SerializePayload for Vec<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if core::any::type_name::<T>() == "u8" {
-            let len_u64 = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-            write_seq_len(writer, len_u64)?;
             // SAFETY: we verified `T == u8` via `type_name`.
             let bytes =
                 unsafe { core::slice::from_raw_parts(self.as_ptr().cast::<u8>(), self.len()) };
-            writer.write_all(bytes)?;
-            return Ok(());
+            return bytes.serialize(writer);
         }
         encode_slice_payloads(writer, self)
     }
@@ -6442,13 +5731,13 @@ impl<T: SerializePayload> SerializePayload for Vec<T> {
         if core::any::type_name::<T>() == "u8" {
             return self.len().checked_add(8);
         }
-        sequence_encoded_len_hint(self.len(), self.iter())
+        sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         if core::any::type_name::<T>() == "u8" {
             return self.len().checked_add(8);
         }
-        sequence_encoded_len_exact(self.len(), self.iter())
+        sequence_encoded_len_exact(self.iter())
     }
 }
 
@@ -6481,8 +5770,8 @@ macro_rules! impl_tuple {
 impl<$( $name: SerializePayload ),+> SerializePayload for ( $( $name, )+ ) {
             fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
                 // Ensure inner element serializers observe the same layout
-                // defaults as the bare codec path (packed seq/struct and
-                // compact lengths when enabled). This keeps nested encodings
+                // defaults as the bare codec path (compact lengths when
+                // enabled). This keeps nested encodings
                 // like `Vec<u8>` consistent with the decoder's expectations.
                 let __merged = tuple_serialization_flags();
                 let __guard = DecodeFlagsGuard::enter(__merged);
@@ -6725,16 +6014,9 @@ pub(crate) fn encode_bare_with_flags<T: SerializePayload>(
         value.serialize(&mut encoder)?;
     }
     let payload = sink.into_inner();
-    let fixed_offsets_used = fixed_offsets_used();
-    let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(
-        flags,
-        fixed_offsets_used,
-        field_bitset_used,
-        compact_len_used,
-    );
+    let final_flags = finalized_encode_flags(flags, compact_len_used);
     Ok((payload, final_flags))
 }
 /// Return the exact payload length under the active layout without allocating an output buffer.
@@ -6844,16 +6126,9 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     if payload_len != expected_payload_len || bounded.len() != encoded_bytes {
         return Err(Error::LengthMismatch.into());
     }
-    let fixed_offsets_used = fixed_offsets_used();
-    let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(
-        base_flags,
-        fixed_offsets_used,
-        field_bitset_used,
-        compact_len_used,
-    );
+    let final_flags = finalized_encode_flags(base_flags, compact_len_used);
     let mut header = Header::new(
         crate::schema::identity::frame_hash::<T>(),
         header_payload_len,
@@ -6895,16 +6170,9 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     }
     let payload_len = sink.buf.len().saturating_sub(headroom) as u64;
     let checksum = sink.checksum();
-    let fixed_offsets_used = fixed_offsets_used();
-    let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(
-        flags,
-        fixed_offsets_used,
-        field_bitset_used,
-        compact_len_used,
-    );
+    let final_flags = finalized_encode_flags(flags, compact_len_used);
     let mut header = Header::new(
         crate::schema::identity::frame_hash::<T>(),
         payload_len,
@@ -6956,16 +6224,9 @@ where
     }
     let payload_len = u64::try_from(payload_writer.len).map_err(|_| Error::LengthMismatch)?;
     let checksum = payload_writer.digest.sum64();
-    let fixed_offsets_used = fixed_offsets_used();
-    let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(
-        flags,
-        fixed_offsets_used,
-        field_bitset_used,
-        compact_len_used,
-    );
+    let final_flags = finalized_encode_flags(flags, compact_len_used);
     let end = payload_writer.inner.stream_position()?;
     let mut header = Header::new(
         crate::schema::identity::frame_hash::<T>(),
@@ -7945,9 +7206,9 @@ where
 }
 /// Decode a single field from the front of `bytes`, permitting trailing bytes after the field.
 ///
-/// This is intended for packed layouts where a self-delimiting field is followed by additional
-/// packed fields in the same payload. The returned `usize` is the canonical byte length consumed
-/// by the decoded field.
+/// This is intended for callers that decode a self-delimiting value followed by bytes they own
+/// (for example an outer frame's trailer). The returned `usize` is the canonical byte length
+/// consumed by the decoded field; the caller decides whether the remainder is permitted.
 pub fn decode_field_prefix<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
@@ -7956,6 +7217,7 @@ where
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Prefix, &mut slot)?;
     Ok((slot.into_value()?, used))
 }
+/// Borrow `len` bytes at `offset` from the active payload context and return the next offset.
 #[inline(never)]
 fn take_context_field(
     ptr: *const u8,
@@ -7986,11 +7248,6 @@ fn take_length_prefixed_context_field(
         .ok_or(Error::LengthMismatch)?;
     Ok((field, data_end))
 }
-#[inline(never)]
-fn remaining_context_field(ptr: *const u8, offset: usize) -> Result<&'static [u8], Error> {
-    let payload = payload_slice_from_ptr(ptr)?;
-    payload.get(offset..).ok_or(Error::LengthMismatch)
-}
 /// Decode one length-prefixed field relative to an active payload context.
 ///
 /// This is a shared implementation detail for derive-generated decoders. It
@@ -8010,26 +7267,9 @@ where
     *offset = next_offset;
     Ok(value)
 }
-/// Canonically decode one fixed-width field relative to an active payload context.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_fixed_canonical<T>(
-    ptr: *const u8,
-    offset: &mut usize,
-    len: usize,
-) -> Result<T, Error>
-where
-    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
-{
-    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
-    let (value, used) = decode_field_canonical::<T>(field)?;
-    if used != field.len() {
-        return Err(Error::LengthMismatch);
-    }
-    *offset = next_offset;
-    Ok(value)
-}
 /// Copy one fixed-width byte-array field relative to an active payload context.
+///
+/// The field has no length prefix; hand-written decoders use this for raw `[u8; N]` members.
 #[doc(hidden)]
 #[inline(never)]
 pub fn decode_context_byte_array<const N: usize>(
@@ -8043,6 +7283,8 @@ pub fn decode_context_byte_array<const N: usize>(
     Ok(value)
 }
 /// Copy one length-prefixed byte-array field relative to an active payload context.
+///
+/// The prefix follows the active `COMPACT_LEN` layout and must declare exactly `N` bytes.
 #[doc(hidden)]
 #[inline(never)]
 pub fn decode_context_framed_byte_array<const N: usize>(
@@ -8058,25 +7300,10 @@ pub fn decode_context_framed_byte_array<const N: usize>(
     *offset = next_offset;
     Ok(value)
 }
-/// Decode one self-delimiting field from the remaining active payload.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_prefix<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
-where
-    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
-{
-    let field = remaining_context_field(ptr, *offset)?;
-    let (value, used) = decode_field_prefix::<T>(field)?;
-    if used > field.len() {
-        return Err(Error::LengthMismatch);
-    }
-    *offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
-    Ok(value)
-}
 /// Finish a derive-generated field sequence at the active decode boundary.
 ///
-/// Canonical field decodes must consume the complete payload. Prefix decodes
-/// may leave bytes for the next packed field and report their exact offset.
+/// Canonical field decodes must consume the complete payload. Prefix decodes may leave trailing
+/// bytes for the caller and report their exact offset.
 #[doc(hidden)]
 #[inline(never)]
 pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error> {

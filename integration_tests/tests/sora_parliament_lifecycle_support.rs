@@ -2,6 +2,7 @@
 //! The publication harness imports these helpers without collecting unrelated beacon scenarios.
 
 use iroha::query::QueryError;
+use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
@@ -25,10 +26,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         account::AccountId,
-        block::{
-            SignedBlock,
-            consensus_v2::{PROTOCOL_VERSION, recommended_data_availability_layout},
-        },
+        block::{SignedBlock, consensus_v2::recommended_data_availability_layout},
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
             BodyElectionAttemptId, BodyInstanceId, BodyInstanceStatusV1, ContractAbiHash,
@@ -120,26 +118,20 @@ use rand::{SeedableRng as _, rngs::StdRng};
 pub(super) const VALIDATOR_COUNT: usize = 4;
 pub(super) const CITIZEN_COUNT: usize = 24;
 pub(super) const BODY_SEATS: u32 = 3;
-// A public QueuePlan transaction reaches terminal application through the
-// admission, autonomous-payload, and merge carriers.
-pub(super) const QUEUE_PLAN_LIFECYCLE_BLOCKS: u64 = 3;
+// An isolated ordinary transaction executes in the next certified global carrier.
+pub(super) const EXECUTION_CARRIER_BLOCKS: u64 = 1;
 // Keep real FastPQ proving enabled, but prevent four local debug daemons from
 // each provisioning a wide Rayon pool on the same host while consensus traffic is live.
 pub(super) const PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER: i64 = 2;
-// Six 3-seat bodies can draw eighteen distinct invitees. QueuePlan gives each
-// separately signed response its H + 1 admission, H + 2 autonomous payload,
-// and H + 3 merge execution, so keep enough room for all response heights plus
-// the exact H - 3 roster-seal
-// authority point without relying on accidental cross-body member overlap.
+// Six three-seat bodies can draw eighteen distinct invitees. Keep enough native
+// execution heights for separately signed responses and the exact roster seal.
 pub(super) const INVITATION_PHASE_BLOCKS: u64 = 56;
-// The public QueuePlan corridor deliberately executes three proof-valid
-// registrations and one proof-invalid early close before the exact close. Each
-// Applied submission consumes three carrier blocks, so the close window must
-// account for the complete QueuePlan lifecycle.
+// The corridor executes three proof-valid registrations and one proof-invalid
+// early close before the exact close, each in its own certified carrier.
 pub(super) const REGISTRATION_PHASE_BLOCKS: u64 = 15;
 pub(super) const SURVIVOR_PHASE_BLOCKS: u64 = 9;
 // A replayed survivor freeze and an early corpus freeze each consume one full
-// QueuePlan lifecycle before the exact corpus-freeze authority point.
+// native transaction lifecycle before the exact corpus-freeze authority point.
 pub(super) const COMMITMENT_PHASE_BLOCKS: u64 = 9;
 // The replayed corpus freeze and wrong-pulse opening must terminate before the
 // autonomous release pulse reaches its exact height.
@@ -147,10 +139,8 @@ pub(super) const RELEASE_DELAY_BLOCKS: u64 = 7;
 pub(super) const OPENING_PHASE_BLOCKS: u64 = 9;
 pub(super) const MIN_ENACTMENT_DELAY: u64 = 4;
 pub(super) const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
-// Exact-roster lifecycle certificates bind their containing height. Keep a
-// deterministic submission window while public QueuePlanSynced admission
-// commits its owner at H + 1, materializes the autonomous payload at H + 2,
-// and executes the admitted transaction in the merge carrier at H + 3.
+// Exact-roster certificates bind their containing height. Leave time to sign
+// and submit against the immediately preceding certified State.
 pub(super) const EXACT_HEIGHT_SUBMISSION_CADENCE: Duration = Duration::from_secs(5);
 pub(super) const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1_073_741_824;
@@ -226,9 +216,7 @@ pub(super) async fn submit_parliament_instructions(
     Ok(())
 }
 
-// A height carrier is deliberately left pending after Torii admission. Its
-// caller must observe the exact finalized carrier height, rather than awaiting
-// this Log's eventual QueuePlan merge and overshooting the protocol checkpoint.
+// The caller observes the exact certified carrier height after native admission.
 pub(super) async fn admit_parliament_height_carrier(
     client: &Client,
     instructions: [Log; 1],
@@ -343,7 +331,7 @@ pub(super) async fn tick(client: &Client, label: impl Into<String>) -> Result<u6
     current_height(client).await
 }
 
-pub(super) async fn next_queue_plan_execution_height(
+pub(super) async fn next_execution_height(
     client: &Client,
     minimum_height: u64,
     label: &str,
@@ -351,8 +339,8 @@ pub(super) async fn next_queue_plan_execution_height(
     loop {
         let authority_height = current_height(client).await?;
         let execution_height = authority_height
-            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
-            .ok_or_else(|| eyre!("{label}: QueuePlan execution height overflow"))?;
+            .checked_add(EXECUTION_CARRIER_BLOCKS)
+            .ok_or_else(|| eyre!("{label}: native transaction execution height overflow"))?;
         if execution_height >= minimum_height {
             return Ok(execution_height);
         }
@@ -364,7 +352,7 @@ pub(super) async fn next_queue_plan_execution_height(
     }
 }
 
-pub(super) async fn advance_to_height_with_queue_plan_carriers(
+pub(super) async fn advance_to_height_with_carriers(
     network: &iroha_test_network::Network,
     client: &Client,
     target_height: u64,
@@ -382,7 +370,7 @@ pub(super) async fn advance_to_height_with_queue_plan_carriers(
         }
         let carrier_height = height
             .checked_add(1)
-            .ok_or_else(|| eyre!("{label}: QueuePlan carrier height overflow"))?;
+            .ok_or_else(|| eyre!("{label}: native transaction carrier height overflow"))?;
         admit_parliament_height_carrier(
             &client,
             [Log::new(
@@ -395,26 +383,26 @@ pub(super) async fn advance_to_height_with_queue_plan_carriers(
         let observed_height = current_height(client).await?;
         if observed_height != carrier_height {
             return Err(eyre!(
-                "{label}: QueuePlan carrier expected exact height {carrier_height}, observed {observed_height}"
+                "{label}: native transaction carrier expected exact height {carrier_height}, observed {observed_height}"
             ));
         }
     }
 }
 
-pub(super) async fn advance_to_queue_plan_authority_height(
+pub(super) async fn advance_to_execution_predecessor(
     network: &iroha_test_network::Network,
     client: &Client,
     execution_height: u64,
     label: &str,
 ) -> Result<()> {
     let authority_height = execution_height
-        .checked_sub(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+        .checked_sub(EXECUTION_CARRIER_BLOCKS)
         .ok_or_else(|| {
             eyre!(
-                "{label}: QueuePlan execution height {execution_height} has no H - {QUEUE_PLAN_LIFECYCLE_BLOCKS} authority"
+                "{label}: native transaction execution height {execution_height} has no H - {EXECUTION_CARRIER_BLOCKS} authority"
             )
         })?;
-    advance_to_height_with_queue_plan_carriers(network, client, authority_height, label).await
+    advance_to_height_with_carriers(network, client, authority_height, label).await
 }
 
 pub(super) async fn advance_to_autonomous_predecessor(
@@ -426,7 +414,7 @@ pub(super) async fn advance_to_autonomous_predecessor(
     let predecessor_height = target_height.checked_sub(1).ok_or_else(|| {
         eyre!("{label}: autonomous target height {target_height} has no predecessor")
     })?;
-    advance_to_height_with_queue_plan_carriers(network, client, predecessor_height, label).await
+    advance_to_height_with_carriers(network, client, predecessor_height, label).await
 }
 
 pub(super) async fn submit_transition(

@@ -145,9 +145,6 @@ fn resident_network_projection_and_real_kaigi_candidate_insertion_match_recount(
     )
     .with_instructions([Log::new(Level::INFO, "resident signal".to_owned())])
     .with_metadata(metadata)
-    .with_admission_intent(
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-    )
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let entrypoint = TransactionEntrypoint::External(transaction);
     let mut index = super::TransactionEntrypointIndex::complete_empty();
@@ -208,117 +205,18 @@ fn resident_canonical_counts_materialized_slots_and_never_certifies_deferred_hei
     assert_eq!(deferred.resident_associations().unwrap(), 1);
     assert!(!deferred.resident_complete());
     let kura = Kura::blank_kura_for_testing();
+    kura.transaction_entrypoint_index.lock().complete = false;
     assert!(
         kura.reconcile_resident_resource_inventory().is_err(),
-        "uninitialized carrier inventory cannot become a zero baseline"
+        "incomplete transaction inventory cannot become a zero baseline"
     );
     assert!(kura.resource_inventory.try_snapshot().is_err());
-}
-
-#[test]
-fn resident_merge_frames_latest_route_reload_truncate_and_failure_are_exact() {
-    use super::resident_inventory::ResidentOwner;
-    let directory = TempDir::new().unwrap();
-    let path = directory.path().join("merge-resident.log");
-    let first = merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0x35; 32], [0x36; 32]));
-    let second = sample_merge_entry(2);
-    let mut log = super::MergeLedgerLog::open_at(&path, 1).unwrap();
-    assert!(log.append(&first).unwrap());
-    assert_eq!(log.resident_associations().unwrap(), 3);
-    assert!(!log.append(&first).unwrap());
-    assert_eq!(log.resident_associations().unwrap(), 3);
-    assert!(log.append(&second).unwrap());
-    assert_eq!(
-        log.entries.len(),
-        1,
-        "payload cache capacity does not count full frame indexes"
-    );
-    assert_eq!(log.resident_associations().unwrap(), 5);
-    drop(log);
-    let mut reopened = super::MergeLedgerLog::open_at(&path, 1).unwrap();
-    assert_eq!(reopened.resident_associations().unwrap(), 5);
-    assert!(reopened.resident_complete());
-    reopened.truncate_to_len(1).unwrap();
-    assert_eq!(reopened.resident_associations().unwrap(), 3);
-    assert_eq!(reopened.latest_execution_entries.len(), 1);
-    reopened.fail_next_append = true;
-    assert!(reopened.append(&second).is_err());
-    assert!(!reopened.resident_complete());
-    assert_eq!(reopened.resident_associations().unwrap(), 3);
-    drop(reopened);
-    let mut repaired = super::MergeLedgerLog::open_at(&path, 1).unwrap();
-    assert!(repaired.resident_complete());
-    assert_eq!(repaired.resident_associations().unwrap(), 3);
-    repaired.truncate_to_len(0).unwrap();
-    assert_eq!(repaired.resident_associations().unwrap(), 0);
-    assert!(repaired.latest_execution_entries.is_empty());
-    assert!(!super::MergeLedgerLog::deferred(1).resident_complete());
-}
-
-#[test]
-fn resident_carrier_forward_reverse_counts_survive_duplicate_reload_and_removal() {
-    use super::resident_inventory::ResidentOwner;
-    let directory = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .unwrap();
-    let _ = store_indexed_reservation_carrier(&kura, 0x42);
-    let record = *kura
-        .merge_carrier_index
-        .lock()
-        .by_height
-        .values()
-        .next()
-        .unwrap();
-    assert_eq!(
-        kura.merge_carrier_index
-            .lock()
-            .resident_associations()
-            .unwrap(),
-        2
-    );
-    let _owner = kura.merge_carrier_lock.lock();
-    assert!(!kura.write_merge_carrier_record_unlocked(record).unwrap());
-    assert_eq!(
-        kura.merge_carrier_index
-            .lock()
-            .resident_associations()
-            .unwrap(),
-        2
-    );
-    *kura.merge_carrier_index.lock() = super::MergeCarrierIndex::default();
-    assert!(!kura.merge_carrier_index.lock().resident_complete());
-    kura.ensure_merge_carrier_index_initialized_unlocked()
-        .unwrap();
-    assert_eq!(
-        kura.merge_carrier_index
-            .lock()
-            .resident_associations()
-            .unwrap(),
-        2
-    );
-    assert!(kura.merge_carrier_index.lock().resident_complete());
-    kura.remove_merge_carrier_record_unlocked(record).unwrap();
-    assert_eq!(
-        kura.merge_carrier_index
-            .lock()
-            .resident_associations()
-            .unwrap(),
-        0
-    );
-    assert!(kura.merge_carrier_index.lock().resident_complete());
 }
 
 #[test]
 fn resident_live_kura_publication_matches_real_index_owners_without_partial_snapshot() {
     use super::resource_inventory::{Family, Unavailable};
     let kura = Kura::blank_kura_for_testing();
-    {
-        let _owner = kura.merge_carrier_lock.lock();
-        kura.ensure_merge_carrier_index_initialized_unlocked()
-            .unwrap();
-    }
     kura.reconcile_resident_resource_inventory().unwrap();
     assert_eq!(
         kura.resource_inventory

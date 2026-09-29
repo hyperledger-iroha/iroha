@@ -6,99 +6,24 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::blocking::Client;
 use iroha::data_model::prelude::*;
-use iroha_core::zk::test_utils::halo2_fixture_envelope;
+#[path = "../proof_fixtures.rs"]
+mod proof_fixtures;
 use iroha_data_model::events::data::prelude::ProofEventFilter;
-use iroha_data_model::{
-    confidential::ConfidentialStatus,
-    isi::verifying_keys,
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    zk::{BackendTag, OpenVerifyEnvelope},
-};
+use iroha_data_model::{isi::verifying_keys, proof::ProofAttachment};
 use iroha_test_network::*;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use proof_fixtures::{confidential_attachment, rejected_confidential_attachment};
 use std::time::Duration;
 use tokio::{task::spawn_blocking, time::timeout};
-const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
 const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
-fn active_vk_record(
-    circuit_id: &str,
-    vk_box: VerifyingKeyBox,
-    public_inputs_schema_hash: [u8; 32],
-    max_proof_bytes: usize,
-) -> VerifyingKeyRecord {
-    let mut record = VerifyingKeyRecord::new(
-        1,
-        circuit_id,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        public_inputs_schema_hash,
-        iroha_core::zk::hash_vk(&vk_box),
-    );
-    record.vk_len =
-        u32::try_from(vk_box.bytes.len()).expect("verifying key length should fit in u32");
-    record.max_proof_bytes =
-        u32::try_from(max_proof_bytes).expect("proof length should fit in u32");
-    record.gas_schedule_id = Some("halo2_default".to_owned());
-    record.key = Some(vk_box);
-    record.status = ConfidentialStatus::Active;
-    record
-}
 fn halo2_attachment_and_registration(
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let vk_hash = seed
-        .vk_hash("halo2/ipa")
-        .expect("fixture should include a verifying key");
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_hash);
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture should include verifying key bytes");
-    let proof_box = fixture.proof_box("halo2/ipa");
-    let vk_id = VerifyingKeyId::new("halo2/ipa", vk_name);
-    let record = active_vk_record(
-        "halo2/ipa:tiny-add",
-        vk_box,
-        fixture.schema_hash,
-        proof_box.bytes.len(),
-    );
-    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-    (
-        attachment,
-        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
-    )
+    confidential_attachment("event-verified", vk_name)
 }
-fn rejected_halo2_attachment_and_registration()
--> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let circuit_id = "halo2/ipa:event-rejected";
-    let public_inputs = vec![1, 2, 3, 4];
-    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 8, 7, 6]);
-    let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
-    let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Halo2IpaPasta,
-        circuit_id: circuit_id.to_owned(),
-        vk_hash: vk_commitment,
-        public_inputs: public_inputs.clone(),
-        proof_bytes: vec![0xaa, 0xbb, 0xcc],
-        aux: Vec::new(),
-    };
-    let proof_box = iroha::data_model::proof::ProofBox::new(
-        "halo2/ipa".into(),
-        norito::to_bytes(&envelope).expect("OpenVerifyEnvelope should encode"),
-    );
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "event_rejected_vk");
-    let record = active_vk_record(
-        circuit_id,
-        vk_box,
-        iroha_crypto::Hash::new(&public_inputs).into(),
-        proof_box.bytes.len(),
-    );
-    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-    (
-        attachment,
-        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
-    )
+fn rejected_halo2_attachment() -> ProofAttachment {
+    rejected_confidential_attachment("event-rejected", "event_vk")
 }
 fn client_with_timeout(network: &Network) -> Client {
     integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
@@ -111,21 +36,17 @@ fn proof_event_timeout(network: &Network) -> Duration {
 }
 fn proof_network_builder() -> NetworkBuilder {
     let (_, verified_vk) = halo2_attachment_and_registration("event_vk");
-    let (_, rejected_vk) = rejected_halo2_attachment_and_registration();
     NetworkBuilder::new()
+        .with_peers(4)
         .with_config_layer(|layer| {
             // Pin Halo2 verification on for this proof-event fixture; it is also the shipping default.
-            layer.write(["zk", "halo2", "enabled"], true).write(
-                ["confidential", "verify_timeout_ms"],
-                PROOF_VERIFY_TIMEOUT_MS,
-            );
+            layer.write(["zk", "halo2", "enabled"], true);
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         ))
         .with_genesis_instruction(verified_vk)
-        .with_genesis_instruction(rejected_vk)
 }
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     const NEEDLES: [&str; 3] = [
@@ -225,7 +146,7 @@ async fn proof_event_scenarios() -> Result<()> {
         verify_proof_emits_event(
             &network,
             stringify!(verify_proof_emits_rejected_event),
-            rejected_halo2_attachment_and_registration().0,
+            rejected_halo2_attachment(),
             false,
         )
         .await?;

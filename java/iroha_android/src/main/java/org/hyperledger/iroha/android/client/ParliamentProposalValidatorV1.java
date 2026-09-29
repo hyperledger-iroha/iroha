@@ -28,6 +28,26 @@ final class ParliamentProposalValidatorV1 {
   private static final Pattern QUANTITY =
       Pattern.compile("(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?");
   private static final Pattern LOWER_HEX_32 = Pattern.compile("[0-9a-f]{64}");
+  private static final int SCCP_GOVERNANCE_MAX_ENTRIES = 16;
+  private static final Set<String> SCCP_EXTERNAL_NETWORKS =
+      fields("ethereum_mainnet", "bsc_mainnet", "ton_mainnet", "tron_mainnet");
+  private static final Set<String> SCCP_GOVERNANCE_ACTIONS =
+      fields(
+          "register_route",
+          "activate_revision",
+          "switch_revision",
+          "deactivate_outbound",
+          "retire_revision",
+          "remove_staged",
+          "release_stranded",
+          "set_taira_paused",
+          "set_destination_paused",
+          "initialize_light_client",
+          "install_trusted_checkpoint",
+          "freeze_light_client",
+          "set_parameters",
+          "clear_bridge_key_fault");
+  private static final Pattern BLS_VALIDATOR_ID = Pattern.compile("ea0130[0-9A-F]{96}");
 
   private ParliamentProposalValidatorV1() {}
 
@@ -156,14 +176,72 @@ final class ParliamentProposalValidatorV1 {
     }
   }
 
+  /**
+   * Checks the closed {@code SccpGovernanceProposalV1} envelope (specs/sccp.md §4.14.3):
+   * subjects, revisions and action tags. Action payloads must be objects; Torii performs the
+   * state-independent payload checks against the live network and core the state-dependent ones.
+   */
   private static void sccpRoute(final Map<String, Object> value) {
-    exact(value, fields("anchor"), "SccpRouteGovernance");
-    final Map<String, Object> anchor =
-        objectValue(value.get("anchor"), "SccpRouteGovernance.anchor");
-    exact(anchor, fields("network_id", "action"), "SccpRouteGovernance.anchor");
-    NetworkId.parse(text(anchor.get("network_id"), "anchor.network_id"));
-    SccpJsonParser.validateRouteGovernanceAction(
-        objectValue(anchor.get("action"), "anchor.action"));
+    exact(value, fields("proposal"), "SccpRouteGovernance");
+    final Map<String, Object> proposal =
+        objectValue(value.get("proposal"), "SccpRouteGovernance.proposal");
+    exact(
+        proposal,
+        fields("network_id", "base_revisions", "actions"),
+        "SccpRouteGovernance.proposal");
+    NetworkId.parse(text(proposal.get("network_id"), "proposal.network_id"));
+    final List<?> baseRevisions =
+        list(proposal.get("base_revisions"), "proposal.base_revisions");
+    if (baseRevisions.isEmpty() || baseRevisions.size() > SCCP_GOVERNANCE_MAX_ENTRIES) {
+      throw invalid(
+          "proposal.base_revisions must hold 1 to " + SCCP_GOVERNANCE_MAX_ENTRIES + " entries");
+    }
+    for (int index = 0; index < baseRevisions.size(); index++) {
+      final String label = "proposal.base_revisions[" + index + "]";
+      final Map<String, Object> entry = objectValue(baseRevisions.get(index), label);
+      exact(entry, fields("subject", "revision"), label);
+      sccpGovernanceSubject(
+          objectValue(entry.get("subject"), label + ".subject"), label + ".subject");
+      uint(entry.get("revision"), label + ".revision");
+    }
+    final List<?> actions = list(proposal.get("actions"), "proposal.actions");
+    if (actions.isEmpty() || actions.size() > SCCP_GOVERNANCE_MAX_ENTRIES) {
+      throw invalid("proposal.actions must hold 1 to " + SCCP_GOVERNANCE_MAX_ENTRIES + " entries");
+    }
+    for (int index = 0; index < actions.size(); index++) {
+      final String label = "proposal.actions[" + index + "]";
+      final Map<String, Object> action = objectValue(actions.get(index), label);
+      exact(action, fields("action", "payload"), label);
+      if (!SCCP_GOVERNANCE_ACTIONS.contains(text(action.get("action"), label + ".action"))) {
+        throw invalid(label + ".action is unknown");
+      }
+      objectValue(action.get("payload"), label + ".payload");
+    }
+  }
+
+  private static void sccpGovernanceSubject(final Map<String, Object> value, final String label) {
+    exact(value, fields("subject", "key"), label);
+    switch (text(value.get("subject"), label + ".subject")) {
+      case "route", "route_control", "light_client" ->
+          sccpExternalNetwork(objectValue(value.get("key"), label + ".key"), label + ".key");
+      case "parameters" -> {
+        if (value.get("key") != null) throw invalid(label + ".key must be null");
+      }
+      case "bridge_key_fault" -> {
+        if (!BLS_VALIDATOR_ID.matcher(string(value.get("key"), label + ".key")).matches()) {
+          throw invalid(label + ".key must be a canonical BLS validator id");
+        }
+      }
+      default -> throw invalid(label + ".subject is unknown");
+    }
+  }
+
+  private static void sccpExternalNetwork(final Map<String, Object> value, final String label) {
+    exact(value, fields("network", "profile"), label);
+    if (!SCCP_EXTERNAL_NETWORKS.contains(text(value.get("network"), label + ".network"))) {
+      throw invalid(label + ".network is unknown");
+    }
+    if (value.get("profile") != null) throw invalid(label + ".profile must be null");
   }
 
   private static void validationFeePolicyProposal(final Map<String, Object> value) {

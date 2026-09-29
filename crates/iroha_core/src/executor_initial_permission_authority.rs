@@ -2321,8 +2321,12 @@ where
                 &identity,
             )?;
             validate_prepared_ivm_execution_policy(state, &summary.metadata)?;
-            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
-                .map_err(overlay_build_error_to_validation_fail)?;
+            crate::pipeline::overlay::validate_contract_binding(
+                state,
+                transaction.payload(),
+                &summary,
+            )
+            .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
         Executable::IvmProved(proved) => {
@@ -2348,8 +2352,12 @@ where
                 &identity,
             )?;
             validate_governed_ivm_proved_execution_policy(state, &summary.metadata)?;
-            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
-                .map_err(overlay_build_error_to_validation_fail)?;
+            crate::pipeline::overlay::validate_contract_binding(
+                state,
+                transaction.payload(),
+                &summary,
+            )
+            .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
     }

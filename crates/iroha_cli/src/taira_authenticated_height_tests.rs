@@ -193,6 +193,9 @@ impl Fixture {
     ) -> SumeragiFinalityAttestation {
         let peer = &self.peers[index];
         let status = SumeragiStatus {
+            protocol_version: 1,
+            config_fingerprint: peer.config_fingerprint.into(),
+            beacon_horizon: None,
             instance: self.instance,
             height: proof.height() + 1,
             view: 0,

@@ -1,20 +1,27 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for proof queries.
+//! The mixed Halo2/STARK network scenario requires the `zk-stark` feature and daemon.
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
     confidential::ConfidentialStatus,
     isi::verifying_keys,
     prelude::*,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::proof::prelude::{
         FindProofRecords, FindProofRecordsByBackend, FindProofRecordsByStatus,
     },
-    zk::{BackendTag, OpenVerifyEnvelope},
+    zk::BackendTag,
 };
-use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
+use iroha_core::zk::hash_vk;
+#[path = "../proof_fixtures.rs"]
+mod proof_fixtures;
+use iroha_data_model::zk::OpenVerifyEnvelope;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use proof_fixtures::confidential_attachment;
+#[cfg(feature = "zk-stark")]
+use proof_fixtures::rejected_confidential_attachment;
 use std::{thread::sleep, time::Duration};
 fn active_vk_record(
     circuit_id: &str,
@@ -43,107 +50,70 @@ fn active_vk_record(
     record
 }
 fn halo2_attachment_and_registration(
-    circuit_id: &str,
+    statement: &str,
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
-    let vk_hash = seed
-        .vk_hash("halo2/ipa")
-        .expect("fixture must include a verifying key");
-    let fixture = halo2_fixture_envelope(circuit_id, vk_hash);
-    let proof_box = fixture.proof_box("halo2/ipa");
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture must include verifying key bytes");
-    let vk_id = VerifyingKeyId::new("halo2/ipa", vk_name);
-    let record = active_vk_record(
-        circuit_id,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        vk_box,
-        fixture.schema_hash,
-        proof_box.bytes.len(),
-        "halo2_default",
-    );
-    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-    (
-        attachment,
-        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
-    )
+    confidential_attachment(statement, vk_name)
 }
-fn rejected_halo2_attachment_and_registration()
--> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let circuit_id = "halo2/ipa:query-rejected";
-    let public_inputs = vec![1, 2, 3, 4];
-    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7, 7]);
-    let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
-    let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Halo2IpaPasta,
-        circuit_id: circuit_id.to_owned(),
-        vk_hash: vk_commitment,
-        public_inputs: public_inputs.clone(),
-        proof_bytes: vec![0x20, 0x21, 0x22],
-        aux: Vec::new(),
-    };
-    let proof_box = iroha::data_model::proof::ProofBox::new(
-        "halo2/ipa".into(),
-        norito::to_bytes(&envelope).expect("OpenVerifyEnvelope should encode"),
-    );
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "query_bad_vk");
-    let record = active_vk_record(
-        circuit_id,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        vk_box,
-        iroha_crypto::Hash::new(&public_inputs).into(),
-        proof_box.bytes.len(),
-        "halo2_default",
-    );
-    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-    (
-        attachment,
-        verifying_keys::RegisterVerifyingKey { id: vk_id, record },
-    )
-}
+#[cfg(feature = "zk-stark")]
 fn rejected_stark_attachment_and_registration(
     label: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
-    let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = format!("{backend}:query-stark");
-    let public_inputs = b"query-stark-public-inputs".to_vec();
-    let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
+    use iroha_core::zk_stark::{
+        STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1,
+    };
+    use iroha_data_model::zk::StarkFriOpenProofV1;
+    let backend = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
+    let circuit_id = format!("{backend}:query-binding");
+    let schema = b"integration:query-binding:v1";
+    let vk_payload = StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.clone(),
-        n_log2: 4,
-        blowup_log2: 2,
+        n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: 2,
+        queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
     };
     let vk_box = VerifyingKeyBox::new(
         backend.into(),
-        norito::to_bytes(&vk_payload).expect("STARK verifying key should encode"),
+        norito::encode_canonical(&vk_payload).expect("canonical STARK verifying key"),
     );
-    let vk_hash = hash_vk(&vk_box);
-    let envelope = OpenVerifyEnvelope {
-        backend: BackendTag::Stark,
-        circuit_id: circuit_id.clone(),
-        vk_hash,
-        public_inputs: public_inputs.clone(),
-        proof_bytes: vec![0x30, 0x31, 0x32],
-        aux: Vec::new(),
-    };
-    let proof_box = ProofBox::new(
-        backend.into(),
-        norito::to_bytes(&envelope).expect("OpenVerifyEnvelope should encode"),
-    );
+    let mut proof_box = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+        backend,
+        &circuit_id,
+        &vk_box,
+        schema,
+        vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+    )
+    .expect("genuine Binding AIR proof at current consensus floors");
+    assert!(iroha_core::zk::verify_backend(
+        backend,
+        &proof_box,
+        Some(&vk_box)
+    ));
+    let mut outer: OpenVerifyEnvelope = norito::decode_canonical(&proof_box.bytes).unwrap();
+    let mut open: StarkFriOpenProofV1 = norito::decode_canonical(&outer.proof_bytes).unwrap();
+    let mut inner: StarkVerifyEnvelopeV1 = norito::decode_canonical(&open.envelope_bytes).unwrap();
+    // Change an authenticated FRI query coordinate, preserving every Norito
+    // frame, the registered key, public statement, schema and vector extent.
+    inner.proof.queries[0][0].j ^= 1;
+    open.envelope_bytes = norito::encode_canonical(&inner).unwrap();
+    outer.proof_bytes = norito::encode_canonical(&open).unwrap();
+    proof_box.bytes = norito::encode_canonical(&outer).unwrap();
+    assert!(!iroha_core::zk::verify_backend(
+        backend,
+        &proof_box,
+        Some(&vk_box)
+    ));
     let vk_id = VerifyingKeyId::new(backend, label);
     let record = active_vk_record(
         &circuit_id,
         BackendTag::Stark,
         "goldilocks",
         vk_box,
-        iroha_crypto::Hash::new(&public_inputs).into(),
+        iroha_crypto::Hash::new(schema).into(),
         proof_box.bytes.len(),
         "stark_default",
     );
@@ -153,10 +123,24 @@ fn rejected_stark_attachment_and_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
+#[cfg(feature = "zk-stark")]
+#[test]
+fn rejected_stark_fixture_retains_canonical_key_and_proof_framing() {
+    let (attachment, registration) = rejected_stark_attachment_and_registration("query_control_vk");
+    let envelope: OpenVerifyEnvelope = norito::decode_canonical(&attachment.proof.bytes).unwrap();
+    assert_eq!(envelope.circuit_id, registration.record.circuit_id);
+    assert_eq!(envelope.vk_hash, registration.record.commitment);
+    let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&envelope.public_inputs).into();
+    assert_eq!(schema_hash, registration.record.public_inputs_schema_hash);
+    assert_eq!(attachment.vk_ref, registration.id);
+    assert!(registration.record.key.is_some());
+}
+
 fn proof_query_network_builder(
     registrations: impl IntoIterator<Item = verifying_keys::RegisterVerifyingKey>,
 ) -> NetworkBuilder {
     let mut builder = NetworkBuilder::new()
+        .with_peers(4)
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -171,32 +155,24 @@ fn proof_query_network_builder(
     }
     builder
 }
-fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
+fn halo2_attachment(statement: &str) -> ProofAttachment {
     halo2_attachment_and_registration(
-        circuit_id,
-        &format!("hash_only_{}", circuit_id.replace(['/', ':'], "_")),
+        statement,
+        &format!("hash_only_{}", statement.replace(['/', ':'], "_")),
     )
     .0
 }
 #[test]
+#[cfg(feature = "zk-stark")]
 fn proof_query_scenarios() -> Result<()> {
-    let (find_attachment, find_vk) =
-        halo2_attachment_and_registration("halo2/ipa:tiny-add", "query_vk_find");
-    let (backend_attachment, backend_vk) =
-        halo2_attachment_and_registration("halo2/ipa:tiny-add-public", "query_vk_backend");
-    let (verified_attachment, verified_vk) =
-        halo2_attachment_and_registration("halo2/ipa:tiny-add2inst-public", "query_vk_status");
-    let (rejected_attachment, rejected_vk) = rejected_halo2_attachment_and_registration();
+    let (find_attachment, find_vk) = halo2_attachment_and_registration("query-find", "query_vk");
+    let (backend_attachment, _) = halo2_attachment_and_registration("query-backend", "query_vk");
+    let (verified_attachment, _) = halo2_attachment_and_registration("query-status", "query_vk");
+    let rejected_attachment = rejected_confidential_attachment("query-rejected", "query_vk");
     let (stark_backend_attachment, stark_backend_vk) =
         rejected_stark_attachment_and_registration("query_stark_vk");
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
-        proof_query_network_builder([
-            find_vk,
-            backend_vk,
-            verified_vk,
-            rejected_vk,
-            stark_backend_vk,
-        ]),
+        proof_query_network_builder([find_vk, stark_backend_vk]),
         stringify!(proof_query_scenarios),
     )?
     else {
@@ -352,10 +328,40 @@ fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> V
         .collect()
 }
 #[test]
-fn halo2_attachment_circuit_changes_proof_hash() {
-    let a = halo2_attachment("halo2/ipa:tiny-add");
-    let b = halo2_attachment("halo2/ipa:tiny-add-public");
+fn halo2_attachment_statement_changes_proof_hash() {
+    let a = halo2_attachment("statement-a");
+    let b = halo2_attachment("statement-b");
     let hash_a = iroha_core::zk::hash_proof(&a.proof);
     let hash_b = iroha_core::zk::hash_proof(&b.proof);
-    assert_ne!(hash_a, hash_b, "fixture circuit should change proof hash");
+    assert_ne!(
+        hash_a, hash_b,
+        "bound public statement should change proof hash"
+    );
+}
+
+#[test]
+fn halo2_attachment_circuit_changes_proof_hash() {
+    let (attachment, registration) =
+        confidential_attachment("circuit-identity", "circuit_identity_vk");
+    let mut envelope: OpenVerifyEnvelope =
+        norito::decode_canonical(&attachment.proof.bytes).expect("canonical confidential envelope");
+    envelope.circuit_id =
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.into();
+    let relabelled = iroha::data_model::proof::ProofBox::new(
+        attachment.proof.backend.clone(),
+        norito::encode_canonical(&envelope).expect("canonical relabelled envelope"),
+    );
+    assert_ne!(
+        iroha_core::zk::hash_proof(&attachment.proof),
+        iroha_core::zk::hash_proof(&relabelled),
+        "circuit identity must participate in the proof hash"
+    );
+    assert!(
+        !iroha_core::zk::verify_backend(
+            &relabelled.backend,
+            &relabelled,
+            registration.record.key.as_ref(),
+        ),
+        "changing the circuit identity must not make the confidential proof valid for another relation"
+    );
 }

@@ -2528,7 +2528,7 @@ mod measured_bytes_impls {
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1},
+        consensus::FinalizedGlobalThresholdBeaconPulseV1,
         domain::Domain,
         events::EventFilterBox,
         governance::types::{
@@ -2622,7 +2622,6 @@ mod measured_bytes_impls {
         AccountRekeyTransitionProvenance,
         BackendTag,
         BridgeHashFunction,
-        CertPhase,
         ConfidentialPolicyMode,
         ConfidentialPolicyTransition,
         ConfidentialStatus,

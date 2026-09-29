@@ -1168,16 +1168,11 @@ async fn submit_install(
     let install_height = installation.certificate.effective_height;
     let client = client.with_request_deadline(deadline.into_std());
     let account = client.account_client()?;
-    let mut payload = account.prepare_transaction(
-        AccountTransactionDraft::new(
-            instructions,
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        // This sole exact-height lifecycle certificate uses authenticated
-        // Ordinary ingress; useful canaries and paid deployment keep QueuePlanSynced.
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary),
-    )?;
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;
@@ -1379,30 +1374,19 @@ fn verify_pulse(
         let anchor = certified[usize::try_from(anchor_height - 1)?].block();
         let pulse_source = &certified[usize::try_from(pulse_height - 1)?];
         let block = pulse_source.block();
-        // Native completion has already authenticated this exact catalog
-        // transaction as Applied on all four peers. The first-release carrier
-        // executes it through a native lane decision, not a merge entry. Bind
-        // the sole native decision to this pulse and exclude unrelated work.
+        // Native completion authenticated this exact catalog transaction on all
+        // four peers. Bind its sole direct input and committed route to the pulse.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
-            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
-        })?;
-        decisions
-            .validate_structure()
-            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
         ensure!(
-            decisions.base_state_height == anchor_height
-                && decisions.groups.len() == 1
-                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
-                && decisions.groups[0].payload.descriptor.slots.len() == 1
-                && context.merge_entry.is_none()
-                && block.external_entrypoint_count() == 0
-                && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty()
-                && context.lane_payload_ownerships.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
+            context.lane_merge.is_none()
+                && block.external_entrypoint_count() == 1
+                && context.external.len() == 1
+                && context.external[0].entrypoint_hash == catalog_entrypoint_hash
+                && context.external[0].lane_id == LaneId::SINGLE
+                && context.external[0].dataspace_id == DataSpaceId::UNIVERSAL,
+            "mandatory pulse carrier is not the exact one-transaction catalog execution"
         );
         let initial_authority = &certified[0].commitment().schedule.current.authority;
         let mut prior_authorization = None;

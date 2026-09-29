@@ -3,17 +3,16 @@
 //! A [`LiteServerSet`] is the ordered list of liteservers one
 //! [`LiteClient`](super::liteclient::LiteClient) fails over across: the list
 //! configured under `[sccp.light_client_keeper.endpoints] ton_liteservers`
-//! (entries `<ipv4>:<port>:<base64 ed25519 public key>`), the compiled default
-//! public list that `iroha_config` exposes in
-//! `defaults::sccp::endpoints::TON_LITESERVERS`, or the `liteservers` array of
-//! a `global-config.json` that a wallet user supplies as a file. Every key is
-//! checked to be a usable Ed25519 point before anything connects.
+//! (entries `<ipv4>:<port>:<base64 ed25519 public key>`), or the compiled
+//! default public list that `iroha_config` exposes in
+//! `defaults::sccp::endpoints::TON_LITESERVERS`. Every key is checked to be a
+//! usable Ed25519 point before anything connects.
 //!
 //! Liteserver addresses and keys are public; they are logged as `ip:port`.
 
 use std::{
     fmt,
-    net::{Ipv4Addr, SocketAddr},
+    net::SocketAddr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -21,7 +20,6 @@ use iroha_config::parameters::{
     actual::{SccpLightClientKeeper, SccpTonLiteserver, compiled_ton_liteservers},
     defaults,
 };
-use norito::json::Value;
 
 use super::adnl::{key_id, server_x25519_key};
 
@@ -231,30 +229,6 @@ impl LiteServerSet {
         Self::from_config(&keeper.endpoints.ton_liteservers)
     }
 
-    /// The `liteservers` array of a TON `global-config.json`
-    /// (`{"ip": <signed 32-bit IPv4>, "port": <u16>, "id": {"@type":
-    /// "pub.ed25519", "key": "<base64>"}}`), in file order.
-    ///
-    /// # Errors
-    /// If the JSON is malformed, an entry is invalid, or the list is invalid.
-    pub fn from_global_config_json(json: &str) -> Result<Self, PeerError> {
-        let config = norito::json::parse_value(json)
-            .map_err(|error| PeerError::new(format!("the global config is not JSON: {error}")))?;
-        let entries = config
-            .get("liteservers")
-            .and_then(Value::as_array)
-            .ok_or_else(|| PeerError::new("the global config has no `liteservers` array"))?;
-        let servers = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                global_config_entry(entry)
-                    .map_err(|error| PeerError::new(format!("liteservers[{index}]: {error}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Self::new(servers)
-    }
-
     /// Number of liteservers (at least one).
     pub fn len(&self) -> usize {
         self.servers.len()
@@ -275,11 +249,6 @@ impl LiteServerSet {
         self.preferred.load(Ordering::Relaxed) % self.servers.len().max(1)
     }
 
-    /// The liteserver the next query starts at.
-    pub fn preferred_server(&self) -> &LiteServer {
-        &self.servers[self.preferred()]
-    }
-
     /// Moves the preferred liteserver to the next one, for callers whose
     /// verification rejected the data of the current one.
     pub fn rotate_preferred(&self) {
@@ -290,32 +259,6 @@ impl LiteServerSet {
     pub(crate) fn set_preferred(&self, index: usize) {
         self.preferred.store(index, Ordering::Relaxed);
     }
-}
-
-/// One `global-config.json` liteserver entry.
-fn global_config_entry(entry: &Value) -> Result<LiteServer, PeerError> {
-    let ip = entry
-        .get("ip")
-        .and_then(Value::as_i64)
-        .and_then(|ip| i32::try_from(ip).ok())
-        .ok_or_else(|| PeerError::new("`ip` must be a signed 32-bit integer"))?;
-    let port = entry
-        .get("port")
-        .and_then(Value::as_u64)
-        .and_then(|port| u16::try_from(port).ok())
-        .ok_or_else(|| PeerError::new("`port` must be a 16-bit integer"))?;
-    let id = entry
-        .get("id")
-        .ok_or_else(|| PeerError::new("`id` is missing"))?;
-    if id.get("@type").and_then(Value::as_str) != Some("pub.ed25519") {
-        return Err(PeerError::new("`id.@type` must be `pub.ed25519`"));
-    }
-    let key = id
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| PeerError::new("`id.key` must be a base64 string"))?;
-    let ip = Ipv4Addr::from(ip.cast_unsigned());
-    LiteServer::parse(&format!("{ip}:{port}:{key}"))
 }
 
 #[cfg(test)]
@@ -387,42 +330,11 @@ mod tests {
         let set = LiteServerSet::parse(&[&a, &b]).expect("list");
         assert_eq!(set.preferred(), 0);
         set.rotate_preferred();
-        assert_eq!(set.preferred_server().label(), "5.9.10.15:48014");
+        assert_eq!(set.servers()[set.preferred()].label(), "5.9.10.15:48014");
         set.rotate_preferred();
         assert_eq!(set.preferred(), 0);
         set.set_preferred(1);
         assert_eq!(set.clone().preferred(), 1);
         assert!(format!("{set:?}").contains("preferred"));
-    }
-
-    #[test]
-    fn global_config_liteservers_are_read_in_order() {
-        let json = format!(
-            r#"{{"@type":"config.global","liteservers":[
-                {{"ip":84478511,"port":19949,"id":{{"@type":"pub.ed25519","key":"{KEY_A}"}}}},
-                {{"ip":-2018135749,"port":53312,"id":{{"@type":"pub.ed25519","key":"{KEY_B}"}}}}
-            ]}}"#
-        );
-        let set = LiteServerSet::from_global_config_json(&json).expect("global config");
-        assert_eq!(set.servers()[0].label(), "5.9.10.47:19949");
-        // Negative integers are the high half of the IPv4 space.
-        assert_eq!(set.servers()[1].label(), "135.181.177.59:53312");
-
-        for broken in [
-            "not json",
-            r#"{"liteservers":{}}"#,
-            r#"{"liteservers":[{"ip":"1.2.3.4","port":1,"id":{"@type":"pub.ed25519","key":"x"}}]}"#,
-            r#"{"liteservers":[{"ip":1,"port":70000,"id":{"@type":"pub.ed25519","key":"x"}}]}"#,
-            r#"{"liteservers":[{"ip":1,"port":1}]}"#,
-            r#"{"liteservers":[{"ip":1,"port":1,"id":{"@type":"pub.aes","key":"x"}}]}"#,
-            r#"{"liteservers":[{"ip":1,"port":1,"id":{"@type":"pub.ed25519"}}]}"#,
-            r#"{"liteservers":[{"ip":84478511,"port":1,"id":{"@type":"pub.ed25519","key":"AAAA"}}]}"#,
-            r#"{"liteservers":[]}"#,
-        ] {
-            assert!(
-                LiteServerSet::from_global_config_json(broken).is_err(),
-                "{broken}"
-            );
-        }
     }
 }

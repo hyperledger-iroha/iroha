@@ -498,6 +498,9 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
             "allowed_suite_commitment": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
+            "app_attestation_authority_policy_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "attestation_trust_roots_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
@@ -505,7 +508,7 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
                 "format": "uint16",
                 "maximum": 65535,
                 "minimum": 0,
-                "type": "integer",
+                "type": "integer"
             },
             "enrollment_attestation_verifier_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -514,13 +517,17 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
                 "format": "uint64",
                 "maximum": 9007199254740991,
                 "minimum": 0,
-                "type": "integer",
+                "type": "integer"
             },
-            "firmware_policy_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "firmware_policy_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "governance_credential_public_key": {
                 "$ref": "#/components/schemas/GovernanceKagemushaDevicePublicKeyV1"
             },
-            "hardware_profile_id": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "hardware_profile_id": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "platform_class": {
                 "$ref": "#/components/schemas/GovernanceKagemushaHardwarePlatformClassV1"
             },
@@ -528,11 +535,18 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
                 "format": "uint64",
                 "maximum": 9007199254740991,
                 "minimum": 0,
-                "type": "integer",
+                "type": "integer"
             },
-            "product_class_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
-            "protocol_version": {"const": 1, "type": "integer"},
-            "provider_id": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "product_class_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "protocol_version": {
+                "const": 1,
+                "type": "integer"
+            },
+            "provider_id": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "qualification_report_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
@@ -540,9 +554,12 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
                 "format": "uint64",
                 "maximum": 9007199254740991,
                 "minimum": 0,
-                "type": "integer",
+                "type": "integer"
             },
-            "version": {"const": 1, "type": "integer"},
+            "version": {
+                "const": 1,
+                "type": "integer"
+            }
         },
         "required": [
             "version",
@@ -561,8 +578,9 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
             "qualification_report_digest",
             "valid_from_ms",
             "expires_at_ms",
+            "app_attestation_authority_policy_digest"
         ],
-        "type": "object",
+        "type": "object"
     },
     "GovernanceKagemushaHelperProtocolV1": {
         "additionalProperties": False,
@@ -1084,32 +1102,71 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
         "additionalProperties": False,
         "properties": {
             "artifacts": {
-                "items": {"$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"},
-                "type": "array",
+                "items": {
+                    "$ref": "#/components/schemas/GovernanceKagemushaArtifactBindingV1"
+                },
+                "type": "array"
             },
-            "cargo_lock_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "cargo_lock_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "enabled_profiles": {
-                "items": {"$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"},
-                "type": "array",
+                "items": {
+                    "$ref": "#/components/schemas/GovernanceKagemushaEnabledProfileV1"
+                },
+                "type": "array"
             },
-            "ep_protocol_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
-            "eq_protocol_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
-            "halo2_k": {"format": "uint32", "maximum": 4294967295, "minimum": 0, "type": "integer"},
-            "hardware_policy_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "ep_protocol_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "eq_protocol_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "halo2_k": {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+            },
+            "hardware_policy_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "helper_protocols": {
-                "items": {"$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"},
-                "type": "array",
+                "items": {
+                    "$ref": "#/components/schemas/GovernanceKagemushaHelperProtocolV1"
+                },
+                "type": "array"
             },
-            "profile_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
-            "release_id": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
-            "source_tree_digest": {"$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"},
+            "network_id": {
+                "maxLength": 74,
+                "minLength": 74,
+                "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                "type": "string"
+            },
+            "profile_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "purpose": {
+                "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1"
+            },
+            "release_id": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "source_tree_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
             "validation_receipt_digest": {
                 "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
             },
-            "version": {"const": 1, "type": "integer"},
+            "version": {
+                "const": 1,
+                "type": "integer"
+            }
         },
         "required": [
             "version",
+            "network_id",
+            "purpose",
             "release_id",
             "source_tree_digest",
             "cargo_lock_digest",
@@ -1121,9 +1178,9 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
             "halo2_k",
             "helper_protocols",
             "enabled_profiles",
-            "artifacts",
+            "artifacts"
         ],
-        "type": "object",
+        "type": "object"
     },
     "GovernanceKagemushaReproducibleBuildV1": {
         "additionalProperties": False,
@@ -1172,6 +1229,71 @@ SCHEMAS_V1: dict[str, dict[str, Any]] = {
             "report",
         ],
         "type": "object",
+    },
+    "GovernanceKagemushaReleasePurposeV1": {
+        "oneOf": [
+            {
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {
+                        "const": "production",
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "null"
+                    }
+                },
+                "required": [
+                    "kind",
+                    "value"
+                ],
+                "type": "object"
+            },
+            {
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {
+                        "const": "testnet_experiment",
+                        "type": "string"
+                    },
+                    "value": {
+                        "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
+                    }
+                },
+                "required": [
+                    "kind",
+                    "value"
+                ],
+                "type": "object"
+            }
+        ]
+    },
+    "GovernanceKagemushaTestnetExperimentScopeV1": {
+        "additionalProperties": False,
+        "properties": {
+            "asset_identity_digest": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "asset_incarnation": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            },
+            "asset_scale": {
+                "format": "uint32",
+                "maximum": 28,
+                "minimum": 0,
+                "type": "integer"
+            },
+            "liability_pool_id": {
+                "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+            }
+        },
+        "required": [
+            "asset_identity_digest",
+            "asset_incarnation",
+            "asset_scale",
+            "liability_pool_id"
+        ],
+        "type": "object"
     },
 }
 

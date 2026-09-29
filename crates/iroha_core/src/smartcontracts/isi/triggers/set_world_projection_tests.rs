@@ -327,11 +327,7 @@ fn borrowed_contract_commits_only_bytecode_and_rejects_stale_derived_hash() {
         .encode()
     );
     let original = hash_world_contract(&entry).unwrap();
-    for flags in [
-        0,
-        norito::core::default_encode_flags(),
-        norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-    ] {
+    for flags in [0, norito::core::default_encode_flags()] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(hash_world_contract(&entry).unwrap(), original);
     }

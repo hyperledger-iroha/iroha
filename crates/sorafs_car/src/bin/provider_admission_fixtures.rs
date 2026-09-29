@@ -44,7 +44,6 @@ struct Options {
     out_dir: PathBuf,
 }
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct FixtureSummary {
     proposal_v1_digest: [u8; 32],
     envelope_v1_digest: [u8; 32],
@@ -55,10 +54,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = parse_args(env::args().skip(1))?;
     let summary = generate_fixtures(&options.out_dir)?;
     println!(
-        "provider admission fixtures refreshed under {} (proposal digest {}, envelope digest {})",
+        "provider admission fixtures refreshed under {} (proposal digest {}, envelope digest {}, \
+         renewal envelope digest {}, revocation digest {})",
         options.out_dir.display(),
         hex_lower(summary.proposal_v1_digest),
-        hex_lower(summary.envelope_v1_digest)
+        hex_lower(summary.envelope_v1_digest),
+        hex_lower(summary.renewal_envelope_digest),
+        hex_lower(summary.revocation_digest)
     );
     Ok(())
 }

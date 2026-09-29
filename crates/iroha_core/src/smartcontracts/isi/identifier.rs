@@ -879,6 +879,41 @@ pub mod isi {
                 verifying_key_bytes: b"identifier-ram-lfe-proof-vk".to_vec(),
             }
         }
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn identifier_execution_relation_rejects_a_valid_unrelated_native_proof() {
+            let fixture = crate::zk::test_utils::stark_public_binding_fixture_envelope();
+            let proof = fixture.proof_box(crate::zk::ZK_BACKEND_STARK_FRI_V1);
+            let key = fixture
+                .vk_box(crate::zk::ZK_BACKEND_STARK_FRI_V1)
+                .expect("key");
+            crate::zk::verify_for_relation(
+                crate::zk::ProofRelation::PublicInputBinding,
+                &proof,
+                &key,
+                test_guardrails(),
+            )
+            .expect("control is a valid native public-input binding proof");
+            let verifier = RamLfeProofVerifierMetadata {
+                proof_backend: proof.backend.to_string(),
+                circuit_id: format!("{}:public-binding-demo", crate::zk::ZK_BACKEND_STARK_FRI_V1),
+                public_inputs_schema_hash: Hash::new(&fixture.public_inputs),
+                verifying_key_bytes: key.bytes,
+            };
+            let error = verify_execution_proof(
+                &proof,
+                &sample_proof_payload(),
+                &verifier,
+                test_guardrails(),
+            )
+            .expect_err("a valid binding proof cannot establish hidden program execution");
+            assert!(
+                error
+                    .to_string()
+                    .contains("no compiled program-execution proof relation"),
+                "unexpected error: {error}"
+            );
+        }
         fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
             crate::zk::ZkVerifyGuardrails {
                 halo2_enabled: true,
@@ -923,14 +958,17 @@ pub mod isi {
                     .expect_err("wrong envelope backend tag must reject before proof parsing");
             let message = err.to_string();
             assert!(
-                message.contains("backend tag"),
+                message.contains("no compiled program-execution proof relation"),
                 "unexpected error: {message}"
             );
             for (backend, expected_message) in [
-                ("halo2/ipa:production-ready", "native verifier registry"),
+                (
+                    "halo2/ipa:production-ready",
+                    "no compiled program-execution proof relation",
+                ),
                 (
                     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                    "must use Halo2 IPA Pasta",
+                    "no compiled program-execution proof relation",
                 ),
             ] {
                 let mut backend_verifier = verifier.clone();
@@ -956,7 +994,7 @@ pub mod isi {
                 .expect_err("non-empty auxiliary bytes must reject before proof parsing");
             let message = err.to_string();
             assert!(
-                message.contains("auxiliary bytes"),
+                message.contains("no compiled program-execution proof relation"),
                 "unexpected error: {message}"
             );
             let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
@@ -966,7 +1004,10 @@ pub mod isi {
                 verify_execution_proof(&zero_vk_hash, &execution, &verifier, test_guardrails())
                     .expect_err("zero verifier-key hash must reject before proof parsing");
             let message = err.to_string();
-            assert!(message.contains("non-zero"), "unexpected error: {message}");
+            assert!(
+                message.contains("no compiled program-execution proof relation"),
+                "unexpected error: {message}"
+            );
             let schema_drift = sample_proof_box(&verifier, |envelope| {
                 envelope.public_inputs.extend_from_slice(b":schema-drift");
             });
@@ -975,7 +1016,7 @@ pub mod isi {
                     .expect_err("public-input schema drift must reject before proof parsing");
             let message = err.to_string();
             assert!(
-                message.contains("public-input schema hash"),
+                message.contains("no compiled program-execution proof relation"),
                 "unexpected error: {message}"
             );
             let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
@@ -986,7 +1027,7 @@ pub mod isi {
                     .expect_err("wrong verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(
-                message.contains("mismatched verifying key"),
+                message.contains("no compiled program-execution proof relation"),
                 "unexpected error: {message}"
             );
         }
@@ -1009,12 +1050,13 @@ pub mod isi {
             let err = verify_execution_proof(&alternate, &execution, &verifier, test_guardrails())
                 .expect_err("alternate-layout identifier proof envelope must reject");
             assert!(
-                err.to_string().contains("canonical OpenVerifyEnvelope"),
+                err.to_string()
+                    .contains("no compiled program-execution proof relation"),
                 "unexpected error: {err}"
             );
         }
         #[test]
-        fn identifier_verify_execution_proof_propagates_node_guardrails() {
+        fn identifier_verify_execution_proof_refuses_even_when_backend_is_disabled() {
             let verifier = sample_proof_verifier();
             let execution = sample_proof_payload();
             let proof = sample_proof_box(&verifier, |_| {});
@@ -1023,7 +1065,8 @@ pub mod isi {
             let err = verify_execution_proof(&proof, &execution, &verifier, guardrails)
                 .expect_err("identifier claim verification must honor disabled Halo2");
             assert!(
-                err.to_string().contains("disabled in node configuration"),
+                err.to_string()
+                    .contains("no compiled program-execution proof relation"),
                 "unexpected error: {err}"
             );
         }

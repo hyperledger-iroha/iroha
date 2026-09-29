@@ -6,7 +6,6 @@ use iroha_data_model_derive::{EventSet, HasOrigin, model};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
-#[allow(unused_imports)]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{fmt, string::String, vec::Vec};
 macro_rules! data_event {
@@ -2541,13 +2540,11 @@ mod executor {
     pub use self::model::*;
     use iroha_data_model_derive::model;
     // Keep super-module imports available for generated code paths.
-    #[allow(unused)]
     use super::*;
     #[model]
     mod model {
         use iroha_data_model_derive::EventSet;
         // Keep super-module imports available for generated code paths.
-        #[allow(unused)]
         use super::*;
         use crate::executor::ExecutorDataModel;
         #[derive(
@@ -2775,7 +2772,6 @@ mod tests {
         );
     }
 }
-#[allow(unused_imports)]
 pub mod prelude {
     pub use super::model::{DataEvent, MetadataChanged};
     pub use super::{

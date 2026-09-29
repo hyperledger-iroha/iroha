@@ -10613,8 +10613,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             debug_assert_eq!(queued_gas, gas);
                             Ok(gas)
                         }
-                        // The retired operation tag 2 (RecordSccpMessage) is handled exactly
-                        // like every other unknown tag.
                         // TODO(ws45): drop 2=RecordSccpMessage from the ivm_abi 0xA0 args text (ABI hash change)
                         _ => Err(ivm::VMError::PermissionDenied),
                     }
@@ -16785,7 +16783,7 @@ seiyaku OuterCaller {
         for operation_tag in [
             0,
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-            RETIRED_RECORD_SCCP_MESSAGE_TAG,
+            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
             u64::MAX,
         ] {
             let mut host = local_contract_host(authority.clone());
@@ -16801,37 +16799,6 @@ seiyaku OuterCaller {
                 host.queued.is_empty(),
                 "rejected tag must not enqueue an ISI"
             );
-        }
-    }
-    /// Operation tag 2 used to select the retired `RecordSccpMessage` bridge.
-    const RETIRED_RECORD_SCCP_MESSAGE_TAG: u64 = 2;
-    fn execute_instruction_outcome_for_tag(
-        payload: &[u8],
-        operation_tag: u64,
-    ) -> (Result<u64, ivm::VMError>, u64, usize) {
-        let mut host = CoreHost::new((*ALICE_ID).clone());
-        bind_test_contract_runtime(&mut host, 306);
-        let mut vm = ivm::IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, payload);
-        vm.set_register(10, ptr);
-        vm.set_register(11, operation_tag);
-        let result = host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm);
-        (result, vm.remaining_gas(), host.queued.len())
-    }
-    #[test]
-    fn retired_sccp_record_tag_fails_exactly_like_an_unknown_tag() {
-        let instruction = InstructionBox::from(Log::new(
-            iroha_logger::Level::INFO,
-            "retired tag".to_owned(),
-        ));
-        let valid = norito::to_bytes(&instruction).expect("encode instruction");
-        for payload in [valid, vec![0xFF; 4]] {
-            let retired =
-                execute_instruction_outcome_for_tag(&payload, RETIRED_RECORD_SCCP_MESSAGE_TAG);
-            let unknown = execute_instruction_outcome_for_tag(&payload, 0x7E57);
-            assert_eq!(retired, unknown);
-            assert!(retired.0.is_err(), "the retired tag must never be admitted");
-            assert_eq!(retired.2, 0, "the retired tag must not enqueue an ISI");
         }
     }
     #[test]
@@ -17904,10 +17871,7 @@ seiyaku OpaqueInstructionSubmission {
             // This fixture exercises semantic rejection before child proof decoding.
             vec![0]
         } else {
-            fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-                .expect("FASTPQ prover")
-                .prove_axt_bound(&batch, &binding)
-                .expect("canonical AXT proof")
+            fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("canonical AXT proof")
         };
         let envelope = axt::AxtProofEnvelope {
             dsid,

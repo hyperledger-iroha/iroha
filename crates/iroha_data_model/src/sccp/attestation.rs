@@ -10,8 +10,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-/// Byte length of one `r ‖ s ‖ v` bridge-key signature (§3.8).
-pub const SCCP_SIGNATURE_BYTES_V1: usize = 65;
 /// Largest history size a verifier accepts (`history_size ≤ 2^32`, §3.5).
 pub const SCCP_HISTORY_MAX_SIZE_V1: u64 = 1 << 32;
 
@@ -218,12 +216,6 @@ impl SccpAttestationStatusV1 {
         self.signer_bitmap |= 1 << index;
         true
     }
-
-    /// Return whether the subject reached its threshold.
-    #[must_use]
-    pub const fn is_attested(&self) -> bool {
-        self.attested_at_height.is_some()
-    }
 }
 
 /// One entry of `SubmitSccpAttestationsV1` (§4.8).
@@ -353,7 +345,6 @@ mod tests {
 
     #[test]
     fn constants_match_the_spec() {
-        assert_eq!(SCCP_SIGNATURE_BYTES_V1, 65);
         assert_eq!(SCCP_HISTORY_MAX_SIZE_V1, 4_294_967_296);
     }
 
@@ -470,7 +461,7 @@ mod tests {
     fn status_bitmap_records_each_signer_once() {
         let mut status = SccpAttestationStatusV1::default();
         assert_eq!(status.signer_count(), 0);
-        assert!(!status.is_attested());
+        assert_eq!(status.attested_at_height, None);
         assert!(status.record_signer(0));
         assert!(status.record_signer(30));
         assert!(status.record_signer(31));
@@ -481,8 +472,6 @@ mod tests {
         assert!(!status.has_signer(1));
         assert_eq!(status.signer_count(), 3);
         assert_eq!(status.signer_bitmap, 0xc000_0001);
-        status.attested_at_height = Some(9);
-        assert!(status.is_attested());
     }
 
     #[test]

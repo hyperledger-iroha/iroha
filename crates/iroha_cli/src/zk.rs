@@ -23,15 +23,13 @@
 use eyre::{Context, Result};
 use std::{fs::File, path::Path};
 // For base64 Engine trait (decode)
-use crate::{Run, RunContext, json_utils, quote_and_sign_transaction};
+use crate::{Run, RunContext, json_utils};
 use base64::Engine as _;
 use iroha::data_model::prelude::{Executable, InstructionBox};
 use iroha::{
     blocking::Client as BlockingClient,
     client::{Client, ZkProofsFilter},
 };
-use iroha_crypto::Hash as CryptoHash;
-use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 // Proof/attachment tooling shares the first-release CLI's 64 MiB local-input
 // corridor. Backend-specific VK inputs use the stricter 8 MiB protocol cap.
 // JSON and Norito decoders additionally receive explicit graph/allocation
@@ -40,18 +38,7 @@ const ZK_CLI_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
 const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
-const ZK_CLI_MAX_NESTING_DEPTH_V1: usize = 64;
 const ZK_CLI_JSON_MAX_NESTING_DEPTH_V1: usize = norito::json::MAX_JSON_VALUE_NESTING_DEPTH;
-// Binary `Vec<u8>` fields account their byte length as sequence elements, so
-// the binary limit must admit one complete proof-sized byte field. JSON arrays
-// use the much smaller graph limit below.
-const ZK_CLI_BINARY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
-    ZK_CLI_INPUT_MAX_BYTES_V1,
-    ZK_CLI_INPUT_MAX_BYTES_V1,
-    ZK_CLI_INPUT_MAX_BYTES_V1,
-    ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
-    ZK_CLI_MAX_NESTING_DEPTH_V1,
-);
 const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     ZK_CLI_INPUT_MAX_BYTES_V1,
@@ -109,8 +96,6 @@ pub enum Command {
     Roots(RootsArgs),
     /// Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
     VerifyBatch(VerifyBatchArgs),
-    /// Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
-    SchemaHash(SchemaHashArgs),
     /// Manage ZK attachments in the app API
     #[command(subcommand)]
     Attachments(AttachmentsCommand),
@@ -125,7 +110,7 @@ pub enum Command {
     /// ZK Vote helpers (tally)
     #[command(subcommand)]
     Vote(VoteCommand),
-    /// Encode a confidential encrypted payload (memo) into Norito bytes/base64
+    /// Validate and encode a typed confidential encrypted memo
     Envelope(EnvelopeArgs),
 }
 #[derive(clap::Args, Debug)]
@@ -142,7 +127,6 @@ impl Run for Command {
         match self {
             Command::Roots(args) => args.run(context),
             Command::VerifyBatch(args) => args.run(context),
-            Command::SchemaHash(args) => args.run(context),
             Command::Attachments(args) => args.run(context),
             Command::RegisterAsset(args) => args.run(context),
             Command::Vk(args) => args.run(context),
@@ -192,34 +176,6 @@ impl Run for VerifyBatchArgs {
             return Ok(());
         }
         eyre::bail!("provide either --norito <file> or --json <file>");
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct SchemaHashArgs {
-    /// Path to a Norito-encoded `OpenVerifyEnvelope`
-    #[arg(long, value_name = "PATH", conflicts_with = "public_inputs_hex")]
-    norito: Option<std::path::PathBuf>,
-    /// Hex-encoded public inputs (when not using --norito)
-    #[arg(long, value_name = "HEX", conflicts_with = "norito")]
-    public_inputs_hex: Option<String>,
-}
-impl Run for SchemaHashArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bytes = if let Some(path) = self.norito {
-            let raw =
-                read_zk_file_bounded(&path, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK OpenVerify envelope")?;
-            let env: Halo2Envelope =
-                norito::decode_from_bytes_with_limits(&raw, ZK_CLI_BINARY_DECODE_LIMITS_V1)
-                    .map_err(|e| eyre::eyre!("failed to decode Norito envelope: {e}"))?;
-            env.public.encode_bytes()
-        } else if let Some(hex) = self.public_inputs_hex {
-            parse_hex_string(&hex)?
-        } else {
-            eyre::bail!("provide either --norito <file> or --public-inputs-hex <hex>");
-        };
-        let hash: [u8; 32] = CryptoHash::new(&bytes).into();
-        context.println(hex::encode(hash))?;
-        Ok(())
     }
 }
 #[derive(clap::Subcommand, Debug)]
@@ -692,6 +648,12 @@ mod attachments_cleanup_tests {
     }
 }
 // ---------------- Confidential envelope helpers ----------------
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum MemoEncoding {
+    Base64,
+    Hex,
+    Json,
+}
 #[derive(clap::Args, Debug)]
 pub struct EnvelopeArgs {
     /// Path to one typed `ConfidentialMemoEnvelopeV1` JSON object.
@@ -700,22 +662,15 @@ pub struct EnvelopeArgs {
     /// Optional output path for Norito bytes.
     #[arg(long, value_name = "PATH")]
     output: Option<std::path::PathBuf>,
-    /// Print base64 of the encoded envelope (default when no output file is provided).
-    #[arg(long, default_value_t = false)]
-    print_base64: bool,
-    /// Print hexadecimal representation of the encoded envelope.
-    #[arg(long, default_value_t = false)]
-    print_hex: bool,
-    /// Print JSON representation of the envelope.
-    #[arg(long, default_value_t = false)]
-    print_json: bool,
+    /// Emit exactly one stdout encoding; defaults to base64 when no output file is given.
+    #[arg(long, value_enum, value_name = "ENCODING")]
+    format: Option<MemoEncoding>,
 }
-fn parse_confidential_memo_envelope_json(
-    json: &str,
+fn read_confidential_memo_envelope_json(
+    path: &Path,
 ) -> eyre::Result<iroha::data_model::confidential::ConfidentialMemoEnvelopeV1> {
     let payload: iroha::data_model::confidential::ConfidentialMemoEnvelopeV1 =
-        norito::json::from_str(json)
-            .map_err(|error| eyre::eyre!("invalid confidential memo JSON: {error}"))?;
+        decode_zk_json_file(path, "confidential memo envelope")?;
     payload
         .validate()
         .map_err(|error| eyre::eyre!("invalid confidential memo envelope: {error}"))?;
@@ -733,39 +688,40 @@ fn encode_confidential_memo_envelope(
     let bytes = norito::codec::encode_adaptive(&payload);
     Ok((payload, bytes))
 }
-impl Run for EnvelopeArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
-        let json = std::fs::read_to_string(&self.envelope_json).with_context(|| {
-            format!(
-                "failed to read confidential memo envelope from {}",
-                self.envelope_json.display()
-            )
-        })?;
-        let payload = parse_confidential_memo_envelope_json(&json)?;
+impl EnvelopeArgs {
+    /// Encode an encrypted memo locally without reading client credentials.
+    pub(crate) fn run_without_client_config(self, mut output: impl std::io::Write) -> Result<()> {
+        if let Some(rendered) = self.execute()? {
+            writeln!(output, "{rendered}")?;
+        }
+        Ok(())
+    }
+
+    fn execute(self) -> Result<Option<String>> {
+        let payload = read_confidential_memo_envelope_json(&self.envelope_json)?;
         let (payload, bytes) = encode_confidential_memo_envelope(payload)?;
         if let Some(path) = &self.output {
             std::fs::write(path, &bytes)
                 .with_context(|| format!("failed to write envelope to {}", path.display()))?;
-            context.println(format!("Wrote {} bytes to {}", bytes.len(), path.display()))?;
         }
-        if self.output.is_none() || self.print_base64 {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            context.println(encoded)?;
+        if self.output.is_none() || self.format.is_some() {
+            Ok(Some(match self.format.unwrap_or(MemoEncoding::Base64) {
+                MemoEncoding::Base64 => base64::engine::general_purpose::STANDARD.encode(&bytes),
+                MemoEncoding::Hex => hex::encode(&bytes),
+                MemoEncoding::Json => norito::json::to_json_pretty(&payload)?,
+            }))
+        } else {
+            Ok(None)
         }
-        if self.print_hex {
-            context.println(hex::encode(&bytes))?;
-        }
-        if self.print_json {
-            context.print_data(&payload)?;
+    }
+}
+impl Run for EnvelopeArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if let Some(rendered) = self.execute()? {
+            context.println_data(rendered)?;
         }
         Ok(())
     }
-}
-fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
-    let trimmed = hex_str.trim();
-    let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    let bytes = hex::decode(without_prefix).map_err(|e| eyre::eyre!("invalid hex string: {e}"))?;
-    Ok(bytes)
 }
 fn ensure_verifier_backend_registry_label_v1<'a>(backend: &'a str, field: &str) -> Result<&'a str> {
     if backend.is_empty() {
@@ -783,6 +739,93 @@ fn parse_hex32_lower(value: &str, field: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct VkSubmissionContext {
+        submitted: Option<Executable>,
+        reject: bool,
+    }
+    impl RunContext for VkSubmissionContext {
+        fn config(&self) -> &iroha::config::Config {
+            panic!("VK command must defer client construction to the shared submission owner")
+        }
+        fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
+            panic!("shared submission owns metadata")
+        }
+        fn input_instructions(&self) -> bool {
+            false
+        }
+        fn output_instructions(&self) -> bool {
+            false
+        }
+        fn i18n(&self) -> &iroha_i18n::Localizer {
+            panic!("shared submission owns output")
+        }
+        fn print_data<T: norito::json::JsonSerialize + ?Sized>(&mut self, _: &T) -> Result<()> {
+            panic!("shared submission owns its JSON receipt")
+        }
+        fn println(&mut self, _: impl std::fmt::Display) -> Result<()> {
+            panic!("VK command must not substitute a diagnostic for the receipt")
+        }
+        fn finish_unconfirmed(&mut self, executable: impl Into<Executable>) -> Result<()> {
+            assert!(self.submitted.replace(executable.into()).is_none());
+            if self.reject {
+                eyre::bail!("canonical submission failed");
+            }
+            Ok(())
+        }
+    }
+
+    fn check_vk_submission_dispatch(operation: VkSubmissionOperation) {
+        use iroha::data_model::isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey};
+        let mut payload = sample_vk_submission(Some("core"));
+        payload.circuit_id = "halo2/pasta/ipa/kaigi-usage-v1".to_owned();
+        let record = build_vk_record(&payload, operation).expect("canonical submission record");
+        let directory = tempfile::tempdir().unwrap();
+        let json = directory.path().join("vk.json");
+        std::fs::write(&json, norito::json::to_vec(&payload).unwrap()).unwrap();
+        let id = iroha::data_model::proof::VerifyingKeyId::new(&payload.backend, &payload.name);
+        let expected: InstructionBox = match operation {
+            VkSubmissionOperation::Register => RegisterVerifyingKey { id, record }.into(),
+            VkSubmissionOperation::Update => UpdateVerifyingKey { id, record }.into(),
+        };
+        for reject in [false, true] {
+            let mut context = VkSubmissionContext {
+                submitted: None,
+                reject,
+            };
+            let result = match operation {
+                VkSubmissionOperation::Register => {
+                    VkRegisterArgs { json: json.clone() }.run(&mut context)
+                }
+                VkSubmissionOperation::Update => {
+                    VkUpdateArgs { json: json.clone() }.run(&mut context)
+                }
+            };
+            if reject {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "canonical submission failed"
+                );
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(
+                context.submitted,
+                Some(Executable::Instructions(vec![expected.clone()].into()))
+            );
+        }
+    }
+
+    #[test]
+    fn vk_submission_register_uses_canonical_receipt_owner() {
+        check_vk_submission_dispatch(VkSubmissionOperation::Register);
+    }
+
+    #[test]
+    fn vk_submission_update_uses_canonical_receipt_owner() {
+        check_vk_submission_dispatch(VkSubmissionOperation::Update);
+    }
+
     fn checked_zk_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked ZK fixture key")
@@ -919,10 +962,25 @@ mod tests {
             norito::codec::decode_adaptive(&bytes).expect("decode envelope");
         assert_eq!(payload, decoded);
         let json = norito::json::to_json(&payload).expect("encode typed JSON");
+        let directory = tempfile::tempdir().expect("memo directory");
+        let path = directory.path().join("memo.json");
+        std::fs::write(&path, json).expect("write typed JSON");
         assert_eq!(
-            parse_confidential_memo_envelope_json(&json).expect("parse typed JSON"),
+            read_confidential_memo_envelope_json(&path).expect("read typed JSON"),
             payload
         );
+        let output = directory.path().join("memo.bin");
+        EnvelopeArgs {
+            envelope_json: path,
+            output: Some(output.clone()),
+            format: None,
+        }
+        .run(&mut VkSubmissionContext {
+            submitted: None,
+            reject: false,
+        })
+        .expect("file-only memo must not access credentials or emit a diagnostic");
+        assert_eq!(std::fs::read(output).unwrap(), bytes);
     }
     #[test]
     fn vk_submission_backend_parser_accepts_only_supported_open_verify_engines() {
@@ -1046,6 +1104,50 @@ mod tests {
         }
     }
     #[test]
+    fn vk_submission_rejects_nonportable_names_before_key_preparation() {
+        let directory = tempfile::tempdir().expect("VK submission directory");
+        let path = directory.path().join("key.json");
+        let mut payload = sample_vk_submission(None);
+        // Invalid key bytes distinguish early ID rejection from key preparation.
+        payload.vk_bytes = Some("not valid base64!".to_owned());
+        for name in [
+            String::new(),
+            " key".to_owned(),
+            "quoted\"key".to_owned(),
+            "back\\slash".to_owned(),
+            "a".repeat(iroha_data_model::proof::VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1),
+        ] {
+            payload.name = name;
+            std::fs::write(
+                &path,
+                norito::json::to_json(&payload).expect("serialize DTO"),
+            )
+            .expect("write DTO");
+            for operation in [
+                VkSubmissionOperation::Register,
+                VkSubmissionOperation::Update,
+            ] {
+                let error = load_vk_submission(&path, operation)
+                    .err()
+                    .expect("nonportable ID must reject before key decoding");
+                assert!(
+                    error.to_string().contains("portable registry syntax"),
+                    "{error}"
+                );
+            }
+        }
+        payload.name = "portable_key".to_owned();
+        std::fs::write(
+            &path,
+            norito::json::to_json(&payload).expect("serialize DTO"),
+        )
+        .expect("write DTO");
+        let error = load_vk_submission(&path, VkSubmissionOperation::Register)
+            .err()
+            .expect("portable name proceeds to invalid key bytes");
+        assert!(error.to_string().contains("base64"), "{error}");
+    }
+    #[test]
     fn vk_submission_enforces_backend_specific_key_size_limits() {
         use base64::Engine as _;
         let limit = iroha_core::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
@@ -1115,7 +1217,10 @@ mod tests {
     fn typed_memo_json_rejects_invalid_placeholder() {
         let placeholder = iroha::data_model::confidential::ConfidentialMemoEnvelopeV1::default();
         let json = norito::json::to_json(&placeholder).expect("serialize placeholder JSON");
-        let err = parse_confidential_memo_envelope_json(&json)
+        let directory = tempfile::tempdir().expect("memo directory");
+        let path = directory.path().join("invalid.json");
+        std::fs::write(&path, json).expect("write placeholder JSON");
+        let err = read_confidential_memo_envelope_json(&path)
             .expect_err("invalid confidential memo placeholder must fail");
         assert!(
             format!("{err}").contains("recipient slot 0"),
@@ -1227,40 +1332,10 @@ pub struct VkRegisterArgs {
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
-#[cfg_attr(test, derive(norito::json::JsonSerialize))]
-#[norito(deny_unknown_fields)]
-struct VkSubmissionJson {
-    backend: String,
-    name: String,
-    version: u32,
-    circuit_id: String,
-    public_inputs_schema_hash_hex: String,
-    #[norito(default)]
-    curve: Option<String>,
-    #[norito(default)]
-    gas_schedule_id: Option<String>,
-    #[norito(default)]
-    vk_len: Option<u32>,
-    #[norito(default)]
-    max_proof_bytes: Option<u32>,
-    #[norito(default)]
-    metadata_uri_cid: Option<String>,
-    #[norito(default)]
-    vk_bytes_cid: Option<String>,
-    #[norito(default)]
-    activation_height: Option<u64>,
-    #[norito(default)]
-    withdraw_height: Option<u64>,
-    #[norito(default)]
-    commitment_hex: Option<String>,
-    #[norito(default)]
-    vk_bytes: Option<String>,
-    #[norito(default)]
-    status: Option<iroha::data_model::confidential::ConfidentialStatus>,
-    #[norito(default)]
-    namespace: Option<String>,
-}
+#[path = "zk_registry_json.rs"]
+mod registry_json;
+use registry_json::VkSubmissionJson;
+
 struct PreparedVkSubmission {
     id: iroha::data_model::proof::VerifyingKeyId,
     record: iroha::data_model::proof::VerifyingKeyRecord,
@@ -1269,42 +1344,6 @@ struct PreparedVkSubmission {
 enum VkSubmissionOperation {
     Register,
     Update,
-}
-fn signed_vk_register_transaction(
-    client: &BlockingClient,
-    metadata: iroha_model_base::metadata::Metadata,
-    prepared: PreparedVkSubmission,
-    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
-) -> Result<iroha::data_model::prelude::SignedTransaction> {
-    use iroha::data_model::{isi::verifying_keys, transaction::Executable};
-    let executable = Executable::Instructions(
-        vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {
-            id: prepared.id,
-            record: prepared.record,
-        })]
-        .into(),
-    );
-    quote_and_sign_transaction(client, executable, fee_payment, metadata)
-        .map(|(transaction, _)| transaction)
-        .wrap_err("failed to quote and sign VK register transaction")
-}
-fn signed_vk_update_transaction(
-    client: &BlockingClient,
-    metadata: iroha_model_base::metadata::Metadata,
-    prepared: PreparedVkSubmission,
-    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
-) -> Result<iroha::data_model::prelude::SignedTransaction> {
-    use iroha::data_model::{isi::verifying_keys, transaction::Executable};
-    let executable = Executable::Instructions(
-        vec![InstructionBox::from(verifying_keys::UpdateVerifyingKey {
-            id: prepared.id,
-            record: prepared.record,
-        })]
-        .into(),
-    );
-    quote_and_sign_transaction(client, executable, fee_payment, metadata)
-        .map(|(transaction, _)| transaction)
-        .wrap_err("failed to quote and sign VK update transaction")
 }
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
@@ -1465,22 +1504,21 @@ fn load_vk_submission(
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
     let id =
         iroha::data_model::proof::VerifyingKeyId::new(backend.to_string(), payload.name.clone());
+    if !id.is_portable_registry_id() {
+        eyre::bail!("verifying-key ID must use bounded portable registry syntax");
+    }
     let record = build_vk_record(&payload, operation)?;
     Ok(PreparedVkSubmission { id, record })
 }
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Register)?;
-        let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let fee_payment = context.transaction_fee_payment()?;
-        let tx = signed_vk_register_transaction(&client, metadata, prepared, fee_payment)?;
-        let hash = tx.hash();
-        client
-            .submit_transaction(&tx)
-            .wrap_err("failed to submit VK register transaction")?;
-        context.println(format!("VK register submitted: {hash}"))?;
-        Ok(())
+        context.finish_unconfirmed(vec![InstructionBox::from(
+            iroha::data_model::isi::verifying_keys::RegisterVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )])
     }
 }
 #[derive(clap::Args, Debug)]
@@ -1493,17 +1531,13 @@ pub struct VkUpdateArgs {
 }
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Update)?;
-        let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let fee_payment = context.transaction_fee_payment()?;
-        let tx = signed_vk_update_transaction(&client, metadata, prepared, fee_payment)?;
-        let hash = tx.hash();
-        client
-            .submit_transaction(&tx)
-            .wrap_err("failed to submit VK update transaction")?;
-        context.println(format!("VK update submitted: {hash}"))?;
-        Ok(())
+        context.finish_unconfirmed(vec![InstructionBox::from(
+            iroha::data_model::isi::verifying_keys::UpdateVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )])
     }
 }
 #[derive(clap::Args, Debug)]

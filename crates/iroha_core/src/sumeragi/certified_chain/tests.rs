@@ -666,7 +666,7 @@ fn pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources() {
     );
     chain
         .kura()
-        .force_hash_only_block_for_testing(NonZeroUsize::new(3).unwrap())
+        .corrupt_canonical_body_for_testing(NonZeroUsize::new(3).unwrap())
         .unwrap();
     let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, chain.kura()).unwrap();
     assert_eq!(

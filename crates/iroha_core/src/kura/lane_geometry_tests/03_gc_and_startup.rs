@@ -144,8 +144,48 @@ fn recovery_rejects_corrupt_and_forged_journals() {
 fn recovery_rejects_noncontiguous_phase_frontiers() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
-    let kura = open_kura(&root, &initial_and_extended_configs().0);
-    let _fixture = prepare_retired_geometry_archive(&kura, &root);
+    let primary = ModelLaneConfig::default();
+    let mut lanes = vec![primary];
+    let mut config =
+        RuntimeLaneConfig::from_catalog(&LaneCatalog::new(nonzero!(3_u32), lanes.clone()).unwrap());
+    let kura = open_kura(&root, &config);
+    let (mut incarnations, mut activations) = initial_geometry();
+    authenticate_transition_fixture_primary(&kura, &config, &incarnations);
+    for id in 1..=2_u32 {
+        lanes.push(ModelLaneConfig {
+            id: LaneId::new(id),
+            alias: format!("phase-frontier-{id}"),
+            ..ModelLaneConfig::default()
+        });
+        let updated = RuntimeLaneConfig::from_catalog(
+            &LaneCatalog::new(nonzero!(3_u32), lanes.clone()).unwrap(),
+        );
+        let mut next_incarnations = incarnations.clone();
+        next_incarnations.insert(LaneId::new(id), Hash::new(id.to_le_bytes()));
+        let mut next_activations = activations.clone();
+        next_activations.insert(LaneId::new(id), u64::from(id));
+        kura.apply_lane_geometry_transition_at_height(
+            &config,
+            &updated,
+            &incarnations,
+            &next_incarnations,
+            &activations,
+            &next_activations,
+            &BTreeSet::new(),
+            u64::from(id),
+        )
+        .expect("apply original addition");
+        kura.mark_lane_geometry_catalog_published(
+            &updated,
+            &next_incarnations,
+            &next_activations,
+            None,
+        )
+        .expect("publish original addition");
+        config = updated;
+        incarnations = next_incarnations;
+        activations = next_activations;
+    }
     let valid = kura
         .read_lane_geometry_journal()
         .expect("two-transition published journal");
@@ -254,11 +294,9 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
             "recovery must leave the rejected {name} bytes untouched"
         );
         if name == "height-cursor v5" {
-            assert_kura_io_error(
-                &error,
-                std::io::ErrorKind::InvalidData,
-                &format!("unsupported lane geometry journal version 5; expected {JOURNAL_VERSION}"),
-            );
+            // The retired shape fails current structural decoding; no legacy
+            // decoder is retained merely to recover its version field.
+            assert!(matches!(error, Error::NoritoFrame(_)), "{error:?}");
         }
     }
 }
@@ -654,83 +692,6 @@ fn configured_catalog_admits_only_the_bound_public_reset_storage_marker() {
     fs::set_permissions(marker_path(&root), fs::Permissions::from_mode(0o644))
         .expect("weaken marker mode");
     assert!(!exact_public_reset_storage_marker(&root));
-}
-
-#[test]
-fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
-    let temp = TempDir::new().expect("temporary directory");
-    let root = temp.path().join("kura");
-    let configured_catalog = configured_primary_catalog("authenticated-primary");
-    let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
-    let (incarnations, activation_heights) = initial_geometry();
-    let configured_catalog_hash = LaneLifecycleParameterV1::catalog_hash(&configured_catalog);
-    let (kura, _) = Kura::new_with_configured_lane_catalog(
-        &kura_config(&root),
-        &configured,
-        &configured_catalog,
-    )
-    .expect("open authenticated configured Kura");
-    kura.bind_lane_storage_network(geometry_fixture_network_id())
-        .expect("bind explicit fixture network before geometry authority");
-    kura.establish_or_verify_configured_primary_geometry_anchor(
-        configured.primary(),
-        incarnations[&LaneId::SINGLE],
-        configured_catalog_hash,
-    )
-    .expect("authenticate configured primary geometry");
-    let bindings = kura
-        .geometry_bindings(&configured, &incarnations, &activation_heights)
-        .expect("derive authenticated primary binding");
-    let lineage_root = unscoped_lineage_root(&bindings);
-    let primary_blocks = kura.binding_blocks_path(&bindings[0]);
-    let lane_artifacts = Kura::lane_artifact_dir(&primary_blocks);
-    if lane_artifacts.exists() {
-        fs::remove_dir(&lane_artifacts).expect("remove empty primary artifact namespace");
-    }
-    assert!(
-        !lane_artifacts.exists(),
-        "fixture must restore an authenticated primary without its empty artifact namespace"
-    );
-    kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
-        &configured,
-        &incarnations,
-        &activation_heights,
-        0,
-        lineage_root,
-    )
-    .expect("restore must durably heal the authenticated primary namespace");
-    let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
-        .expect("healed primary artifact namespace is descriptor-bound");
-    assert!(
-        kura.geometry_bound_progress_directory_unchanged(&namespace),
-        "healed primary artifact namespace must retain its durable identity"
-    );
-    drop(namespace);
-    drop(kura);
-    let (reopened, _) = Kura::new_with_configured_lane_catalog(
-        &kura_config(&root),
-        &configured,
-        &configured_catalog,
-    )
-    .expect("reopen authenticated configured Kura");
-    reopened
-        .bind_lane_storage_network(geometry_fixture_network_id())
-        .expect("bind explicit fixture network before geometry authority");
-    reopened
-        .restore_lane_segments_with_geometry_at_height_and_lineage_root(
-            &configured,
-            &incarnations,
-            &activation_heights,
-            0,
-            lineage_root,
-        )
-        .expect("authenticated namespace healing must be restart-idempotent");
-    let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
-        .expect("reopened primary artifact namespace is descriptor-bound");
-    assert!(
-        reopened.geometry_bound_progress_directory_unchanged(&namespace),
-        "reopened primary artifact namespace must retain its durable identity"
-    );
 }
 
 #[test]
@@ -1180,10 +1141,7 @@ fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_muta
     let journal = kura
         .read_lane_geometry_journal()
         .expect("transition journal");
-    let binding = journal.records[0].operations[0]
-        .updated
-        .as_ref()
-        .expect("created immutable instance binding");
+    let binding = &journal.records[0].operations[0].created;
     let link = kura.binding_blocks_path(binding);
     let displaced = link.with_extension("displaced");
     fs::rename(&link, &displaced).expect("retain the original journal-owned instance");

@@ -17,9 +17,8 @@ fn captured_codec_schema_identities() {
     crate::captured_schema_tests::assert_bidirectional::<super::HiddenRamFheInstruction>(
         "iroha_crypto::ram_lfe::HiddenRamFheInstruction",
     );
-    crate::captured_schema_tests::assert_bidirectional::<super::HiddenRamFheProgram>(
-        "iroha_crypto::ram_lfe::HiddenRamFheProgram",
-    );
+    // The private tape owner replaces the captured public instruction-vector
+    // layout. Its first-release identity and codec are checked in program_tests.
     crate::captured_schema_tests::assert_bidirectional::<super::BfvProgrammedPublicParameters>(
         "iroha_crypto::ram_lfe::BfvProgrammedPublicParameters",
     );

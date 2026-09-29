@@ -5,7 +5,7 @@ async fn block_and_header_queries_fail_on_hash_only_history_gap() -> Result<()> 
     let state = state_with_test_blocks_and_transactions(3, 1, 1)?;
     state
         .kura()
-        .force_hash_only_block_for_testing(nonzero!(2_usize))
+        .corrupt_canonical_body_for_testing(nonzero!(2_usize))
         .expect("convert middle query fixture block to hash-only form");
     let state_view = state.view();
     let blocks_error = ValidQuery::execute(FindBlocks, CompoundPredicate::PASS, &state_view)
@@ -17,7 +17,7 @@ async fn block_and_header_queries_fail_on_hash_only_history_gap() -> Result<()> 
     assert!(matches!(
         &blocks_error,
         QueryExecutionFail::CanonicalHistory(
-            iroha_data_model::query::error::CanonicalHistoryError::HashOnlyBodyUnavailable {
+            iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable {
                 height: 2,
                 ..
             }

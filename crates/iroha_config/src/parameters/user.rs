@@ -32,7 +32,6 @@ use iroha_data_model::{
     governance::types::{
         MAX_PARLIAMENT_BODY_TARGET_SEATS_V1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
     },
-    merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     soracloud::{
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
         SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
@@ -1043,7 +1042,7 @@ pub enum ParseError {
     /// Private Musubi publication listener settings were invalid.
     #[error("Invalid Musubi publication configuration")]
     InvalidMusubiPublicationConfig,
-    /// Snapshot configuration contained an invalid audited-bootstrap policy.
+    /// Snapshot configuration contained invalid resource budgets.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
     /// Network Time Service configuration contained invalid or unsafe values.
@@ -1324,7 +1323,7 @@ impl Root {
                 )),
             );
         }
-        if let Some(sumeragi) = sumeragi.as_ref() {
+        if sumeragi.is_some() {
             let lane_profile = network.lane_profile;
             let reply_source_capacity = network
                 .max_total_connections
@@ -1338,97 +1337,6 @@ impl Root {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                         "trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
-                    )),
-                );
-            }
-            if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
-                        sumeragi.queues.authenticated_non_validator_sources,
-                    )),
-                );
-            }
-            let effect_work_capacity = (sumeragi.queues.commands.get()
-                / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-                .max(1);
-            let validator_roster_len = trusted_peers.value().validator_roster_len();
-            let authenticated_non_validator_source_capacity =
-                sumeragi.queues.authenticated_non_validator_sources.get();
-            match actual::sumeragi_v2_body_ingress_required_message_capacity(
-                validator_roster_len,
-                authenticated_non_validator_source_capacity,
-            ) {
-                Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 canonical outer-ingress message capacity {} is below the roster-aware minimum {required_bodies}; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
-                            sumeragi.queues.bodies,
-                        )),
-                    );
-                }
-                None => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 roster-aware canonical outer-ingress message minimum overflowed; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
-                        )),
-                    );
-                }
-                Some(_) => {}
-            }
-            let body_source_bytes = sumeragi.queues.body_source_bytes.get();
-            match actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                validator_roster_len,
-                authenticated_non_validator_source_capacity,
-                body_source_bytes,
-            ) {
-                Some(required_body_bytes)
-                    if sumeragi.queues.body_bytes.get() < required_body_bytes =>
-                {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {} is below the roster-aware minimum {required_body_bytes}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
-                            sumeragi.queues.body_bytes,
-                        )),
-                    );
-                }
-                None => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 roster-aware aggregate canonical outer-ingress wire-byte minimum overflowed; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
-                        )),
-                    );
-                }
-                Some(_) => {}
-            }
-            if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
-                validator_roster_len,
-                effect_work_capacity,
-                sumeragi.queues.bodies.get(),
-                sumeragi.queues.authenticated_non_validator_sources.get(),
-            ) {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
-                        sumeragi.queues.authenticated_non_validator_sources,
-                        sumeragi.queues.bodies,
-                    )),
-                );
-            }
-            let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-                effect_work_capacity,
-                sumeragi.queues.bodies.get(),
-            )
-            .and_then(|shared_capacity| {
-                actual::validate_sumeragi_v2_exact_output_geometry(
-                    shared_capacity,
-                    reply_source_capacity,
-                )
-            });
-            if let Err(error) = geometry {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured network reply-source capacity is {reply_source_capacity}"
                     )),
                 );
             }
@@ -1496,9 +1404,6 @@ impl Root {
         let settlement = self.settlement.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
-        }
-        if let Err(message) = snapshot.bootstrap.validate() {
-            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
         if let Err(message) = snapshot.resources.validate(snapshot.max_payload_bytes) {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
@@ -5077,7 +4982,7 @@ mod sccp_limit_tests {
     use super::*;
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     #[test]
-    fn canonical_limit_key_reads_and_retired_knobs_are_unknown() {
+    fn canonical_limit_key_reads() {
         let canonical: toml::Table =
             toml::from_str("max_proofs_per_block = 17").expect("parse canonical SCCP key");
         let decoded = ConfigReader::new()
@@ -5085,21 +4990,6 @@ mod sccp_limit_tests {
             .read_and_complete::<Sccp>()
             .expect("read canonical SCCP key");
         assert_eq!(decoded.max_proofs_per_block.get(), 17);
-        for retired in [
-            "max_bls_aggregate_checks_per_block = 17",
-            "max_bls_signer_contributions_per_block = 17",
-            "max_bn254_pairing_checks_per_block = 17",
-            "max_bls12_381_pairing_checks_per_block = 17",
-        ] {
-            let table: toml::Table = toml::from_str(retired).expect("parse retired SCCP key");
-            assert!(
-                ConfigReader::new()
-                    .with_toml_source(TomlSource::inline(table))
-                    .read_and_complete::<Sccp>()
-                    .is_err(),
-                "retired [zk.sccp] knob must be rejected: {retired}"
-            );
-        }
     }
     #[test]
     fn defaults_are_nonzero_ordered_and_preserved() {
@@ -6281,143 +6171,6 @@ impl Genesis {
     }
 }
 include!("user/kura.rs");
-/// User-level finite candidate block limits.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct SumeragiBlock {
-    /// Maximum transactions selected for one candidate block.
-    #[config(default = "defaults::sumeragi::BLOCK_MAX_TRANSACTIONS")]
-    pub max_transactions: NonZeroUsize,
-    /// Local canonical block-body resource capacity in bytes.
-    /// Authenticated startup requires this to cover the signed RS16 payload
-    /// envelope; a smaller value cannot redefine the network proposal limit.
-    #[config(default = "defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES")]
-    pub max_payload_bytes: NonZeroUsize,
-    /// Proposal queue scan budget relative to `max_transactions`.
-    #[config(default = "defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER")]
-    pub proposal_queue_scan_multiplier: NonZeroUsize,
-}
-/// User-level bounded queues and outer-ingress byte budgets around the
-/// serialized reducer.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct SumeragiQueues {
-    /// Serialized reducer command FIFO capacity.
-    #[config(default = "defaults::sumeragi::QUEUE_COMMAND_CAPACITY")]
-    pub commands: NonZeroUsize,
-    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
-    #[config(default = "defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY")]
-    pub authenticated_non_validator_sources: NonZeroUsize,
-    /// Certified-body and block-sync ingress capacity.
-    #[config(default = "defaults::sumeragi::QUEUE_BODY_CAPACITY")]
-    pub bodies: NonZeroUsize,
-    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
-    #[config(
-        env = "SUMERAGI_QUEUES_BODY_BYTES",
-        default = "defaults::sumeragi::QUEUE_BODY_BYTES"
-    )]
-    pub body_bytes: NonZeroUsize,
-    /// Per-ingress-source canonical outer-ingress wire-byte partition.
-    /// Validator partitions isolate ordinary traffic, payload completions, and
-    /// timeout votes; authenticated non-validator partitions do not spend the
-    /// timeout reserve. This also reserves the fixed atomic
-    /// lane-certificate and executable-source minima.
-    #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
-    pub body_source_bytes: NonZeroUsize,
-    /// Payload-chunk ingress and orphan-buffer capacity.
-    #[config(default = "defaults::sumeragi::QUEUE_CHUNK_CAPACITY")]
-    pub chunks: NonZeroUsize,
-    /// Reconstructed bodies waiting for reducer delivery.
-    #[config(default = "defaults::sumeragi::QUEUE_READY_BODY_CAPACITY")]
-    pub ready_bodies: NonZeroUsize,
-}
-/// User-level durable storage budgets for Sumeragi v2.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct SumeragiStorage {
-    /// Aggregate checksummed body-frame bytes retained for one active height.
-    #[config(default = "defaults::sumeragi::BODY_STORE_MAX_BYTES_PER_HEIGHT")]
-    pub body_store_max_bytes_per_height: Bytes,
-}
-/// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
-#[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct SumeragiV2RuntimeLimits {
-    /// Authenticated merge-QC identities retained by one height-local adapter.
-    #[config(default = "defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY")]
-    pub authenticated_merge_qc_capacity: NonZeroUsize,
-    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
-    #[config(default = "defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES")]
-    pub merge_leader_body_frame_headroom_bytes: NonZeroUsize,
-    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
-    #[config(default = "defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES")]
-    pub autonomous_carrier_headroom_bytes: NonZeroUsize,
-    /// Cadence for retrying durable autonomous queue reservation.
-    #[config(default = "defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK.into()")]
-    pub autonomous_producer_recheck_ms: DurationMs,
-    /// Consecutive identical recovery waits before the stage is reported stuck.
-    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS")]
-    pub historical_recovery_stuck_attempts: NonZeroU32,
-    /// Attempts spent in each exponential historical-recovery retry tier.
-    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS")]
-    pub historical_recovery_retry_tier_attempts: NonZeroU32,
-    /// Highest exponential historical-recovery retry tier.
-    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER")]
-    pub historical_recovery_max_retry_tier: NonZeroU32,
-    /// Sidecar chunks transferred during one bounded adapter service turn.
-    #[config(default = "defaults::sumeragi::V2_SIDECAR_SERVICE_BURST")]
-    pub sidecar_service_burst: NonZeroUsize,
-    /// Concurrent certified merge-sidecar assemblies retained globally.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY")]
-    pub merge_sidecar_inbound_session_capacity: NonZeroUsize,
-    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER")]
-    pub merge_sidecar_inbound_sessions_per_peer: NonZeroUsize,
-    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES")]
-    pub merge_sidecar_inbound_assembly_bytes: NonZeroUsize,
-    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER")]
-    pub merge_sidecar_inbound_assembly_bytes_per_peer: NonZeroUsize,
-    /// Deferred global blocks waiting for exact certified sidecars.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY")]
-    pub merge_sidecar_deferred_block_capacity: NonZeroUsize,
-    /// Maximum future carrier-height distance admitted for deferred sidecars.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE")]
-    pub merge_sidecar_future_block_distance: NonZeroU64,
-    /// Base timeout before retrying an incomplete certified sidecar request.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT.into()")]
-    pub merge_sidecar_request_timeout_ms: DurationMs,
-    /// Concurrent response sessions retained for one authenticated source.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE")]
-    pub merge_sidecar_outbound_sessions_per_source: NonZeroUsize,
-    /// Response bytes retained for one authenticated source.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE")]
-    pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
-    /// Idempotency request gates retained for one authenticated source.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE")]
-    pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
-    /// Certified merge entries retained in Kura before canonical carrier commitment.
-    #[config(default = "defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY")]
-    pub pending_certified_merge_entry_capacity: NonZeroUsize,
-    /// Aggregate bytes retained by pending Kura control-sidecar stores.
-    #[config(default = "defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES")]
-    pub pending_control_sidecar_bytes: NonZeroUsize,
-    /// Durable merge-signing decisions retained before committed-frontier GC.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY")]
-    pub merge_signing_guard_record_capacity: NonZeroUsize,
-    /// Runtime byte ceiling for one canonical merge-signing decision.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES")]
-    pub merge_signing_guard_record_bytes: NonZeroUsize,
-    /// Aggregate bytes retained in the merge-signing journal.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES")]
-    pub merge_signing_guard_total_bytes: NonZeroUsize,
-    /// Durable Native AMX signing decisions retained at one height.
-    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY")]
-    pub native_amx_signing_guard_record_capacity: NonZeroUsize,
-    /// Runtime byte ceiling for one canonical Native AMX signing record.
-    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES")]
-    pub native_amx_signing_guard_record_bytes: NonZeroUsize,
-    /// Runtime byte ceiling for the Native AMX signing chain anchor.
-    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES")]
-    pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
-}
 /// User-level consensus key-rotation and algorithm policy.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SumeragiKeys {
@@ -6453,18 +6206,6 @@ pub struct Sumeragi {
     pub global_beacon_partial_signer_provider_revision: Option<u64>,
     /// Exact non-zero public-policy digest for the global beacon signer.
     pub global_beacon_partial_signer_provider_policy_digest_hex: Option<String>,
-    /// Finite candidate block limits.
-    #[config(nested)]
-    pub block: SumeragiBlock,
-    /// Bounded asynchronous adapter queues.
-    #[config(nested)]
-    pub queues: SumeragiQueues,
-    /// Shared finite lane, merge, recovery, and Native AMX service bounds.
-    #[config(nested)]
-    pub limits: SumeragiV2RuntimeLimits,
-    /// Node-local durable storage budgets.
-    #[config(nested)]
-    pub storage: SumeragiStorage,
     /// Consensus key-rotation and algorithm policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
@@ -6703,18 +6444,6 @@ impl Sumeragi {
         Ok((records_dir, installation_log))
     }
 
-    /// Parse this section on its own, as profile geometry validation does.
-    ///
-    /// The safety-record paths are resolved against the default `kura.store_dir`; geometry
-    /// validation never reads them.
-    pub(crate) fn parse_section(self) -> Result<actual::Sumeragi, ParseError> {
-        let mut emitter = Emitter::new();
-        let kura_store_dir = WithOrigin::inline(PathBuf::from(defaults::kura::STORE_DIR));
-        let parsed = self.parse(&mut emitter, &kura_store_dir);
-        emitter.into_result()?;
-        Ok(parsed.expect("a Sumeragi section without errors parses"))
-    }
-
     fn parse(
         self,
         emitter: &mut Emitter<ParseError>,
@@ -6726,10 +6455,6 @@ impl Sumeragi {
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest_hex,
-            block,
-            queues,
-            limits,
-            storage,
             keys,
             view_timeout_base_ms,
             view_timeout_max_ms,
@@ -6828,119 +6553,6 @@ impl Sumeragi {
             );
             valid = false;
         }
-        if queues.commands.get() < defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "sumeragi.queues.commands must be at least {}",
-                    defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY,
-                )),
-            );
-            valid = false;
-        }
-        if storage.body_store_max_bytes_per_height.get()
-            < defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "sumeragi.storage.body_store_max_bytes_per_height must hold one maximum durable body frame (minimum {}, configured {})",
-                    defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
-                    storage.body_store_max_bytes_per_height.get(),
-                )),
-            );
-            valid = false;
-        }
-        let envelope_headroom = defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES;
-        let manifest_wire_bytes =
-            defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES;
-        let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
-        let certified_fence_escape_reserve =
-            defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES;
-        let lane_progress_bytes = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
-        let lane_completion_bytes = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
-        let minimum_source_bytes = block
-            .max_payload_bytes
-            .get()
-            .checked_add(envelope_headroom)
-            .map(|ordinary| ordinary.max(lane_progress_bytes))
-            .and_then(|ordinary| {
-                block
-                    .max_payload_bytes
-                    .get()
-                    .checked_add(envelope_headroom)
-                    .and_then(|completion| completion.checked_add(manifest_wire_bytes))
-                    .map(|completion| completion.max(lane_completion_bytes))
-                    .and_then(|completion| ordinary.checked_add(completion))
-            })
-            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
-            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve));
-        match minimum_source_bytes {
-            Some(minimum) if queues.body_source_bytes.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
-                        queues.body_source_bytes,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
-                    )),
-                );
-                valid = false;
-            }
-        }
-        let minimum_body_sources = queues
-            .authenticated_non_validator_sources
-            .get()
-            .checked_add(1);
-        let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_capacity(
-            1,
-            queues.authenticated_non_validator_sources.get(),
-        );
-        match minimum_body_messages {
-            Some(minimum) if queues.bodies.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum {minimum}, configured {})",
-                        queues.bodies,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "Sumeragi authenticated non-validator ingress message geometry exceeds the platform size representation",
-                ));
-                valid = false;
-            }
-        }
-        match minimum_body_sources
-            .and_then(|sources| queues.body_source_bytes.get().checked_mul(sources))
-        {
-            Some(minimum) if queues.body_bytes.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum {minimum}, configured {})",
-                        queues.body_bytes,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(
-                        "Sumeragi authenticated-source ingress byte geometry exceeds the platform size representation",
-                    ),
-                );
-                valid = false;
-            }
-        }
         let key_algorithms: BTreeSet<Algorithm> = keys.allowed_algorithms.iter().copied().collect();
         if !key_algorithms.contains(&Algorithm::BlsNormal) {
             emitter.emit(
@@ -6966,61 +6578,6 @@ impl Sumeragi {
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest,
-            block: actual::SumeragiBlock {
-                max_transactions: block.max_transactions,
-                max_payload_bytes: block.max_payload_bytes,
-                proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,
-            },
-            queues: actual::SumeragiQueues {
-                commands: queues.commands,
-                authenticated_non_validator_sources: queues.authenticated_non_validator_sources,
-                bodies: queues.bodies,
-                body_bytes: queues.body_bytes,
-                body_source_bytes: queues.body_source_bytes,
-                chunks: queues.chunks,
-                ready_bodies: queues.ready_bodies,
-            },
-            limits: actual::SumeragiV2RuntimeLimits {
-                authenticated_merge_qc_capacity: limits.authenticated_merge_qc_capacity,
-                merge_leader_body_frame_headroom_bytes: limits
-                    .merge_leader_body_frame_headroom_bytes,
-                autonomous_carrier_headroom_bytes: limits.autonomous_carrier_headroom_bytes,
-                autonomous_producer_recheck: limits.autonomous_producer_recheck_ms.0,
-                historical_recovery_stuck_attempts: limits.historical_recovery_stuck_attempts,
-                historical_recovery_retry_tier_attempts: limits
-                    .historical_recovery_retry_tier_attempts,
-                historical_recovery_max_retry_tier: limits.historical_recovery_max_retry_tier,
-                sidecar_service_burst: limits.sidecar_service_burst,
-                merge_sidecar_inbound_session_capacity: limits
-                    .merge_sidecar_inbound_session_capacity,
-                merge_sidecar_inbound_sessions_per_peer: limits
-                    .merge_sidecar_inbound_sessions_per_peer,
-                merge_sidecar_inbound_assembly_bytes: limits.merge_sidecar_inbound_assembly_bytes,
-                merge_sidecar_inbound_assembly_bytes_per_peer: limits
-                    .merge_sidecar_inbound_assembly_bytes_per_peer,
-                merge_sidecar_deferred_block_capacity: limits.merge_sidecar_deferred_block_capacity,
-                merge_sidecar_future_block_distance: limits.merge_sidecar_future_block_distance,
-                merge_sidecar_request_timeout: limits.merge_sidecar_request_timeout_ms.0,
-                merge_sidecar_outbound_sessions_per_source: limits
-                    .merge_sidecar_outbound_sessions_per_source,
-                merge_sidecar_outbound_bytes_per_source: limits
-                    .merge_sidecar_outbound_bytes_per_source,
-                merge_sidecar_server_request_gates_per_source: limits
-                    .merge_sidecar_server_request_gates_per_source,
-                pending_certified_merge_entry_capacity: limits
-                    .pending_certified_merge_entry_capacity,
-                pending_control_sidecar_bytes: limits.pending_control_sidecar_bytes,
-                merge_signing_guard_record_capacity: limits.merge_signing_guard_record_capacity,
-                merge_signing_guard_record_bytes: limits.merge_signing_guard_record_bytes,
-                merge_signing_guard_total_bytes: limits.merge_signing_guard_total_bytes,
-                native_amx_signing_guard_record_capacity: limits
-                    .native_amx_signing_guard_record_capacity,
-                native_amx_signing_guard_record_bytes: limits.native_amx_signing_guard_record_bytes,
-                native_amx_signing_guard_anchor_bytes: limits.native_amx_signing_guard_anchor_bytes,
-            },
-            storage: actual::SumeragiStorage {
-                body_store_max_bytes_per_height: storage.body_store_max_bytes_per_height,
-            },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
                 overlap_grace_blocks: keys.overlap_grace_blocks,
@@ -12358,13 +11915,6 @@ impl Nexus {
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
-        if let Err(error) = iroha_data_model::merge::validate_merge_lane_authority_geometry(
-            &lane_catalog,
-            &dataspace_catalog,
-        ) {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(error.to_string()));
-            return None;
-        }
         let routing_policy =
             Self::build_routing_policy(routing_policy, &lane_catalog, &dataspace_catalog, emitter)?;
         let registry = registry.parse(emitter)?;
@@ -13848,9 +13398,6 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
-    /// Explicit authorization for a one-time audited hash-only snapshot boundary.
-    #[config(nested)]
-    pub bootstrap: SnapshotBootstrapPolicy,
 }
 impl Snapshot {
     fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {
@@ -13927,73 +13474,6 @@ impl SnapshotResourcePolicy {
             );
         }
         Ok(())
-    }
-}
-/// Fail-closed authorization for importing one audited hash-only snapshot boundary.
-#[derive(Debug, Clone, Default, ReadConfig)]
-pub struct SnapshotBootstrapPolicy {
-    /// Whether the audited bootstrap path is enabled.
-    #[config(default = "false")]
-    pub enabled: bool,
-    /// Exact SHA-256 digest of the authorized snapshot payload.
-    pub audited_sha256: Option<String>,
-    /// Exact terminal height committed by the authorized snapshot.
-    pub audited_height: Option<u64>,
-}
-impl SnapshotBootstrapPolicy {
-    /// Validate that the policy is either fully disabled or fully and canonically specified.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when disabled bootstrap retains an audit anchor, or
-    /// when enabled bootstrap lacks a canonical lowercase SHA-256 digest or a
-    /// non-zero audited height.
-    pub fn validate(&self) -> core::result::Result<(), String> {
-        if !self.enabled {
-            if self.audited_sha256.is_some() || self.audited_height.is_some() {
-                return Err(
-                    "snapshot.bootstrap digest/height require snapshot.bootstrap.enabled=true"
-                        .to_owned(),
-                );
-            }
-            return Ok(());
-        }
-        let digest = self
-            .audited_sha256
-            .as_deref()
-            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_sha256".to_owned())?;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(
-                "snapshot.bootstrap.audited_sha256 must contain exactly 64 lowercase hexadecimal digits"
-                    .to_owned(),
-            );
-        }
-        let height = self
-            .audited_height
-            .ok_or_else(|| "snapshot.bootstrap.enabled requires audited_height".to_owned())?;
-        if height == 0 {
-            return Err("snapshot.bootstrap.audited_height must be non-zero".to_owned());
-        }
-        Ok(())
-    }
-    /// Return whether this policy authorizes the exact payload digest.
-    #[must_use]
-    pub fn authorizes_digest(&self, actual_sha256: &str) -> bool {
-        self.validate().is_ok()
-            && self.enabled
-            && self
-                .audited_sha256
-                .as_deref()
-                .is_some_and(|expected| expected == actual_sha256)
-    }
-    /// Return whether this policy authorizes the exact payload digest and terminal height.
-    #[must_use]
-    pub fn authorizes(&self, actual_sha256: &str, height: u64) -> bool {
-        self.authorizes_digest(actual_sha256) && self.audited_height == Some(height)
     }
 }
 /// User-level non-secret custody and private TLS listener settings for Musubi publication.
@@ -20035,7 +19515,7 @@ pub struct ToriiRamLfeProgram {
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: RamLfeSecret,
     /// Norito-encoded hidden BFV RAM-FHE program as exact `0x`-prefixed lowercase hex.
-    pub hidden_program_hex: String,
+    pub hidden_program_hex: iroha_crypto::HiddenRamFheProgram,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: PrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
@@ -20094,61 +19574,7 @@ impl ToriiRamLfeProgram {
                     return None;
                 }
             };
-        let Some(hidden_program_literal) = self.hidden_program_hex.strip_prefix("0x") else {
-            emit_torii_config_error(
-                emitter,
-                format!(
-                    "torii.ram_lfe.programs[{index}].hidden_program_hex must be exact `0x`-prefixed lowercase hex"
-                ),
-            );
-            return None;
-        };
-        if hidden_program_literal.is_empty()
-            || !hidden_program_literal
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            emit_torii_config_error(
-                emitter,
-                format!(
-                    "torii.ram_lfe.programs[{index}].hidden_program_hex must contain non-empty lowercase hex after `0x`"
-                ),
-            );
-            return None;
-        }
-        let hidden_program_bytes = match Vec::from_hex(hidden_program_literal) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                emit_torii_config_error(
-                    emitter,
-                    format!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}"),
-                );
-                return None;
-            }
-        };
-        let hidden_program: iroha_crypto::HiddenRamFheProgram = match norito::decode_from_bytes(
-            hidden_program_bytes.as_slice(),
-        ) {
-            Ok(program) => program,
-            Err(err) => {
-                emit_torii_config_error(
-                    emitter,
-                    format!(
-                        "invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}"
-                    ),
-                );
-                return None;
-            }
-        };
-        if let Err(err) = iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program) {
-            emit_torii_config_error(
-                emitter,
-                format!(
-                    "invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}"
-                ),
-            );
-            return None;
-        }
+        let hidden_program = self.hidden_program_hex;
         if let Err(err) = KeyPair::from_private_key(self.signer_private_key.clone()) {
             emit_torii_config_error(
                 emitter,

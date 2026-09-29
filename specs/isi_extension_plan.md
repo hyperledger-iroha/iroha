@@ -69,8 +69,6 @@ security and operability risk first, UX throughput second.
 
 - Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
   edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
-  (`default/mod.rs`).
 - Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
 - World state includes `account_rekey_records` keyed by `AccountAlias` so we can stage alias →
   signatory migrations without touching the historical `AccountId` encoding.

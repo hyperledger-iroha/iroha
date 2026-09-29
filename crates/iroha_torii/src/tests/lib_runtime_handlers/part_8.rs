@@ -737,28 +737,6 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
         }]
     );
     assert!(candidates.unavailable_reason.is_none());
-    let proposal_height = app
-        .state
-        .latest_block_header_fast()
-        .map_or(1, |header| header.height().get().saturating_add(1));
-    let exact_candidates = super::queue_plan_synced_proxy_candidate_peer_ids(
-        app.as_ref(),
-        &local_peer_id,
-        route,
-        std::slice::from_ref(&authoritative_peer_id),
-        proposal_height,
-        None,
-        &[],
-        false,
-    );
-    assert_eq!(
-        exact_candidates.peers,
-        vec![ToriiProxyCandidate::HttpBridge {
-            peer_id: authoritative_peer_id,
-            torii_url: "http://127.0.0.1:19080".to_owned(),
-        }],
-        "proposal-bound exact authorities must retain their manifest HTTP bridge"
-    );
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -1009,16 +987,13 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
             ToriiProxyResponseFormatV1::Json,
         )),
     };
-    let fanout_candidates = super::torii_proxy_candidate_peer_ids_for_request(
+    let fanout_candidates = super::torii_proxy_candidate_peer_ids(
         app.as_ref(),
         &local_peer_id,
         route,
         None,
         &local_fanout_request.visited_peer_ids,
-        &local_fanout_request,
-        true,
-    )
-    .expect("ordinary read fanout candidate selection");
+    );
     assert!(
         fanout_candidates.peers.iter().all(|candidate| {
             !matches!(candidate, ToriiProxyCandidate::Local(_))
@@ -1680,7 +1655,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         (request_id, responder_peer_id),
         tx,
         usize::MAX,
-        false,
     );
     let payload = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
@@ -1693,12 +1667,10 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     let message =
         iroha_p2p::peer::message::PeerMessage::new(responder_peer, payload, payload_bytes);
     let (requests, _request_rx) = tokio::sync::mpsc::channel(1);
-    let (publications, _publication_rx) = tokio::sync::mpsc::channel(1);
     super::proxy_network_workers::dispatch(
         &app,
         &iroha_core::IrohaNetwork::closed_for_tests(),
         &requests,
-        &publications,
         message,
     )
     .await;
@@ -1733,14 +1705,9 @@ async fn identical_torii_proxy_submissions_keep_all_pending_waiters() {
     let (first_tx, first_rx) = tokio::sync::oneshot::channel();
     let (second_tx, second_rx) = tokio::sync::oneshot::channel();
     let _first_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), first_tx, 1024, true);
-    let _second_waiter_token = super::register_torii_proxy_pending_waiter(
-        &app,
-        pending_key.clone(),
-        second_tx,
-        1024,
-        true,
-    );
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), first_tx, 1024);
+    let _second_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), second_tx, 1024);
     assert_eq!(
         app.torii_proxy_pending
             .lock()
@@ -1802,9 +1769,9 @@ async fn identical_torii_proxy_waiters_enforce_body_bounds_independently() {
     let (tight_tx, tight_rx) = tokio::sync::oneshot::channel();
     let (wide_tx, wide_rx) = tokio::sync::oneshot::channel();
     let _tight_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), tight_tx, 4, false);
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), tight_tx, 4);
     let _wide_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), wide_tx, 1024, false);
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), wide_tx, 1024);
     let expected_response = ToriiProxyHttpResponseV1 {
         status_code: StatusCode::OK.as_u16(),
         headers: Vec::new(),
@@ -1852,15 +1819,10 @@ async fn identical_torii_proxy_attempt_cleanup_is_waiter_scoped() {
     let pending_key = (request_id, responder_peer_id.clone());
     let (failed_tx, failed_rx) = tokio::sync::oneshot::channel();
     let (live_tx, live_rx) = tokio::sync::oneshot::channel();
-    let failed_waiter_token = super::register_torii_proxy_pending_waiter(
-        &app,
-        pending_key.clone(),
-        failed_tx,
-        1024,
-        true,
-    );
+    let failed_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), failed_tx, 1024);
     let _live_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), live_tx, 1024, true);
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), live_tx, 1024);
 
     drop(failed_waiter_token);
     assert!(

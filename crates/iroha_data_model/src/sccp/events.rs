@@ -4,7 +4,6 @@
 //! payload struct. Parliament proposal lifecycle outcomes are reported by the existing
 //! Parliament governance events; SCCP adds only [`SccpEvent::GovernanceEnacted`] with the
 //! subjects it changed.
-// TODO(ws20): add `SccpEvent` to `DataEvent` with its filter and captured identity tests.
 
 use super::{
     governance::SccpGovernanceSubjectV1,

@@ -1,77 +1,59 @@
-/// Network selected independently by the actual four-validator finality fixture.
+/// Default network used only by structural, unauthenticated projection tests.
 pub(crate) fn canonical_query_network_id() -> iroha_data_model::NetworkId {
     native_storage_network_id()
 }
 
-// Physical canonical query fixtures reuse the genuine configured primary and
-// exact-wire three-of-four BLS chain. They do not claim economic execution.
-
-/// Own the durable files and authenticated finality for a caller-built fixture chain.
+/// Original native execution and physical custody for canonical query fixtures.
 pub(crate) struct CanonicalQueryStore {
-    _root: TempDir,
+    /// Executing State and its authoritative committed hash cut.
+    pub(crate) state: Arc<State>,
     /// Actual physical store used by the State query reader.
     pub(crate) kura: Arc<Kura>,
-    /// Independently retained exact bodies for assertions and corruption controls.
+    /// Original native bodies retained independently of query caches.
     pub(crate) blocks: Vec<Arc<SignedBlock>>,
+    _chain: crate::sumeragi::test_chain::CertifiedTestChain,
 }
 impl CanonicalQueryStore {
-    /// Persist a contiguous canonical chain and bind every exact executed wire by CommitQC.
-    pub(crate) fn new(blocks: Vec<Arc<SignedBlock>>) -> Self {
-        assert!(!blocks.is_empty());
-        let (root, _, kura) = kura_root_fixture(nonzero!(32_usize));
-        // State readers must share the exact configured genesis incarnation,
-        // established before the first physical body is persisted.
-        let _initial_state = State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            ChainId::from("canonical-query"),
-            canonical_query_network_id(),
-        );
-        for (index, block) in blocks.iter().enumerate() {
-            assert_eq!(
-                block.header().height().get(),
-                u64::try_from(index + 1).unwrap()
-            );
-            assert_eq!(
-                block.header().prev_block_hash(),
-                index.checked_sub(1).map(|i| blocks[i].hash())
-            );
-            block.validate_output_merkle_cache().unwrap();
-            kura.store_block(Arc::clone(block))
-                .expect("store exact canonical query body");
-        }
-        let artifacts =
-            persist_v2_finality_chain_through(&kura, NonZeroUsize::new(blocks.len()).unwrap());
-        for (block, artifact) in blocks.iter().zip(&artifacts) {
-            assert_eq!(
-                artifact.height_context.network_id,
-                canonical_query_network_id()
-            );
-            assert_eq!(artifact.height_context.roster.len(), 4);
-            assert_eq!(artifact.commit_qc.signers.len(), 3);
-            artifact.verify().expect("actual BLS and PoP finality");
-            let wire = block.encode_wire().unwrap();
-            assert_eq!(
-                artifact
-                    .commit_qc
-                    .execution_commitment
-                    .executed_block_wire_len,
-                u64::try_from(wire.len()).unwrap()
-            );
-            assert_eq!(
-                artifact
-                    .commit_qc
-                    .execution_commitment
-                    .executed_block_wire_hash,
-                Hash::new(&wire)
-            );
-        }
+    /// Retain the chain's original executed blocks and certificates without resigning.
+    pub(crate) fn from_chain(chain: crate::sumeragi::test_chain::CertifiedTestChain) -> Self {
+        let blocks = (1..=chain.height())
+            .map(|height| Arc::clone(chain.committed(height).block()))
+            .collect();
         Self {
-            _root: root,
-            kura,
+            state: Arc::clone(chain.state()),
+            kura: Arc::clone(chain.kura()),
             blocks,
+            _chain: chain,
         }
+    }
+
+    /// Extend the same original native chain without altering any retained query prefix.
+    pub(crate) fn append_next(&mut self) {
+        self._chain.commit(Vec::new());
+        self.blocks.push(Arc::clone(
+            self._chain.committed(self._chain.height()).block(),
+        ));
+    }
+
+    /// Open a detached query-permission fixture over the original authenticated history.
+    pub(crate) fn reader_state(&self, world: World) -> State {
+        let mut state = State::try_new_with_chain_and_network_id(
+            crate::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            world,
+            Arc::clone(&self.kura),
+            LiveQueryStore::start_test(),
+            self.state.view().chain_id.clone(),
+            *self.state.network_id_ref(),
+            #[cfg(feature = "telemetry")]
+            Default::default(),
+        )
+        .expect("reader opens original native custody");
+        for block in &self.blocks {
+            state.push_block_hash_for_testing(block.hash());
+        }
+        state
     }
     /// Exact expected bytes for the selected complete physical bodies, without reading storage.
     pub(crate) fn wire_bytes(&self, heights: impl IntoIterator<Item = usize>) -> u64 {
@@ -107,79 +89,5 @@ impl CanonicalQueryStore {
         file.sync_all().unwrap();
         // Leave the already authenticated sparse index untouched. The actual
         // canonical reader must reject altered disk bytes even with a warm body.
-    }
-}
-
-/// Publish a structural query fixture through actual storage and independently signed finality.
-/// Kura's blank test constructor owns the temporary directory for its whole lifetime.
-pub(crate) fn persist_canonical_query_blocks(kura: &Kura, blocks: &[Arc<SignedBlock>]) {
-    establish_dummy_store_primary_anchor(kura);
-    for (index, block) in blocks.iter().enumerate() {
-        assert_eq!(
-            block.header().height().get(),
-            u64::try_from(index + 1).unwrap()
-        );
-        assert_eq!(
-            block.header().prev_block_hash(),
-            index.checked_sub(1).map(|i| blocks[i].hash())
-        );
-        block.validate_output_merkle_cache().unwrap();
-        kura.store_block(Arc::clone(block)).unwrap();
-    }
-    if !blocks.is_empty() {
-        // One explicit finite epoch covers these structural history fixtures,
-        // including the original 100-carrier tests. Epoch-transition tests own
-        // next-epoch snapshots separately; all contexts below are actually signed.
-        const QUERY_EPOCH_END_HEIGHT: u64 = 1024;
-        assert!(u64::try_from(blocks.len()).unwrap() < QUERY_EPOCH_END_HEIGHT);
-        let keys = v2_finality_fixture_keys();
-        let mut artifacts = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            let artifact = v2_finality_artifact_for_block_with_keys_and_context_policy(
-                block,
-                artifacts.last(),
-                &keys,
-                v2_finality_fixture_execution_commitment(),
-                None,
-                canonical_query_network_id(),
-                0,
-                QUERY_EPOCH_END_HEIGHT,
-                DataAvailabilityLayout {
-                    encoding: PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4096,
-                    max_chunk_count: 8,
-                },
-            );
-            let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
-            assert_v2_commit_receipt_matches_artifact(&receipt, &artifact);
-            artifacts.push(artifact);
-        }
-        for (block, artifact) in blocks.iter().zip(artifacts) {
-            assert_eq!(
-                artifact.height_context.network_id,
-                canonical_query_network_id()
-            );
-            assert_eq!(artifact.height_context.roster.len(), 4);
-            assert_eq!(artifact.commit_qc.signers.len(), 3);
-            artifact.verify().unwrap();
-            let wire = block.encode_wire().unwrap();
-            assert_eq!(
-                artifact
-                    .commit_qc
-                    .execution_commitment
-                    .executed_block_wire_hash,
-                Hash::new(&wire)
-            );
-            assert_eq!(
-                artifact
-                    .commit_qc
-                    .execution_commitment
-                    .executed_block_wire_len,
-                u64::try_from(wire.len()).unwrap()
-            );
-        }
     }
 }

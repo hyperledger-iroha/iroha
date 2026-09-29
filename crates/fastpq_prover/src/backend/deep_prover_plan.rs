@@ -147,66 +147,12 @@ impl DeepProverPlan {
                 max: AXT_INNER_PAYLOAD_CEILING_BYTES,
             });
         }
-        let mut degrees = [PUBLIC_POLYNOMIAL_DEGREE + 1; COLUMN_COUNT];
-        let mut first_degree_excess = None;
-        let mut first_extension = None;
-        let mut any_unmasked = false;
-        for retained_column in 0..COMMITTED_COLUMN_COUNT {
-            let source_column = COMMITTED_COLUMNS[retained_column];
-            if source.committed_column(retained_column)?.len() != TRACE_ROWS {
-                return Err(invalid(
-                    "DEEP retained source column has another row extent",
-                ));
-            }
-            let shape = shapes[retained_column];
-            let mask = masks[retained_column];
-            if shape.trace_coefficients != TRACE_ROWS
-                || shape.trace_degree_bound != TRACE_ROWS
-                || shape.mask_coefficients != mask.len()
-                || mask.is_empty()
-                || mask.len() > MAX_MASK_COEFFICIENTS
-                || shape.mask_degree_bound == 0
-                || shape.mask_degree_bound > mask.len()
-            {
-                return Err(invalid(
-                    "DEEP mask differs from the bounded vanishing-mask shape",
-                ));
-            }
-            let mut highest_nonzero = None;
-            for (coefficient, &value) in mask.iter().enumerate() {
-                value.validate("deep_prover_mask", &[retained_column, coefficient])?;
-                if coefficient >= shape.mask_degree_bound && value != F::ZERO {
-                    return Err(invalid("DEEP mask has nonzero declared degree padding"));
-                }
-                if value != F::ZERO {
-                    highest_nonzero = Some(coefficient);
-                    if value.coefficients()[1..].iter().any(|&word| word != 0)
-                        && first_extension.is_none()
-                    {
-                        first_extension =
-                            Some(DeepPrivateProofRefusal::ExtensionMaskCannotUseBaseRows {
-                                retained_column,
-                                source_column,
-                            });
-                    }
-                }
-            }
-            degrees[source_column] = if let Some(highest) = highest_nonzero {
-                let degree_bound = checked_sum(&[TRACE_ROWS, highest, 1])?;
-                if degree_bound > FRI_DEGREES[0] && first_degree_excess.is_none() {
-                    first_degree_excess = Some(DeepPrivateProofRefusal::MaskExceedsFriDegree {
-                        retained_column,
-                        source_column,
-                        trace_degree_bound: degree_bound,
-                        fri_degree_bound: FRI_DEGREES[0],
-                    });
-                }
-                degree_bound
-            } else {
-                any_unmasked = true;
-                TRACE_ROWS
-            };
-        }
+        let MaskedDegrees {
+            degrees,
+            first_degree_excess,
+            first_extension,
+            any_unmasked,
+        } = masked_degrees(source, masks, shapes)?;
         // The omitted public columns must remain verifier-known polynomials,
         // never a claimant-supplied mask or a physical-row constant at OOD points.
         if PUBLIC_COLUMNS
@@ -251,6 +197,88 @@ impl DeepProverPlan {
     ) -> core::result::Result<(), DeepPrivateProofRefusal> {
         Err(self.refusal)
     }
+}
+
+/// Exact masked trace degree bounds with the first degree/extension refusals found.
+struct MaskedDegrees {
+    degrees: [usize; COLUMN_COUNT],
+    first_degree_excess: Option<DeepPrivateProofRefusal>,
+    first_extension: Option<DeepPrivateProofRefusal>,
+    any_unmasked: bool,
+}
+
+/// Check every retained column's mask shape and derive its exact degree bound.
+fn masked_degrees(
+    source: &SourceTraceColumns<'_>,
+    masks: &[&[F]],
+    shapes: &[MaskingShape],
+) -> Result<MaskedDegrees> {
+    let mut degrees = [PUBLIC_POLYNOMIAL_DEGREE + 1; COLUMN_COUNT];
+    let mut first_degree_excess = None;
+    let mut first_extension = None;
+    let mut any_unmasked = false;
+    for retained_column in 0..COMMITTED_COLUMN_COUNT {
+        let source_column = COMMITTED_COLUMNS[retained_column];
+        if source.committed_column(retained_column)?.len() != TRACE_ROWS {
+            return Err(invalid(
+                "DEEP retained source column has another row extent",
+            ));
+        }
+        let shape = shapes[retained_column];
+        let mask = masks[retained_column];
+        if shape.trace_coefficients != TRACE_ROWS
+            || shape.trace_degree_bound != TRACE_ROWS
+            || shape.mask_coefficients != mask.len()
+            || mask.is_empty()
+            || mask.len() > MAX_MASK_COEFFICIENTS
+            || shape.mask_degree_bound == 0
+            || shape.mask_degree_bound > mask.len()
+        {
+            return Err(invalid(
+                "DEEP mask differs from the bounded vanishing-mask shape",
+            ));
+        }
+        let mut highest_nonzero = None;
+        for (coefficient, &value) in mask.iter().enumerate() {
+            value.validate("deep_prover_mask", &[retained_column, coefficient])?;
+            if coefficient >= shape.mask_degree_bound && value != F::ZERO {
+                return Err(invalid("DEEP mask has nonzero declared degree padding"));
+            }
+            if value != F::ZERO {
+                highest_nonzero = Some(coefficient);
+                if value.coefficients()[1..].iter().any(|&word| word != 0)
+                    && first_extension.is_none()
+                {
+                    first_extension =
+                        Some(DeepPrivateProofRefusal::ExtensionMaskCannotUseBaseRows {
+                            retained_column,
+                            source_column,
+                        });
+                }
+            }
+        }
+        degrees[source_column] = if let Some(highest) = highest_nonzero {
+            let degree_bound = checked_sum(&[TRACE_ROWS, highest, 1])?;
+            if degree_bound > FRI_DEGREES[0] && first_degree_excess.is_none() {
+                first_degree_excess = Some(DeepPrivateProofRefusal::MaskExceedsFriDegree {
+                    retained_column,
+                    source_column,
+                    trace_degree_bound: degree_bound,
+                    fri_degree_bound: FRI_DEGREES[0],
+                });
+            }
+            degree_bound
+        } else {
+            any_unmasked = true;
+            TRACE_ROWS
+        };
+    }
+    Ok(MaskedDegrees {
+        degrees,
+        first_degree_excess,
+        first_extension,
+        any_unmasked,
+    })
 }
 
 /// Checked base-field payload floor for a complete in-memory retained-row LDE.

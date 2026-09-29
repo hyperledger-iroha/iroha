@@ -14,11 +14,6 @@ use iroha_crypto::{Hash, HashOf};
 
 fn owner_fixture() -> Arc<Kura> {
     let kura = Kura::blank_kura_for_testing();
-    {
-        let _carrier = kura.merge_carrier_lock.lock();
-        kura.ensure_merge_carrier_index_initialized_unlocked()
-            .unwrap();
-    }
     kura.reconcile_physical_resource_inventory().unwrap();
     kura.reconcile_resident_resource_inventory().unwrap();
     assert!(kura.resource_inventory_snapshot().is_ok());
@@ -63,30 +58,17 @@ fn assert_complete(rows: &BTreeMap<String, u64>) {
     let names = [
         "resident_canonical",
         "resident_transaction",
-        "resident_merge",
-        "resident_carrier",
-        "resident_replica",
-        "resident_verification",
         "resident_frontier",
         "resident_queue",
         "canonical_index",
         "canonical_hashes",
         "pipeline_index",
-        "ownership_index",
-        "certified_index",
-        "execution_input_index",
-        "execution_preflight_index",
-        "application_receipt_index",
-        "merge_bundle_index",
-        "canonical_replica_index",
-        "merge_carrier_record",
-        "native_latest_record",
         "query_marker_records",
         "evidence_key_records",
         "storage_bytes",
     ];
-    assert_eq!(names.len(), 23);
-    assert_eq!(rows.len(), 23 * 5 + 10);
+    assert_eq!(names.len(), 10);
+    assert_eq!(rows.len(), 10 * 5 + 10);
     assert_eq!(scalar(rows, "available"), 1);
     assert_eq!(rows[&format!("{PREFIX}status{{reason=\"available\"}}")], 1);
     for field in [
@@ -313,11 +295,6 @@ fn resource_gather_uses_recovery_wrapper_and_never_repairs_unavailable_inventory
     );
     unavailable(&samples(&metrics), "busy");
     kura.prune_in_progress.store(false, Ordering::Release);
-    kura.post_wsv_resident_recovery_complete
-        .store(false, Ordering::Release);
-    unavailable(&samples(&metrics), "unregistered");
-    kura.post_wsv_resident_recovery_complete
-        .store(true, Ordering::Release);
     kura.canonical_storage_poisoned
         .store(true, Ordering::Release);
     unavailable(&samples(&metrics), "invalid_inventory");

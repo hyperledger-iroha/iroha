@@ -35,10 +35,6 @@ impl NativeFrameRead<'_> {
         if height > count {
             return Ok(None);
         }
-        if kura.is_hard_fork_hash_only_block(usize::try_from(position)?) {
-            kura.ensure_snapshot_bootstrap_authenticated()?;
-            return Ok(None);
-        }
         if Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash) {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
@@ -91,10 +87,6 @@ impl Kura {
         self.ensure_canonical_storage_not_poisoned()?;
         let mut store = self.block_store.lock();
         if height > store.read_exact_durable_index_count()? {
-            return Ok(None);
-        }
-        if self.is_hard_fork_hash_only_block(usize::try_from(position)?) {
-            self.ensure_snapshot_bootstrap_authenticated()?;
             return Ok(None);
         }
         if Self::read_durable_hash_at_height(&mut store, height)? != Some(hash) {

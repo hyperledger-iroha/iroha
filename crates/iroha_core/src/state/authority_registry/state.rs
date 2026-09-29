@@ -131,12 +131,6 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Canonical(Canonical::Cell(schema::<iroha_model_base::chain::ChainId>())));
     network_id: iroha_data_model::NetworkId => ("state.network_id",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::NetworkId>())));
-    snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> => ("state.snapshot_v2_bootstrap_candidate",
-        Role::Local("Unauthenticated startup candidate; must never become commitment/proof authority"));
-    authenticated_snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord> => ("state.authenticated_snapshot_v2_bootstrap",
-        Role::History { source: "Snapshot-policy-authorized V2 bootstrap trust root bound to exact WSV/Kura network and finality", authentication: "snapshot authenticated envelope owner and State startup prevalidation/install boundary" });
-    authenticated_snapshot_bootstrap_payload: Option<crate::snapshot::AuthenticatedSnapshotBootstrapPayload> => ("state.authenticated_snapshot_bootstrap_payload",
-        Role::History { source: "Snapshot-policy-authorized V2 bootstrap trust root bound to exact WSV/Kura network and finality", authentication: "snapshot authenticated envelope owner and State startup prevalidation/install boundary" });
     #[cfg(feature = "telemetry")]
     telemetry: StateTelemetry => ("state.telemetry",
         Role::Local("Observability sink excluded from deterministic execution"));

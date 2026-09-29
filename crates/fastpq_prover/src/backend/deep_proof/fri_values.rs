@@ -6,6 +6,11 @@ use super::{Fp4, Result, shape};
 
 /// One complete FRI fiber. Its arity byte is followed by exactly that many
 /// canonical 32-byte extension-field values, without sequence or cell framing.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "fibers are inline fixed-arity values (at most 16 * 32 bytes); boxing the \
+              sixteen-value variant would add one heap allocation per opened fiber"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "fastpq_prover::deep_compact::FriFiberValuesV1")]
 pub(in crate::backend) enum FriValues {
@@ -35,6 +40,15 @@ impl FriValues {
     /// Exact payload width at one protocol-selected arity.
     pub(super) const fn encoded_bytes(arity: usize) -> usize {
         1 + arity * Fp4::BYTES
+    }
+
+    /// Canonical leading arity byte of this fixed variant.
+    const fn arity_byte(&self) -> u8 {
+        match self {
+            Self::Four(_) => 4,
+            Self::Eight(_) => 8,
+            Self::Sixteen(_) => 16,
+        }
     }
 }
 
@@ -66,7 +80,7 @@ impl norito::core::SerializePayload for FriValues {
         &self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> std::result::Result<(), norito::Error> {
-        writer.write_all(&[self.len() as u8])?;
+        writer.write_all(&[self.arity_byte()])?;
         for value in self.iter() {
             writer.write_all(&value.to_le_bytes())?;
         }
@@ -132,7 +146,7 @@ mod tests {
         for arity in [4, 8, 16] {
             let values = values(arity);
             let fiber = FriValues::new(values.clone()).unwrap();
-            let mut expected = vec![arity as u8];
+            let mut expected = vec![u8::try_from(arity).unwrap()];
             for value in &values {
                 expected.extend_from_slice(&value.to_le_bytes());
             }
@@ -157,16 +171,17 @@ mod tests {
             assert!(FriValues::new(values(arity)).is_err());
         }
         for arity in [4, 8, 16] {
+            let arity_byte = u8::try_from(arity).unwrap();
             let fiber = FriValues::new(values(arity)).unwrap();
             let mut raw = norito::codec::encode_with_header_flags(&fiber).0;
-            for tag in [0, 1, 2, 3, 5, 8_u8.wrapping_add(arity as u8), 32] {
-                if tag == arity as u8 {
+            for tag in [0, 1, 2, 3, 5, 8_u8.wrapping_add(arity_byte), 32] {
+                if tag == arity_byte {
                     continue;
                 }
                 raw[0] = tag;
                 assert!(norito::core::decode_field_canonical::<FriValues>(&raw).is_err());
             }
-            raw[0] = arity as u8;
+            raw[0] = arity_byte;
             for length in [0, 1, raw.len() - 1, raw.len() + 1] {
                 let mut changed = raw.clone();
                 changed.resize(length, 0);

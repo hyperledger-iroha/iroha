@@ -60,7 +60,7 @@ impl Kura {
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::{Family, Unavailable, Usage};
         let generation = self.resource_inventory.reconciliation_generation()?;
-        if self.auxiliary_history_deferred || self.provisional_snapshot_bootstrap_pending() {
+        if self.auxiliary_history_deferred {
             return Err(Unavailable::InvalidInventory);
         }
         fn exact(owner: &impl ResidentOwner) -> std::result::Result<u64, Unavailable> {

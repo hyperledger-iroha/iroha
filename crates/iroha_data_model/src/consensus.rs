@@ -1,13 +1,4 @@
 //! Consensus-related data model DTOs for on-chain persistence.
-pub use crate::block::consensus::{
-    CertPhase, SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus,
-    SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiPeerKeyPolicyStatus, SumeragiQcStatus, SumeragiRoundGapStatus,
-    SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-};
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;

@@ -90,9 +90,6 @@ sha2 = "0.10.9"
 # its complete bundled PTX inventory and signed provenance are qualified.
 default = ["metal"]
 dev-tools = []
-# TODO: remove once `iroha_core`'s `telemetry` feature stops forwarding to it;
-# IVM no longer gates any code on this feature.
-telemetry = []
 # Expose benchmark-only backend selection hooks. Production builds must leave
 # this disabled so field dispatch is immutable after hardware selection.
 bench = []

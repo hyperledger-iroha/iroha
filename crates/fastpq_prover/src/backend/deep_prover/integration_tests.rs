@@ -6,6 +6,11 @@ use crate::backend::{
     merkle_multiproof::{MultiproofLimits, MultiproofPlan},
 };
 
+/// Narrow one small fixture position or level to its `u32` wire field.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn coefficient_limits() -> CoefficientLimits {
     CoefficientLimits {
         max_payload_bytes: usize::MAX,
@@ -46,31 +51,19 @@ fn multiproof(leaves: usize, indices: &[usize]) -> MultiproofPlan {
     .unwrap()
 }
 
-#[test]
-fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
-    let binding = Context::new(b"streamed final FRI frontier integrity").unwrap();
-    let oracle = Oracle::Fri(4);
-    let replay = CoefficientReplayPlan::fri(4, coefficient_limits()).unwrap();
-    let coefficients = (0..replay.degree())
-        .map(|i| dense(i as u64))
-        .collect::<Vec<_>>();
-    let indices = [0, 1, 31, 64, 127];
-    let actual = commit(
-        replay,
-        &binding,
-        oracle,
-        &indices,
-        &[&coefficients],
-        stream_limits(),
-    )
-    .unwrap();
-    let plan = multiproof(128, &indices);
+/// Independently hash all 128 final-round FRI fibers and every Merkle level above them.
+fn independent_fri_levels(
+    binding: &Context,
+    oracle: Oracle,
+    domain: crate::backend::FriDomain,
+    coefficients: &[F],
+) -> Vec<Vec<Digest>> {
     let mut levels = vec![
         (0..128)
             .map(|index| {
                 let payload = (0..4)
                     .flat_map(|position| {
-                        let x = replay.domain().point(index + position * 128);
+                        let x = domain.point(index + position * 128);
                         coefficients
                             .iter()
                             .rev()
@@ -78,7 +71,9 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
                             .to_le_bytes()
                     })
                     .collect::<Vec<_>>();
-                binding.hash_leaf(oracle, index as u32, &payload).unwrap()
+                binding
+                    .hash_leaf(oracle, narrow_u32(index), &payload)
+                    .unwrap()
             })
             .collect::<Vec<_>>(),
     ];
@@ -91,12 +86,56 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
             .enumerate()
             .map(|(index, pair)| {
                 binding
-                    .hash_parent(oracle, level as u32, index as u32, pair[0], pair[1])
+                    .hash_parent(
+                        oracle,
+                        narrow_u32(level),
+                        narrow_u32(index),
+                        pair[0],
+                        pair[1],
+                    )
                     .unwrap()
             })
             .collect();
         levels.push(next);
     }
+    levels
+}
+
+#[test]
+fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
+    let binding = Context::new(b"streamed final FRI frontier integrity").unwrap();
+    let oracle = Oracle::Fri(4);
+    let replay = CoefficientReplayPlan::fri(4, coefficient_limits()).unwrap();
+    let coefficients = (0..replay.degree())
+        .map(|i| dense(i as u64))
+        .collect::<Vec<_>>();
+    let indices = [0, 1, 31, 64, 127];
+    let mut committed = commit(
+        replay,
+        &binding,
+        oracle,
+        &[],
+        &[&coefficients],
+        stream_limits(),
+    )
+    .unwrap();
+    let cache = committed
+        .cache
+        .take()
+        .unwrap()
+        .bind(&binding, oracle, committed.root)
+        .unwrap();
+    let actual = open(
+        cache,
+        replay,
+        &indices,
+        &[&coefficients],
+        DigestExecutionV1::Cpu,
+    )
+    .unwrap();
+    assert_eq!(actual.root, committed.root);
+    let plan = multiproof(128, &indices);
+    let levels = independent_fri_levels(&binding, oracle, replay.domain(), &coefficients);
     assert_eq!(
         levels.iter().map(Vec::len).collect::<Vec<_>>(),
         [128, 64, 32, 16, 8, 4, 2, 1]
@@ -114,7 +153,7 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
             siblings,
             |level, index, left, right| {
                 context
-                    .hash_parent(oracle, level as u32, index as u32, left, right)
+                    .hash_parent(oracle, narrow_u32(level), narrow_u32(index), left, right)
                     .map_err(binding_error)
             },
         )
@@ -177,7 +216,13 @@ fn streamed_terminal_binds_every_linear_value_and_requires_its_duplicate_parent(
     let verify = |root, leaf| {
         plan.verify_with(root, &[leaf], &[], |level, index, left, right| {
             binding
-                .hash_parent(Oracle::Terminal, level as u32, index as u32, left, right)
+                .hash_parent(
+                    Oracle::Terminal,
+                    narrow_u32(level),
+                    narrow_u32(index),
+                    left,
+                    right,
+                )
                 .map_err(binding_error)
         })
     };

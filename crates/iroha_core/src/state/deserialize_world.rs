@@ -7201,7 +7201,6 @@ mod validation_fee_registry_restore_tests {
                     .parse()
                     .expect("validation-fee emergency-fast chain id"),
                 network_id: network_id(),
-                snapshot_v2_bootstrap_candidate: None,
                 nexus_runtime_restored_from_snapshot: false,
                 kura,
                 query_handle: LiveQueryStore::start_test(),
@@ -8513,7 +8512,6 @@ fn decode_world_fields(
         sccp_light_client_sets: Storage::default(),
         sccp_light_client_checkpoints: Storage::default(),
         sccp_light_client_stride_index: Storage::default(),
-        sccp_light_client_checkpoint_expiry: Storage::default(),
         external_event_buf,
     }));
     Ok(world)
@@ -9014,7 +9012,6 @@ struct BuildStateInputs {
     nexus: iroha_config::parameters::actual::Nexus,
     chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
-    snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     nexus_runtime_restored_from_snapshot: bool,
     kura: Arc<Kura>,
     query_handle: LiveQueryStoreHandle,
@@ -9040,7 +9037,6 @@ fn build_state(
         nexus,
         chain_id,
         network_id,
-        snapshot_v2_bootstrap_candidate,
         nexus_runtime_restored_from_snapshot,
         kura,
         query_handle,
@@ -9241,9 +9237,6 @@ fn build_state(
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,
-        snapshot_v2_bootstrap_candidate,
-        authenticated_snapshot_v2_bootstrap: None,
-        authenticated_snapshot_bootstrap_payload: None,
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: PublicationMutex::default(),

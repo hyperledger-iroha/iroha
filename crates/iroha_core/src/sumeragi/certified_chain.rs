@@ -64,7 +64,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_sumeragi::{
-    crypto::{AttestationVerifier, CertError, verify_qc},
+    crypto::{AttestationVerifier, CertError},
     message::{BlockHeader, Qc, VoteKind},
     preimage::payload_hash,
     types::{Committee, EpochId, Hash32},
@@ -673,14 +673,13 @@ impl PrefixVerifierContext<'_> {
         let verifier = self.attestations.unwrap_or(&native);
         #[cfg(test)]
         relation_counts::qc(height);
-        let checked = verify_qc(
+        let checked = iroha_sumeragi::crypto::Verifier::new(
             &authority.crypto,
-            verifier,
             &self.instance,
             &authority.epoch,
             &authority.committee,
-            &commit_qc,
-        );
+        )
+        .verify_qc(verifier, &commit_qc);
         checked.map_err(|error| ChainReadError::Certificate { height, error })?;
         Ok(CertifiedBlock {
             committed,
@@ -894,7 +893,7 @@ impl<V: StateReadOnly + ?Sized> ChainSource<'_, V> {
                 let expected = hashes
                     .get(index.get() - 1)
                     .ok_or(ChainReadError::NotCommitted { height })?;
-                if kura.is_hash_only_block_height(index) {
+                if kura.is_canonical_body_missing(index) {
                     return Err(ChainReadError::NotInView { height });
                 }
                 let block = kura

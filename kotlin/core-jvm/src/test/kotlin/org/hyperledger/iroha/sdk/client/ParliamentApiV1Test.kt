@@ -300,6 +300,82 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun sccpRouteGovernanceAdmitsOnlyTheClosedProposalEnvelope() {
+        fun sccpProposal(edit: (MutableMap<String, Any?>) -> Unit): ByteArray {
+            val proposal = validProposal("SccpRouteGovernance")
+            @Suppress("UNCHECKED_CAST")
+            val payload = proposal["payload"] as MutableMap<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val sccp = payload["proposal"] as MutableMap<String, Any?>
+            edit(sccp)
+            return encode(proposal)
+        }
+        fun subject(subject: String, key: Any?): MutableMap<String, Any?> = linkedMapOf(
+            "base_revisions" to listOf(
+                linkedMapOf(
+                    "subject" to linkedMapOf("subject" to subject, "key" to key),
+                    "revision" to 0,
+                ),
+            ),
+        )
+
+        listOf(
+            subject("parameters", null),
+            subject("light_client", bscMainnet()),
+            subject("bridge_key_fault", "ea0130" + "AB".repeat(48)),
+        ).forEach { replacement ->
+            ParliamentApiV1.Proposal.fromJson(sccpProposal { it.putAll(replacement) })
+        }
+
+        val rejected = listOf<(MutableMap<String, Any?>) -> Unit>(
+            { it["anchor"] = null },
+            { it.remove("base_revisions") },
+            { it["base_revisions"] = emptyList<Any?>() },
+            { it["actions"] = emptyList<Any?>() },
+            { proposal ->
+                val action = (proposal["actions"] as List<*>).single()
+                proposal["actions"] = List(17) { action }
+            },
+            { it.putAll(subject("sora_taira", bscMainnet())) },
+            { it.putAll(subject("parameters", bscMainnet())) },
+            { it.putAll(subject("bridge_key_fault", "ea0130" + "ab".repeat(48))) },
+            {
+                it.putAll(
+                    subject(
+                        "route",
+                        linkedMapOf("network" to "sora_taira", "profile" to null),
+                    ),
+                )
+            },
+            {
+                it["actions"] = listOf(
+                    linkedMapOf("action" to "Remove", "payload" to linkedMapOf<String, Any?>()),
+                )
+            },
+            {
+                it["actions"] = listOf(
+                    linkedMapOf("action" to "freeze_light_client", "payload" to null),
+                )
+            },
+        )
+        rejected.forEachIndexed { index, edit ->
+            assertFailsWith<IllegalArgumentException>("accepted SCCP proposal mutation $index") {
+                ParliamentApiV1.Proposal.fromJson(sccpProposal(edit))
+            }
+        }
+        assertFailsWith<IllegalArgumentException>("accepted the anchor payload") {
+            val proposal = validProposal("SccpRouteGovernance")
+            proposal["payload"] = linkedMapOf(
+                "anchor" to linkedMapOf(
+                    "network_id" to networkId(),
+                    "action" to linkedMapOf<String, Any?>(),
+                ),
+            )
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+        }
+    }
+
+    @Test
     fun effectSensitiveProposalsRequireExactOperator() {
         listOf("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance").forEach { kind ->
             val valid = validProposal(kind)
@@ -415,6 +491,18 @@ class ParliamentApiV1Test {
         val fixture = "kagemusha_verifier_release_install_v1.json"
         ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
 
+        assertReleaseMutationRejected(fixture, "missing network identity") { proposal ->
+            releaseNested(proposal, "manifest").remove("network_id")
+        }
+        assertReleaseMutationRejected(fixture, "missing release purpose") { proposal ->
+            releaseNested(proposal, "manifest").remove("purpose")
+        }
+        assertReleaseMutationRejected(fixture, "unknown release purpose") { proposal ->
+            releaseNested(releaseNested(proposal, "manifest"), "purpose")["kind"] = "unknown"
+        }
+        assertReleaseMutationRejected(fixture, "production purpose requires explicit null") { proposal ->
+            releaseNested(releaseNested(proposal, "manifest"), "purpose").remove("value")
+        }
         assertReleaseMutationRejected(fixture, "unknown manifest field") { proposal ->
             val manifest = releaseNested(proposal, "manifest")
             manifest["retired"] = true
@@ -454,6 +542,34 @@ class ParliamentApiV1Test {
         }
         assertReleaseMutationRejected(fixture, "ungoverned predecessor") { proposal ->
             releaseNested(proposal, "expected_predecessor")["authority_policy"] = null
+        }
+    }
+
+    @Test
+    fun kagemushaReleasePurposeAcceptsExactTestnetScopeAndRejectsDrift() {
+        val payload = releaseProposalPayload("kagemusha_verifier_release_install_v1.json")
+        val scope = linkedMapOf<String, Any?>(
+            "asset_identity_digest" to List(32) { 1 },
+            "asset_incarnation" to List(32) { 2 },
+            "asset_scale" to 28,
+            "liability_pool_id" to List(32) { 3 },
+        )
+        val purpose = linkedMapOf<String, Any?>("kind" to "testnet_experiment", "value" to scope)
+        releaseNested(payload, "manifest")["purpose"] = purpose
+        KagemushaVerifierProposalValidatorV1.install(payload)
+        scope["asset_scale"] = 29
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
+        }
+        scope["asset_scale"] = 28
+        scope["retired"] = null
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
+        }
+        scope.remove("retired")
+        purpose["value"] = null
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
         }
     }
 
@@ -1584,15 +1700,24 @@ class ParliamentApiV1Test {
                 ),
             )
             "SccpRouteGovernance" -> linkedMapOf(
-                "anchor" to linkedMapOf(
+                "proposal" to linkedMapOf(
                     "network_id" to networkId(),
-                    "action" to linkedMapOf(
-                        "action" to "Remove",
-                        "route" to linkedMapOf(
-                            "lane_id" to inboundLane(),
-                            "route_id" to "taira_bsc_xor",
-                            "asset_key" to "xor",
+                    "base_revisions" to listOf(
+                        linkedMapOf(
+                            "subject" to linkedMapOf(
+                                "subject" to "route",
+                                "key" to bscMainnet(),
+                            ),
                             "revision" to 1,
+                        ),
+                    ),
+                    "actions" to listOf(
+                        linkedMapOf(
+                            "action" to "remove_staged",
+                            "payload" to linkedMapOf(
+                                "network" to bscMainnet(),
+                                "revision" to 1,
+                            ),
                         ),
                     ),
                 ),
@@ -1714,10 +1839,8 @@ class ParliamentApiV1Test {
         },
     )
 
-    private fun inboundLane(): MutableMap<String, Any?> = linkedMapOf(
-        "source" to linkedMapOf("network" to "bsc_mainnet", "profile" to null),
-        "target" to linkedMapOf("network" to "sora_taira", "profile" to null),
-    )
+    private fun bscMainnet(): MutableMap<String, Any?> =
+        linkedMapOf("network" to "bsc_mainnet", "profile" to null)
 
     private fun account(seed: Int): String =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")

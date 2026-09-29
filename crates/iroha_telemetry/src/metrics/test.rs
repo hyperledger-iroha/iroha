@@ -2098,7 +2098,7 @@ fn serialize_status_json() {
             "budget_hit_total": 0
         },
         "sumeragi": {
-            "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
+            "mode_tag": "iroha3-consensus::permissioned-sumeragi@v1",
             "leader_index": 1,
             "highest_qc_height": 10,
             "locked_qc_height": 9,

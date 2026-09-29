@@ -2040,6 +2040,23 @@ fn cached_provider_readback_rechecks_current_target_before_replaying_response() 
     assert_eq!(restored.status, 200);
     assert_eq!(restored.body, first.body);
 }
+/// Drop the service's durable journal, then reopen it from disk as a restarted service would.
+#[cfg(unix)]
+fn reopen_durable_journal(
+    fixture: &mut ControlServiceFixture,
+    root: &std::path::Path,
+    binding: &MusubiPublicationServiceJournalBindingV1,
+    limits: DurableMusubiPublicationServiceJournalLimitsV1,
+) {
+    let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
+        .expect("temporary journal");
+    let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
+    drop(durable);
+    fixture.service.journal = Box::new(
+        DurableMusubiPublicationServiceJournalV1::open(root, binding.clone(), limits)
+            .expect("reopen durable readback journal"),
+    );
+}
 #[cfg(unix)]
 #[test]
 fn durable_readback_journal_separates_replacement_and_renewal_targets() {
@@ -2079,14 +2096,7 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let initial_response = control_readback_response(&mut fixture, &initial, 3_000);
     assert_eq!(initial_response.status, 200);
     assert_eq!(calls.lock().expect("readback calls").len(), 1);
-    let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
-        .expect("temporary journal");
-    let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
-    drop(durable);
-    fixture.service.journal = Box::new(
-        DurableMusubiPublicationServiceJournalV1::open(root.path(), binding.clone(), limits)
-            .expect("reopen durable readback journal"),
-    );
+    reopen_durable_journal(&mut fixture, root.path(), &binding, limits);
     let cached = control_readback_response(&mut fixture, &initial, 3_100);
     assert_eq!(cached.status, 200);
     assert_eq!(cached.body, initial_response.body);
@@ -2112,14 +2122,7 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let renewal_response = control_readback_response(&mut fixture, &renewal, 3_300);
     assert_eq!(renewal_response.status, 200);
     assert_eq!(calls.lock().expect("replacement readback calls").len(), 3);
-    let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
-        .expect("second temporary journal");
-    let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
-    drop(durable);
-    fixture.service.journal = Box::new(
-        DurableMusubiPublicationServiceJournalV1::open(root.path(), binding, limits)
-            .expect("reopen durable journal with all readback targets"),
-    );
+    reopen_durable_journal(&mut fixture, root.path(), &binding, limits);
     let cached_replacement = control_readback_response(&mut fixture, &replacement, 3_400);
     assert_eq!(cached_replacement.status, 200);
     assert_eq!(cached_replacement.body, replacement_response.body);

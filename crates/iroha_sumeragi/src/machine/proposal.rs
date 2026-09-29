@@ -3,7 +3,6 @@
 use super::{Core, EvKey, ExecState, Held};
 use crate::{
     api::{Action, ExecOutcome, LocalFault},
-    crypto::verify_proposal_signature,
     message::{Block, Defect, Evidence, Proposal, VoteKind, WireMessage},
     pacemaker::exec_retry_delay,
     safety::RecordedVote,
@@ -30,15 +29,10 @@ impl Core {
         if !exact {
             let leader = self.topo.leader(w);
             #[cfg(not(sumeragi_mutation = "MS18"))]
-            let signed = verify_proposal_signature(
-                &*self.crypto,
-                &self.instance,
-                &self.cfg.epoch.id,
-                &self.cfg.committee,
-                leader,
-                &p,
-            )
-            .is_ok();
+            let signed = self
+                .verifier(&self.cfg)
+                .verify_proposal_signature(leader, &p)
+                .is_ok();
             #[cfg(sumeragi_mutation = "MS18")]
             let signed = {
                 let msg = crate::preimage::prop_preimage(
@@ -122,98 +116,47 @@ impl Core {
 
     /// Step 3. Returns the defect, or runs the TC handler on a valid justification.
     fn check_justify(&mut self, p: &Proposal) -> Option<Defect> {
-        match (p.view, &p.justify) {
-            (0, None) => None,
-            (0, Some(_)) => Some(Defect::UnexpectedJustify),
-            (_, None) => Some(Defect::MissingJustify),
-            (w, Some(tc)) => {
-                let valid = tc.instance == self.instance
-                    && tc.height == self.height
-                    && Some(tc.view) == w.checked_sub(1)
-                    && self.verify_tc_cached(tc);
-                if !valid {
-                    return Some(Defect::InvalidJustify);
-                }
-                self.on_verified_tc(tc.clone(), true);
-                None
-            }
+        let defect = p.justify_defect(self.height, |tc| {
+            tc.instance == self.instance && self.verify_tc_cached(tc)
+        });
+        if defect.is_none()
+            && let Some(tc) = &p.justify
+        {
+            self.on_verified_tc(tc.clone(), true);
         }
+        defect
     }
 
-    /// Step 5: `parent_qc` is `None` iff `h == g + 1`, else a valid `CommitQC` of the tip.
+    /// Step 5: `parent_qc` is absent exactly at the genesis parent.
     fn check_parent(&mut self, p: &Proposal) -> Option<Defect> {
         if cfg!(sumeragi_mutation = "MS19") {
             return None;
         }
-        if self.height == self.genesis.saturating_add(1) {
-            return p.parent_qc.is_some().then_some(Defect::UnexpectedParentQc);
-        }
-        let Some(qc) = &p.parent_qc else {
-            return Some(Defect::MissingParentQc);
-        };
-        let shape_ok = qc.kind == VoteKind::Commit
-            && Some(qc.height) == self.height.checked_sub(1)
-            && qc.value() == (self.tip.block_hash, self.tip.result);
-        let ok = shape_ok && (self.tip.commit_qc.as_ref() == Some(qc) || self.verify_qc_cached(qc));
-        (!ok).then_some(Defect::InvalidParentQc)
+        p.parent_defect(
+            self.height == self.genesis.saturating_add(1),
+            self.height.saturating_sub(1),
+            (self.tip.block_hash, self.tip.result),
+            |qc| self.tip.commit_qc.as_ref() == Some(qc) || self.verify_qc_cached(qc),
+        )
     }
 
-    /// Step 6: header checks, the TC rule (SR10) and the fresh-block rules.
+    /// Step 6: the same signed-content rules used by independent evidence attribution.
     fn check_header(&self, p: &Proposal, bh: Hash32) -> Option<Defect> {
-        let header = &p.header;
-        let params = &self.cfg.params;
-        let checks = [
-            (header.instance != self.instance, Defect::HeaderInstance),
-            (header.height != self.height, Defect::HeaderHeight),
-            (header.epoch != self.cfg.epoch.id, Defect::EpochContext),
-            (
-                self.height == self.cfg.epoch.last_height
-                    && !header.attest
-                    && !cfg!(sumeragi_mutation = "MS45"),
-                Defect::BoundaryAttestation,
-            ),
-            (
-                header.parent_hash != self.tip.block_hash && !cfg!(sumeragi_mutation = "MS19"),
-                Defect::ParentHash,
-            ),
-            (
-                header.parent_result != self.tip.result && !cfg!(sumeragi_mutation = "MS19"),
-                Defect::ParentResult,
-            ),
-            (
-                header.payload_len > params.max_block_bytes,
-                Defect::PayloadTooLarge,
-            ),
-            (
-                header.payload_len == 0 && !cfg!(sumeragi_mutation = "MA8"),
-                Defect::EmptyPayload,
-            ),
-        ];
-        if let Some((_, defect)) = checks.into_iter().find(|(failed, _)| *failed) {
-            return Some(defect);
-        }
-        let w = p.view;
-        let certified = p
-            .justify
-            .as_ref()
-            .and_then(|tc| tc.high_pqc.as_ref())
-            .filter(|_| w > 0 && !NO_TC_RULE);
-        if let Some(q) = certified {
-            // Re-proposal: exactly Q's block; Q's honest signers checked the rest.
-            return (bh != q.block_hash).then_some(Defect::TcRule);
-        }
-        let fresh = [
-            (header.origin_view != w, Defect::OriginView),
-            (header.proposer != self.topo.leader(w), Defect::Proposer),
-            (
-                header.skipped_leaders != self.topo.skipped_leader_keys(&self.cfg.committee, w),
-                Defect::SkippedLeaders,
-            ),
-        ];
-        fresh
-            .into_iter()
-            .find(|(failed, _)| *failed)
-            .map(|(_, defect)| defect)
+        p.header_defect(
+            self.instance,
+            self.height,
+            (self.tip.block_hash, self.tip.result),
+            &self.cfg,
+            &self.topo,
+            bh,
+            |defect| match defect {
+                Defect::BoundaryAttestation => !cfg!(sumeragi_mutation = "MS45"),
+                Defect::ParentHash | Defect::ParentResult => !cfg!(sumeragi_mutation = "MS19"),
+                Defect::EmptyPayload => !cfg!(sumeragi_mutation = "MA8"),
+                Defect::TcRule => !NO_TC_RULE,
+                _ => true,
+            },
+        )
     }
 
     /// Step 7: evidence for a signed defect (payload stripped) and an early timeout if it is the

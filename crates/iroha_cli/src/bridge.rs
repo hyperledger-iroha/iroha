@@ -1,8 +1,4 @@
 //! Bridge commands: genesis readiness probes and typed bridge receipts.
-//!
-//! The retired SCCP subcommands are gone; SCCP v1 has its own `iroha sccp` command group
-//! (specs/sccp.md §10).
-// TODO(ws42): the SCCP v1 wallet commands live under `iroha sccp`, not under `ops bridge`.
 use crate::{Run, RunContext};
 mod genesis_readiness;
 use clap::Subcommand;
@@ -99,11 +95,7 @@ mod tests {
         command: Command,
     }
     #[test]
-    fn bridge_commands_expose_no_retired_sccp_surface() {
-        assert!(
-            TestCli::try_parse_from(["iroha", "sccp", "capabilities"]).is_err(),
-            "the retired `ops bridge sccp` group must not parse"
-        );
+    fn emit_receipt_grammar_parses() {
         let parsed = TestCli::try_parse_from([
             "iroha",
             "emit-receipt",

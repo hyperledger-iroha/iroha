@@ -178,27 +178,6 @@ fn current_families() -> Vec<Value> {
         family("transaction-tree", transaction_tree),
         family("committed-first-network", || committed_transaction(0)),
         family("committed-second-network", || committed_transaction(1)),
-        family("merge-inclusion", || {
-            super::CertifiedMergeTransactionInclusion {
-                version: 1,
-                merge_entry_hash: iroha_crypto::HashOf::from_untyped_unchecked(
-                    iroha_crypto::Hash::new(b"query identity merge"),
-                ),
-                merge_epoch_id: 7,
-                execution_batch_hash: iroha_crypto::Hash::new(b"query identity execution"),
-                entrypoint_count: 1,
-                // This separate DTO has not changed. Preserve its original opaque
-                // fixture roots without recreating a retired Time input/query path.
-                entrypoint_merkle_root:
-                    "f07dc468cd4cc526f91b7630496585f1b7540bdb44548edf1c3750adee7bae3f"
-                        .parse()
-                        .expect("original merge fixture input root"),
-                result_merkle_root:
-                    "392e8b8ddd97cc0a0a89ffa0a712bfed5a5b46a90149b80575a4958aa173ced1"
-                        .parse()
-                        .expect("original merge fixture result root"),
-            }
-        }),
     ];
     rows.extend(super::tx_predicate::generic_membership_identity_records());
     #[cfg(feature = "ids_projection")]
@@ -236,14 +215,14 @@ fn complete_query_frames_match_pre_declaration_fixtures() {
     #[cfg(not(feature = "ids_projection"))]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_full_identity_frames.json"),
-        "54f30ee0263b129455359acd930d9f3e62eeb802f8e64d880e630cf9b9845c1f",
-        24,
+        "42ad4a32128727fdbddc7cabff5a1c39d3237a08667d2c4b2fa18a7eb7baf2c2",
+        23,
     );
     #[cfg(feature = "ids_projection")]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_ids_identity_frames.json"),
-        "0fe9a59a7ca8b1049ae9468878bcca80baf0f2442b03d938696ae1d066f2a6f5",
-        29,
+        "a89b323adcd15fd420e32751c1ecc43e3b4da40eda4ab55b2e7b5578e2ff6a13",
+        28,
     );
     assert_eq!(hex::encode(Sha256::digest(source.as_bytes())), digest);
     let expected: Vec<Value> = json::from_str(source).expect("immutable query fixture");

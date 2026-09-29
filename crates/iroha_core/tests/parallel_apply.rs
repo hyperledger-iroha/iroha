@@ -18,12 +18,18 @@ use snapshots::assert_events;
 use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
 // Use a fixed creation time so event fixtures do not depend on wall clock.
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
-fn test_network_id(label: &[u8]) -> NetworkId {
-    NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::new(label),
-        ),
-    )
+fn test_network_id(_label: &[u8]) -> NetworkId {
+    start_chain(iroha_core::state::World::new(), false).network_id()
+}
+fn start_chain(
+    world: iroha_core::state::World,
+    parallel_apply: bool,
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.chain_id = ChainId::from("chain");
+    config.pipeline.parallel_apply = parallel_apply;
+    iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("actual native parity genesis")
 }
 fn tx_builder(network_id: &NetworkId, authority: &AccountId) -> TransactionBuilder {
     let mut builder = TransactionBuilder::new(
@@ -67,9 +73,14 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let b0 = Asset::new(b_coin, Quantity::from(0_u64));
         iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], [])
     };
-    // Kura + query handles
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
+    let mut sequential = start_chain(build_world(), false);
+    let mut parallel = start_chain(build_world(), true);
+    assert_eq!(
+        sequential.network_id(),
+        parallel.network_id(),
+        "local scheduling cannot alter genesis policy"
+    );
+    let network_id = sequential.network_id();
     // Two independent transactions: a mint and a log. Mint will take the standard path,
     // log is handled by detached path; overall results should match sequential mode.
     let tx1 = tx_builder(&network_id, &alice_id)
@@ -87,204 +98,27 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let tx2 = tx_builder(&network_id, &bob_id)
         .with_instructions([Log::new(Level::INFO, "t2".to_string())])
         .sign(iroha_test_samples::BOB_KEYPAIR.private_key());
-    // Build a NewBlock with both transactions
-    let tx1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-    let tx2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-    // Run sequential apply
-    let world_seq = build_world();
-    let mut state_seq = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world_seq,
-        kura.clone(),
-        query.clone(),
-        ChainId::from("chain"),
-        network_id,
-    );
-    let nexus = state_seq.nexus_snapshot();
-    state_seq.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let cfg_seq = iroha_config::parameters::actual::Pipeline {
-        dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
-        access_set_cache_enabled:
-            iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
-        parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
-        workers: iroha_config::parameters::defaults::pipeline::WORKERS,
-        stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
-        parallel_apply: false,
-        ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
-        gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
-        debug_trace_scheduler_inputs:
-            iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
-        debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max_ed25519:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
-        signature_batch_max_secp256k1:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
-        signature_batch_max_pqc:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
-        signature_batch_max_bls:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
-        cache_size: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
-        ivm_cache_max_decoded_ops:
-            iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
-        ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
-        ivm_execution_max_bytes:
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
-        overlay_max_instructions:
-            iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
-        overlay_max_bytes: iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_BYTES,
-        overlay_chunk_instructions:
-            iroha_config::parameters::defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
-        gas: iroha_config::parameters::actual::Gas {
-            tech_account_id: iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID
-                .to_string(),
-            accepted_assets: Vec::new(),
-            units_per_gas: Vec::new(),
-        },
-        ivm_max_cycles_upper_bound:
-            iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-        ivm_max_decoded_instructions:
-            iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
-        ivm_max_decoded_bytes: iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
-        quarantine_max_txs_per_block:
-            iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-        quarantine_tx_max_cycles:
-            iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-        query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
-        query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
-        query_stored_min_gas_units:
-            iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
-        amx_per_dataspace_budget_ms:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
-        amx_group_budget_ms: iroha_config::parameters::defaults::pipeline::AMX_GROUP_BUDGET_MS,
-        amx_per_instruction_ns:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_INSTRUCTION_NS,
-        amx_per_memory_access_ns:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
-        amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
-    };
-    state_seq.set_pipeline(cfg_seq);
-    let genesis = state_seq
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish sequential genesis");
-    let new_block = iroha_core::block::BlockBuilder::new_with_time_source(
-        vec![tx1.clone(), tx2.clone()],
-        block_time_source(),
-    )
-    .chain(0, Some(&genesis))
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-    .unpack(|_| {});
-
-    let mut sb_seq = state_seq.block(new_block.header());
-    let vb_seq = new_block
-        .clone()
-        .validate_and_record_transactions(&mut sb_seq)
-        .unpack(|_| {});
-    state_seq
-        .commit_executed_block_for_testing(sb_seq, vb_seq.clone().commit_unchecked().unpack(|_| {}))
-        .expect("publish sequential effects");
-    // Run parallel-apply (skeleton path)
-    let world_par = build_world();
-    let mut state_par = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world_par,
-        iroha_core::kura::Kura::blank_kura_for_testing(),
-        query,
-        ChainId::from("chain"),
-        network_id,
-    );
-    let nexus = state_par.nexus_snapshot();
-    state_par.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let cfg_par = iroha_config::parameters::actual::Pipeline {
-        dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
-        access_set_cache_enabled:
-            iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
-        parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
-        workers: iroha_config::parameters::defaults::pipeline::WORKERS,
-        stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
-        parallel_apply: true,
-        ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
-        gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
-        debug_trace_scheduler_inputs:
-            iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
-        debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max_ed25519:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
-        signature_batch_max_secp256k1:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
-        signature_batch_max_pqc:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
-        signature_batch_max_bls:
-            iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
-        cache_size: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
-        ivm_cache_max_decoded_ops:
-            iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
-        ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
-        ivm_execution_max_bytes:
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
-        overlay_max_instructions:
-            iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
-        overlay_max_bytes: iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_BYTES,
-        overlay_chunk_instructions:
-            iroha_config::parameters::defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
-        gas: iroha_config::parameters::actual::Gas {
-            tech_account_id: iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID
-                .to_string(),
-            accepted_assets: Vec::new(),
-            units_per_gas: Vec::new(),
-        },
-        ivm_max_cycles_upper_bound:
-            iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-        ivm_max_decoded_instructions:
-            iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
-        ivm_max_decoded_bytes: iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
-        quarantine_max_txs_per_block:
-            iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-        quarantine_tx_max_cycles:
-            iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-        query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
-        query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
-        query_stored_min_gas_units:
-            iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
-        amx_per_dataspace_budget_ms:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
-        amx_group_budget_ms: iroha_config::parameters::defaults::pipeline::AMX_GROUP_BUDGET_MS,
-        amx_per_instruction_ns:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_INSTRUCTION_NS,
-        amx_per_memory_access_ns:
-            iroha_config::parameters::defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
-        amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
-    };
-    state_par.set_pipeline(cfg_par);
-    let parallel_genesis = state_par
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish parallel genesis");
-    assert_eq!(parallel_genesis.hash(), genesis.hash());
-    let mut sb_par = state_par.block(new_block.header());
-    let vb_par = new_block
-        .validate_and_record_transactions(&mut sb_par)
-        .unpack(|_| {});
-    state_par
-        .commit_executed_block_for_testing(sb_par, vb_par.clone().commit_unchecked().unpack(|_| {}))
-        .expect("publish parallel effects");
+    sequential.commit(vec![tx1.clone(), tx2.clone()]);
+    let vb_seq = sequential.committed(sequential.height());
+    parallel.commit(vec![tx1, tx2]);
+    let vb_par = parallel.committed(parallel.height());
+    let state_seq = sequential.state();
+    let state_par = parallel.state();
     // Compare results order and kinds
     let seq_ok: Vec<_> = vb_seq
-        .as_ref()
+        .block()
         .output_results()
         .map(|r| r.as_ref().is_ok())
         .collect();
     let par_ok: Vec<_> = vb_par
-        .as_ref()
+        .block()
         .output_results()
         .map(|r| r.as_ref().is_ok())
         .collect();
     assert_eq!(seq_ok, par_ok, "approval/rejection sequence must match");
     // Compare that final state roots are identical
-    let root_seq = vb_seq.as_ref().header().merkle_root();
-    let root_par = vb_par.as_ref().header().merkle_root();
+    let root_seq = vb_seq.block().header().merkle_root();
+    let root_par = vb_par.block().header().merkle_root();
     assert_eq!(root_seq, root_par, "merkle roots must match");
     // Compare resulting asset balances (Alice's coin should be 10 in both states)
     let a_coin: AssetId = AssetId::of(
@@ -316,7 +150,7 @@ fn run_block_and_events(
     bootstrap_accounts: Vec<AccountId>,
 ) -> (
     Vec<iroha_data_model::events::prelude::EventBox>,
-    iroha_core::state::State,
+    Arc<iroha_core::state::State>,
 ) {
     // Build a fresh world aligned with authority accounts present in `txs`,
     // plus any additional bootstrap accounts referenced by the test.
@@ -357,50 +191,24 @@ fn run_block_and_events(
         assets.push(Asset::new(asset_id, Quantity::from(balance)));
     }
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query,
-        ChainId::from("chain"),
+    let mut chain = start_chain(world, parallel_apply);
+    assert_eq!(
+        chain.network_id(),
         *network_id,
+        "transactions bind the actual original genesis"
     );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let mut cfg = state.view().pipeline().clone();
-    cfg.parallel_apply = parallel_apply;
-    state.set_pipeline(cfg);
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish parity genesis");
-    // Build a signed block from txs
-    let block: SignedBlock = {
-        let accepted: Vec<_> = txs
-            .into_iter()
-            .map(|tx| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
-            .collect();
-        BlockBuilder::new_with_time_source(accepted, block_time_source())
-            .chain(0, Some(&genesis))
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into()
-    };
-    // Execute and commit
-    let mut sb = state.block(block.header());
-    let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
-    let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
+    chain.take_events().unwrap();
+    chain.commit(txs);
+    let committed = chain.committed(chain.height());
+    let errors = committed.block().failed_outputs().collect::<Vec<_>>();
     assert!(
         errors.is_empty(),
         "parity fixture transactions failed: {errors:?}"
     );
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("commit parity fixture state");
-    (events, state)
+    let events = chain
+        .take_events()
+        .expect("original native publication events");
+    (events, Arc::clone(chain.state()))
 }
 // event_list_json moved to snapshot helpers; removed.
 #[test]

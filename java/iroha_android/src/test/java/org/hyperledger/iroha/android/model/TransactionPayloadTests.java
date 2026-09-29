@@ -14,7 +14,7 @@ import org.hyperledger.iroha.android.client.LocalSigningContext;
 import org.hyperledger.iroha.android.client.VerifyingKeyTransactionDraft;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
-import org.hyperledger.iroha.android.sccp.SccpV1;
+import org.hyperledger.iroha.android.client.TairaTestnetProfile;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.junit.Test;
 
@@ -161,7 +161,7 @@ public final class TransactionPayloadTests {
             .setNonce(0xffff_ffffL)
             .build();
     final NoritoJavaCodecAdapter adapter =
-        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+        new NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT);
     final TransactionPayload decoded =
         adapter.decodeTransaction(adapter.encodeTransaction(payload));
 
@@ -180,7 +180,7 @@ public final class TransactionPayloadTests {
   private static String sampleAuthority() {
     try {
       return AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x21), "ed25519")
-          .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+          .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);
     }

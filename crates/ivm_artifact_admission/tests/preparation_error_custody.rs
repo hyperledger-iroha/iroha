@@ -133,17 +133,17 @@ fn original_capacity_refusal_survives_unmetered_conversion_and_wakes_only_on_its
     let VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. }) = converted else {
         panic!("must preserve the actual release owner");
     };
-    let wakes = Arc::new(Wakes::default());
-    let waker = Waker::from(Arc::clone(&wakes));
+    let wake_count = Arc::new(Wakes::default());
+    let waker = Waker::from(Arc::clone(&wake_count));
     let mut context = Context::from_waker(&waker);
     let mut future = release.wait_for_release();
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(8);
     drop(unrelated.try_reserve_bytes(8).unwrap());
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
     drop(occupied);
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(wake_count.0.load(Ordering::SeqCst), 1);
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Ready(()));
     assert_eq!(budget.reserved_bytes(), 0);
 }

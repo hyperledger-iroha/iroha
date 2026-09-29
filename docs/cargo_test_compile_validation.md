@@ -28,7 +28,7 @@ These three native-only libraries have no Rust doctest examples and Cargo
 cannot run doctests for their `cdylib` targets. Normal `cargo test` handles them
 without warnings. Their manifests and dependencies are unchanged.
 
-SCCP capability/discovery records have one owner in `iroha_sccp::api`, and PoR
+SCCP read-API records have one owner in `iroha_sccp::api`, and PoR
 status pages have one owner in `sorafs_manifest::por`. Typed producers and
 consumers import those declarations directly; each root accepts one identity.
 The [schema contract](../specs/norito_schema_identity.md) records these rules.
@@ -51,12 +51,9 @@ including false-statement rejection. Its raw tests use the existing explicit
 64 MiB diagnostic allocation policy and retain 32 MiB rejection controls;
 production proof and allocation limits are unchanged.
 
-Seven focused SCCP tests pass across Torii, SDK and CLI. The Torii regression
-builds real capability/discovery responses, decodes them through the SDK's HTTP
-transport and rejects competing root identities. Both canonical PoR page tests
-also pass, including wrong-root rejection and cursor bounds.
-The SCCP roundtrip/identity and Core proxy regressions also pass on distinct
-default-feature artifacts. Both local integration helper regressions pass on
+Both canonical PoR page tests pass, including wrong-root rejection and cursor
+bounds. The Core proxy regressions also pass on distinct default-feature
+artifacts. Both local integration helper regressions pass on
 the final workspace artifact, including the corrected caller-argument order.
 
 Workspace formatting, the retired-codec guard, Norito codec-contract checks,

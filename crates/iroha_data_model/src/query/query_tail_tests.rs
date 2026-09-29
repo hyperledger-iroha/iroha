@@ -2,7 +2,6 @@
 mod canonical_output_inclusion_tests {
     use super::*;
     use crate::block::{SignedBlock, output_test_support as fixture};
-    use crate::transaction::TransactionEntrypoint;
     use iroha_crypto::{Hash, HashOf, MerkleProof};
     use norito::codec::DecodeAll as _;
     fn execution_fixture() -> (SignedBlock, CommittedTransaction) {

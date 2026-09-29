@@ -1,16 +1,10 @@
 # SCCP v1: SORA Cross-Chain Protocol (first release)
 
-Status: normative design, first release, revision 3. Revision 3 applies the
-binding decisions of 2026-09-26: governance belongs to the SORA Parliament
-alone, a destination pause is a Parliament-enacted control message, validators
-join and leave freely, and validator nodes set up SCCP with no operator step.
-§14.1 records these decisions; §14.2 records the disposition of the revision 2
-safety, accounting, implementability and serverless-liveness reviews, as
-amended by revision 3; §14.3 records the disposition of the revision 3
-verification against the code. This document supersedes
-`specs/bridge_proofs.md` in full (that document describes only the retired
-Groth16/replay-archive SCCP). Generic Sumeragi bridge finality
-(`specs/bridge_finality.md`) is unaffected.
+Status: normative design, first release, revision 4. Governance belongs to
+the SORA Parliament alone, a destination pause is a Parliament-enacted control
+message, validators join and leave freely, and validator nodes set up SCCP
+with no operator step; §14 records these binding decisions. SCCP does not
+change generic Sumeragi bridge finality (`specs/bridge_finality.md`).
 
 SCCP moves Taira XOR between the Taira Iroha network and four external
 mainnets. The first release admits exactly these profiles:
@@ -53,8 +47,15 @@ There are no testnet profiles, no alias profiles and no compatibility layouts.
   certificate over the block, `specs/sumeragi.md`) and the node's state has
   applied `h`. The Sumeragi core applies only certified blocks, so a committed
   height never reverts. Everywhere in this spec, "committed" means durably
-  final. (Revision 4: this replaces the Sumeragi v2 finality artifact, which
-  the Sumeragi core retired; see §14.4.)
+  final.
+- **Epochs** are the fixed-length epochs of the Sumeragi core
+  (`specs/sumeragi.md` §11.7): with genesis height `g` and the scheduled
+  `epoch_length_blocks`, the genesis block and the first `epoch_length`
+  heights after it form epoch 0, and each following run of `epoch_length`
+  heights is the next epoch (`sumeragi_epoch(h, g, epoch_length)`). A height
+  is an epoch **boundary** iff it is the last height of its epoch.
+  `current_epoch` is the epoch of the executing height; a node reading
+  committed state uses the next height.
 - **Amounts.** Taira XOR amounts are `Numeric` values of the XOR definition
   (scale ≤ 9). `taira_units(q) = mantissa(q) × 10^(9 − scale(q))`; it MUST be
   an exact integer with `0 < taira_units(q) < 2^128`. Every destination token
@@ -106,11 +107,11 @@ trust the Parliament for what it enacts (§9.13).
 
 | Question | Decision | Why |
 |---|---|---|
-| Attestation transport | Self-authenticating `SubmitSccpAttestationsV1` instruction in ordinary transactions, auto-submitted by each validator node from its bridge key's own account. It is fee-exempt on success behind admission pre-verification and queue deduplication (§4.8) | Durable, peer-identical, state-derived bytes that any Torii serves. It needs no Sumeragi wire change while v2 is being redesigned, and a stalled signer cannot halt consensus. The digest is transport-independent, so a later move to Commit-vote extensions changes no contract (§12). P2P gossip is rejected because it is neither durable nor state-derived. |
-| Where the commitment root lives | Post-execution world state (`sccp_block_commitments[h]`), authenticated by the Commit QC's `ExecutionCommitment`. The frozen `VerifiedHeightContext` of `h` is passed into the post-execution hook. `BlockHeader::sccp_commitment_root` is deleted | The v2 proposer signs a result-less proposal, so a header root authored before execution is structurally wrong and breaks on any failed SCCP transaction (§4.5). |
+| Attestation transport | Self-authenticating `SubmitSccpAttestationsV1` instruction in ordinary transactions, auto-submitted by each validator node from its bridge key's own account. It is fee-exempt on success behind admission pre-verification and queue deduplication (§4.8) | Durable, peer-identical, state-derived bytes that any Torii serves. It needs no Sumeragi wire change, and a stalled signer cannot halt consensus. The digest is transport-independent, so a later move to Commit-vote extensions changes no contract (§12). P2P gossip is rejected because it is neither durable nor state-derived. |
+| Where the commitment root lives | Post-execution world state (`sccp_block_commitments[h]`), authenticated by the execution commitment of the block's commit certificate. The post-execution hook reads the consensus inputs of `h` from the Sumeragi core's schedule (§4.3.2). The block header carries no SCCP root | A proposal carries no execution result, so a header root authored before execution would break on any failed SCCP transaction (§4.5). |
 | Bridge-key registry | New map keyed by `PeerId`, set by `SetSccpBridgeKeyV1`. The instruction carries a consensus-key consent over a per-peer monotone binding nonce, plus a secp256k1 proof of possession. The key's own secp256k1 universal account is its attestor account and is registered implicitly. There is a permanent never-reused address index and a fault bar (§4.2) | The consensus-key registry is indexed by the peer's own BLS key and admin-gated, and staking registration is lane-scoped and refuses fresh global candidates. One key per role means no second key file. |
-| Validator setup | Zero-touch. A node running with role `validator` generates its bridge key on first start in an owner-only directory under its store, and submits `SetSccpBridgeKeyV1` itself, fee-exempt on success, before it is elected. The attestor and the light-client keeper are enabled by default, with compiled default public RPC lists (§4.9, §4.13.4) | Validators join and leave freely; SCCP must not add a setup step or a funded account to that path. |
-| Attestation roster | `HeightContext` consensus roster mapped to active bridge addresses, sorted ascending by address (keyless slots as zero, first), `t = ⌊2n/3⌋+1`. Grouped into **generations**: a new one at every epoch boundary whose `(peer, address)` member list differs from the current generation, on forced rotation (key change, fault, too many unusable slots) and on the 1 d heartbeat, which fires at the first block past it and is block-start work, so an idle Taira still produces it. The outgoing generation signs the boundary block; there is no seat-change batching and no handoff bond (§4.3) | Deterministic and publicly derivable. Validators come and go like on Ethereum; SCCP never delays an exit. Ascending order lets contracts enforce signer uniqueness in O(1) per signature. |
+| Validator setup | Zero-touch. A node running with role `validator` generates its bridge key on first start in an owner-only directory under its store, and submits `SetSccpBridgeKeyV1` itself, fee-exempt on success, as soon as its peer is registered. The attestor and the light-client keeper are enabled by default, with compiled default public RPC lists (§4.9, §4.13.4) | Validators join and leave freely; SCCP must not add a setup step or a funded account to that path. |
+| Attestation roster | Scheduled consensus committee (§4.3.2) mapped to active bridge addresses, sorted ascending by address (keyless slots as zero, first), `t = ⌊2n/3⌋+1`. Grouped into **generations**: a new one at every epoch boundary whose `(peer, address)` member list differs from the current generation, on forced rotation (key change, fault, too many unusable slots) and on the 1 d heartbeat, which fires at the first block past it and is block-start work (§4.3.2). The outgoing generation signs the boundary block; there is no seat-change batching and no handoff bond (§4.3) | Deterministic and publicly derivable. Validators come and go like on Ethereum; SCCP never delays an exit. Ascending order lets contracts enforce signer uniqueness in O(1) per signature. |
 | Fees and permissions | Attestations, fault evidence, keeper advances, recipient self-claims and bridge-key registration are fee-exempt on success (charged on failure) only under the authority, pre-verification, deduplication and per-block caps in §4.19. Everything else pays ordinary fees. The only SCCP permission token is `CanProposeSccpRouteGovernance`, which only allows proposing and is granted and revoked only in genesis | Signatures are the authority. A fee-exempt root is safe only when admission rejects invalid and duplicate payloads before the queue. |
 | Storage/pruning | Messages, control messages, inbound records, consumed sets, history leaves, rosters, subjects and SCCP governance revisions: permanent. Signatures: pruned after `attestation_retention_ms` (at least the outbound TTL plus 1 d), except rotation attestations, which are kept until the outgoing roster expires plus 1 d (§4.10). Light-client checkpoints: one permanent per stride, the rest pruned after 30 d unless Parliament-installed (§4.13.1) | Old messages remain provable through the history root under any newer attestation. Old burns remain provable through retained checkpoints. |
 | Equivocation | `SubmitSccpAttestationFaultV1`: any valid bridge signature over a non-canonical statement. Phase 1 records the fault, evicts the key, bars the peer from new keys until the Parliament clears it, and forces a new generation. Phase 2 slashes through the existing consensus penalty pipeline while the validator is still bonded (§4.11) | Off-chain signatures are otherwise unaccountable. |
@@ -120,12 +121,12 @@ trust the Parliament for what it enacts (§9.13).
 | New-user claims | Settlement registers a missing recipient account. A recipient with no XOR self-claims fee-exempt, and the fee is deducted from the proceeds (§4.12.4) | No faucet, sponsor program or hosted onboarding is needed. |
 | Light-client liveness | Permissionless proof-carrying advances; an in-node keeper on validator nodes, enabled by default, using compiled default public RPC lists; and Parliament re-initialization and trusted checkpoints as a last resort, built and verified with public-RPC tooling (§4.13.4) | Light clients have weak-subjectivity bounds that idle lanes would otherwise exceed. The keeper adds liveness, never trust. |
 | Escrow | One core-created escrow account per route, derived without the revision, created at genesis. Core rejects every non-SCCP debit, credit, registration or unregistration of it. `balance(escrow(route)) = Σ_r liability(r) + stranded(route)` (§4.15) | Registration cannot be front-run, and upgradable executor code cannot drain escrow. |
-| Governance | SORA Parliament only, through the existing pipeline: `ProposeSccpRouteGovernance` (bonded citizen or `CanProposeSccpRouteGovernance`) → 8-body Parliament → due certificate → atomic enactment. The payload is replaced by the v1 action set, and the expected head is scoped per SCCP subject (route, route control, light-client lane, parameters, faulted peer) instead of the whole registry (§4.14). `RegisterRoute` pins the deployment's initial roster generation. TON deployment addresses are recomputed on Taira. SCCP attempts and their progress transitions are permissionless and core-derived, so no clerk controls the agenda. Genesis MUST seat the Parliament (§4.14.5) | Governance belongs to the Parliament, not to validators or their keys. Per-subject heads keep independent proposals from superseding each other. |
+| Governance | SORA Parliament only, through the existing pipeline: `ProposeSccpRouteGovernance` (bonded citizen or `CanProposeSccpRouteGovernance`) → 8-body Parliament → due certificate → atomic enactment. The payload is the v1 action set, and the expected head is scoped per SCCP subject (route, route control, light-client lane, parameters, faulted peer) (§4.14). `RegisterRoute` pins the deployment's initial roster generation. TON deployment addresses are recomputed on Taira. SCCP attempts and their progress transitions are permissionless and core-derived, so no clerk controls the agenda. Genesis MUST seat the Parliament (§4.14.5) | Governance belongs to the Parliament, not to validators or their keys. Per-subject heads keep independent proposals from superseding each other. |
 | Destination pause | A Parliament-enacted `SetDestinationPaused` records a **control leaf** in the enacting block's commitment tree. After the bridge roster attests that block, anyone calls `applyControl` on the destination, which verifies the attestation, the Merkle path and a strictly increasing control nonce. Burns, rotations and voids are never paused (§5.1.6) | One governance authority for both sides, no privileged or roster-signed control keys, and the destination needs no verification logic beyond what finalization already has. |
 | Destination replay protection | Dense per-(network, revision) outbound nonce assigned by Taira. EVM/TRON use a bitmap `mapping(uint256 ⇒ uint256)`; TON uses sequentially deployed bucket child contracts of 512 flags that are never redeployed (§5) | One storage word per 256 messages instead of one slot per message. The TON account-state cap (65 536 cells) forbids an in-contract dictionary. |
 | Token/bridge shape | One contract per destination: ERC-20/TRC-20 with the bridge built in (EVM/TRON), or one Jetton master with the bridge built in plus standard wallets and consumption buckets (TON). 9 decimals everywhere | Removes the TRON deployment cycle (token↔route), all cross-contract minting calls, code-hash rechecks and unit scaling. |
-| Taira resets | Taira identity is the runtime `NetworkId`. Genesis carries a random reset nonce, so every reset has a fresh identity, and seeds the Parliament. Nothing Taira-specific is compiled into Rust or contracts. The Parliament should pause old deployments before a reset; otherwise they freeze when their last roster expires (§4.18) | The old compiled genesis hash made every reset and devnet unusable. |
-| Contract toolchains | Solidity 0.8.31 (`solc` +commit.fd3a2265 for ETH/BSC; tronprotocol `tv_0.8.31` +commit.c2812a3d for TRON), legacy pipeline, `evmVersion: cancun`; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | The pinned 0.7.6 compiler is x86-64 only and needs Rosetta. |
+| Taira resets | Taira identity is the runtime `NetworkId`. Genesis carries a random reset nonce, so every reset has a fresh identity, and seeds the Parliament. Nothing Taira-specific is compiled into Rust or contracts. The Parliament should pause old deployments before a reset; otherwise they freeze when their last roster expires (§4.18) | A compiled Taira identity would make every reset and devnet unusable. |
+| Contract toolchains | Solidity 0.8.31 (`solc` +commit.fd3a2265 for ETH/BSC; tronprotocol `tv_0.8.31` +commit.c2812a3d for TRON), legacy pipeline, `evmVersion: cancun`; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | Every contract builds natively on macOS arm64, with no Rosetta or Docker. |
 
 ### 1.3 End-to-end shape
 
@@ -168,9 +169,9 @@ Each profile has a 1-byte tag and a 32-byte identity word:
 
 `network_bytes(p) = tag(p) ‖ identity_word(p)` (33 bytes).
 
-The Taira `ChainId` label, the compiled `SCCP_TAIRA_CHAIN_ID_V1`,
-`SCCP_TAIRA_GENESIS_HASH_V1` and `SCCP_TAIRA_FINALITY_NETWORK_ID_V1`
-constants are removed. The I105 discriminant is not part of any SCCP hash.
+SCCP reads Taira's identity only from world state: no SCCP hash or check uses
+the Taira `ChainId` label or a compiled Taira chain id, genesis hash or
+network id. The I105 discriminant is not part of any SCCP hash.
 
 ### 2.2 Lanes
 
@@ -211,8 +212,7 @@ destination contract (§4.14). `asset_id` text is `xor`.
 | 5 | `tron_address21` | 21 | first byte `0x41`, remaining 20 bytes nonzero |
 | 7 | `ton_account36` | 36 | `i32` workchain (big-endian) = 0, then a nonzero 32-byte account id |
 
-Codecs 4 and 6 are unassigned. The previous I105-text Taira account encoding
-and its on-chain base-105/Ed25519 validation are removed. The 1024-byte bound
+Codecs 4 and 6 are unassigned. The 1024-byte bound
 admits Taira multisig controllers with many members. A Taira authority whose
 `AccountAddress` exceeds it cannot send (§4.4), and wallets refuse such
 recipients before burning (§7.2).
@@ -313,8 +313,8 @@ control_nonce = 2, paused = 0  →  0x85fcfc8718c845c212df8ae486161d03bde8116eaa
 Tree rule ("promote-odd"): level 0 is the leaf list. Each next level pairs
 elements left to right, and an unpaired last element is promoted unchanged. The
 root of a single-leaf tree is that leaf. A block has 1..=512 leaves of both
-kinds together (`SCCP_MESSAGES_MAX_PER_BLOCK_V1`, renamed from
-`SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1`), so paths have at most 9 siblings.
+kinds together (`SCCP_MESSAGES_MAX_PER_BLOCK_V1`), so paths have at most 9
+siblings.
 
 Verification is positional and binds the leaf index and count:
 
@@ -390,7 +390,7 @@ approval or a control statement: governance is decided by the Parliament
 | Field | Meaning |
 |---|---|
 | `height` | Taira block height `h` |
-| `epoch` | NPoS epoch of `h` (`HeightContext(h).epoch`) |
+| `epoch` | epoch of `h` (§0) |
 | `timestampMs` | `creation_time_ms` of block `h`'s header |
 | `blockHash` | `HashOf<BlockHeader>` of block `h` (32 bytes) |
 | `sccpRoot` | root of block `h`'s commitment tree, or zero if `messageCount = 0` |
@@ -428,8 +428,8 @@ Member ordering: all zero members (roster peers without an active bridge key)
 come first, then nonzero members **strictly ascending** as 160-bit unsigned
 integers. Every verifier MUST check the `n` range, the `t` formula and the
 ordering while hashing. Because members are unique and signers are addressed by
-position, a single key can never count twice. `n ≤ 31` holds because SCCP can
-only be enabled when NPoS `max_validators ≤ 31` (§4.1).
+position, a single key can never count twice. `n ≤ 31` holds because roster
+derivation fails closed for any roster outside 4..=31 (§4.3.2).
 
 ### 3.8 Signatures
 
@@ -467,8 +467,8 @@ only be enabled when NPoS `max_validators ≤ 31` (§4.1).
 | Max history path | 32 |
 
 Implementations MUST pin all constants in golden tests (§11). Every selector,
-event topic and typehash in this document was computed (and every revision 2
-value re-verified) with the Keccak-256 of pycryptodome
+event topic and typehash in this document was computed with the Keccak-256 of
+pycryptodome
 (`Crypto.Hash.keccak`, `digest_bits=256`) over the canonical signature
 strings, with tuple types expanded as the Solidity ABI does.
 
@@ -490,18 +490,20 @@ InitializeSccpV1 {
 }
 ```
 
-`InitializeSccpV1` is valid only inside the genesis block. It requires
-consensus mode `Npos` and NPoS `max_validators` in 4..=31. It validates the
-parameters, stores them, creates the four route escrow accounts (§4.15) and an
-empty registry. SCCP exists on a network iff `sccp_parameters` is present. The
-compiled chain-id gate (`sccp_local_sora_network_for_chain_id`) is removed.
+`InitializeSccpV1` is valid only inside the genesis block. It requires the
+NPoS consensus parameters with `max_validators` in 4..=31. The Sumeragi core
+schedules every live validator whatever `max_validators` is, so roster
+derivation enforces 4..=31 itself and fails closed outside it (§3.7, §4.3.2).
+It validates the parameters, stores them, creates the four
+route escrow accounts (§4.15) and an empty registry. SCCP exists on a network
+iff `sccp_parameters` is present; no compiled chain id gates it.
 `InitializeSccpV1` does not check that the Parliament can be seated; the
 genesis tooling does (§4.14.5, §4.18).
 
 | Field | Taira genesis value | Rule |
 |---|---|---|
 | `enabled` | `true` | When false, only value-moving effects stop: `RecordSccpMessage` fails, and inbound settlement and outbound refunds stay `Pending`. Bridge keys, roster generations, subjects, attestations, fault evidence, light-client advances, inbound and void proof recording, Parliament enactment and control messages keep running, so re-enabling needs no recovery and destinations keep receiving rotations and controls. Per-route stops use `Paused` (§4.14.2) |
-| `roster_max_age_ms` | 86 400 000 (1 d) | Heartbeat: force a new generation at the first block whose `creation_time_ms ≥ valid_from + roster_max_age` (block-start work, so an idle Taira still produces that block, §4.3.2). `roster_max_age_ms ≥ 3 600 000` (1 h) |
+| `roster_max_age_ms` | 86 400 000 (1 d) | Heartbeat: force a new generation at the first block whose `creation_time_ms ≥ valid_from + roster_max_age` (block-start work, §4.3.2; until the core proposer builds blocks for pending start-of-block work, an idle Taira produces that block only when a transaction arrives, §13 item 2). `roster_max_age_ms ≥ 3 600 000` (1 h) |
 | `roster_validity_ms` | 1 209 600 000 (14 d) | `valid_until = valid_from + roster_validity`; `2 × roster_max_age_ms + attestation_stall_ms + 86 400 000 ≤ roster_validity_ms ≤ MAX_ROSTER_VALIDITY_MS` (30 d), so a destination always has at least `roster_max_age + 1 d` to rotate (§5.1.5) |
 | `outbound_ttl_ms` | 604 800 000 (7 d) | 1 d..=90 d; `deadline_ms = creation_time_ms(record block) + outbound_ttl_ms` |
 | `min_outbound_amount` | 10^9 (1 XOR) | Floor per outbound message; bounds permanent dust records. `1 ≤ min_outbound_amount ≤ 10^15` (1 000 000 XOR) |
@@ -516,14 +518,11 @@ table, including the joint ones, against the complete new value. Windows are
 in milliseconds of Taira block time, not in blocks, because Iroha produces no
 empty blocks and block counts have no wall-clock bound (§4.14.5).
 
-The revision 2 fields `min_generation_interval_ms` (seat-change batching) and
-`governance_approval_ttl_blocks` (bridge-key approvals) do not exist, and the
-block-count fields `attestation_retention_blocks` and `attestation_stall_blocks`
-are replaced by the millisecond fields above. The defaults are tuned for free
-validator churn: generations may change at every epoch boundary (3 600 blocks,
-about 4 h when Taira produces a block every 4 s), the 1 d heartbeat bounds how
-long a kept destination trusts any generation, and 14 d validity leaves about
-13 days to rotate an unattended destination (§5.1.5, §9.9).
+The defaults are tuned for free validator churn: generations may change at
+every epoch boundary (3 600 blocks, about 4 h when Taira produces a block every
+4 s), the 1 d heartbeat bounds how long a kept destination trusts any
+generation, and 14 d validity leaves about 13 days to rotate an unattended
+destination (§5.1.5, §9.9).
 
 Node-local behavior (key directory, submission cadence, keeper endpoints)
 lives in `iroha_config` `[sccp.attestor]` (§4.9) and `[sccp.light_client_keeper]`
@@ -533,9 +532,7 @@ consensus policy hash. Each category has a per-transaction and a per-block
 limit: proofs, proof bytes (plus a per-frame bound), native headers and header
 bytes, Ethereum light-client updates, BSC vote attestations, secp256k1
 recoveries (TRON) and Ed25519 signature checks (TON). Defaults admit one full
-advance of every chain in a transaction and four in a block. The
-pending-outbound, pairing, BLS-aggregate and TON validator-key knobs are
-removed.
+advance of every chain in a transaction and four in a block.
 
 ### 4.2 Bridge keys
 
@@ -657,40 +654,49 @@ sccp_heartbeat_marker: Option<u64>        // generation whose heartbeat block wa
 
 #### 4.3.2 Derivation
 
-**Height context.** `ValidBlock::finalize_owned_execution_metadata` receives,
-as a new argument, the frozen `VerifiedHeightContext` `ctx(h)` that
-`record_execution` used for block `h`. For genesis this is the context from
-`build_genesis_height_context`. SCCP never reads height context from Kura or
-from a parent finality artifact. SCCP requires `ctx.mode = Npos` (§4.1).
+**Height inputs.** The post-execution hook of block `h`
+(`ValidBlock::finalize_owned_execution_metadata`) reads the consensus inputs of
+`h` from the Sumeragi core's lag-2 `consensus_schedule` in world state
+(`SccpHeightInputsV1::from_sumeragi_schedule`). The block's output-seal
+finalizer advances the schedule before the hook runs, so it holds the
+scheduled committees of `h` and `h + 1` and the epoch length. The inputs are
+the epoch of `h` and its last height (§0), the roster of `h`, which is the
+scheduled committee of `h`, and at a boundary the next roster, which is the
+scheduled committee of `h + 1`. The genesis block uses the same schedule. SCCP
+never reads height inputs from Kura or from a parent finality artifact. The
+core schedules every live validator in both consensus modes, so the roster
+rule does not depend on the consensus mode.
 
-Let `peers(E)` be the voting roster of epoch `E`: `ctx.roster` for heights of
-`E`, and `ctx.next_epoch_snapshot.roster` for `E+1` at a boundary.
-`members(E)` maps each peer to the address of its active bridge key (active
-at the start of `E` and not faulted at the executing height), or to the zero
-address, and orders them per §3.7. It is a list of
+Let `peers(E)` be the roster of epoch `E`: the scheduled committee of the
+executing height for heights of `E`, and the scheduled committee of `h + 1`
+for `E+1` at a boundary `h`. `members(E)` maps each peer to the address of its
+active bridge key (active at the start of `E` and not faulted at the executing
+height), or to the zero address, and orders them per §3.7. It is a list of
 `(peer, address)` pairs; the roster digest (§3.7) hashes only the addresses.
 
 - **Generation 1** is created in the post-execution hook of the genesis block
   from `peers(0)` and the genesis keys, if any: `valid_from_ms` = genesis
   `creation_time_ms`, `activation_height` = the genesis height.
 - **Rotation heights** are epoch boundaries, fault blocks and heartbeat
-  blocks. Block `h_b` is a boundary iff `ctx(h_b).height =
-  ctx(h_b).epoch_end_height`, and then `ctx(h_b).next_epoch_snapshot` MUST be
-  present. A fault block is a block that records an attestation fault (§4.11).
+  blocks. Block `h_b` is a boundary iff it is the last height of its epoch
+  (§0), and then the schedule MUST hold the committee of `h_b + 1`. A fault
+  block is a block that records an attestation fault (§4.11).
   A heartbeat block is a block with `creation_time_ms(h_b) − g.valid_from_ms ≥
   roster_max_age_ms` for the current generation `g`. Fault and heartbeat
   blocks use `peers(E)` of their own epoch.
 - **Heartbeat as block-start work.** Iroha produces no empty blocks, so a
   heartbeat that waited for a transaction or an epoch boundary could miss the
-  validity window on an idle Taira. At block start, in the hooks that
-  `State::deterministic_start_work_pending` probes with the candidate header,
-  core evaluates the heartbeat condition against the header's creation time;
-  when it holds and `sccp_heartbeat_marker ≠ Some(g)`, core writes
+  validity window on an idle Taira. At block start core evaluates the
+  heartbeat condition against the candidate header's creation time
+  (`State::deterministic_start_work_pending` reports it); when it holds and
+  `sccp_heartbeat_marker ≠ Some(g)`, core writes
   `sccp_heartbeat_marker = Some(g)`. That write is deterministic start-of-block
-  work, so the Sumeragi v2 proposer builds the block even with an empty queue
-  (`v2_candidate.rs`). The marker fires at most once per generation: if the
-  derivation fails closed (below), later blocks still retry it as heartbeat
-  blocks, but no further empty block is forced for `g`.
+  work, and a proposer MUST build a block for pending start-of-block work even
+  with an empty queue. The Sumeragi core proposer does not probe start-of-block
+  work yet, so until it does an idle Taira produces the heartbeat block only
+  when a transaction arrives (§13 item 2). The marker fires at most once per
+  generation: if the derivation fails closed (below), later blocks still retry
+  it as heartbeat blocks, but no further empty block is forced for `g`.
 - In the hook of a rotation height `h_b` (epoch `E`), the following runs in
   order:
   1. At a boundary, promote the bridge keys pending for `E+1`.
@@ -720,14 +726,16 @@ address, and orders them per §3.7. It is a list of
   are recorded but can never be attested, `RecordSccpMessage` is refused while
   it signs (§4.4), and no deployment can be pinned to it (§4.14.3). Rule (a)
   replaces it at the next rotation height.
-- If a boundary lacks `next_epoch_snapshot`, or a roster size falls outside
-  4..=31, the hook fails closed for SCCP: no generation change, event
+- If the schedule lacks an input of `h` (the committee of `h`, or of `h + 1`
+  at a boundary), or a roster size falls outside 4..=31, the hook fails closed
+  for SCCP: no generation change, event
   `SccpRosterDerivationFailed`, and `RecordSccpMessage` is refused until a later
   rotation height succeeds. Block execution itself is not failed. While
   derivation fails, `g` stays current past any membership change and past its
-  heartbeat, which is the exception to the guarantees of §4.3.3, §5.1.5 and
-  §9.10: `g`'s members may include peers that are no longer validators, and
-  the next handoff is signed by `g` as it stands.
+  heartbeat. This extends the membership lag of §4.3.3 and §9.10 and is an
+  exception to the guarantee of §5.1.5: `g`'s members may include peers that
+  left the committee before earlier boundaries, and the next handoff is
+  signed by `g` as it stands.
 
 A zero-address slot counts in `n` but can never sign. Rule (a) replaces a
 generation at the next rotation height once too many slots are unusable.
@@ -735,33 +743,45 @@ Between rotation heights, liveness requires `t` online attestors.
 
 #### 4.3.3 Churn and handoff liveness
 
-Validators join and leave at any epoch boundary under the unchanged NPoS rules.
-SCCP adds no bond, no withdrawal delay, no seat-change batching and no hook in
-staking; `FinalizePublicLaneUnbond` and every other staking instruction are
+Validators join and leave under the consensus rules, and SCCP samples the
+scheduled committee at rotation heights (§4.3.2). SCCP adds no bond, no
+withdrawal delay, no seat-change batching and no hook in staking;
+`FinalizePublicLaneUnbond` and every other staking instruction are
 untouched.
 
 - **Joining.** A node running with role `validator` registers its bridge key as
-  soon as its peer is registered, before it is elected (§4.9). A key registered
-  during epoch `E` is active from `E+1`, so a validator elected for `E+1` or
-  later normally enters its first generation with a key. A validator elected
-  without an active key holds a zero slot until the boundary at which its key
-  is promoted, which starts a new generation by rule (b).
-- **Leaving.** A validator in `peers(E)` but not in `peers(E+1)` leaves at the
-  boundary `h_b` of `E`. The rotation subject is `h_b`, signed by the outgoing
-  generation `g`. Because generations change at every membership change (rule
-  (b) compares `(peer, address)` pairs), every member of `g` is a peer of
-  `peers(E)`, so every signer of the handoff is still a validator at `h_b`, and
-  its obligation ends with the subjects at heights `≤ h_b`. **Exception:**
-  while the derivation fails closed (§4.3.2), `g` is kept past membership
-  changes, and its next handoff may need signatures from peers that have
-  already left; their attestors keep signing as observers while they run
-  (§4.9), but nothing obliges them to.
+  soon as its peer is registered (§4.9). The core schedules the validator into
+  the committee two heights after the block that registers its peer (or at its
+  consensus key's later activation height), at any height
+  (`specs/sumeragi.md` §10.1), and SCCP picks it up at the next rotation
+  height. A key registered during epoch `E` is active from `E+1`, and
+  the boundary of `E` promotes pending keys before it computes `members(E+1)`
+  (§4.3.2 step 1), so a validator normally enters its first boundary
+  generation with a key. A validator in a generation without an active key
+  (for example a fault or heartbeat generation created in the epoch it joined)
+  holds a zero slot until the boundary at which its key is promoted, which
+  starts a new generation by rule (b).
+- **Leaving.** A validator leaves the committee two heights after the block
+  that unregisters its peer, at any height (`specs/sumeragi.md` §10.1). SCCP
+  samples the committee only at rotation heights (§4.3.2), so the current
+  generation `g` keeps a departed member's slot until a rotation height
+  replaces `g`: by rule (b) at the next boundary, by rule (c) at the
+  heartbeat, or by rule (a) earlier once unusable slots exceed `n_g − t_g`.
+  The handoff at a rotation height `h_b` is signed by the outgoing generation
+  `g`, whose members were sampled when `g` was created, so `g` can include
+  peers that have left the committee since and are not validators at `h_b`
+  (§13 item 9). Their attestors keep signing as observers while they run
+  (§4.9), but nothing obliges them to. A member's obligation ends with the
+  subjects at heights `≤` the handoff height of its last generation. While
+  the derivation fails closed (§4.3.2), `g` also stays current past later
+  boundaries, and this window grows.
 - **Liveness assumption.** Destinations follow `g → g+1` only after `t`
   members of `g` sign `h_b`. SCCP assumes that `t` nonzero members of `g` sign
-  `h_b` within `attestation_stall_ms` of its durable finality. Rule (a)
-  guarantees that `g` has at least `t` nonzero slots whose peers are in the
-  roster of `E`, and `h_b`'s own Commit QC was produced by at least `2f+1`
-  validators of `E`. Zero slots never sign, the QC signers need not be the
+  `h_b` within `attestation_stall_ms` of its durable finality. Unless `g` is
+  inert, rule (a) guarantees that `g` had at least `t` nonzero slots whose
+  peers were in the roster at the last rotation height before `h_b` (members
+  may have left since, see Leaving), and `h_b`'s own Commit QC was produced by
+  at least `2f+1` validators of `E`. Zero slots never sign, the QC signers need not be the
   key holders, and an inert generation (§4.3.2) cannot sign at all, so this
   is an assumption, not a consequence: it
   asks that `t` of `g`'s key-holding validators keep their nodes up for a few
@@ -793,9 +813,8 @@ RecordSccpMessage {
 }
 ```
 
-This is a plain signed instruction: no `IvmProved` executable, no contract and
-no replay witness. The authority is the sender. Execution runs these steps in
-order:
+This is a plain signed instruction, not a contract call. The authority is the
+sender. Execution runs these steps in order:
 
 1. SCCP is enabled. The route for `network` has exactly one revision `r` in
    `Bidirectional` (§4.14.2), `r = expected_revision`, and
@@ -839,16 +858,17 @@ Ordinary fees apply. Taira cannot observe mints; the destination's consumed set
 is authoritative (§5). A record leaves `Recorded` only through a proven void
 (§4.16); a minted record stays `Recorded`.
 
-Contract-originated SCCP sends (Kotodama) are not part of v1. The syscall
-`0xA0` operation tag 2 and the `ledger::sccp::record` builtin are removed
-(§10). The post-execution root (§4.5) would support them safely later.
+Contract-originated SCCP sends (Kotodama) are not part of v1: Kotodama has no
+SCCP builtin, and the IVM host rejects every syscall `0xA0` operation tag
+other than `1=SubmitBallot` with `PermissionDenied`, so it executes no
+`RecordSccpMessage`. The `0xA0` ABI argument text still lists
+`2=RecordSccpMessage` until `TODO(ws45)` removes it (§11). The post-execution
+root (§4.5) would support contract-originated sends safely later.
 
 ### 4.5 Block commitment and history (post-execution)
 
-The following are deleted (a block-header wire change; the header fixtures are
-regenerated): `BlockHeader::sccp_commitment_root`,
-`CandidateAttachments.sccp_commitment_root`, `SccpRootValidation` and
-`validate_sccp_commitment_root_for_signed_block`.
+The block header carries no SCCP root: the commitment root of a block exists
+only in its post-execution world state.
 
 All SCCP instructions are routed to the universal dataspace and execute
 serially in one execution context, so nonce assignment and `commitment_index`
@@ -863,8 +883,9 @@ sccp_block_leaves: (u64 height, u32 commitment_index) → SccpLeafRefV1 =
 ```
 
 In `ValidBlock::finalize_owned_execution_metadata`
-(`crates/iroha_core/src/block/post_execution_tail.rs`), with `ctx(h)` (§4.3.2),
-after all transactions of block `h` have executed and before the output seal:
+(`crates/iroha_core/src/block/post_execution_tail.rs`), with the height inputs
+of `h` (§4.3.2), after all transactions of block `h` have executed and before
+the output seal:
 
 1. Read the applied leaf outbox `sccp_block_leaves[(h, ·)]` and assert that its
    indices are exactly `0..m`. A gap is an execution invariant violation and
@@ -880,10 +901,10 @@ after all transactions of block `h` have executed and before the output seal:
    derivation cannot create a subject per block.
 4. Run the pruning step (§4.10).
 
-These writes are part of the post-state covered by the Commit QC's
-`ExecutionCommitment` (`ordinary_writes_root`, `post_state_root`), so the root
-is QC-authenticated with no vote-wire change. The proposal-time collectors and
-the callback-record fail-closed rule become dead code and are removed.
+These writes are part of the post-state covered by the execution commitment
+of the block's commit certificate (its ordinary-write and post-state roots,
+`specs/sumeragi.md` §4.1), so the root is certificate-authenticated with no
+vote-wire change.
 
 ### 4.6 Attestation subjects
 
@@ -914,8 +935,8 @@ the signing bridge key's own account (§4.2.1).
 | Option | Durable & state-derived | Consensus coupling | Verdict |
 |---|---|---|---|
 | Instruction in later blocks | yes: stored in world state, identical on every peer | none (ordinary tx path) | **chosen**; latency +1–2 blocks (4–8 s) |
-| P2P gossip (new `ConsensusMessageV2`) | no, unless also embedded by the proposer, which reintroduces proposer-authored SCCP data | new message kind + reducer ingress | rejected |
-| Sumeragi Commit-vote extension (KAGEMUSHA seal pattern) | yes (in the CommitQC envelope) | changes `HeightContext`, vote and QC wire in the Sumeragi v2 redesign; a validator without a bridge key would stall SCCP blocks | deferred optimization (§12); the digest is unchanged by it |
+| P2P gossip (a new consensus message kind) | no, unless also embedded by the proposer, which reintroduces proposer-authored SCCP data | new message kind + reducer ingress | rejected |
+| Sumeragi commit-vote extension (KAGEMUSHA seal pattern) | yes (in the commit certificate) | changes the Sumeragi vote and certificate wire; a validator without a bridge key would stall SCCP blocks | deferred optimization (§12); the digest is unchanged by it |
 
 ### 4.8 `SubmitSccpAttestationsV1`
 
@@ -981,7 +1002,7 @@ validation-fee classification as "no DS effect".
 
 ### 4.9 Node attestor
 
-A new irohad component (`crates/irohad/src/sccp_attestor.rs`), modeled on the
+An irohad component (`crates/irohad/src/sccp_attestor.rs`), modeled on the
 Soracloud runtime mutation sink. It is enabled by default and needs no
 operator input: a validator installs, starts and leaves exactly as it would
 without SCCP.
@@ -1013,9 +1034,9 @@ without SCCP.
   `activation_epoch = current_epoch + 1` from committed state, signs the
   binding with the node's consensus key, the PoP and the transaction with the
   bridge key (authority `account_of(key)`), and pushes it into its local queue.
-  It retries once per epoch until the key is pending or active. This happens
-  before the peer is elected, so the key is active by the time the peer joins
-  a roster. It is fee-exempt on success (§4.2.3); a barred peer reports
+  It retries once per epoch until the key is pending or active. This starts as
+  soon as the peer is registered, so the key is normally active by the first
+  boundary generation that includes the peer (§4.3.3). It is fee-exempt on success (§4.2.3); a barred peer reports
   `sccp_attestor_barred` until the Parliament clears the fault.
 - **What it signs.** For each newly durably final height (§0), and for every
   height with a subject whose generation contains an address in the node's key
@@ -1115,8 +1136,11 @@ Validation requires three things:
 - the statement is **faulty**.
 
 A statement is faulty in one of three cases. Every height below the executing
-height is durably final, because v2 executes a height only on durable parent
-finality.
+height is certified and can never revert: the Sumeragi core executes `h+1`
+only after the commit certificate of `h`, against its certified post-state
+(`specs/sumeragi.md` §4.1, §10.2), although `h` may not yet be applied on the
+executing node. The executing state therefore holds the canonical statement
+of every lower height that has a subject.
 
 - `statement.height ≥ current height`: honest attestors sign only durably
   final heights.
@@ -1275,13 +1299,12 @@ later voided moves its amount to `stranded(route)` (§4.16).
 
 ### 4.13 Inbound light clients
 
-Anchors become permissionless light-client state. World state stores
+Inbound finality is permissionless light-client state. World state stores
 **authenticated validator sets** of each source chain with validity ranges,
 plus finalized checkpoints. Each inbound or void proof carries its own finality
-evidence, verified against a stored set. There are no per-transfer anchor
-windows, no anchor preimages and no Parliament-advanced anchors: the
-Parliament only initializes, re-initializes, freezes and installs trusted
-checkpoints (§4.14.3); every advance is permissionless.
+evidence, verified against a stored set. The Parliament only initializes,
+re-initializes, freezes and installs trusted checkpoints (§4.14.3); every
+advance is permissionless.
 
 #### 4.13.1 State
 
@@ -1406,18 +1429,11 @@ period (~27 h, ~25 KB). BSC, one skipping advance per validator-set change
 (about daily, ~3 KB). TRON, one segment per maintenance period (4 per day,
 ~20 KB each). TON, one key-block hop per validator round (~18 h, ~20–60 KB).
 
-The existing per-chain verifiers in `iroha_sccp` (`ethereum_native.rs`,
-`ethereum_source.rs`, `ton_native.rs`) are kept and refactored into these
-stateless checks; the Parlia header, roster and vote-attestation primitives now
-live in `light_client/bsc.rs` and the TRON header, signature, transaction and
-Merkle primitives in `light_client/tron.rs`. The following are removed:
-
-- `SccpNativeTrustAnchorV1`, the anchor preimage DTOs, the anchor interval
-  cutoff and `sccp_inbound_anchor_high_water`;
-- BSC full Parlia replay (seal, recents, difficulty, Go `math/rand` backoff);
-- TRON schedule replay and the 27-header window;
-- the TON 64-block window and signature-per-block walk;
-- every replay-witness field.
+The per-chain checks are stateless functions in `iroha_sccp`: Ethereum in
+`ethereum_native.rs` and `ethereum_source.rs`, TON in `ton_native.rs`, the
+Parlia header, roster and vote-attestation primitives in
+`light_client/bsc.rs`, and the TRON header, signature, transaction and Merkle
+primitives in `light_client/tron.rs`.
 
 Deployment code identity is not proven per transfer. EVM and TRON deployments
 are verified off-chain by Parliament reviewers before the vote (§4.14.4), and
@@ -1427,7 +1443,7 @@ TON deployment addresses are recomputed by Taira at registration (§4.14.3).
 
 - **Wallets.** Anyone may advance, and wallets advance as part of a claim.
 - **In-node keeper.** An irohad component
-  (`crates/irohad/src/sccp_light_client_keeper.rs`, config
+  (`crates/irohad/src/sccp_attestor/keeper.rs`, config
   `[sccp.light_client_keeper]`) runs on validator nodes and is enabled by
   default. It is effective whenever the node holds an active or pending
   registered bridge key (§4.9), and needs no other setup. It reads each light
@@ -1439,10 +1455,11 @@ TON deployment addresses are recomputed by Taira at registration (§4.14.3).
   (§4.19). Admission keeps at most one pending exempt advance per
   `(authority, network)`, separate from the attestor's pending attestation
   batch on the same account (§4.8), and the proposer includes at most one
-  exempt advance per network per block. Its submissions are verified like
+  exempt advance per network per block. It drops, with a warning, any built
+  advance larger than `max_advance_bytes`. Its submissions are verified like
   anyone's, so a lying endpoint can only cause rejected advances. Default
   lists of free public RPC endpoints per chain are compiled into the
-  `iroha_config` defaults (approved for the first release); an operator MAY
+  `iroha_config` defaults; an operator MAY
   override them and MAY add per-endpoint secret headers read from owner-only
   files.
 
@@ -1455,7 +1472,7 @@ TON deployment addresses are recomputed by Taira at registration (§4.14.3).
   advance_after_ms = 0            # 0 = ws_bound_ms / 4 of each light client
   poll_interval_ms = 60000        # how often local light-client state is checked
   request_timeout_ms = 10000      # per RPC request, with failover to the next endpoint
-  max_advance_bytes = 262144      # never exceeds the on-chain per-ISI bounds
+  max_advance_bytes = 262144      # larger built advances are dropped; ≤ the on-chain per-ISI bounds
 
   [sccp.light_client_keeper.endpoints]
   ethereum_execution = []         # empty = the compiled default list
@@ -1535,10 +1552,6 @@ sccp_destination_words: [u8; 32] → (SccpNetworkV1, u32)   // unique across all
 sccp_governance_revisions: SccpGovernanceSubjectV1 → u64  // §4.14.3; absent = 0
 ```
 
-The Groth16 verifying keys, semantic profiles, finality anchors, outbound proof
-policy, IVM execution policy, TON guardian keys and schema hashes are removed
-from the registry.
-
 #### 4.14.2 Activation states
 
 `Staged` → `Bidirectional` ⇄ `Paused`; `Bidirectional`/`Paused` →
@@ -1571,16 +1584,15 @@ transition is a Parliament-enacted action (§4.14.3).
 #### 4.14.3 Governance: the Parliament pipeline
 
 SCCP has exactly one governance authority: the SORA Parliament. Validators and
-bridge keys take no part in any decision. SCCP reuses the existing Parliament
-pipeline unchanged in its mechanics (`ProposeSccpRouteGovernance`, the
-SCCP body list of `parliament_attempt_policy_v1`, the due certificate and
-automatic enactment) and replaces only the action payload and the expected
-head.
+bridge keys take no part in any decision. SCCP uses the Parliament pipeline
+(`ProposeSccpRouteGovernance`, the SCCP body list of
+`parliament_attempt_policy_v1`, the due certificate and automatic enactment)
+with its own action payload and a per-subject expected head.
 
 **Payload.**
 
 ```
-ProposeSccpRouteGovernance { proposal: SccpGovernanceProposalV1 }       // replaces `anchor`
+ProposeSccpRouteGovernance { proposal: SccpGovernanceProposalV1 }
 ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal { proposal: Box<SccpGovernanceProposalV1> })
 
 SccpGovernanceProposalV1 {
@@ -1635,7 +1647,7 @@ general) is carried in `params`, `bootstrap` and `checkpoint` as opaque bytes
 
 **Pipeline.**
 
-1. **Propose.** `ProposeSccpRouteGovernance` keeps its proposer rule
+1. **Propose.** `ProposeSccpRouteGovernance` has one proposer rule
    (`ensure_sccp_route_governance_proposer`): the authority is a citizen whose
    bond is at least `gov.citizenship_bond_amount`, or holds
    `CanProposeSccpRouteGovernance`. `network_id` MUST equal the live
@@ -1646,8 +1658,8 @@ general) is carried in `params`, `bootstrap` and `checkpoint` as opaque bytes
    every `u64` in the payload (base revisions, generations, the parameters,
    and the integer fields of light-client params, bootstraps and
    checkpoints) is at most
-   2^53 − 1 (a new SCCP arm of `first_release_exact_json_u64_invariant_error`,
-   which the pipeline already applies at proposal and at attempt creation),
+   2^53 − 1 (the SCCP arm of `first_release_exact_json_u64_invariant_error`,
+   which the pipeline applies at proposal and at attempt creation),
    and `base_revisions` lists exactly the subjects `S(P)` (below) with their
    current `rev(s)`. The proposal id is
    `ProposalKind::SccpRouteGovernance(..).fingerprint()` and the record is
@@ -1659,11 +1671,11 @@ general) is carried in `params`, `bootstrap` and `checkpoint` as opaque bytes
    `CreateParliamentGovernanceAttemptV1`: for this kind it is permissionless
    and core-derived (§4.14.5 item 3). It additionally fails unless every
    `rev(s)` still equals `base_revisions` and every `RegisterRoute`
-   destination word is still unused (checked next to the existing payout
-   preflight of attempt creation); a proposal that fails this check is stale
-   and can never get another attempt, so a new proposal against the current
-   state is needed. `parliament_attempt_policy_v1` gives
-   risk tier `Constitutional` and the unchanged SCCP body list: Rules
+   destination word is still unused (checked next to the payout preflight of
+   attempt creation); a proposal that fails this check is stale and can never
+   get another attempt, so a new proposal against the current state is
+   needed. `parliament_attempt_policy_v1` gives
+   risk tier `Constitutional` and the SCCP body list: Rules
    Committee, Agenda Council, Interest Panel, Review Panel, Coordination
    Council, FMA Committee and Oversight Committee (public findings) and the
    Policy Jury (hidden timed-OVN binding ballot), plus a fresh Confirmation
@@ -1678,10 +1690,9 @@ general) is carried in `params`, `bootstrap` and `checkpoint` as opaque bytes
    progress transitions and keeps heights advancing.
 4. **Enactment.** At `certificate height + gov.min_enactment_delay`, at block
    start, `execute_due_parliament_certificate_v1` recomputes the head. A
-   changed head marks the proposal `Superseded`. Otherwise
-   `apply_sccp_governance_proposal_v1` (replacing
-   `apply_sccp_route_governance_action`) applies every action in order in the
-   isolated effect transaction and increments
+   changed head marks the proposal `Superseded`. Otherwise the SCCP enactment
+   (`smartcontracts::isi::sccp::governance::enact`) applies every action in
+   order in the isolated effect transaction and increments
    `sccp_governance_revisions[s]` by one for each subject `s` of the proposal,
    inside that same effect transaction. If any action's precondition fails at
    enactment, the effect transaction is dropped, no SCCP state changes, and
@@ -1700,9 +1711,10 @@ proposal with new content is needed. After `Superseded`, or whenever any
 check, and only a new proposal with the current base revisions (a new id)
 can proceed.
 
-There is no direct path: `ApplySccpRouteGovernance` is deleted, and core
-rejects every `SetParameter` that targets SCCP state (SCCP parameters are not
-in the generic `Parameter` set, §4.1), whatever the executor.
+There is no direct path: no instruction applies an SCCP governance action
+outside Parliament enactment, and core rejects every `SetParameter` that
+targets SCCP state (SCCP parameters are not in the generic `Parameter` set,
+§4.1), whatever the executor.
 
 **Expected head, scoped per subject.** Each action has exactly one subject (the
 comment above it). For a proposal `P`, let `S(P)` be the sorted, deduplicated
@@ -1717,14 +1729,13 @@ head_root  = parliament_governance_head_root_v1(&[(s, rev(s)) for s in S(P)])
 expected   = GovernanceExpectedHeadV1::Present { subject_id, version, head_root }
 ```
 
-`GovernanceSubjectPreimageV1::SccpRouteRegistry` and the whole-registry head
-(`sccp_registry.to_wire()`) are removed. Only the enactment of an SCCP proposal
-changes `rev(s)`. Automatic SCCP state changes (records, releases, liability,
-nonces, frozen voids, light-client advances, bridge keys, faults) never touch
-a head; each action re-checks its own preconditions at enactment instead, and
-the actions that such automatic changes can race have "ensure" semantics or
-name the exact state they act on (`SetTairaPaused`, `SetDestinationPaused`,
-`ClearBridgeKeyFault`, below). Consequences:
+Only the enactment of an SCCP proposal changes `rev(s)`. Automatic SCCP state
+changes (records, releases, liability, nonces, frozen voids, light-client
+advances, bridge keys, faults) never touch a head; each action re-checks its
+own preconditions at enactment instead, and the actions that such automatic
+changes can race have "ensure" semantics or name the exact state they act on
+(`SetTairaPaused`, `SetDestinationPaused`, `ClearBridgeKeyFault`, below).
+Consequences:
 
 - Proposals whose subject sets are disjoint never supersede each other:
   registering the TON route, re-initializing the Ethereum light client and
@@ -1745,21 +1756,21 @@ name the exact state they act on (`SetTairaPaused`, `SetDestinationPaused`,
   change the route's activation; neither can end `ExecutionFailed` because of
   the other.
 
-**Implementation notes** (from the Parliament code as it stands):
+**Implementation notes:**
 
-- Replace the SCCP arm of `governed_subject_id_v1` and of
+- The SCCP arm of `governed_subject_id_v1` and of
   `GovernanceSubjectPreimageV1` (`crates/iroha_data_model/src/governance/types.rs`)
-  with `Sccp(Vec<SccpGovernanceSubjectV1>)`, and the SCCP arm of
+  is `Sccp(Vec<SccpGovernanceSubjectV1>)`, and the SCCP arm of
   `parliament_expected_head_v1`
-  (`crates/iroha_core/src/smartcontracts/isi/world.rs`) with the head above.
-  The reducer checks only subject-id equality and head validity, and there is
-  no global per-subject lock, so this is a local change. A `version ≥ 1` with
-  a nonzero `head_root` satisfies the existing head validity check.
-- Increment `sccp_governance_revisions` inside the effect transaction: the
-  failure path re-checks that the head is unchanged before recording
+  (`crates/iroha_core/src/smartcontracts/isi/world.rs`) computes the head
+  above. The reducer checks only subject-id equality and head validity, and
+  there is no global per-subject lock. A `version ≥ 1` with a nonzero
+  `head_root` satisfies the head validity check.
+- `sccp_governance_revisions` is incremented inside the effect transaction:
+  the failure path re-checks that the head is unchanged before recording
   `ExecutionFailed`.
-- Persist `sccp_governance_revisions` in state snapshots.
-- Put the `base_revisions` and destination-word checks next to the payout
+- State snapshots persist `sccp_governance_revisions`.
+- The `base_revisions` and destination-word checks run next to the payout
   preflight of `CreateParliamentGovernanceAttemptV1`.
 - Certificates due at the same height execute in a deterministic order, so
   overlapping subjects supersede deterministically.
@@ -1780,8 +1791,9 @@ name the exact state they act on (`SetTairaPaused`, `SetDestinationPaused`,
     `StateInit{code: minter_code, data: canonical_initial_data}`. The initial
     data is built per §5.3.1 from the generation record of `G`, the live
     `NetworkId`, the revision, the cap and the wallet and bucket code refs.
-    Taira hashes cells with the existing `ton_native` cell code; only code
-    hashes and depths are needed.
+    Taira computes the address with `iroha_sccp::v1::ton_cell`
+    (`minter_account_id` over `state_init`, with code cells as
+    `CellRef::opaque`); only code hashes and depths are needed.
 - `ActivateRevision`: `r` is `Staged`, no other revision of the route is
   `Bidirectional` or `Paused`, and the network's light client is installed and
   not frozen, so burns on the new deployment are provable.
@@ -1895,12 +1907,11 @@ changes to how SCCP attempts are driven; the rest are not SCCP-specific, and
 the recommended `[gov]` profile applies to every Parliament proposal kind on
 Taira.
 
-All windows below are block counts. Iroha produces no empty blocks: Sumeragi
-v2 builds a block only for queued transactions or deterministic block-start
-work (`State::deterministic_start_work_pending`), and a Parliament enactment
-height is start work but the other Parliament windows are not. Wall-clock
-figures therefore assume that blocks keep coming, which item 4 ensures while
-an SCCP attempt is active.
+All windows below are block counts. Iroha produces no empty blocks: the
+Sumeragi core builds a block only for queued transactions (it does not probe
+start-of-block work, §4.3.2), so no Parliament window elapses on an idle
+chain. Wall-clock figures therefore assume that blocks keep coming, which
+item 4 ensures while an SCCP attempt is active.
 
 1. **Citizens.** Sortition candidates are exactly the citizens whose recorded
    bond is at least `gov.citizenship_bond_amount`
@@ -1991,11 +2002,11 @@ an SCCP attempt is active.
 3. **No clerk for SCCP.** `CreateParliamentGovernanceAttemptV1` and the
    manager-only transitions (`CompleteQualification`,
    `RegisterInitialSortition`, `RegisterSortitionRequest`, `AdvanceBodyPhase`,
-   `RegisterBallotAttempt`, `EscalateRisk`) require `CanManageParliament`
-   today (`parliament_transition_requires_manager_v1`), which would let one
-   account outside the Parliament decide which SCCP proposals ever reach the
-   bodies. For `ProposalKind::SccpRouteGovernance` they become permissionless
-   and core-derived: `parliament_transition_requires_manager_v1` takes the
+   `RegisterBallotAttempt`, `EscalateRisk`) require `CanManageParliament` for
+   other proposal kinds, which for SCCP would let one account outside the
+   Parliament decide which proposals ever reach the bodies. For
+   `ProposalKind::SccpRouteGovernance` they are permissionless and
+   core-derived: `parliament_transition_requires_manager_v1` takes the
    proposal kind and returns false for SCCP, and each transition is valid only
    with the canonical content core derives from state. An attempt exists for
    exactly the `Proposed` SCCP proposal it names, whose `base_revisions` are
@@ -2111,9 +2122,11 @@ Validators provide items 5 and 6 as infrastructure. A threshold of them can
 withhold pulses or release shares (liveness) or open ballots early
 (secrecy), but cannot choose members, proposals or outcomes (§9.13).
 
-**Tooling.** `iroha_cli` has no command today to register timed-OVN ballot
-keys or to cast a timed-OVN ballot; `iroha gov parliament` MUST gain both
-(§8). `scripts/taira_devnet.py` generates the `C` citizen keys in its
+**Tooling.** Jurors register timed-OVN ballot keys and cast timed-OVN ballots
+with `iroha gov parliament ballot register|cast` (§8). Ballot casting MUST
+anchor its evidence on the Sumeragi core's `SumeragiFinalityVerifier`; until
+it does, the CLI pins its trusted checkpoint from an independent source
+(TODO(ws24)). `scripts/taira_devnet.py` generates the `C` citizen keys in its
 owner-only workspace and runs the driver, the citizens' invitation responses,
 endorsements and ballots itself, modeled on
 `integration_tests/tests/sora_parliament_enactment.rs`. Disposable devnets
@@ -2199,7 +2212,8 @@ themselves before finalizing (§7.1).
   genesis for all four routes, so it cannot be front-run. Core rejects every
   ordinary `Register<Account>` and `Unregister<Account>` of an escrow id,
   whatever the executor.
-- **Core custody guards.** `ensure_not_sccp_custody_source/destination` in
+- **Core custody guards.** `ensure_not_sccp_escrow_source` and
+  `ensure_not_sccp_escrow_destination` in
   `crates/iroha_core/src/smartcontracts/isi/asset.rs` reject every transfer,
   burn, mint or other balance change that touches an escrow, except the SCCP
   effects:
@@ -2376,15 +2390,16 @@ instruction routes to the universal dataspace.
 
 The only SCCP permission token is `CanProposeSccpRouteGovernance`, which only
 allows proposing. Its grant and revoke rule is `OnlyGenesis`, as for
-`CanManageKagemushaReserve`: genesis MAY grant it (for example to the reset
-operator's proposing account), and after genesis nobody can grant or revoke
-it. `CanManageSccpGovernance`, which today is the only grantor, is deleted,
-and no other manager role replaces it. A holder can only put proposals before
-the Parliament and pay their fees; bonded citizens can always propose. The
-default executor gets allow-visitors for the SCCP instructions; core enforces
-every SCCP rule. Implicit account registrations (a bridge key's account,
-§4.2.2; a recipient at settlement, refund or stranded release, §4.12.3) have
-the effect and validation-fee DS classification of `Register<Account>`.
+`CanManageKagemushaReserve` (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
+`crates/iroha_core/src/executor.rs`): genesis MAY grant it (for example to the
+reset operator's proposing account), and after genesis nobody can grant or
+revoke it. No manager role grants or revokes it. A holder can only put
+proposals before the Parliament and pay their fees; bonded citizens can always
+propose. The default executor gets allow-visitors for the SCCP instructions;
+core enforces every SCCP rule. Implicit account registrations (a bridge key's
+account, §4.2.2; a recipient at settlement, refund or stranded release,
+§4.12.3) have the effect and validation-fee DS classification of
+`Register<Account>`.
 
 ## 5. Destination contracts
 
@@ -2493,15 +2508,19 @@ call). If the current roster expires before anyone rotates, the destination is
 - the Parliament registers a new revision.
 
 Taira's heartbeat guarantees a new generation at the first block at or after
-`valid_from + roster_max_age_ms`, and the heartbeat is block-start work, so an
-idle Taira still produces that block (§4.3.2). Its rotation subject is attested
+`valid_from + roster_max_age_ms`, and the heartbeat is block-start work
+(§4.3.2). Its rotation subject is attested
 within `attestation_stall_ms` under the liveness assumption of §4.3.3. Anyone
 keeping a destination alive therefore has at least
 `roster_validity − roster_max_age − attestation_stall` (about 13 days with the
 defaults of 14 d, 1 d and 10 min) to rotate, and the §4.1 rule keeps that
-window at least `roster_max_age + 1 d`. Two exceptions void this guarantee:
+window at least `roster_max_age + 1 d`. Three exceptions void this guarantee:
 while the roster derivation fails closed (§4.3.2) no heartbeat generation is
-created, and while Taira itself is halted no block is produced. Under
+created; while Taira itself is halted no block is produced; and until the
+Sumeragi core proposer builds blocks for pending start-of-block work (§13
+item 2), an idle Taira produces the heartbeat block only when a transaction
+arrives, so the window shrinks by however long Taira stays idle past
+`valid_from + roster_max_age_ms`. Under
 validator churn a new generation can start at every epoch boundary (§4.3.2),
 so a destination that lags by `k` generations replays `k` rotations; each
 `rotateRosters` call carries up to 16. The minting pause does not block
@@ -2681,8 +2700,6 @@ signatures. Selectors are the first four bytes of Keccak-256 over the
 canonical signature with tuples expanded, for example
 `applyControl((uint64,uint64,uint64,bytes32,bytes32,uint32,bytes32,uint64,bytes32,bytes32),(uint64,uint64,uint64,uint8,bytes),(uint32,bytes),(uint64,bool,uint32,bytes32[]))`
 → `0x0ce970d6` (§3.9 names the tool). None collides with an ERC-20 selector.
-The revision 2 `setMintingPaused` (`0xbc120437`) and `mintControlNonce()`
-(`0x41e5c0cb`) do not exist.
 
 Events:
 
@@ -2754,8 +2771,7 @@ immutable: INITIAL_ROSTER_DIGEST, INITIAL_GENERATION, TAIRA_NETWORK_ID, NETWORK_
 
 Three contracts: `SccpTairaXorMinter` (TEP-74 Jetton master with the bridge
 built in), `SccpTairaXorWallet` (TEP-74 wallet) and `SccpConsumedBucket`
-(replay flags). All are in workchain 0. They replace the existing
-bridge/master/wallet, proof verifier and replay forest.
+(replay flags). All are in workchain 0.
 
 #### 5.3.1 Minter storage (TL-B) and canonical initial data
 
@@ -3064,8 +3080,8 @@ destination up to date pays one rotation per missed generation, batched 16 per
   `osaka`. The legacy pipeline avoids the via-IR-only 0.8.31 bugs. The source
   MUST NOT `delete` memory `bytes` elements or use custom storage layouts
   (0.8.31 legacy-pipeline bug patterns).
-- `Acton.toml` moves to `acton = "1.2.0"` (PascalCase wrapper names;
-  `acton simulator` replaces the lightweight localnet).
+- `Acton.toml` pins `acton = "1.2.0"` (PascalCase wrapper names), and
+  `acton simulator` provides local end-to-end emulation.
 
 ## 6. Torii read API (served by every Taira peer from state)
 
@@ -3095,12 +3111,11 @@ these bytes: signatures, proofs and digests are verified locally (§7).
 Writes use the generic `POST /v1/pipeline/transactions`,
 `GET /v1/pipeline/transactions/{hash}/status` and `POST /v1/fees/quote`. There
 are no SCCP-specific submit endpoints, and Torii serves no destination calldata
-or BoC projections. The existing Parliament draft route
+or BoC projections. The Parliament draft route
 `POST /v1/gov/proposals/sccp-route-governance`
-(`handle_gov_propose_sccp_route_governance`) is kept and takes the new
+(`handle_gov_propose_sccp_route_governance`) takes the
 `SccpGovernanceProposalV1` payload; Parliament participation uses the generic
-Parliament routes. After the change, regenerate
-`specs/sdk_operation_inventory.tsv` and the OpenAPI artifacts.
+Parliament routes.
 
 ## 7. Wallet flows (no hosted services)
 
@@ -3197,8 +3212,8 @@ the control step of step 5.
      rebuild `txTrieRoot`), `/wallet/getblockbylimitnext` for the solidity
      segment, `/walletsolidity/gettransactioninfobyid` for discovery.
    - **TON:** liteserver ADNL (`ton.org/global-config.json` peers):
-     `getMasterchainInfo`, `lookupBlock`, `getBlockProof`, `getAllShardsInfo`,
-     `getBlock`, `getOneTransaction`.
+     `getMasterchainInfo`, `lookupBlock`, `getBlockHeader`, `getBlockProof`,
+     `getShardBlockProof`, `getTransactions`, `getOneTransaction`.
 4. `GET /v1/sccp/light-clients/{network}`. If the light client does not cover
    the evidence, build `AdvanceSccpLightClientV1` updates with
    `expected_state_hash`: ETH `/eth/v1/beacon/light_client/updates`; BSC set
@@ -3273,35 +3288,34 @@ the control step of step 5.
   - the per-chain inbound and void verifiers and light-client logic;
   - TON cell hashing and StateInit address derivation;
   - Torii DTOs (`api.rs`).
-
-  All compiled Taira constants and all Groth16 code are removed.
-- **`crates/iroha_sccp_rpc`** (new, approved; std; network I/O; added to the
-  workspace with a regenerated `Cargo.lock`) is used by the irohad keeper, the
-  CLI and the wallet. It holds:
+- **`crates/iroha_sccp_rpc`** (std; network I/O) is used by the irohad keeper,
+  the CLI and the wallet. It holds:
   - endpoint lists with failover, and per-endpoint secret headers read from
     owner-only files;
   - blocking `reqwest` (rustls, no `json` feature) with `norito::json`
     parsing;
-  - EVM JSON-RPC, the beacon API (SSZ), TRON HTTP (transaction bytes from
-    `raw_data_hex`; `ret` re-encoding pinned by captured fixtures), and a TON
-    ADNL-TCP liteclient with its ADNL handshake crypto built from workspace
-    crypto crates;
+  - EVM JSON-RPC, the beacon API (JSON light-client and header routes), TRON
+    HTTP (transaction bytes from `raw_data_hex`; `ret` re-encoding pinned by
+    captured fixtures), and a TON ADNL-TCP liteclient with its ADNL handshake
+    crypto built from workspace crypto crates;
   - the compiled default public endpoint lists that `iroha_config` exposes as
     defaults;
   - builders for advances, backfills, inbound proofs, void proofs and
     light-client bootstraps.
-- **`crates/iroha_sccp_wallet`** (new, approved; std; never in the `irohad` graph,
-  enforced by a new `sccp_wallet` layer in `ci/dependency_budget.json`) holds:
+- **`crates/iroha_sccp_wallet`** (std; never in the `irohad` graph, enforced
+  by the `sccp_wallet` layer in `ci/dependency_budget.json`) holds:
   - `pure/`: bundle and rotation verification, EVM ABI encoding and EIP-1559
     signing, the TRON `Transaction.raw` protobuf builder and signing, TON
     cell/BoC builders and wallet-v5 messages. These are FFI-exportable for SDK
     bridges;
-  - `flows.rs`: the resumable, journaled flows of §7;
+  - `journal.rs`: the resumable journal keyed by `NetworkId`, built on
+    `iroha_wallet::operation_journal`. The resumable, journaled flows of §7
+    that write through it are still to be built (TODO(ws51));
   - `config.rs`: the client-config `[sccp]` table (file-only): endpoint lists,
     timeouts and pinned deployments per `NetworkId`.
-- **`crates/irohad`** gains `sccp_attestor.rs` (§4.9: key generation, automatic
-  registration, signing, graceful-shutdown handoff) and
-  `sccp_light_client_keeper.rs` (§4.13.4). Both are enabled by default. Their
+- **`crates/irohad`** has `sccp_attestor.rs` (§4.9: key generation, automatic
+  registration, signing, graceful-shutdown handoff) and its light-client
+  keeper `sccp_attestor/keeper.rs` (§4.13.4). Both are enabled by default. Their
   configuration lives in `iroha_config` (`[sccp.attestor]` with `key_dir`
   derived from `kura.store_dir`, `[sccp.light_client_keeper]` with the default
   endpoint lists; user → actual → defaults; no environment variables).
@@ -3311,10 +3325,11 @@ the control step of step 5.
   deploy, deployment verify, governance propose|show|drive, bridge-key
   status|rotate}`.
   - `governance propose` builds, statically validates and submits
-    `ProposeSccpRouteGovernance`; Parliament participation uses the existing
-    `iroha gov parliament` commands, which gain timed-OVN ballot-key
-    registration and ballot casting (missing today, §4.14.5). There is no
-    governance signing command, because bridge keys never approve anything.
+    `ProposeSccpRouteGovernance`; Parliament participation uses the
+    `iroha gov parliament` commands, including timed-OVN ballot-key
+    registration and ballot casting (`ballot register|cast`, §4.14.5). There
+    is no governance signing command, because bridge keys never approve
+    anything.
   - `governance drive` is the Parliament driver of §4.14.5 item 4: it creates
     SCCP attempts, submits the permissionless progress transitions and the
     exact-height checkpoints, collects release partials for
@@ -3330,8 +3345,8 @@ the control step of step 5.
   - No keys on argv or in environment variables.
 - **SDKs (phase 2):** read models, `RecordSccpMessage` building, bundle
   verification and destination encoding, via `connect_norito_bridge` (Swift,
-  Kotlin, C#) and `iroha_js_host` (JS). Python only verifies. Java adds
-  nothing, and its SCCP surface is deleted.
+  Kotlin, C#) and `iroha_js_host` (JS). Python only verifies. Java has no
+  SCCP surface.
 
 ## 9. Security analysis
 
@@ -3504,14 +3519,16 @@ exited keys stay dangerous for exactly as long as someone still trusts them.
 Mitigations:
 
 1. Destinations accept a generation only until its `valid_until_ms`. Taira
-   starts a successor at every membership change and at the first block past
-   every `roster_max_age_ms` (1 d), which an idle Taira still produces
-   (§4.3.2), except while the roster derivation fails closed or Taira is
-   halted. A kept destination rotates to it and then accepts the previous
-   roster for at most the 24 h grace, so it never trusts a departed
-   validator's key much beyond one day after the departure.
-   An unkept one trusts a generation for at most `roster_validity_ms` (14 d)
-   from its `valid_from_ms`.
+   starts a successor at the first epoch boundary after every membership
+   change and at the first block past every `roster_max_age_ms` (1 d)
+   (§4.3.2), except while the roster derivation fails closed, Taira is
+   halted, or Taira is idle before the core proposer builds blocks for
+   pending start-of-block work (§13 item 2). A kept destination rotates to it
+   and then accepts the previous roster for at most the 24 h grace, so it
+   never trusts a departed validator's key much beyond one day after the
+   first successor generation that follows the departure. An unkept one
+   trusts a generation for at most `roster_validity_ms` (14 d) from its
+   `valid_from_ms`.
 2. Every roster a destination installs is bounded by the immutable
    `MAX_ROSTER_VALIDITY_MS` (30 d) relative to the destination's own clock, and
    `validFromMs` must equal the attested block time within
@@ -3548,10 +3565,12 @@ rotates as a side effect, and `iroha sccp roster sync` is cheap to run daily.
   capabilities liveness list, and forced generations drop unusable slots at
   the next rotation height.
 - **Churn.** A handoff needs `t` nonzero members of the outgoing generation
-  within the attestation window (§4.3.3). They are validators at the boundary
-  (except while the roster derivation fails closed, §4.3.2), the attestor
-  signs handoffs first and before a graceful shutdown, and the
-  stalled-handoff event makes a failure visible. An abrupt loss of more than
+  within the attestation window (§4.3.3). They need not all still be
+  validators at the boundary: members that left the committee since `g` was
+  created, or while the roster derivation fails closed (§4.3.2), sign only as
+  observers (§4.3.3, §13 item 9). The attestor signs handoffs first and before
+  a graceful shutdown, and the stalled-handoff event makes a failure
+  visible. An abrupt loss of more than
   `n − t` usable members of one generation exactly at a boundary leaves that
   handoff unattested; destinations still on that generation then freeze at
   its expiry and refund through voids, and the Parliament registers new
@@ -3647,8 +3666,7 @@ rotates as a side effect, and `iroha sccp roster sync` is cheap to run daily.
   release `stranded` value, pause or resume destinations, or change
   parameters within their rules. It cannot mint on a destination, forge an
   attestation, move escrow of another route, or change a deployment's cap,
-  rosters or consumed nonces. These powers equal what the revision 2
-  bridge-key quorum had, moved from validators to citizens.
+  rosters or consumed nonces.
 - **Citizenship cost.** The Parliament is only as Sybil-resistant as its bond.
   On Taira, XOR comes from a faucet, so the bond MUST be far beyond faucet
   reach and the faucet MUST use adaptive difficulty (§4.14.5 item 1). Cheap
@@ -3675,156 +3693,11 @@ rotates as a side effect, and `iroha sccp roster sync` is cheap to run daily.
   decision with the recommended profile, plus deliberation, and wall-clock
   time that depends on block production (§4.14.5, §9.10).
 
-## 10. Removed from the repository
+## 11. Tests and fixtures
 
-No alias, shim or fallback decoder survives.
-
-**Kept (revision 3).** The Parliament pipeline stays: `ProposeSccpRouteGovernance`
-with its proposer rule, `ProposalKind::SccpRouteGovernance`, the SCCP body list
-in `parliament_attempt_policy_v1` (`crates/iroha_core/src/governance/parliament.rs`),
-certificate-driven enactment through `execute_due_parliament_certificate_v1`,
-`CanProposeSccpRouteGovernance`, and the Torii draft route
-`POST /v1/gov/proposals/sccp-route-governance`. Only the payload
-(`SccpRouteGovernanceAnchorV1` → `SccpGovernanceProposalV1`), the action
-executor, the expected head, the grant rule of
-`CanProposeSccpRouteGovernance` (now `OnlyGenesis`) and the manager rule for
-SCCP attempts (now permissionless and core-derived) change (§4.14.3,
-§4.14.5, §4.19).
-
-**Never implemented (revision 2 designs dropped by revision 3).**
-`ApproveSccpGovernanceV1`, the `SccpGovernance` and `SccpMintControl` EIP-712
-structs and their approval state, `setMintingPaused` and `mintControlNonce`,
-`sccp_mint_control`, the handoff bond (`SccpHandoffPending` in unbond
-finalization), `min_generation_interval_ms`, `governance_approval_ttl_blocks`,
-the attestor-account registry and key file, and the `iroha sccp governance
-sign|submit` and `bridge-key register` commands. None may be added.
-
-**Rust (`crates/`)**
-
-- **`iroha_sccp`:**
-  - Groth16 BN254/BLS12-381 requests, statements, public signals, wrappers
-    and pairing verification;
-  - `TairaSccpMessageProofV1` and Taira BLS finality-proof verification;
-  - destination parse/verify; the old `finalizeFromTaira` calldata, TON BoC
-    and Solidity replay-witness encoders;
-  - the compiled `SCCP_TAIRA_*` identity constants;
-  - `replay_archive.rs`;
-  - `bin/sccp_release_evidence.rs` with its `[[bin]]` entry and `dev-tools`
-    feature;
-  - `halo2curves` if it becomes unused;
-  - the forgeable-key Groth16 fixtures;
-  - BLAKE2b SCCP hashing (`prefixed_blake2b`, the `sccp:*` BLAKE2b prefixes).
-- **`iroha_data_model`:**
-  - `bridge/sccp_replay.rs` (and its directory) and `bridge/sccp_ton_breaker.rs`;
-  - the Groth16 key, profile, anchor, outbound-policy, IVM execution-policy,
-    TON-guardian and schema-hash registry types;
-  - `SccpNativeTrustAnchorV1`, `BridgeSccpDestinationProof*`,
-    `BridgeProofPayload::SccpDestination`;
-  - `BlockHeader::sccp_commitment_root` and its payload, builder and
-    projection sites;
-  - `RecordSccpMessage.replay_witness` and the payload-carrying
-    `RecordSccpMessage` form;
-  - SCCP use of `SubmitBridgeProof`, `ApplySccpRouteGovernance` and
-    `SubmitSccpTonBreakerObservationV1`;
-  - `SccpRouteGovernanceAnchorV1` and the old `SccpRouteGovernanceActionV1`
-    (`Register`, `SetActivation`, `SwitchRevision`, `InitializeTrustAnchor`,
-    `AdvanceTrustAnchor`, `Remove`), replaced by `SccpGovernanceProposalV1`;
-  - `GovernanceSubjectPreimageV1::SccpRouteRegistry`, replaced by the
-    per-subject `GovernanceSubjectPreimageV1::Sccp(Vec<SccpGovernanceSubjectV1>)`;
-  - pending-outbound records and usage;
-  - the revision-bearing escrow derivation (replaced per §4.15).
-- **`iroha_core`:**
-  - SORA finality anchor derivation;
-  - destination-proof acceptance and receipt projection;
-  - replay admission and the Kura replay-archive rebuild;
-  - header-root validation and `SccpRootValidation`, the candidate-attachment
-    root and the proposal-time collectors;
-  - the `IvmProved` SCCP execution binding
-    (`SccpIvmProvedExecutionBindingV1`, overlay plumbing);
-  - the TON breaker;
-  - the whole-registry SCCP arm of `parliament_expected_head_v1`
-    (`sccp_registry.to_wire()`) and `apply_sccp_route_governance_action`,
-    replaced by the per-subject head and `apply_sccp_governance_proposal_v1`;
-  - the state maps `sccp_replay_forests`, `sccp_ton_breaker_observations`,
-    `sccp_outbound_pending_usage`, `sccp_outbound_pending_messages`,
-    `sccp_inbound_anchor_high_water` and `sccp_route_liabilities` (replaced by
-    the registry fields);
-  - the compiled chain-id gate.
-
-  SCCP ISIs move out of `smartcontracts/isi/world.rs` into
-  `smartcontracts/isi/sccp/`.
-- **`iroha_torii`:** `sccp_replay.rs` (and its directory); the readiness gate,
-  bootstrap abort and refresh worker; the proof-request, outbound-material and
-  replay GETs; the destination-proof and native-message POST flows and their
-  ingress policy; and catalog entries for all of these. The governance draft
-  route is kept with the new payload.
-- **`iroha_config`:** `[torii.sccp_replay_archive]`; the `[zk.sccp]`
-  pending-outbound, pairing, BLS-aggregate and TON validator-key knobs;
-  `SCCP_LAUNCH_MODE`. Added: `[sccp.attestor]` (§4.9),
-  `[sccp.light_client_keeper]` (§4.13.4) and the `[zk.sccp]` BSC
-  vote-attestation limits.
-- **Executor:** `CanManageSccpGovernance` with its grant rules and deny
-  visitors. `CanProposeSccpRouteGovernance` is kept, and its grant and revoke
-  rule, which today requires `CanManageSccpGovernance`, becomes genesis-only
-  in Core (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
-  `crates/iroha_core/src/executor_initial_permission_authority.rs`). The executor-level
-  `SetParameter` deny for the old SCCP registry parameter is replaced by a
-  core rule that no `SetParameter` touches SCCP state.
-- **`iroha` client and `iroha_cli`:** the proof-request and submit methods;
-  the compiled Taira chain check; `ops bridge sccp` (replaced by
-  `iroha sccp`); `gov_instruction record-sccp-transfer |
-  ensure-ivm-execution-vk | propose-sccp-route-governance` (the last replaced
-  by `iroha sccp governance propose`).
-- **IVM/Kotodama:**
-  - the `ledger::sccp::record` builtin and every compiler, IR and semantic
-    site;
-  - syscall `0xA0` operation tag 2 in `ivm_abi` (`syscalls.rs`,
-    `syscalls_doc_gen.rs`), `ivm/spec/syscalls.toml`, `mock_wsv` and core host
-    handling;
-  - the fixtures `c085.ko`/`c086.ko`, and the tag in
-    `crates/ivm/docs/syscalls.md`.
-
-  **The ABI v1 hash changes.** `collect_abi_syscall_surface` hashes the
-  syscall `args` text, and the `0xA0` text loses `2=RecordSccpMessage`.
-  Syscall numbering and `abi_syscall_list` are unchanged. The following are
-  updated in the same change:
-  - the golden in `crates/ivm/tests/abi_hash_versions.rs`;
-  - every committed `.to` fixture and manifest that embeds the old hash
-    (about 60 of 136 today);
-  - `crates/ivm/docs/syscalls.md`, `status.md` and `roadmap.md`.
-
-**Contracts, circuits, scripts, CI, docs, SDKs**
-
-- `circuits/sccp/` entirely (Go gnark circuits, manifests, KATs).
-- EVM: `contracts/evm/sccp/{SccpGroth16Bn254MessageVerifier,
-  SccpSha256ReplayForest, ISccpMessageVerifier, TairaXorExactEvmSccpBridge,
-  TairaXorEvmToken, SccpExactTransferCodec}.sol` and their replay-forest smoke;
-  the `contracts/ethereum/sccp/` and `contracts/bsc/sccp/` wrappers.
-- TRON: `contracts/tron/sccp/*` (TRON uses the shared source).
-- TON: `proof-verifier.tolk`, `replay-forest.tolk` and the old
-  bridge/master/wallet.
-- `artifacts/sccp-bsc/` diagnostic circom.
-- Scripts: `scripts/sccp_release_{bundle,common,fixture,readiness_report}.py`,
-  `sccp_verify_release_bundle.py`, `sccp_all_lanes_evidence.py`,
-  `sccp_phase_log_runner.py`, `sccp_validator_builder{,_driver}.py`,
-  `check_sccp_production_corridor.sh` and `check_sccp_vendor_generated.py`;
-  the production corridor of `ton_sccp_builder.py`; the disabled live phase of
-  `contract_tvm_smoke.mjs` (rewritten).
-- CI: `.github/workflows/sccp_production_corridor.yml` and the matching
-  `pytests/`.
-- Fixtures: `fixtures/sccp/release_evidence_v1/` and
-  `fixtures/sccp/replay_forest_v1.json`.
-- Docs: `docs/source/sccp_validator_release_builder.md`; rewrite
-  `docs/source/sccp_ton_release_builder.md`; delete `specs/bridge_proofs.md`
-  when this spec is implemented.
-- SDKs: the replay, Groth16 key and proof-request surfaces in JS, Python,
-  Swift, Kotlin and C#; the Java SCCP surface.
-
-## 11. Tests and fixture migration
-
-New shared vectors live in `fixtures/sccp/`. They are generated by Rust and
-consumed by contract and SDK tests. Every assertion of the retired suites that
-still applies is ported.
+Shared vectors live in `fixtures/sccp/`. They are generated by Rust (the TON
+StateInit vectors by the contracts themselves) and consumed by contract, node
+and SDK tests.
 
 | Fixture | Content |
 |---|---|
@@ -3837,7 +3710,7 @@ still applies is ported.
 | `roster_v1.json` | roster digests for n = 4, 7, 31 with zero slots; ordering, threshold and validity-bound negatives |
 | `evm_calldata_v1.json`, `ton_bodies_v1.json` | golden calldata and BoCs for finalize, historical, rotateRosters, `applyControl` (direct and historical), voids, transferToTaira and burn, with every selector of §5.2.2; non-canonical `transferToTaira` calldata negatives (offset, padding, trailing bytes); snake-cell negatives |
 | `ton_stateinit_v1.json` | canonical minter initial data and address for a fixed generation, `NetworkId`, revision, cap and code refs |
-| `native_transfer_event_v1.json` | regenerated for the keccak/big-endian layout and the new event shapes, including void events |
+| `native_transfer_event_v1.json` | `SccpTransferToTaira` and `SccpVoided` event vectors of the Ethereum light client in the keccak/big-endian layout |
 | `rpc/{eth,bsc,tron,ton}/` | captured public-RPC responses for real mainnet blocks. They drive the proof builders and verifiers: finality, ancestry, inclusion, and TRON `raw_data_hex` with `ret` re-encoding, including a multisig-permission transaction |
 
 Required tests:
@@ -3872,9 +3745,10 @@ Required tests:
     starts there; the outgoing generation attests the boundary (including a
     leaving validator that shuts down gracefully); the handoff-stalled event
     when too many outgoing attestors are killed abruptly; recording is not
-    blocked by the stalled handoff; the heartbeat, including an idle Taira
-    with an empty queue producing the heartbeat block through block-start
-    work exactly once per generation.
+    blocked by the stalled handoff; the heartbeat, and, once the core
+    proposer builds blocks for pending start-of-block work (§13 item 2), an
+    idle Taira with an empty queue producing the heartbeat block through
+    block-start work exactly once per generation.
   - Attestation admission rejects invalid, foreign-authority, unknown-subject,
     all-duplicate and queued-duplicate batches, and enforces the exempt cap;
     a keeper advance from the same bridge-key account is admitted while its
@@ -3908,8 +3782,8 @@ Required tests:
     an identical re-proposal after `ExecutionFailed` refused; `ExecutionFailed`
     with no state change when a precondition fails at enactment (a stale
     bootstrap, a destination word taken by another route's enactment); the
-    proposer rule and the `OnlyGenesis` grant rule; no direct path
-    (`ApplySccpRouteGovernance` absent, `SetParameter` rejected by core).
+    proposer rule and the `OnlyGenesis` grant rule; no direct path (every
+    `SetParameter` targeting SCCP state rejected by core).
   - Controls: an enacted `SetDestinationPaused` produces a control leaf in the
     enacting block, the roster attests it, the proof bundle verifies in the
     wallet crate and `applyControl` succeeds on EDR; `RecordSccpMessage` is
@@ -3947,11 +3821,15 @@ Required tests:
 
   Measured gas and energy are recorded against §5.4. TRON bytecode also runs
   on a local java-tron (TRE) node, including the `ecrecover` masking golden.
-- **ABI goldens:** `crates/ivm/tests/abi_syscall_list_golden.rs` is unchanged.
-  `abi_hash_versions.rs` is updated to the new hash, and all `.to` fixtures
-  and manifests are regenerated (§10).
-- Regenerate `tests/fixtures/block_signature_identity_frames.json` and the
-  schema goldens after the header change.
+- **ABI goldens (open, `TODO(ws45)`):** the syscall `0xA0` argument text in
+  `crates/ivm/spec/syscalls.toml`, the generated
+  `crates/ivm_abi/src/syscalls_doc_gen.rs` and `crates/ivm/docs/syscalls.md`
+  must name only the `1=SubmitBallot` operation tag (§4.4), and `ivm_abi`
+  must not define a tag-2 constant. The text still names
+  `2=RecordSccpMessage`. Removing that tag changes the ABI v1 hash, so the hash
+  golden in `crates/ivm/tests/abi_hash_versions.rs` and every committed `.to`
+  fixture and manifest are regenerated in the same change. Syscall numbering
+  and `abi_syscall_list_golden.rs` are unchanged.
 
 ## 12. Phasing and later work
 
@@ -3970,8 +3848,7 @@ Required tests:
   7. TRON (same source, TRON compiler, TRE qualification under colima on
      macOS);
   8. TON;
-  9. deletion of retired code;
-  10. SDKs.
+  9. SDKs.
 - **SCCP's own Parliament changes (phase 1):** the per-subject head, the
   permissionless core-derived SCCP attempts and manager transitions, the
   `OnlyGenesis` grant rule, and `iroha sccp governance drive` (§4.14.3,
@@ -3985,15 +3862,15 @@ Required tests:
   `InstallParliamentTleKey` certificates on every roster change and whenever a
   TLE session is exhausted; TLE custody that outlives a validator's departure
   until its ballots' retention deadlines; node-generated beacon and TLE
-  credentials (§4.14.5 item 7); and timed-OVN ballot commands in
-  `iroha gov parliament`. Routes cannot be registered on Taira before these
-  land; integration tests use the existing Parliament test harness
+  credentials (§4.14.5 item 7); and ballot evidence anchored on the Sumeragi
+  core's `SumeragiFinalityVerifier` (§4.14.5). Routes cannot be registered on
+  Taira before these land; integration tests use the Parliament test harness
   meanwhile.
 - **Phase 2:** stake slashing for SCCP faults while still bonded (§4.11); SDK
   parity (§8); MCP `iroha.*` read tools.
 - **Later:**
-  - carry attestations in Sumeragi Commit votes once v2 settles (same digest,
-    no contract change);
+  - carry attestations in Sumeragi commit votes (same digest, no contract
+    change);
   - finalizer and claim tips (deferred by decision; a later payload version
     bump, since no backwards compatibility is required);
   - Taira-side verification of EVM deployments by storage proofs through the
@@ -4001,16 +3878,6 @@ Required tests:
   - destination attested-root caching if measured traffic justifies it.
 
 ## 13. Open questions
-
-Resolved by the revision 3 decisions (§14.1) and removed from this list: fee
-exemption including "exempt on success, charged on failure" (approved),
-implicit recipient registration (approved), shipping default public RPC lists
-(approved), the new crates and `Cargo.lock` regeneration (approved), finalizer
-tips (deferred), the handoff bond and its staking hook (dropped), seat-change
-batching (dropped), and a bridge key as an NPoS election precondition (moot:
-nodes register keys automatically before election). The revision 3 review
-also resolved the clerk question: SCCP attempts and manager transitions are
-permissionless and core-derived (§4.14.5 item 3).
 
 1. **Parliament TLE and beacon re-keying.** Every roster change needs a new
    beacon session before the next pulse and a new TLE session before the next
@@ -4024,10 +3891,11 @@ permissionless and core-derived (§4.14.5 item 3).
    Should core count an active attempt's pending checkpoint, requested pulse
    or enactment as block-start work (as the SCCP heartbeat is, §4.3.2), and
    apply the two exact-height checkpoints automatically at block start? Both
-   would remove the ticks and the timing risk. Relatedly, core should confirm
-   that an idle v2 proposer probes block-start work with the current ledger
-   time at least once per proposal timeout, which the SCCP heartbeat relies
-   on.
+   would remove the ticks and the timing risk. Relatedly, the SCCP heartbeat
+   needs the Sumeragi core proposer to build a block for pending
+   start-of-block work, probing with the current ledger time at least once
+   per proposal timeout; it does not yet (§4.3.2). Who owns that proposer
+   change?
 3. **Pause latency.** A destination pause takes at least one Parliament round:
    at least about 1 104 blocks with the recommended profile plus
    deliberation, and 13 004 or more with Taira's current windows (§9.10). Is
@@ -4058,10 +3926,13 @@ permissionless and core-derived (§4.14.5 item 3).
    mainnet and real burns. Until then, inbound verification is tested with
    captured mainnet blocks (finality, ancestry, inclusion) plus unit-level
    event binding. Who funds and performs the first mainnet deployments?
-9. **The consensus roster never rotates today** (`v2_context.rs` TODO).
-   Generations change only through key rotation, faults and the heartbeat until
-   NPoS roster activation lands; the churn rules of §4.3.3 are exercised only
-   in tests until then.
+9. **Committee changes between boundaries.** The Sumeragi core schedules
+   every live validator in both consensus modes and has no election epochs,
+   so its committee can change at any height, not only at an epoch boundary.
+   SCCP derives generations only at rotation heights (§4.3.2), so a validator
+   that leaves mid-epoch stays in the signing generation until the next one.
+   Whether that needs a rotation at every committee change needs measurement
+   under real churn.
 10. **Public RPC coverage of the default lists** (beacon light-client routes,
     `eth_getBlockReceipts` on BSC, TRON full blocks with `raw_data_hex`,
     liteserver reliability and retention) is still unverified, and the chosen
@@ -4080,146 +3951,14 @@ permissionless and core-derived (§4.14.5 item 3).
 14. **Wrapped test XOR on mainnets** is stranded on every Taira reset. Token
     naming and user disclosure need product sign-off.
 
-## 14. Decisions and review disposition
-
-### 14.1 Revision 3 decisions (binding, 2026-09-26)
+## 14. Decisions (binding, 2026-09-26)
 
 | # | Decision | Applied in |
 |---|---|---|
-| D1 | **Governance is the SORA Parliament only**; validators and bridge keys take no part. `ApproveSccpGovernanceV1`, the `SccpGovernance` typed data, governance nonces and `t`/`f+1` approval rules are gone. Every SCCP decision (route registration and revisions with deployment and cap, activation including pause, resume and retirement, destination controls, parameters, stranded releases, fault clearing, light-client initialization, re-initialization, freezing and trusted checkpoints) goes through the kept pipeline `ProposeSccpRouteGovernance` → 8-body Parliament → due certificate → enactment, with its proposer rule, a new `SccpGovernanceProposalV1` payload, and expected heads scoped per subject (route, route control, light-client lane, parameters, faulted peer). Genesis MUST seat the Parliament; the exact requirements were read from the Parliament code | §1.1, §1.2, §3.6, §4.1, §4.11, §4.13, §4.14.3–§4.14.5, §4.18, §4.19, §6, §7.4, §9.13, §10 |
-| D2 | **Destination pause = Parliament pause.** The roster-controlled mint breaker and `SccpMintControl` are gone. An enacted `SetDestinationPaused` records a control leaf (`SCCP/CONTROL/V1`, §3.4) in the enacting block's commitment tree; the roster attests it like any block; anyone applies it with `applyControl` (`0x0ce970d6`; historical `0x935a913b`; TON `sccp_apply_control`) under a strictly increasing control nonce. Burns, rotations and voids stay open while paused | §3.4, §3.9, §4.4, §4.5, §4.14.6, §5.1.6, §5.2, §5.3, §5.4, §6, §7.1, §9.2, §9.10 |
-| D3 | **Validators come and go at any time.** No handoff bond, no staking change, no seat-change batching. A new generation starts at every boundary whose member set differs, plus forced rotation and the heartbeat; the outgoing generation signs the boundary block; the attestor prioritizes handoffs and signs them before a graceful shutdown. Defaults re-tuned to a 1 d heartbeat and 14 d validity under the immutable 30 d maximum, all Parliament-settable | §1.2, §4.1, §4.3, §4.4, §4.9, §5.1.5, §5.4, §9.9, §9.10 |
-| D4 | **Zero-touch validator setup.** The node generates its bridge key on first start under its store directory (overridable, no environment variables), and registers it itself, fee-exempt on success, before election. The attestor account is the key's own secp256k1 account, registered implicitly. Attestor and keeper are on by default with compiled default public RPC lists. The Taira launcher passes nothing. The Parliament's beacon and TLE credentials must become node-generated the same way; until then the guarantee covers SCCP only | §1.2, §4.2, §4.9, §4.13.4, §4.14.5, §4.19, §8, §9.1, §9.5 |
-| D5 | **Approved:** fee exemption on success (charged on failure) for attestations, fault evidence, keeper advances, recipient self-claims and bridge-key registration; implicit recipient registration; the crates `iroha_sccp_rpc` and `iroha_sccp_wallet` (reqwest + rustls, TON ADNL crypto) with `Cargo.lock` regeneration; colima for TRON TRE; default public RPC lists in `iroha_config`; editing concurrently modified files while preserving their edits | §4.2.3, §4.8, §4.12, §4.19, §8, §12, §13 |
+| D1 | **Governance is the SORA Parliament only**; validators and bridge keys take no part, and no governance statement is ever signed. Every SCCP decision (route registration and revisions with deployment and cap, activation including pause, resume and retirement, destination controls, parameters, stranded releases, fault clearing, light-client initialization, re-initialization, freezing and trusted checkpoints) goes through the pipeline `ProposeSccpRouteGovernance` → 8-body Parliament → due certificate → enactment, with its proposer rule, the `SccpGovernanceProposalV1` payload, and expected heads scoped per subject (route, route control, light-client lane, parameters, faulted peer). Genesis MUST seat the Parliament (§4.14.5) | §1.1, §1.2, §3.6, §4.1, §4.11, §4.13, §4.14.3–§4.14.5, §4.18, §4.19, §6, §7.4, §9.13 |
+| D2 | **Destination pause = Parliament pause.** No roster-controlled breaker or signed mint-control statement exists. An enacted `SetDestinationPaused` records a control leaf (`SCCP/CONTROL/V1`, §3.4) in the enacting block's commitment tree; the roster attests it like any block; anyone applies it with `applyControl` (`0x0ce970d6`; historical `0x935a913b`; TON `sccp_apply_control`) under a strictly increasing control nonce. Burns, rotations and voids stay open while paused | §3.4, §3.9, §4.4, §4.5, §4.14.6, §5.1.6, §5.2, §5.3, §5.4, §6, §7.1, §9.2, §9.10 |
+| D3 | **Validators come and go at any time.** No handoff bond, no staking change, no seat-change batching. A new generation starts at every boundary whose member set differs, plus forced rotation and the heartbeat; the outgoing generation signs the boundary block; the attestor prioritizes handoffs and signs them before a graceful shutdown. Defaults are a 1 d heartbeat and 14 d validity under the immutable 30 d maximum, all Parliament-settable | §1.2, §4.1, §4.3, §4.4, §4.9, §5.1.5, §5.4, §9.9, §9.10 |
+| D4 | **Zero-touch validator setup.** The node generates its bridge key on first start under its store directory (overridable, no environment variables), and registers it itself, fee-exempt on success, as soon as its peer is registered. The attestor account is the key's own secp256k1 account, registered implicitly. Attestor and keeper are on by default with compiled default public RPC lists. The Taira launcher passes nothing. The Parliament's beacon and TLE credentials must become node-generated the same way; until then the guarantee covers SCCP only | §1.2, §4.2, §4.9, §4.13.4, §4.14.5, §4.19, §8, §9.1, §9.5 |
+| D5 | **Approved:** fee exemption on success (charged on failure) for attestations, fault evidence, keeper advances, recipient self-claims and bridge-key registration; implicit recipient registration; the crates `iroha_sccp_rpc` and `iroha_sccp_wallet` (reqwest + rustls, TON ADNL crypto); colima for TRON TRE; default public RPC lists in `iroha_config` | §4.2.3, §4.8, §4.12, §4.19, §8, §12 |
 | D6 | **Deferred:** finalizer tips; a later payload version bump is acceptable | §12 |
 | D7 | **Networks:** the four mainnet profiles only; no testnets | preamble, §2 |
-
-### 14.2 Review disposition (revision 2, amended by revision 3)
-
-Findings are cited as S (safety), A (accounting), I (implementability) and L
-(serverless liveness), numbered as in the reviews. Rows marked "Revision 3"
-record where a revision 3 decision replaced the revision 2 disposition.
-
-| Finding | Disposition | Where |
-|---|---|---|
-| S1 deployment laundering (EVM/TRON) | Adopted: immutable `INITIAL_ROSTER_DIGEST`/`INITIAL_GENERATION`, `opCount`, Taira-pinned initial digest, reviewer verification against Taira state before the Parliament vote, genuine rotation chain checked at enactment | §4.14, §5.1.1, §5.2.1, §9.7 |
-| S2 TON roster not bound to digest | Adopted: `valid_from_ms` stored, canonical initial data, Taira recomputes the address, mandatory `sccp_init` | §4.14.3, §5.3.1 |
-| S3 Ethereum participation threshold | Adopted for every update and proof: ≥ 342, finality branch, slot ordering, fork version of `signature_slot − 1`, finalized-only committees, proof-carrying backfill | §4.13.3 |
-| S4 "committed" ambiguity | Adopted: durable finality with a matching certified `post_state_root` | §0, §4.9, §4.11 |
-| S5 / I2 mint control not chain-bound | Revision 3: the signed mint-control struct is gone; the control leaf binds the Taira and target network bytes, the destination word and the revision; destination words stay unique (D2) | §3.4, §5.1.6, §4.14.3 |
-| S6 governance replay | Revision 3: no signed governance statement exists; each Parliament proposal enacts at most once, `base_revisions` make every decision's id state-specific, per-subject heads supersede stale decisions, and actions re-check their preconditions at enactment (D1) | §4.14.3, §9.2 |
-| S7 roster validity unenforced | Adopted with modification: immutable 30 d maximum, clock-skew and `validFromMs = timestampMs` checks, parameter upper bound, attestor future-time refusal. Revision 3 defaults are 1 d heartbeat and 14 d validity (D3) | §4.1, §4.9, §5.1.5, §9.9 |
-| S8 / A10 `enabled = false` deadlock | Adopted: only value movement stops | §4.1 |
-| S9 / I8 fee-exempt spam | Adopted: key-account authority checked before crypto, queue dedupe, all-recorded failure, exempt cap, fail-fast; revision 3 adds exempt key registration limited to once per peer per epoch (D4, D5) | §4.2.3, §4.8, §4.11, §4.19 |
-| S10 TRON witness set | Adopted: 19 of the 27 active in the covering maintenance period; eviction at boundaries | §4.13.3 |
-| S11 binding replay | Adopted: per-peer `binding_nonce` | §4.2.2 |
-| S12 fault eviction ineffective | Adopted: peer bar with a Parliament-enacted `ClearBridgeKeyFault`; immediate rotation | §4.11, §4.14.3 |
-| S13 / A15 reset hygiene | Adopted: genesis reset nonce and repeat refusal; revision 3: the pre-reset pause is a Parliament decision (SHOULD), and keys are destroyed with the node stores (D1, D4) | §4.18, §9.8 |
-| S14 stranded funds | Adopted: `Retired` needs zero liability; void and refund | §4.14.2, §4.16 |
-| S15 precision fixes | Adopted: digest/nonzero-slot rule, canonical TRON calldata, TON workchain 0, `ecrecover` masking with a TRE golden, fail-closed roster size, dense index assertion, single dataspace | §5.1.2, §5.1.7, §3.8, §4.3.2, §4.5 |
-| A1 / L4 no refund path | Adopted: payload deadline, `voidExpired`/`voidFrozen`, Taira refund on void proof. Deadline-based instead of storage-proof-based, which also works on TRON | §3.2, §4.16, §5.1.8 |
-| A2 / L2 burns can become unprovable | Adopted: prove/settle split, permanent stride checkpoints, Backfill, stated claim windows, `InstallTrustedCheckpoint`, corrected liveness text. The `historical_summaries` ancestry mode is not adopted, because it needs full beacon states from debug APIs that public endpoints generally do not serve | §4.12, §4.13, §9.10 |
-| A3 escrow front-run and guards | Adopted: one genesis-created escrow per route, core-reserved ids, normative core custody guards and tests | §4.15 |
-| A4 / I4 TRON burns unprovable | Adopted: strict canonical calldata in the contract; Taira accepts every non-semantic field; multisig fixture | §5.1.7, §4.12.2, §11 |
-| A5 revision state strands burns | Adopted: proofs in every non-`Staged` state; `Retired` requires zero liability; wallet pre-burn checks | §4.14.2, §7.2 |
-| A6 sender/receiver validation mismatch | Adopted: Taira mirrors destination recipient rules; uncreditable recipients bounce; TON owner rule | §4.4, §4.12.3, §5.1.7 |
-| A7 / I7 TON consume without mint | Adopted: computed fees, bounceable `sccp_consumed`, unconsume on a bounced internal transfer, value kept on a bounced consume | §5.3.4, §5.3.5 |
-| A8 / L3 new user cannot claim | Adopted: implicit registration and a self-claim with the fee taken from proceeds (approved, D5). Tips deferred (D6) | §4.12.3, §4.12.4, §12 |
-| A9 bounce to an unmaintained revision | Adopted: bounce onto the `Bidirectional` revision; liability precondition | §4.12.5 |
-| A11 unattestable records | Adopted: signer-availability and stall checks | §4.4 |
-| A12 amount type and scale | Adopted: exact `taira_units`; 9 decimals everywhere; TON cap < 2^96 | §0, §2.3, §3.2 |
-| A13 TON duplicate pending supply | Documented | §5.3.5 |
-| A14 / I6 / L15 TON storage rent and redeploy | Adopted: 100-year floors, top-ups, sequential never-redeployed buckets | §5.3.4, §5.3.5 |
-| A16 dust | Adopted: `min_outbound_amount` | §4.1, §4.4 |
-| I1 ABI hash changes | Adopted: hash golden, `.to` fixtures and docs updated | §10, §11 |
-| I3 no height context in hook | Adopted option (a): frozen `VerifiedHeightContext` passed in; NPoS required | §4.1, §4.3.2 |
-| I5 attestor single key | Adopted: key set across generations | §4.9 |
-| I9 TON byte chunks | Adopted: standard maximal snake cells with goldens | §5.3.2 |
-| I10 TON owner address | Adopted | §5.1.7, §5.3.4 |
-| I11 TRON code endpoint | Adopted: `/walletsolidity/getcontractinfo` `runtimecode` | §4.14.4 |
-| I12 parameters in core | Adopted: dedicated state written only by genesis and Parliament enactment | §4.1 |
-| I13 `word(x)` | Adopted | §0 |
-| I14 masking | Adopted | §3.8, §5.2.4 |
-| I15 codec 3 length | Adopted with modification: raised to 1024, oversize authorities rejected | §3.1, §4.4 |
-| I16 Norito layout flags | Adopted: headered frames (the governance action hash of revision 2 no longer exists) | §0, §4.2.2 |
-| I17 key source | Revision 3: an auto-generated owner-only key directory under the node store, overridable by path; no descriptors, no attestor key file (D4) | §4.9 |
-| I18 revision switch race | Adopted: `expected_revision` | §4.4 |
-| I19 recovery ids 2–3 | Adopted: re-sign with a test | §3.8 |
-| L1 light clients die when idle | Adopted (a): an in-node keeper using public RPC, on by default with compiled default lists (D4), plus Parliament re-initialization with public-RPC bootstrap tooling; the wallet-only liveness claim is dropped. (b) is not adopted: validator-signed external checkpoints would make validators an oracle over external state | §4.13.4 |
-| L5 destination freezes without a keeper | Partly adopted: `rotateRosters` batching, and freezes are lossless through voids. 180 d validity is not adopted (long-range bound, S7) | §5.1.5, §4.16 |
-| L6 orphaned rotation attestation | Revision 3: the handoff bond is dropped (D3). The outgoing generation signs the boundary it just finalized, the attestor signs handoffs first and before a graceful shutdown and keeps its key set, a stalled handoff is reported, and its failure mode is a lossless freeze. Seating gates and Commit-vote carriage are still not adopted | §4.3.3, §4.9, §9.10 |
-| L7 BSC advance cost, TRON linkage | Adopted: skipping advances, self-authenticating TRON segments, cost figures | §4.13.3 |
-| L8 Ethereum ancestry retention | Adopted: HeaderChain and Backfill; the state requirement of HistoryContract is stated | §4.13.3, §4.13.5 |
-| L9 roster churn | Revision 3: no seat-change batching; a generation per membership change, forced rules, batched rotation (16 per call), and churn cost stated (D3) | §4.3.2, §5.1.5, §5.4 |
-| L10 silent attestor failures | Adopted: liveness exposure, health gauges, record stall refusal. The election precondition is moot: nodes register keys automatically before election (D4) | §4.4, §4.9 |
-| L11 external hard forks | Adopted: `supported_until`, wallet pre-burn guard, recovery path. Revision 3: `supported_until` comes from the running release's compiled profile, not stored params, so a fork needs a release but no Parliament round | §4.13.2, §7.2 |
-| L12 RPC coverage and auth | Adopted: secret header files, default lists (approved, D5), `raw_data_hex`, capture fixtures. A TRON gRPC fallback is not adopted | §4.13.4, §8, §11 |
-| L13 governance bodies off-chain | Adopted: Parliament proposal bodies are in state and served with their heads; bootstrap tooling for reviewers | §4.14.3, §6 |
-| L14 checkpoint FIFO griefing | Adopted: stride retention; proofs never need re-proving | §4.13.1 |
-| L16 rotation signature pruning margin | Adopted: +1 d, and Kura serving | §4.10, §6 |
-| L17 TRON tree wording | Adopted | §4.13.3 |
-| L18 single-operator dependencies | Adopted: listed; raw and QR hand-off by default | §9.1, §7.1 |
-
-### 14.3 Revision 3 verification disposition
-
-The revision 3 text was checked against the Parliament, executor, config and
-Sumeragi v2 code. Findings and where they were applied:
-
-| Finding | Disposition | Where |
-|---|---|---|
-| `CanProposeSccpRouteGovernance` had no grantor once `CanManageSccpGovernance` is deleted | Adopted: `OnlyGenesis` grant and revoke; no replacement manager role | §1.2, §4.19, §10 |
-| `SetTairaPaused` under `RouteControl` shared `activation` with `Route` lifecycle actions | Adopted: moved under `Route{network}`, addressed by network with "ensure" semantics; `RouteControl` covers only the destination pause | §4.14.3, §11 |
-| No action could move `supported_until` after a fork | Adopted: derived from the compiled chain profile at execution time and bound into the consensus policy hash; removed from stored params | §4.13.1–§4.13.3, §6, §9.10, §13 |
-| One fresh ballot per TLE session blocks bring-up; validators gate timing | Adopted: recommended `[gov]` profile with `max_fresh_ballots_per_session = 8`, `session_lifetime_blocks = 7 200`; in-node TLE DKG as a launch gate; session installation binds no proposal content; three bring-up proposals | §4.14.5, §12, §13 |
-| TLE, beacon and FD200 credentials are validator operator steps | Adopted: node-generated by default under the store directory, overridable in `iroha_config`; until then D4 is stated as covering SCCP only | §4.14.5 item 7, §9.1 |
-| A single clerk account controls the SCCP agenda | Adopted: SCCP attempts and manager-only transitions are permissionless with core-derived content | §4.14.3, §4.14.5 item 3, §4.19, §9.13 |
-| Keeper advances blocked by the pending attestation batch on the same account | Adopted: pending limits per exempt kind (and per network for advances) | §4.8, §4.13.4, §4.19 |
-| Parameters without rules; exempt cap too small; validity rule ignored the epoch | Adopted: explicit bounds for every field, exempt cap 128 (≥ 94), entries ≥ 64, retention ≥ TTL + 1 d. The epoch term is replaced by the stall bound because the heartbeat no longer waits for an epoch boundary (below) | §4.1, §5.1.5 |
-| Executor versus core for `SetParameter` | Adopted: core | §4.14.3 |
-| Fail-closed derivation, address-only comparison and zero slots in the handoff argument | Adopted: `(peer, address)` comparison; exceptions stated | §4.3.2, §4.3.3, §5.1.5, §9.10 |
-| Attestor "what it signs" omitted the key PoP | Adopted | §4.9 |
-| Wallets refused to record behind an unapplied resume | Adopted: refuse only when the newest control is a pause; step 5 applies a pending resume | §7.1, §4.16 |
-| Rotation-keeper interval lacked a term | Adopted, with the stall term that replaces the epoch term | §7.4, §5.1.5 |
-| `ClearBridgeKeyFault` could clear a fault it never saw | Adopted: names the fault; `barred` holds the newest fault | §4.2.1, §4.11, §4.14.3 |
-| Retry wording after `Superseded`, `Rejected` and `ExecutionFailed` | Adopted | §4.14.3 |
-| "pinned" checkpoints undefined | Adopted: "Parliament-installed" | §1.2 |
-| Keeper had no config defaults | Adopted: `[sccp.light_client_keeper]` block | §4.13.4 |
-| Validators halting Taira presented as damage control | Adopted: removed and labeled outside the protocol | §9.10 |
-| No empty blocks: block-count windows have no wall-clock bound | Adopted: Parliament latency stated in blocks with a mandatory driver that ticks an idle tip; SCCP windows (stall, retention) moved to block time; the heartbeat fires at the first block past it and is block-start work so an idle Taira produces it; open question on Parliament block-start work | §4.1, §4.3.2, §4.14.5, §13 |
-| Exact-height ballot checkpoints and `FinalizeOpenedBallot` need a submitter | Adopted: the driver submits them; open question on automatic checkpoints | §4.14.5 item 4, §13 |
-| Churn breaks roster-bound beacon and TLE sessions | Adopted: re-keying on every roster change required (a consensus prerequisite of D3), liveness assumption and TLE custody after departure stated | §4.14.5 items 5–6, §9.10, §12 |
-| TON bootstrap usually stale at enactment | Adopted (a) and (b): short windows with the driver, and the TON light client proposed alone. (c) a fresh-at-proposal catch-up rule is not adopted: it reopens a long-range window of up to the proposal's age | §4.14.5 |
-| "Must be made again" wrong after `ExecutionFailed` or `Rejected` | Adopted | §4.14.3 |
-| Recommended profile did not cut latency | Adopted: the verified `[gov]` window profile; with a Policy Jury of at most 20 seats no Confirmation Jury arises | §4.14.5 |
-| Latency formula incomplete | Adopted: sequential public findings, retries, TLE queueing, Confirmation Jury | §4.14.5 |
-| Policy Jury liveness stricter than stated | Adopted: sealed-seat quorum; every non-dropped registered juror must vote | §4.14.5 item 2 |
-| Genesis provisioning gaps (accounts, fee float, CLI ballots, devnet keys) | Adopted | §4.14.5, §4.18, §8, §12 |
-| Faucet makes citizenship cheap | Adopted: bond far beyond faucet reach and adaptive faucet difficulty; residual risk stated | §4.14.5 item 1, §9.13, §13 |
-| Cross-subject enactment preconditions | Adopted: ensure semantics for both pauses; destination-word check at proposal and attempt creation, distinct deployment addresses in tooling | §4.14.3, §7.4 |
-| Exact-JSON `u64` invariant | Adopted: SCCP arm; TON chain data as opaque BoC bytes | §4.14.3 |
-| Per-subject head implementation details | Adopted as implementation notes | §4.14.3 |
-
-### 14.4 Revision 4 (2026-09-28): the Sumeragi core
-
-The Sumeragi core replaced Sumeragi v2 (`HeightContext`, `V2FinalityArtifact`,
-`BridgeFinalityProof` and `next_epoch_snapshot` are gone). SCCP keeps every
-rule above and changes only where its consensus inputs come from:
-
-- **Finality.** A height is durably final once its certified frame is in Kura
-  and applied (§0). The attestor signs only such heights.
-- **Height inputs.** The post-execution hook reads the core's lag-2
-  `consensus_schedule` (three consecutive scheduled heights), which the
-  output-seal finalizer advances for the block just before the hook runs.
-  `epoch` and `epoch_end_height` follow the fixed-length epochs of
-  `specs/sumeragi.md` §11.7 (`sumeragi_epoch(h, genesis_height,
-  epoch_length_blocks)`; the genesis block and the first `epoch_length`
-  heights form epoch 0). The roster of `h` is the scheduled committee of `h`;
-  at a boundary the next roster is the scheduled committee of `h + 1`. Where
-  this spec says `HeightContext(h)` or `ctx.next_epoch_snapshot`, read these
-  scheduled values. A block whose inputs are not scheduled fails SCCP roster
-  derivation closed; block execution is unaffected.
-- **Bridge-key epochs.** Activation and the once-per-epoch exempt binding use
-  the same fixed-length epochs (`current_epoch` of the next height).
-- **Parliament ballot anchoring.** Clients re-anchor Parliament ballot
-  evidence on the core's `SumeragiFinalityVerifier`; the retired `ballot
-  anchor` CLI subcommand is removed.

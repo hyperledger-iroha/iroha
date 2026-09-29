@@ -2,26 +2,11 @@
 #[allow(clippy::too_many_lines)]
 async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let world = World::with(
         [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let state = State::new(world, kura, query_handle);
-    let time_origin_ms = state
-        .seed_genesis_for_testing()
-        .expect("authenticate Time fixture predecessor")
-        .header()
-        .creation_time_ms;
-    // Prepare world and a simple pre-commit time trigger that sets account metadata
-    let block = result_bearing_time_trigger_block(&state, |h| {
-        h.set_height(NonZeroU64::new(1).unwrap());
-        h.creation_time_ms = time_origin_ms;
-    });
-    let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
     let tkey: Name = "tick".parse().unwrap();
     let trigger_id: TriggerId = "tick_once".parse().unwrap();
     let t = Trigger::new(
@@ -38,18 +23,15 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );
-    Register::trigger(t).execute(&ALICE_ID, &mut stx).unwrap();
-    stx.apply();
-    state_block.commit_world_overlay_for_testing().unwrap();
-    // Apply a new block: time trigger should fire during apply
-    let block2 = result_bearing_time_trigger_block(&state, |h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-        h.creation_time_ms = time_origin_ms + 1;
-    });
-    let state_block2 = state.block(block2.as_ref().header());
-    let mut events = state_block2
-        .apply_fixture_block(&block2, None)
-        .expect("replay the complete actual typed Time outputs");
+    let genesis_instructions = vec![Register::trigger(t).into()];
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = genesis_instructions;
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+    chain.take_events().unwrap();
+    let state = Arc::clone(chain.state());
+    chain.commit_at(2, Vec::new());
+    let mut events = chain.take_events().unwrap();
     // Exactly one Time event and a single TriggerCompleted notification
     let time_count = events
         .iter()
@@ -158,30 +140,19 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
 fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
 
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let world = World::with(
         [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let state = State::new(world, kura, query_handle);
-    let time_origin_ms = state
-        .seed_genesis_for_testing()
-        .expect("authenticate Time fixture predecessor")
-        .header()
-        .creation_time_ms;
+    let time_origin_ms = 0;
+
     let replacer_id: TriggerId = "a_time_sibling_replacer".parse().unwrap();
     let replaced_id: TriggerId = "b_time_sibling_replaced".parse().unwrap();
     let replacement_executed: Name = "time_replacement_executed".parse().unwrap();
 
-    let block1 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(1).unwrap());
-        header.creation_time_ms = time_origin_ms + 1;
-    });
-    let mut state_block1 = state.block(block1.as_ref().header());
+    let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
-        let mut stx = state_block1.transaction();
         let replacement = Trigger::new(
             replaced_id.clone(),
             Action::new(
@@ -219,24 +190,22 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
             )
             .expect("original time-trigger sibling action"),
         );
-        Register::trigger(replacer)
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        Register::trigger(original_sibling)
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        stx.apply();
+        genesis_instructions.push(Register::trigger(replacer).into());
+        genesis_instructions.push(Register::trigger(original_sibling).into());
     }
-    state_block1.commit_world_overlay_for_testing().unwrap();
-
-    let block2 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-        header.creation_time_ms = time_origin_ms + 2;
-    });
-    let state_block2 = state.block(block2.as_ref().header());
-    let _ = state_block2
-        .apply_fixture_block(&block2, None)
-        .expect("replay the complete actual typed Time outputs");
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = genesis_instructions;
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+    chain.take_events().unwrap();
+    let state = Arc::clone(chain.state());
+    let block2 = chain.proposal(Some(time_origin_ms + 2), Vec::new());
+    chain.commit_proposal(
+        block2,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let _ = chain.take_events().unwrap();
 
     {
         let view = state.view();
@@ -254,14 +223,13 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
     }
 
-    let block3 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(3).unwrap());
-        header.creation_time_ms = time_origin_ms + 3;
-    });
-    let state_block3 = state.block(block3.as_ref().header());
-    let _ = state_block3
-        .apply_fixture_block(&block3, None)
-        .expect("replay the complete actual typed Time outputs");
+    let block3 = chain.proposal(Some(time_origin_ms + 3), Vec::new());
+    chain.commit_proposal(
+        block3,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let _ = chain.take_events().unwrap();
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -271,88 +239,24 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         "the replacement becomes eligible in the following block",
     );
 }
-
-fn result_bearing_time_trigger_block(
-    state: &State,
-    update_header: impl FnOnce(&mut BlockHeader),
-) -> CommittedBlock {
-    let signer = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-        signer.public_key().clone(),
-    )]);
-    let valid = ValidBlock::new_dummy_and_modify_header(signer.private_key(), |header| {
-        update_header(header);
-        if !header.is_genesis() {
-            header.set_prev_block_hash(state.latest_block_hash_fast());
-        }
-    });
-    let mut signed: SignedBlock = valid.into();
-    if signed.header().is_genesis() {
-        let snapshot = state.block(signed.header()).axt_policy_snapshot();
-        signed
-            .set_execution_outputs(
-                Vec::new(),
-                0,
-                BTreeMap::new(),
-                Vec::new(),
-                snapshot,
-                Default::default(),
-                &crate::execution_output_test_support::structural_output_limits(),
-            )
-            .expect("empty World setup metadata is structurally complete");
-    } else {
-        signed = signed.canonical_resultless_proposal();
-        let mut trial = state.block(signed.header());
-        ValidBlock::execute_block_outputs_for_test(&mut signed, &mut trial, None)
-            .expect("construct Time replay fixture from the actual complete owner");
-        // The preview overlay is discarded. Replay below must reproduce every
-        // output and its metadata on the unchanged predecessor.
-    }
-    let signature =
-        iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), signed.header().hash())
-            .expect("sign the result-bearing time-trigger fixture block");
-    signed
-        .replace_signatures(
-            [iroha_data_model::block::BlockSignature::new(0, signature)]
-                .into_iter()
-                .collect(),
-        )
-        .expect("replace the time-trigger fixture signature after attaching results");
-    ValidBlock::new_unverified_for_tests(signed)
-        .commit(&topology)
-        .unpack(|_| {})
-        .expect("commit the result-bearing time-trigger fixture block")
-}
 #[test]
-fn apply_fixture_block_reports_predecessor_metadata_failure() {
-    let state = State::new(
-        World::default(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    // Actual output replay can succeed while metadata correctly refuses a
-    // height-two carrier whose original State has no height-one predecessor.
-    let source = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-    });
-    let block = state.block(source.as_ref().header());
-    let error = block
-        .apply_fixture_block(&source, None)
-        .expect_err("fixture metadata refusal must not become an empty successful event list");
-    assert!(
-        error.contains("execution publication does not extend this State's exact parent"),
-        "unexpected metadata refusal: {error}"
-    );
-    assert!(state.view().block_hashes().is_empty());
-    assert_eq!(state.committed_height(), 0);
+fn native_time_replay_refuses_a_foreign_genesis_without_publishing() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let mut source = CertifiedTestChain::start(TestChainConfig::new(World::new(), 0)).unwrap();
+    source.commit_at(2, Vec::new());
+    let mut foreign = TestChainConfig::new(World::new(), 0);
+    foreign.genesis_key = ALICE_KEYPAIR.clone();
+    let mut target = CertifiedTestChain::start(foreign).unwrap();
+    let original = target.state().latest_block_hash_fast();
+    assert!(target.replay_from(&source).is_err());
+    assert_eq!(target.height(), 1);
+    assert_eq!(target.state().latest_block_hash_fast(), original);
 }
 
 #[test]
 fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -368,19 +272,10 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let state = State::new(world, kura.clone(), query_handle);
-    let time_origin_ms = state
-        .seed_genesis_for_testing()
-        .expect("authenticate Time fixture predecessor")
-        .header()
-        .creation_time_ms;
-    let block1 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(1).unwrap());
-        header.creation_time_ms = time_origin_ms;
-    });
-    let mut state_block1 = state.block(block1.as_ref().header());
+    let time_origin_ms = 0;
+
+    let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
-        let mut stx = state_block1.transaction();
         let action = Action::new(
             vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
@@ -395,27 +290,29 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         .expect("trigger action fixture satisfies validation invariants")
         .with_retry_policy(retry_policy)
         .expect("scheduled trigger fixture accepts its retry policy");
-        Register::trigger(Trigger::new(trigger_id.clone(), action))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        stx.apply();
+        genesis_instructions
+            .push(Register::trigger(Trigger::new(trigger_id.clone(), action)).into());
     }
-    state_block1.commit_world_overlay_for_testing().unwrap();
-    let block2 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-        header.creation_time_ms = time_origin_ms + 6;
-    });
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = genesis_instructions;
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+    chain.take_events().unwrap();
+    let state = Arc::clone(chain.state());
+    let block2 = chain.proposal(Some(time_origin_ms + 6), Vec::new());
     {
         let view = state.view();
         assert!(
-            view.time_triggers_due_for_block(&block2.as_ref().header()),
+            view.time_triggers_due_for_block(&block2.header()),
             "scheduled retry trigger should be due for block2"
         );
     }
-    let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2
-        .apply_fixture_block(&block2, None)
-        .expect("replay the complete actual typed Time outputs");
+    chain.commit_proposal(
+        block2,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events2 = chain.take_events().unwrap();
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -449,38 +346,30 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
             })
         );
     }
-    let block3 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(3).unwrap());
-        header.creation_time_ms = time_origin_ms + 8;
-    });
-    let mut state_block3 = state.block(block3.as_ref().header());
-    {
-        let mut stx = state_block3.transaction();
-        Register::asset_definition(AssetDefinition::numeric(
+    let transaction = chain.sign(
+        &ALICE_KEYPAIR,
+        [Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
             "retrycoin",
             iroha_data_model::asset::AssetBalancePolicy::Global,
             Some(DomainId::try_new("wonderland", "universal").unwrap()),
         ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        stx.apply();
-    }
-    state_block3.commit_world_overlay_for_testing().unwrap();
-    let block3 =
-        result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
-    state
-        .block(block3.as_ref().header())
-        .apply_fixture_block(&block3, None)
-        .expect("publish the actual quiet retry interval");
-    let block4 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(4).unwrap());
-        header.creation_time_ms = time_origin_ms + 12;
-    });
-    let state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4
-        .apply_fixture_block(&block4, None)
-        .expect("replay the complete actual typed Time outputs");
+        .into()],
+        time_origin_ms + 7,
+    );
+    assert_eq!(
+        chain.commit_at(time_origin_ms + 8, vec![transaction]),
+        vec![true]
+    );
+    let events3 = chain.take_events().unwrap();
+    assert!(!events3.iter().any(|event| matches!(event, EventBox::TriggerCompleted(completion) if completion.trigger_id() == &trigger_id)), "quiet retry interval must not execute early");
+    let block4 = chain.proposal(Some(time_origin_ms + 12), Vec::new());
+    chain.commit_proposal(
+        block4,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events4 = chain.take_events().unwrap();
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -508,8 +397,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
 fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -525,19 +412,10 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let state = State::new(world, kura.clone(), query_handle);
-    let time_origin_ms = state
-        .seed_genesis_for_testing()
-        .expect("authenticate Time fixture predecessor")
-        .header()
-        .creation_time_ms;
-    let block1 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(1).unwrap());
-        header.creation_time_ms = time_origin_ms;
-    });
-    let mut state_block1 = state.block(block1.as_ref().header());
+    let time_origin_ms = 0;
+
+    let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
-        let mut stx = state_block1.transaction();
         let action = Action::new(
             vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
@@ -552,27 +430,29 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         .expect("trigger action fixture satisfies validation invariants")
         .with_retry_policy(retry_policy)
         .expect("scheduled trigger fixture accepts its retry policy");
-        Register::trigger(Trigger::new(trigger_id.clone(), action))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        stx.apply();
+        genesis_instructions
+            .push(Register::trigger(Trigger::new(trigger_id.clone(), action)).into());
     }
-    state_block1.commit_world_overlay_for_testing().unwrap();
-    let block2 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-        header.creation_time_ms = time_origin_ms + 6;
-    });
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = genesis_instructions;
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+    chain.take_events().unwrap();
+    let state = Arc::clone(chain.state());
+    let block2 = chain.proposal(Some(time_origin_ms + 6), Vec::new());
     {
         let view = state.view();
         assert!(
-            view.time_triggers_due_for_block(&block2.as_ref().header()),
+            view.time_triggers_due_for_block(&block2.header()),
             "scheduled retry trigger should be due for block2"
         );
     }
-    let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2
-        .apply_fixture_block(&block2, None)
-        .expect("replay the complete actual typed Time outputs");
+    chain.commit_proposal(
+        block2,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events2 = chain.take_events().unwrap();
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -606,14 +486,13 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
             })
         );
     }
-    let block3 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(3).unwrap());
-        header.creation_time_ms = time_origin_ms + 12;
-    });
-    let state_block3 = state.block(block3.as_ref().header());
-    let events3 = state_block3
-        .apply_fixture_block(&block3, None)
-        .expect("replay the complete actual typed Time outputs");
+    let block3 = chain.proposal(Some(time_origin_ms + 12), Vec::new());
+    chain.commit_proposal(
+        block3,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events3 = chain.take_events().unwrap();
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -640,8 +519,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
 fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -657,24 +534,10 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let state = State::new(world, kura.clone(), query_handle);
-    let time_origin_ms = state
-        .seed_genesis_for_testing()
-        .expect("authenticate Time fixture predecessor")
-        .header()
-        .creation_time_ms;
+    let time_origin_ms = 0;
+
+    let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
-        let mut parameters = state.world.parameters.block();
-        parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
-        parameters.commit();
-    }
-    let block1 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(1).unwrap());
-        header.creation_time_ms = time_origin_ms;
-    });
-    let mut state_block1 = state.block(block1.as_ref().header());
-    {
-        let mut stx = state_block1.transaction();
         let action = Action::new(
             vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
@@ -690,27 +553,29 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         .expect("trigger action fixture satisfies validation invariants")
         .with_retry_policy(retry_policy)
         .expect("scheduled trigger fixture accepts its retry policy");
-        Register::trigger(Trigger::new(trigger_id.clone(), action))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        stx.apply();
+        genesis_instructions
+            .push(Register::trigger(Trigger::new(trigger_id.clone(), action)).into());
     }
-    state_block1.commit_world_overlay_for_testing().unwrap();
-    let block2 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-        header.creation_time_ms = time_origin_ms + 2;
-    });
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = genesis_instructions;
+    let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+    chain.take_events().unwrap();
+    let state = Arc::clone(chain.state());
+    let block2 = chain.proposal(Some(time_origin_ms + 2), Vec::new());
     {
         let view = state.view();
         assert!(
-            view.time_triggers_due_for_block(&block2.as_ref().header()),
+            view.time_triggers_due_for_block(&block2.header()),
             "periodic retry trigger should be due for block2"
         );
     }
-    let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2
-        .apply_fixture_block(&block2, None)
-        .expect("replay the complete actual typed Time outputs");
+    chain.commit_proposal(
+        block2,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events2 = chain.take_events().unwrap();
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -744,30 +609,22 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-    let block3 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(3).unwrap());
-        header.creation_time_ms = time_origin_ms + 6;
-    });
-    let mut state_block3 = state.block(block3.as_ref().header());
-    {
-        let mut stx = state_block3.transaction();
-        Register::asset_definition(AssetDefinition::numeric(
+    let transaction = chain.sign(
+        &ALICE_KEYPAIR,
+        [Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
             "periodiccoin",
             iroha_data_model::asset::AssetBalancePolicy::Global,
             Some(DomainId::try_new("wonderland", "universal").unwrap()),
         ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        stx.apply();
-    }
-    state_block3.commit_world_overlay_for_testing().unwrap();
-    let block3 =
-        result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
-    let state_block3 = state.block(block3.as_ref().header());
-    let events3 = state_block3
-        .apply_fixture_block(&block3, None)
-        .expect("replay the complete actual typed Time outputs");
+        .into()],
+        time_origin_ms + 5,
+    );
+    assert_eq!(
+        chain.commit_at(time_origin_ms + 6, vec![transaction]),
+        vec![true]
+    );
+    let events3 = chain.take_events().unwrap();
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -796,14 +653,13 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-    let block4 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(4).unwrap());
-        header.creation_time_ms = time_origin_ms + 8;
-    });
-    let state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4
-        .apply_fixture_block(&block4, None)
-        .expect("replay the complete actual typed Time outputs");
+    let block4 = chain.proposal(Some(time_origin_ms + 8), Vec::new());
+    chain.commit_proposal(
+        block4,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events4 = chain.take_events().unwrap();
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -832,14 +688,13 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         assert_eq!(action.repeats, Repeats::Exactly(2));
         assert_eq!(action.retry_state, None);
     }
-    let block5 = result_bearing_time_trigger_block(&state, |header| {
-        header.set_height(NonZeroU64::new(5).unwrap());
-        header.creation_time_ms = time_origin_ms + 10;
-    });
-    let state_block5 = state.block(block5.as_ref().header());
-    let events5 = state_block5
-        .apply_fixture_block(&block5, None)
-        .expect("replay the complete actual typed Time outputs");
+    let block5 = chain.proposal(Some(time_origin_ms + 10), Vec::new());
+    chain.commit_proposal(
+        block5,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let events5 = chain.take_events().unwrap();
     let completions5: Vec<_> = events5
         .iter()
         .filter_map(|event| match event {

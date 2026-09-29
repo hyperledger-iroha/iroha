@@ -595,7 +595,10 @@ pub(crate) fn decode_ram_fhe_profile(
     Ok(decode_programmed_public_parameters(program_policy)?.map(|value| value.ram_fhe_profile))
 }
 pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
-    norito::to_bytes(program_id).expect("RAM-LFE program id encoding must succeed")
+    let mut bytes = Vec::new();
+    norito::core::write_canonical_to_writer(program_id, &mut bytes)
+        .expect("RAM-LFE program id encoding must succeed");
+    bytes
 }
 #[cfg(test)]
 mod tests {
@@ -614,6 +617,22 @@ mod tests {
     };
     use sha2::{Digest as _, Sha256};
     use std::str::FromStr;
+
+    #[test]
+    fn program_id_associated_data_is_canonical_and_fits_initializer_bound() {
+        let max_name = "p".repeat(iroha_model_base::name::MAX_NAME_BYTES);
+        let program_id = RamLfeProgramId::from_str(&max_name).expect("maximum program name");
+        assert!(RamLfeProgramId::from_str(&(max_name + "p")).is_err());
+        let expected = program_id_bytes(&program_id);
+        assert!(expected.len() <= iroha_crypto::ram_lfe::RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES);
+        let decoded: RamLfeProgramId =
+            norito::decode_from_bytes(&expected).expect("canonical program name frame");
+        assert_eq!(decoded, program_id);
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(program_id_bytes(&program_id), expected);
+        }
+    }
     fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
     }
@@ -1080,11 +1099,17 @@ mod tests {
         let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
             .expect("valid RAM-LFE test secret");
         let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        let mut mismatched_program = default_bfv_programmed_hidden_program();
-        mismatched_program
-            .instructions
-            .pop()
-            .expect("default program has instructions");
+        let default_program = default_bfv_programmed_hidden_program();
+        let mut builder = HiddenRamFheProgram::builder().expect("bounded tape allocation");
+        for instruction in default_program
+            .instructions()
+            .take(default_program.instruction_count() - 1)
+        {
+            builder.push(instruction).expect("bounded modified tape");
+        }
+        let mismatched_program = builder
+            .finish()
+            .expect("modified tape remains a valid program");
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,

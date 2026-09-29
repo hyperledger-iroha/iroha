@@ -149,16 +149,14 @@ def test_tolk_stdlib_check(tmp_path: Path) -> None:
         builder.check_tolk_stdlib(tmp_path)
 
 
-def test_no_docker_corridor_or_environment_toggles_remain() -> None:
+def test_no_docker_or_environment_toggles() -> None:
     python_source = (SCRIPTS / "ton_sccp_builder.py").read_text(encoding="utf-8")
     golden_source = (SCRIPTS / "generate_ton_sccp_stateinit_golden.py").read_text(encoding="utf-8")
     wrapper = (SCRIPTS / "sccp_ton_contract_build.sh").read_text(encoding="utf-8")
     for source in (python_source, golden_source, wrapper):
-        for retired in ("docker run", '"docker"', "--pull=never", "production-prepare", "production-release"):
-            assert retired not in source
+        for forbidden in ("docker run", '"docker"'):
+            assert forbidden not in source
         assert "os.environ" not in source
-        assert "replay_forest" not in source
-        assert "ACTON_BIN" not in source
     assert 'exec python3 "$script_dir/ton_sccp_builder.py" "$@"' in wrapper
     assert os.stat(SCRIPTS / "ton_sccp_builder.py").st_mode & 0o111
 
@@ -170,30 +168,7 @@ def test_acton_project_pins_the_toolchain_and_pascal_case_contracts() -> None:
         assert f"[contracts.{name}]" in manifest
         assert (builder.PROJECT / "contracts" / f"{name}.tolk").is_file()
         assert (builder.PROJECT / "wrappers" / f"{name}.gen.tolk").is_file()
-    for retired in ("TairaXorSccpBridge", "TairaXorJettonMaster", "proof-verifier", "replay-forest"):
-        assert retired not in manifest
     assert ".toolchain/" in (builder.PROJECT / ".gitignore").read_text(encoding="utf-8")
-
-
-# Sources of the retired bridge/master/wallet, proof verifier and replay forest.
-# TODO(ws14): the retired wrappers (`wrappers/TairaXor*.gen.tolk`), the old
-# suites directly under `tests/`, `scripts/generate-stateinit-golden.tolk` and
-# `fixtures/sccp/ton_stateinit_golden_v1.json` await deletion by the
-# orchestrator (the fixture only after `crates/iroha_sccp/src/ton_native.rs`,
-# owned by ws10/ws3A, stops including it); add them here once removed.
-RETIRED_CONTRACT_SOURCES = (
-    "TairaXorSccpBridge.tolk",
-    "TairaXorJettonMaster.tolk",
-    "TairaXorJettonWallet.tolk",
-    "proof-verifier.tolk",
-    "replay-forest.tolk",
-    "sccp-codec.tolk",
-    "constants.tolk",
-    "errors.tolk",
-    "jetton-utils.tolk",
-    "messages.tolk",
-    "storage.tolk",
-)
 
 
 def test_contract_sources_are_exactly_the_v1_set() -> None:
@@ -201,24 +176,10 @@ def test_contract_sources_are_exactly_the_v1_set() -> None:
     present = sorted(path.name for path in contracts.glob("*.tolk"))
     expected = sorted(Path(path).name for path in builder.SOURCE_FILES if path.startswith("contracts/"))
     assert present == expected
-    for retired in RETIRED_CONTRACT_SOURCES:
-        assert not (contracts / retired).exists()
 
 
 def test_security_notes_describe_the_v1_design() -> None:
     text = (builder.PROJECT / "SECURITY.md").read_text(encoding="utf-8")
-    for retired in (
-        "SccpDisableMinting",
-        "3-of-5",
-        "Ed25519",
-        "forest",
-        "mintingDisabled",
-        "ton_stateinit_golden_v1",
-        "Acton 1.1.0",
-        "Tolk 1.4.1",
-        "Linux/amd64",
-    ):
-        assert retired not in text
     for current in (
         "sccp_apply_control",
         "control_nonce",

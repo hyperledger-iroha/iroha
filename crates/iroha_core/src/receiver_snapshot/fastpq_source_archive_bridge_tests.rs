@@ -8,7 +8,6 @@ use crate::{
         fastpq_ordinary_source_statement_archive_v1 as build_archive,
         fastpq_ordinary_source_statement_opening_v1,
     },
-    sumeragi::exec::{NativeAmxApplicationManifestV1, execution_commitment_from_witness_for_tests},
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -131,14 +130,9 @@ fn fixture(count: u32, entries: u32) -> (ExecWitness, Vec<FastpqOrdinarySourceSt
 }
 
 fn execution_ordinary_root(witness: &ExecWitness) -> Hash {
-    let manifest = NativeAmxApplicationManifestV1::empty(
-        1,
-        Hash::new(b"core archive bridge test-only executed-block placeholder"),
-    );
-    // Exercise the real ordinary-write projection; this test seam does not authenticate a block.
-    execution_commitment_from_witness_for_tests(witness, &manifest)
-        .unwrap()
-        .ordinary_writes_root
+    // Use the same canonical witness projection as native execution commitments.
+    let (reads, writes) = crate::exec_witness::roots::witness_pairs(witness);
+    crate::exec_witness::smt::compute_post_state_root(&reads, &writes)
 }
 
 fn exact_build_limits(

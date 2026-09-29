@@ -1,10 +1,11 @@
 //! Shared test fixtures for the desktop supervisor shell.
 use iroha_data_model::{
-    block::consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
+    block::consensus_v2::SumeragiV2GenesisContextParameters,
     parameter::{
         Parameter, Parameters,
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
+    sumeragi::PROTOCOL_VERSION,
 };
 use norito::json::{self, Map, Value};
 use std::{

@@ -11,6 +11,7 @@ use iroha_core::{
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::peer::PeerId;
+use iroha_torii_shared::route_catalog;
 use norito::json;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
@@ -21,7 +22,7 @@ const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi.json",
     "/swagger.json",
     "/swagger/v1/swagger.json",
-    iroha_torii_shared::uri::SCHEMA,
+    route_catalog::diagnostic::SCHEMA.path(),
 ];
 async fn fetch_generated_openapi(app: &axum::Router) -> Option<String> {
     for path in OPENAPI_CANDIDATES {
@@ -271,7 +272,7 @@ async fn router_builds_under_current_features() {
         .oneshot(fixtures::operator_signed_request(
             &cfg.common.key_pair,
             Request::builder()
-                .uri(Uri::from_static(iroha_torii_shared::uri::PEERS))
+                .uri(Uri::from_static(route_catalog::core::PEERS.path()))
                 .body(axum::body::Body::empty())
                 .unwrap(),
             &[],
@@ -351,7 +352,7 @@ async fn router_builds_under_current_features() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static(iroha_torii_shared::uri::PROFILE))
+                    .uri(Uri::from_static(route_catalog::diagnostic::PROFILE.path()))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -365,7 +366,7 @@ async fn router_builds_under_current_features() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static(iroha_torii_shared::uri::SCHEMA))
+                    .uri(Uri::from_static(route_catalog::diagnostic::SCHEMA.path()))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -376,10 +377,10 @@ async fn router_builds_under_current_features() {
     #[cfg(not(feature = "telemetry"))]
     {
         for path in [
-            iroha_torii_shared::uri::STATUS,
+            route_catalog::diagnostic::STATUS.path(),
             "/status/peers",
-            iroha_torii_shared::uri::METRICS,
-            iroha_torii_shared::uri::AXT_PROOF_CACHE_STATUS,
+            route_catalog::diagnostic::METRICS.path(),
+            route_catalog::telemetry::DEBUG_AXT_CACHE.path(),
             "/v1/debug/witness",
         ] {
             let resp = app
@@ -478,9 +479,9 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
         .expect("test Torii router initializes");
     let app = runtime.router();
     for path in [
-        iroha_torii_shared::uri::STATUS,
-        iroha_torii_shared::uri::STATUS_BLOCKS,
-        iroha_torii_shared::uri::STATUS_PEERS,
+        route_catalog::diagnostic::STATUS.path(),
+        route_catalog::diagnostic::STATUS_BLOCKS.path(),
+        route_catalog::diagnostic::STATUS_PEERS.path(),
     ] {
         let resp = app
             .clone()

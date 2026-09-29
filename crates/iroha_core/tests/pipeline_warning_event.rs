@@ -15,35 +15,6 @@ use std::sync::Arc;
 // unused
 #[test]
 fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
-    // Build a persistent Kura in a temp directory so sidecars are writable.
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let (kura, _block_count) = Kura::new_fresh_single_lane(
-        &iroha_config::parameters::actual::Kura {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
-                temp_dir.path().to_str().unwrap().into(),
-            ),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-            native_context_archive_max_bytes:
-                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
-            block_hash_history_bytes:
-                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-            transaction_history_bytes:
-                iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
-            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
-            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-            debug_output_new_blocks: false,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        },
-        &LaneConfig::default(),
-    )
-    .expect("kura init");
-    let query = LiveQueryStore::start_test();
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -63,16 +34,13 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let chain_id = ChainId::from("chain");
-    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
-    let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
+    let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 0),
+    )
+    .expect("native chain with isolated persistent Kura");
+    let network_id = chain.network_id();
+    let kura = Arc::clone(chain.kura());
+    chain.take_events().unwrap();
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -98,23 +66,15 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
         iroha_primitives::json::Json::new("v"),
     )])
     .sign(bob_keypair.private_key());
-    let acc: Vec<_> = vec![tx1, tx2]
-        .into_iter()
-        .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
-        .collect();
-    let new_block = iroha_core::block::BlockBuilder::new(acc)
-        .chain(0, Some(&genesis))
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-        .unpack(|_| {});
+    let new_block = chain.proposal(None, vec![tx1, tx2]);
     // Inject a mismatching sidecar for this block height before validation
     let height = new_block.header().height().get();
     let block_hash = new_block.header().hash();
     let mut fingerprint = [0u8; 32];
     fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
     let sidecar_txs: Vec<PipelineTxSnapshot> = new_block
-        .transactions()
-        .iter()
-        .map(|tx| PipelineTxSnapshot::compact(tx.as_ref().hash_as_entrypoint(), 0, 0))
+        .external_transactions()
+        .map(|tx| PipelineTxSnapshot::compact(tx.hash_as_entrypoint(), 0, 0))
         .collect();
     let sidecar = PipelineRecoverySidecar::new(
         height,
@@ -127,18 +87,19 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
     );
     kura.write_pipeline_metadata(&sidecar);
     // Publish canonical outputs; local DAG metadata has no consensus authority.
-    let mut sb = state.block(new_block.header());
-    let vb =
-        iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
+    let cb = chain.commit_proposal(
+        new_block,
+        iroha_core::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
     assert!(
-        cb.as_ref()
+        cb.block()
             .output_results()
             .all(|result| result.as_ref().is_ok())
     );
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish canonical outputs independently of advisory metadata");
+    let events = chain
+        .take_events()
+        .expect("original native publication events");
     assert!(
         !events.is_empty(),
         "publication must emit the transaction events"
@@ -163,35 +124,6 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
 }
 #[test]
 fn pipeline_warning_ignored_for_stale_sidecar() {
-    // Build a persistent Kura in a temp directory so sidecars are writable.
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let (kura, _block_count) = Kura::new_fresh_single_lane(
-        &iroha_config::parameters::actual::Kura {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(
-                temp_dir.path().to_str().unwrap().into(),
-            ),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-            native_context_archive_max_bytes:
-                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
-            block_hash_history_bytes:
-                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-            transaction_history_bytes:
-                iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
-            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
-            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-            debug_output_new_blocks: false,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        },
-        &LaneConfig::default(),
-    )
-    .expect("kura init");
-    let query = LiveQueryStore::start_test();
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -211,16 +143,13 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let chain_id = ChainId::from("chain");
-    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
-    let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
+    let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 0),
+    )
+    .expect("native chain with isolated persistent Kura");
+    let network_id = chain.network_id();
+    let kura = Arc::clone(chain.kura());
+    chain.take_events().unwrap();
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -246,14 +175,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         iroha_primitives::json::Json::new("v"),
     )])
     .sign(bob_keypair.private_key());
-    let acc: Vec<_> = vec![tx1, tx2]
-        .into_iter()
-        .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
-        .collect();
-    let new_block = iroha_core::block::BlockBuilder::new(acc)
-        .chain(0, Some(&genesis))
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-        .unpack(|_| {});
+    let new_block = chain.proposal(None, vec![tx1, tx2]);
     // Inject a stale sidecar (no tx hashes for this block height) before validation
     let height = new_block.header().height().get();
     let block_hash = new_block.header().hash();
@@ -270,18 +192,19 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     );
     kura.write_pipeline_metadata(&sidecar);
     // Validate and apply; expect no DAG mismatch warning when sidecar txs do not match the block
-    let mut sb = state.block(new_block.header());
-    let vb =
-        iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
+    let cb = chain.commit_proposal(
+        new_block,
+        iroha_core::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
     assert!(
-        cb.as_ref()
+        cb.block()
             .output_results()
             .all(|result| result.as_ref().is_ok())
     );
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish canonical outputs independently of advisory metadata");
+    let events = chain
+        .take_events()
+        .expect("original native publication events");
     assert!(
         !events.is_empty(),
         "publication must emit the transaction events"

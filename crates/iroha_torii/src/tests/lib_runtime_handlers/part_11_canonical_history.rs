@@ -38,7 +38,7 @@ async fn ledger_headers_reports_authenticated_hash_only_gap() {
     let block_hash = store_block(&app, block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     app.kura
-        .force_hash_only_block_for_testing(nonzero!(1_usize))
+        .corrupt_canonical_body_for_testing(nonzero!(1_usize))
         .expect("convert Torii history fixture to authenticated hash-only form");
 
     let error = super::handler_ledger_headers(
@@ -55,7 +55,7 @@ async fn ledger_headers_reports_authenticated_hash_only_gap() {
         error,
         Error::Query(ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(
-                iroha_data_model::query::error::CanonicalHistoryError::HashOnlyBodyUnavailable {
+                iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable {
                     height: 1,
                     ..
                 }

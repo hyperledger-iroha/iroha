@@ -3,10 +3,11 @@
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 
-fn fixture() -> (NetworkId, RoutingPlan, QueuePlanAdmissionBindingV1) {
-    let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-        b"lane admission model network",
-    )));
+fn fixture() -> (
+    RoutingPlan,
+    QueuePlanAdmissionContextV1,
+    QueuePlanGlobalAdmissionIdentityV1,
+) {
     let plan = RoutingPlan::native_amx(
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5)),
         vec![
@@ -48,28 +49,19 @@ fn fixture() -> (NetworkId, RoutingPlan, QueuePlanAdmissionBindingV1) {
             })
             .collect(),
     };
-    let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"untrusted input reference"));
-    let binding = QueuePlanAdmissionBindingV1 {
-        version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-        network_id_digest: queue_plan_admission_network_id_digest(&network),
-        request_id: queue_plan_synced_request_id(&network, entrypoint_hash),
-        entrypoint_hash,
-        signed_transaction_hash: None,
-        routing_plan_digest: plan.digest(),
-        admission_context: context,
-        enqueue_timestamp_ms: 73,
-        queue_plan_journal_version: QUEUE_PLAN_JOURNAL_CLAIM_VERSION_V1,
-        durable_admission_version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-        // Deliberately not a physical journal claim. Core must compare exact transaction bytes.
-        journal_record_digest: Hash::new(b"shape-only journal digest"),
+    let identity = QueuePlanGlobalAdmissionIdentityV1 {
+        version: QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
+        // These are untrusted identity bytes, with no registry or certificate authority.
+        network_id_digest: Hash::new(b"lane admission model network"),
+        request_id: Hash::new(b"lane admission model request"),
     };
-    (network, plan, binding)
+    (plan, context, identity)
 }
 
 #[test]
-fn lane_admission_all_eleven_dtos_roundtrip_canonical_and_json() {
-    let (_, plan, binding) = fixture();
-    binding.validate_structure().unwrap();
+fn lane_admission_current_dtos_roundtrip_canonical_and_json() {
+    let (plan, context, identity) = fixture();
+    context.validate_for_routing_plan(&plan).unwrap();
     macro_rules! roundtrip {
         ($ty:ty, $value:expr) => {{
             let value: $ty = $value;
@@ -91,26 +83,17 @@ fn lane_admission_all_eleven_dtos_roundtrip_canonical_and_json() {
     roundtrip!(NativeAmxRoutingPlan, native.clone());
     roundtrip!(RoutingPlan, plan.clone());
     roundtrip!(RoutingPlan, RoutingPlan::single(plan.coordinator_route()));
-    roundtrip!(
-        QueuePlanGlobalAdmissionIdentityV1,
-        binding.global_admission_identity()
-    );
+    roundtrip!(QueuePlanGlobalAdmissionIdentityV1, identity);
     roundtrip!(
         QueuePlanRouteIncarnationV1,
-        binding.admission_context.route_incarnations[0].clone()
+        context.route_incarnations[0].clone()
     );
-    roundtrip!(
-        QueuePlanAdmissionContextV1,
-        binding.admission_context.clone()
-    );
-    roundtrip!(QueuePlanAdmissionRegistryKeyV1, binding.registry_key());
-    roundtrip!(QueuePlanAdmissionRegistryValueV1, binding.registry_value());
-    roundtrip!(QueuePlanAdmissionBindingV1, binding);
+    roundtrip!(QueuePlanAdmissionContextV1, context.clone());
 }
 
 #[test]
 fn lane_admission_routing_normalizes_only_at_explicit_constructor() {
-    let (_, canonical, binding) = fixture();
+    let (canonical, context, _) = fixture();
     let RoutingPlan::NativeAmx(native) = &canonical else {
         unreachable!()
     };
@@ -124,7 +107,7 @@ fn lane_admission_routing_normalizes_only_at_explicit_constructor() {
         RoutingPlan::native_amx(native.coordinator.route, legs),
         canonical
     );
-    assert_eq!(binding.routing_plan().unwrap(), canonical);
+    assert_eq!(context.routing_plan().unwrap(), canonical);
     assert_eq!(
         RoutingDecision::default(),
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
@@ -138,22 +121,16 @@ fn lane_admission_routing_normalizes_only_at_explicit_constructor() {
         decoded, noncanonical,
         "decoding must not silently sort untrusted input"
     );
-    assert!(
-        binding
-            .admission_context
-            .validate_for_routing_plan(&decoded)
-            .is_err()
-    );
+    assert!(context.validate_for_routing_plan(&decoded).is_err());
     let mut bad_digest = native.clone();
     bad_digest.plan_digest = Hash::new(b"forged plan digest");
     assert!(
-        binding
-            .admission_context
+        context
             .validate_for_routing_plan(&RoutingPlan::NativeAmx(bad_digest))
             .is_err()
     );
     let single = RoutingPlan::single(native.coordinator.route);
-    let mut context = binding.admission_context.clone();
+    let mut context = context.clone();
     context.route_incarnations.truncate(1);
     context.routing_plan_digest = single.digest();
     context.validate_for_routing_plan(&single).unwrap();
@@ -166,8 +143,8 @@ fn lane_admission_routing_normalizes_only_at_explicit_constructor() {
 
 #[test]
 fn lane_admission_context_rejects_each_identity_geometry_and_order_mutation() {
-    let (_, plan, binding) = fixture();
-    let original = binding.admission_context;
+    let (plan, context, _) = fixture();
+    let original = context;
     let mut cases = Vec::new();
     macro_rules! mutation {
         ($label:literal, $value:ident, $body:block) => {{
@@ -255,7 +232,7 @@ fn lane_admission_context_rejects_each_identity_geometry_and_order_mutation() {
 
 #[test]
 fn lane_admission_native_participant_bounds_and_duplicate_controls() {
-    let (_, plan, binding) = fixture();
+    let (plan, context, _) = fixture();
     let coordinator = plan.coordinator_route();
     for count in [0, MAX_QUEUE_PLAN_NATIVE_AMX_PARTICIPANTS_V1 + 1] {
         let participants = (0..count)
@@ -270,144 +247,36 @@ fn lane_admission_native_participant_bounds_and_duplicate_controls() {
             })
             .collect();
         let plan = RoutingPlan::native_amx(coordinator, participants);
-        assert!(
-            binding
-                .admission_context
-                .validate_for_routing_plan(&plan)
-                .is_err()
-        );
+        assert!(context.validate_for_routing_plan(&plan).is_err());
     }
     let RoutingPlan::NativeAmx(mut native) = plan else {
         unreachable!()
     };
     native.participants.push(native.participants[0]);
     assert!(
-        binding
-            .admission_context
+        context
             .validate_for_routing_plan(&RoutingPlan::NativeAmx(native))
             .is_err()
     );
 }
 
 #[test]
-fn lane_admission_binding_rejects_versions_request_substitution_and_zero_claim() {
-    let (_, _, original) = fixture();
-    let mut cases = Vec::new();
-    macro_rules! mutation {
-        ($label:literal, $value:ident, $body:block) => {{
-            let mut $value = original.clone(); $body cases.push(($label, $value));
-        }};
-    }
-    mutation!("binding version", v, {
-        v.version += 1;
-    });
-    mutation!("context version", v, {
-        v.admission_context.version += 1;
-    });
-    mutation!("journal version", v, {
-        v.queue_plan_journal_version += 1;
-    });
-    mutation!("durable claim version", v, {
-        v.durable_admission_version += 1;
-    });
-    mutation!("zero network", v, {
-        v.network_id_digest = Hash::prehashed([0; 32]);
-    });
-    mutation!("zero request", v, {
-        v.request_id = Hash::prehashed([0; 32]);
-    });
-    mutation!("zero journal", v, {
-        v.journal_record_digest = Hash::prehashed([0; 32]);
-    });
-    mutation!("different entrypoint", v, {
-        v.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"different entrypoint"));
-    });
-    mutation!("different network", v, {
-        v.network_id_digest = Hash::new(b"different network");
-    });
-    mutation!("different plan", v, {
-        v.routing_plan_digest = Hash::new(b"different plan");
-    });
-    for (label, binding) in cases {
-        assert!(binding.validate_structure().is_err(), "{label}");
-    }
-    assert_eq!(
-        original.registry_key().entrypoint_hash,
-        original.entrypoint_hash
-    );
-    assert_eq!(
-        original.registry_key().network_id_digest,
-        original.network_id_digest
-    );
-    assert_eq!(
-        original.registry_value().binding_hash,
-        original.canonical_hash()
-    );
-    assert_eq!(
-        original.global_admission_identity().request_id,
-        original.request_id
-    );
-    let mut changed = original.clone();
-    changed.journal_record_digest = Hash::new(b"another unverified journal claim");
-    changed.validate_structure().unwrap();
-    assert_ne!(
-        changed.canonical_hash(),
-        original.canonical_hash(),
-        "structure alone intentionally does not verify a physical claim"
-    );
-}
-
-#[test]
-fn lane_admission_hash_domains_and_ambient_layout_are_explicit() {
-    let (network, _, binding) = fixture();
-    let network_digest = queue_plan_admission_network_id_digest(&network);
-    assert_eq!(
-        network_digest,
-        Hash::new_from_chunks(&[
-            b"iroha:torii:queue-plan-admission-network:v1\0",
-            network.as_bytes()
-        ])
-    );
-    let request_bytes = norito::encode_canonical(&(
-        "torii:proxy:queue-plan-synced:v1",
-        network_digest,
-        binding.entrypoint_hash,
-    ))
-    .unwrap();
-    assert_eq!(binding.request_id, Hash::new(request_bytes));
-    let bytes = norito::encode_canonical(&binding).unwrap();
-    assert_eq!(
-        binding.canonical_hash(),
-        Hash::new_from_chunks(&[b"iroha:torii:queue-plan-admission-binding:v1\0", &bytes])
-    );
-    let changed_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-        b"different genesis",
-    )));
-    assert_ne!(
-        queue_plan_synced_request_id(&changed_network, binding.entrypoint_hash),
-        binding.request_id
-    );
-    let canonical_hash = binding.canonical_hash();
+fn lane_admission_routing_digests_ignore_ambient_codec_layout() {
+    let (plan, _, _) = fixture();
+    let single = RoutingPlan::single(plan.coordinator_route());
+    let native_digest = plan.digest();
+    let single_digest = single.digest();
     let alternative =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _guard = norito::core::DecodeFlagsGuard::enter(alternative);
-    assert_eq!(binding.canonical_hash(), canonical_hash);
-    assert_eq!(
-        queue_plan_synced_request_id(&network, binding.entrypoint_hash),
-        binding.request_id
-    );
+    assert_eq!(plan.digest(), native_digest);
+    assert_eq!(single.digest(), single_digest);
 }
 
 #[test]
 fn lane_admission_json_requires_nullable_slots_and_enum_tags() {
-    let (_, plan, binding) = fixture();
-    let mut value = norito::json::to_value(&binding).unwrap();
-    value
-        .as_object_mut()
-        .unwrap()
-        .remove("signed_transaction_hash");
-    assert!(norito::json::from_value::<QueuePlanAdmissionBindingV1>(value).is_err());
-    let mut genesis_context = binding.admission_context.clone();
+    let (plan, context, _) = fixture();
+    let mut genesis_context = context;
     genesis_context.authority_height = 0;
     genesis_context.proposal_height = 1;
     genesis_context.predecessor_block_hash = None;
@@ -434,11 +303,11 @@ fn lane_admission_json_requires_nullable_slots_and_enum_tags() {
 
 #[test]
 fn lane_admission_canonical_frames_reject_other_owner_and_trailing_bytes() {
-    let (_, plan, binding) = fixture();
-    let mut bytes = norito::encode_canonical(&binding).unwrap();
-    assert!(norito::decode_canonical::<QueuePlanAdmissionContextV1>(&bytes).is_err());
+    let (plan, context, _) = fixture();
+    let mut bytes = norito::encode_canonical(&context).unwrap();
+    assert!(norito::decode_canonical::<QueuePlanGlobalAdmissionIdentityV1>(&bytes).is_err());
     bytes.push(0);
-    assert!(norito::decode_canonical::<QueuePlanAdmissionBindingV1>(&bytes).is_err());
+    assert!(norito::decode_canonical::<QueuePlanAdmissionContextV1>(&bytes).is_err());
     let bytes = norito::encode_canonical(&plan.coordinator_leg()).unwrap();
     assert!(norito::decode_canonical::<RoutingPlan>(&bytes).is_err());
 }
@@ -516,35 +385,11 @@ fn lane_admission_canonical_schema_frame_vectors() {
             0x22, 0xb2
         ]
     );
-    check!(
-        QueuePlanAdmissionRegistryKeyV1,
-        "iroha_data_model::block::lane_admission::QueuePlanAdmissionRegistryKeyV1",
-        [
-            0x99, 0x33, 0x1d, 0x58, 0xfd, 0x00, 0x7a, 0x41, 0xe8, 0x24, 0xdb, 0x66, 0xdc, 0x2f,
-            0x1e, 0x50
-        ]
-    );
-    check!(
-        QueuePlanAdmissionRegistryValueV1,
-        "iroha_data_model::block::lane_admission::QueuePlanAdmissionRegistryValueV1",
-        [
-            0x90, 0xc6, 0xb3, 0x15, 0xa1, 0x47, 0x7b, 0x70, 0x82, 0x41, 0x0b, 0xc1, 0xa5, 0x95,
-            0x80, 0x3c
-        ]
-    );
-    check!(
-        QueuePlanAdmissionBindingV1,
-        "iroha_data_model::block::lane_admission::QueuePlanAdmissionBindingV1",
-        [
-            0xa3, 0x4e, 0x2e, 0xe9, 0x48, 0x1b, 0x99, 0x35, 0x70, 0xac, 0x91, 0xe0, 0x2e, 0x82,
-            0x42, 0xef
-        ]
-    );
 }
 
 #[test]
-fn lane_admission_routing_digest_vectors_preserve_existing_domains() {
-    let (_, plan, _) = fixture();
+fn lane_admission_routing_digest_vectors_use_current_domains() {
+    let (plan, _, _) = fixture();
     assert_eq!(
         plan.digest(),
         Hash::prehashed([
@@ -560,220 +405,5 @@ fn lane_admission_routing_digest_vectors_preserve_existing_domains() {
             0xaa, 0xf8, 0x7c, 0x8e, 0x42, 0x72, 0xaf, 0x9a, 0x45, 0xab, 0x74, 0xce, 0x4e, 0x2c,
             0x93, 0x86, 0xe2, 0xfb
         ])
-    );
-}
-
-fn complete_input_model_fixture() -> LaneAdmittedInputV1 {
-    let (network, _, mut binding) = fixture();
-    let key = KeyPair::from_seed(vec![0x37; 32], Algorithm::Ed25519);
-    let signed = crate::transaction::TransactionBuilder::new(
-        network,
-        crate::account::AccountId::new(key.public_key().clone()),
-        crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .sign(key.private_key());
-    binding.signed_transaction_hash = Some(signed.hash());
-    let entrypoint = TransactionEntrypoint::External(signed);
-    binding.entrypoint_hash = entrypoint.hash();
-    binding.request_id = queue_plan_synced_request_id(&network, binding.entrypoint_hash);
-    LaneAdmittedInputV1 {
-        entrypoint,
-        certificate: QueuePlanAdmissionCertificateV1 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-            binding,
-            // Pure wire fixture: this signature is deliberately not an admission attestation.
-            attestations: vec![QueuePlanAdmissionAttestationV1 {
-                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-                validator_index: 0,
-                signature: Signature::new(key.private_key(), b"untrusted model fixture"),
-            }],
-        },
-    }
-}
-
-#[test]
-fn complete_lane_admission_model_roundtrips_certificate_and_exact_entrypoint() {
-    let input = complete_input_model_fixture();
-    macro_rules! roundtrip {
-        ($ty:ty, $value:expr) => {{
-            let value: $ty = $value;
-            let bytes = norito::encode_canonical(&value).unwrap();
-            let decoded: $ty = norito::decode_canonical(&bytes).unwrap();
-            assert_eq!(decoded, value);
-            assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
-            let json = norito::json::to_json(&value).unwrap();
-            assert_eq!(norito::json::from_str::<$ty>(&json).unwrap(), value);
-        }};
-    }
-    roundtrip!(
-        QueuePlanAdmissionAttestationV1,
-        input.certificate.attestations[0].clone()
-    );
-    roundtrip!(QueuePlanAdmissionCertificateV1, input.certificate.clone());
-    roundtrip!(LaneAdmittedInputV1, input.clone());
-    assert_eq!(
-        input.routing_plan().unwrap(),
-        input.certificate.binding.routing_plan().unwrap()
-    );
-    let mut changed = input;
-    changed.certificate.binding.routing_plan_digest = Hash::new(b"unbound routing plan");
-    assert!(changed.routing_plan().is_err());
-}
-
-#[test]
-fn complete_lane_admission_model_requires_both_slots_and_rejects_duplicate_plan_field() {
-    let input = complete_input_model_fixture();
-    for key in ["entrypoint", "certificate"] {
-        let mut value = norito::json::to_value(&input).unwrap();
-        value.as_object_mut().unwrap().remove(key);
-        assert!(norito::json::from_value::<LaneAdmittedInputV1>(value).is_err());
-    }
-    let mut value = norito::json::to_value(&input).unwrap();
-    value.as_object_mut().unwrap().insert(
-        "routing_plan".to_owned(),
-        norito::json::to_value(&input.routing_plan().unwrap()).unwrap(),
-    );
-    assert!(
-        norito::json::from_value::<LaneAdmittedInputV1>(value).is_err(),
-        "the plan has exactly one owner in the binding"
-    );
-    let bytes = norito::encode_canonical(&input.certificate).unwrap();
-    assert!(norito::decode_canonical::<LaneAdmittedInputV1>(&bytes).is_err());
-    let bytes = norito::encode_canonical(&input).unwrap();
-    assert!(norito::decode_canonical::<QueuePlanAdmissionCertificateV1>(&bytes).is_err());
-}
-
-fn complete_input_model_with_body(body_bytes: usize) -> LaneAdmittedInputV1 {
-    let mut input = complete_input_model_fixture();
-    let (network, _, _) = fixture();
-    let key = KeyPair::from_seed(vec![0x37; 32], Algorithm::Ed25519);
-    let mut builder = crate::transaction::TransactionBuilder::new(
-        network,
-        crate::account::AccountId::new(key.public_key().clone()),
-        crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    );
-    builder.set_creation_time(std::time::Duration::from_millis(73));
-    let signed = builder
-        .with_instructions([crate::isi::Log::new(
-            crate::Level::INFO,
-            "x".repeat(body_bytes),
-        )])
-        .sign(key.private_key());
-    input.certificate.binding.signed_transaction_hash = Some(signed.hash());
-    input.entrypoint = TransactionEntrypoint::External(signed);
-    input.certificate.binding.entrypoint_hash = input.entrypoint.hash();
-    input.certificate.binding.request_id =
-        queue_plan_synced_request_id(&network, input.entrypoint.hash());
-    // The certificate remains deliberately unauthenticated; this tests only decoding.
-    input
-}
-
-#[test]
-fn complete_lane_admission_decoder_accepts_exact_frame_cap_with_nested_body() {
-    let cap = super::super::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-    let oversized = complete_input_model_with_body(cap);
-    let overhead = norito::encode_canonical(&oversized).unwrap().len() - cap;
-    let input = complete_input_model_with_body(cap - overhead);
-    let bytes = norito::encode_canonical(&input).unwrap();
-    assert_eq!(bytes.len(), cap);
-    assert_eq!(
-        LaneAdmittedInputV1::decode_canonical(&bytes).unwrap(),
-        input
-    );
-    assert!(
-        matches!(
-            norito::decode_canonical_with_limits::<LaneAdmittedInputV1>(
-                &bytes,
-                norito::DecodeLimits::new(cap, cap, cap, cap * 4, 64),
-            ),
-            Err(norito::Error::TotalAllocationExceeded { .. })
-        ),
-        "the former certificate allocation budget rejects a valid complete input"
-    );
-    let over_cap = complete_input_model_with_body(cap - overhead + 1);
-    let bytes = norito::encode_canonical(&over_cap).unwrap();
-    assert_eq!(bytes.len(), cap + 1);
-    assert!(LaneAdmittedInputV1::decode_canonical(&bytes).is_err());
-}
-
-#[test]
-fn complete_lane_admission_decoder_rejects_malformed_and_noncanonical_frames() {
-    let bytes = norito::encode_canonical(&complete_input_model_fixture()).unwrap();
-    assert!(LaneAdmittedInputV1::decode_canonical(&[]).is_err());
-    assert!(LaneAdmittedInputV1::decode_canonical(&bytes[..bytes.len() - 1]).is_err());
-    let mut trailing = bytes.clone();
-    trailing.push(0);
-    assert!(LaneAdmittedInputV1::decode_canonical(&trailing).is_err());
-    let mut compressed = bytes.clone();
-    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
-    // Mutate only the declared V1 header fields: magic, two version bytes,
-    // schema, then compression. Header::write is intentionally private.
-    let schema_start = header.magic.len() + 2;
-    let compression_offset = schema_start + header.schema.len();
-    compressed[compression_offset] = norito::Compression::Zstd as u8;
-    assert!(LaneAdmittedInputV1::decode_canonical(&compressed).is_err());
-    let mut unknown_schema = bytes.clone();
-    unknown_schema[schema_start..compression_offset].fill(0x5a);
-    assert_eq!(
-        norito::core::Header::read(unknown_schema.as_slice())
-            .unwrap()
-            .schema,
-        [0x5a; 16],
-    );
-    assert!(LaneAdmittedInputV1::decode_canonical(&unknown_schema).is_err());
-    assert!(LaneAdmittedInputV1::decode_canonical(&bytes).is_ok());
-}
-
-#[test]
-fn complete_lane_admission_decoder_preserves_stricter_outer_allocation_budget() {
-    let input = complete_input_model_with_body(160 * 1024);
-    let bytes = norito::encode_canonical(&input).unwrap();
-    let cap = super::super::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-    let result =
-        norito::with_decode_limits(norito::DecodeLimits::new(cap, cap, cap, 1, 64), || {
-            LaneAdmittedInputV1::decode_canonical(&bytes)
-        });
-    assert!(
-        matches!(result, Err(norito::Error::TotalAllocationExceeded { .. })),
-        "a nested decoder cannot relax its caller's budget"
-    );
-    assert_eq!(
-        LaneAdmittedInputV1::decode_canonical(&bytes).unwrap(),
-        input
-    );
-}
-
-#[test]
-fn complete_lane_admission_schema_frame_vectors() {
-    use norito::schema::identity::{NoritoSchema, frame_hash};
-    macro_rules! check {
-        ($ty:ty, $name:literal, $hash:expr) => {
-            assert_eq!(<$ty as NoritoSchema>::nominal_name(), $name);
-            assert_eq!(frame_hash::<$ty>(), $hash);
-        };
-    }
-    check!(
-        QueuePlanAdmissionAttestationV1,
-        "iroha_data_model::block::lane_admission::QueuePlanAdmissionAttestationV1",
-        [
-            0x93, 0x4b, 0x2c, 0x59, 0xe3, 0x92, 0xb8, 0x1e, 0x44, 0x4c, 0x6d, 0x20, 0x7f, 0x14,
-            0x1b, 0x64
-        ]
-    );
-    check!(
-        QueuePlanAdmissionCertificateV1,
-        "iroha_data_model::block::lane_admission::QueuePlanAdmissionCertificateV1",
-        [
-            0xf7, 0xa0, 0x65, 0xd3, 0xad, 0x63, 0xd0, 0x99, 0xf9, 0xaa, 0x5b, 0xb4, 0xa0, 0x1b,
-            0x84, 0x0f
-        ]
-    );
-    check!(
-        LaneAdmittedInputV1,
-        "iroha_data_model::block::lane_admission::LaneAdmittedInputV1",
-        [
-            0x74, 0xde, 0x06, 0xf5, 0xae, 0x8e, 0x07, 0xd4, 0x03, 0xfd, 0x9b, 0x87, 0xc0, 0x74,
-            0x51, 0x7c
-        ]
     );
 }

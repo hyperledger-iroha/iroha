@@ -71,7 +71,7 @@ fn committed_network_proof_app_for_test() -> (
     for work in [
         instructions("successful proof input"),
         vec![InstructionBox::from(Unregister::domain(
-            iroha_data_model::domain::DomainId::try_new("missing_proof_domain", "universal")
+            iroha_model_base::domain::DomainId::try_new("missing_proof_domain", "universal")
                 .unwrap(),
         ))],
     ] {

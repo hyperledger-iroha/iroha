@@ -12,10 +12,8 @@ use iroha_data_model::{
         consensus_v2::{SumeragiV2GenesisContextParameters, ValidationError, ValidatorPower},
     },
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     sumeragi::{
@@ -59,49 +57,6 @@ fn mint_finality_authority(
     }
 }
 
-fn mint_finality_genesis_authorization(
-    authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    last_height: u64,
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: authority.network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height,
-        authority_generation: authority.generation,
-        authority_id: authority.authority_id().expect("valid fixture authority"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(authority)
-        .expect("valid fixture genesis authorization");
-    authorization
-}
-
-fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
-    SumeragiV2GenesisContextParameters::recommended()
-}
-
-#[test]
-fn genesis_context_parameters_reject_noncanonical_hash_markers() {
-    let mut context = recommended_genesis_context();
-    context.nexus_amx_context_hash[Hash::LENGTH - 1] &= !1;
-    assert_eq!(
-        context.validate(),
-        Err(ValidationError::InvalidNexusAmxContextHash),
-    );
-
-    let mut context = recommended_genesis_context();
-    context.execution_policy_hash[Hash::LENGTH - 1] &= !1;
-    assert_eq!(
-        context.validate(),
-        Err(ValidationError::InvalidExecutionPolicyHash),
-    );
-}
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
     assert!(u8::try_from(len).is_ok(), "len must fit in u8");
     (0..len)
@@ -179,6 +134,9 @@ fn rng_hash(rng: &mut DeterministicRng) -> Hash {
 }
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
+}
+fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
 }
 fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisParams {
     let mode = if rng.next_bool() {
@@ -521,8 +479,6 @@ fn consensus_persistence_norito_roundtrip() {
         epoch: 2,
         witness: exec_witness.clone(),
     };
-    assert_roundtrip(&evidence);
-    assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
 }
@@ -640,10 +596,6 @@ fn consensus_roundtrip_deterministic_fuzz() {
         assert_roundtrip(&exec_witness);
         let exec_witness_msg = rng_exec_witness_msg(&mut rng);
         assert_roundtrip(&exec_witness_msg);
-        let evidence = rng_evidence(&mut rng);
-        assert_roundtrip(&evidence);
-        let evidence_record = rng_evidence_record(&mut rng, evidence);
-        assert_roundtrip(&evidence_record);
     }
 }
 #[test]

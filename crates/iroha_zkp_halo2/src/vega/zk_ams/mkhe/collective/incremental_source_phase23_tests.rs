@@ -345,16 +345,19 @@ fn exact_word_count_v1(source: &str, word: &str, expected: usize) -> bool {
     })
 }
 
+/// Token ranges of one associated function: generics, parameters, returns, bounds and body.
+type FunctionPartsV1 = (
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+);
+
 fn associated_function_parts_v1(
     tokens: &[RustTokenV1<'_>],
     function: usize,
-) -> Option<(
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-)> {
+) -> Option<FunctionPartsV1> {
     use RustTokenV1::{Punct, Word};
     matches!(tokens.get(function), Some(Word("fn"))).then_some(())?;
     matches!(tokens.get(function + 1), Some(Word(_))).then_some(())?;
@@ -853,13 +856,14 @@ fn function_body_has_no_context_mint_v1(
             continue;
         }
         if tokens.get(cursor) == Some(&Punct(b'!'))
-            && let Some(group) = macro_group_v1(tokens, cursor) {
-                if has_dangerous_context_word_v1(&tokens[group.clone()], context, self_is_context) {
-                    return false;
-                }
-                cursor = group.end + 1;
-                continue;
+            && let Some(group) = macro_group_v1(tokens, cursor)
+        {
+            if has_dangerous_context_word_v1(&tokens[group.clone()], context, self_is_context) {
+                return false;
             }
+            cursor = group.end + 1;
+            continue;
+        }
         if tokens.get(cursor) == Some(&Word("fn"))
             && matches!(tokens.get(cursor + 1), Some(Word(_)))
         {
@@ -931,9 +935,7 @@ fn context_impl_has_no_production_mint_v1(
         return false;
     };
     let self_is_context = tokens[header.clone()] == [Word(context)];
-    if tokens[header.clone()].contains(&Word(context))
-        && !self_is_context
-    {
+    if tokens[header.clone()].contains(&Word(context)) && !self_is_context {
         return false;
     }
     let Some(items) = top_level_item_ranges_v1(&tokens[body.clone()]) else {
@@ -1134,8 +1136,7 @@ fn exact_production_child_modules_v1(source: &str, expected: &[(&str, &str)]) ->
         };
         let default_would_mint_context = item.contains(&Word(CONTEXT))
             && attributes.iter().any(|attribute| {
-                attribute.first() == Some(&Word("derive"))
-                    && attribute.contains(&Word("Default"))
+                attribute.first() == Some(&Word("derive")) && attribute.contains(&Word("Default"))
             });
         if !production_outer_attributes_are_inert_v1(&attributes)
             || default_would_mint_context
@@ -1256,8 +1257,7 @@ fn exact_test_only_context_constructor_v1(source: &str) -> bool {
                 }
                 cursor += 1;
             };
-            if tokens[index + 1..open].contains(&Word(CONTEXT))
-            {
+            if tokens[index + 1..open].contains(&Word(CONTEXT)) {
                 if impl_body.is_some() || tokens[index..open] != [Word("impl"), Word(CONTEXT)] {
                     return false;
                 }

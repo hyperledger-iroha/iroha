@@ -27,9 +27,9 @@ fn det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature() {
     let mut original = h.block(0, b"transactions");
     original.header.control_witness = ControlWitness::try_from_slice(b"pulse-A").unwrap();
     let signed = h.proposal(0, &original, None);
-    let signer = h.v.signer(h.leader(0));
+    let leader = h.v.signer(h.leader(0));
     assert!(h.v.crypto.verify(
-        signer.public_key(),
+        leader.public_key(),
         &signed.signing_preimage(&h.v.crypto),
         &signed.sig
     ));
@@ -41,7 +41,7 @@ fn det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature() {
             signed.block_hash(&h.v.crypto)
         );
         assert!(!h.v.crypto.verify(
-            signer.public_key(),
+            leader.public_key(),
             &changed.signing_preimage(&h.v.crypto),
             &signed.sig
         ));
@@ -95,7 +95,7 @@ fn det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation
     let proposed = h.core.mine.proposal.as_ref().unwrap();
     assert_eq!(
         proposed.header.payload_len,
-        b"last transaction".len() as u32
+        u32::try_from(b"last transaction".len()).unwrap()
     );
     assert_eq!(
         proposed.header.control_witness.as_slice(),
@@ -114,7 +114,8 @@ fn transaction_timeout_cannot_start_control_or_accept_late_work() {
     let context = h.core.fresh_build.as_ref().unwrap().context;
     // Even a matching unsolicited response cannot substitute for work selection.
     answer(&mut h, req, context);
-    assert!(h.core.fresh_build.as_ref().unwrap().control.is_none());
+    assert!(h.core.fresh_build.as_ref().unwrap().payload.is_none());
+    assert!(h.core.mine.proposal.is_none());
     h.tick(h.local.build_timeout);
     assert!(h.core.mine.proposal.is_none());
     assert!(h.core.fresh_build.is_none());

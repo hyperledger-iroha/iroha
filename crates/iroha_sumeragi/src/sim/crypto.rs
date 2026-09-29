@@ -416,24 +416,19 @@ mod tests {
     fn osign_checks_and_retraction() {
         let log: SharedLog = Rc::default();
         let i = Hash32([1; 32]);
-        let x = SimSigner::new(key(1), Some(0), Rc::clone(&log));
-        let prep = |bh: u8| {
-            preimage::vote_preimage(
-                VoteKind::Prepare,
-                &i,
-                &crate::testing::TEST_EPOCH.id,
-                5,
-                2,
-                &Hash32([bh; 32]),
-                &i,
-                false,
-            )
+        let epoch = &crate::testing::TEST_EPOCH.id;
+        let vote = |kind, height, view, bh: &Hash32| {
+            preimage::vote_preimage(kind, &i, epoch, height, view, bh, &i, false)
         };
+        let tmo = |height, view, hq| preimage::tmo_preimage(&i, epoch, height, view, hq);
+        let echo = |nonce, height| preimage::echo_preimage(&i, epoch, nonce, height);
+        let x = SimSigner::new(key(1), Some(0), Rc::clone(&log));
+        let prep = |bh: u8| vote(VoteKind::Prepare, 5, 2, &Hash32([bh; 32]));
         let leader = SimSigner::new(key(9), None, Rc::clone(&log));
         for bh in 1..=3u8 {
             leader.sign(&preimage::prop_preimage(
                 &i,
-                &crate::testing::TEST_EPOCH.id,
+                epoch,
                 5,
                 2,
                 &Hash32([bh; 32]),
@@ -454,79 +449,24 @@ mod tests {
         x.sign(&prep(3));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "equivocation");
         // Timeout fence.
-        x.sign(&preimage::tmo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            6,
-            3,
-            None,
-        ));
-        x.sign(&preimage::vote_preimage(
-            VoteKind::Commit,
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            6,
-            3,
-            &i,
-            &i,
-            false,
-        ));
+        x.sign(&tmo(6, 3, None));
+        x.sign(&vote(VoteKind::Commit, 6, 3, &i));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "fence");
         // A timeout for an earlier view: out of order (the Lemma 2 lock clause covers only
         // timeouts at views ≥ the Commit's).
-        x.sign(&preimage::tmo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            6,
-            2,
-            None,
-        ));
+        x.sign(&tmo(6, 2, None));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "timeout order");
         // After a Commit at view 1, a later timeout must carry hq ≥ 1.
-        x.sign(&preimage::vote_preimage(
-            VoteKind::Commit,
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            1,
-            &i,
-            &i,
-            false,
-        ));
-        x.sign(&preimage::tmo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            1,
-            Some(1),
-        ));
+        x.sign(&vote(VoteKind::Commit, 7, 1, &i));
+        x.sign(&tmo(7, 1, Some(1)));
         assert!(log.borrow_mut().take_violations().is_empty());
-        x.sign(&preimage::tmo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            2,
-            Some(0),
-        ));
+        x.sign(&tmo(7, 2, Some(0)));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "stale lock");
         // Echoes are never recorded or checked.
-        x.sign(&preimage::echo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            7,
-            7,
-        ));
-        x.sign(&preimage::echo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            8,
-            7,
-        ));
+        x.sign(&echo(7, 7));
+        x.sign(&echo(8, 7));
         assert!(log.borrow_mut().take_violations().is_empty());
-        assert!(!log.borrow().was_signed(
-            &key(1),
-            &preimage::echo_preimage(&i, &crate::testing::TEST_EPOCH.id, 7, 7)
-        ));
+        assert!(!log.borrow().was_signed(&key(1), &echo(7, 7)));
         assert_eq!(log.borrow().max_signed_height(&key(1), &i), Some(7));
         assert_eq!(log.borrow_mut().commits.len(), 2);
         // Byzantine keys are logged but not checked.
@@ -535,26 +475,11 @@ mod tests {
         b.sign(&prep(2));
         assert!(log.borrow_mut().take_violations().is_empty());
         // A Prepare for a block never proposed in that view (SR3).
-        x.sign(&preimage::vote_preimage(
-            VoteKind::Prepare,
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            8,
-            0,
-            &i,
-            &i,
-            false,
-        ));
+        x.sign(&vote(VoteKind::Prepare, 8, 0, &i));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "unproposed");
         // Abstention (R2/R6).
         log.borrow_mut().set_abstain(&key(1), i, 10);
-        x.sign(&preimage::tmo_preimage(
-            &i,
-            &crate::testing::TEST_EPOCH.id,
-            9,
-            0,
-            None,
-        ));
+        x.sign(&tmo(9, 0, None));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "abstain");
         assert!(log.borrow().was_signed(&key(2), &prep(1)));
         log.borrow_mut().prune_below(6);

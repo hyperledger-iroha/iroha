@@ -669,6 +669,162 @@ def source_capture_heartbeat(stop: threading.Event, started: float,
               f"in {time.monotonic() - started:.0f}s", flush=True)
 
 
+class PrivateSourceTree:
+    """Hold one unpublished capture and defer directory durability to its seal.
+
+    Only a capture-private tree uses this writer. Files receive their final
+    metadata before their sole fsync; every directory is then frozen and synced
+    bottom-up before the existing signed-tree verification and publication.
+    At most one root and two traversal descriptors are open, independent of size.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.fd = -1
+        self.directories: dict[Path, tuple[int, ...]] = {}
+        self.frozen: set[Path] = set()
+
+    @staticmethod
+    def identity(info: os.stat_result) -> tuple[int, ...]:
+        return info.st_dev, info.st_ino, info.st_uid, info.st_gid
+
+    def __enter__(self):
+        real_path(self.root)
+        before = self.root.lstat()
+        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            require(file_identity(before) == file_identity(info)
+                    and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                    "private source root custody changed")
+            self.directories[Path('.')] = self.identity(info)
+            self.fd = fd
+        except BaseException:
+            os.close(fd)
+            raise
+        return self
+
+    def __exit__(self, *_exc):
+        os.close(self.fd)
+        self.fd = -1
+
+    def check_root(self) -> None:
+        named, held = self.root.lstat(), os.fstat(self.fd)
+        mode = 0o500 if Path('.') in self.frozen else 0o700
+        require(all(stat.S_ISDIR(info.st_mode)
+                    and self.identity(info) == self.directories[Path('.')]
+                    and stat.S_IMODE(info.st_mode) == mode for info in (named, held)),
+                "private source root was replaced or its custody changed")
+
+    @contextlib.contextmanager
+    def directory(self, relative: Path, *, create: bool = False):
+        require(not relative.is_absolute() and '..' not in relative.parts,
+                "private source directory escapes capture")
+        self.check_root()
+        fd = os.dup(self.fd)
+        traversed = Path('.')
+        try:
+            for component in relative.parts:
+                traversed /= component
+                fresh = traversed not in self.directories
+                if fresh:
+                    require(create, "private source contains an unrecorded directory")
+                    # No existing directory, link or substituted entry is adopted.
+                    os.mkdir(component, mode=0o700, dir_fd=fd)
+                named = os.stat(component, dir_fd=fd, follow_symlinks=False)
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                                | os.O_CLOEXEC, dir_fd=fd)
+                os.close(fd)
+                fd = child
+                info = os.fstat(fd)
+                require(self.identity(info) == self.identity(named)
+                        and info.st_uid == os.geteuid(), "private source directory changed")
+                if fresh:
+                    os.fchmod(fd, 0o700)
+                    self.directories[traversed] = self.identity(info)
+                require(self.identity(info) == self.directories[traversed]
+                        and stat.S_IMODE(os.fstat(fd).st_mode)
+                        == (0o500 if traversed in self.frozen else 0o700),
+                        "private source directory custody changed")
+            require(self.identity(os.fstat(fd)) == self.directories[relative],
+                    "private source directory owner differs")
+            yield fd
+        finally:
+            os.close(fd)
+
+    def write(self, relative: Path, payload: bytes, *, executable: bool,
+              timestamps: tuple[int, int] | None = None) -> None:
+        require(relative.name and relative != Path('.'), "source file needs a name")
+        with self.directory(relative.parent, create=True) as parent:
+            fd = os.open(relative.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+            identity = None
+            complete = False
+            try:
+                info = os.fstat(fd)
+                identity = self.identity(info)
+                require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                        and info.st_uid == os.geteuid(), "private source file custody differs")
+                view = memoryview(payload)
+                while view:
+                    size = os.write(fd, view)
+                    require(size > 0, "short private source write")
+                    view = view[size:]
+                mode = 0o500 if executable else 0o400
+                os.fchmod(fd, mode)
+                if timestamps is not None:
+                    os.utime(fd, ns=timestamps)
+                os.fsync(fd)
+                info = os.fstat(fd)
+                named = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+                require(self.identity(info) == identity and info.st_nlink == 1
+                        and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == mode
+                        and info.st_size == len(payload) and file_identity(info) == file_identity(named),
+                        "private source file changed before sealing")
+                complete = True
+            finally:
+                if not complete:
+                    # Match the exclusive output contract: scrub only our held new
+                    # inode, and never unlink a substituted name or an older source.
+                    try:
+                        os.ftruncate(fd, 0)
+                        os.fsync(fd)
+                        named = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+                        if self.identity(named) == identity:
+                            os.unlink(relative.name, dir_fd=parent)
+                            os.fsync(parent)
+                    except OSError:
+                        pass
+                os.close(fd)
+
+    def symlink(self, relative: Path, destination: str) -> None:
+        with self.directory(relative.parent, create=True) as parent:
+            os.symlink(destination, relative.name, dir_fd=parent)
+
+    def seal(self, previous: Path, unchanged: set[Path]) -> None:
+        real_path(self.root)
+        self.check_root()
+        for relative in sorted(self.directories, key=lambda path: len(path.parts), reverse=True):
+            with self.directory(relative) as fd:
+                os.fchmod(fd, 0o500)
+                if relative in unchanged:
+                    info = (previous / relative).stat(follow_symlinks=False)
+                    require(stat.S_ISDIR(info.st_mode), "unchanged captured directory changed type")
+                    os.utime(fd, ns=(info.st_atime_ns, info.st_mtime_ns))
+                os.fsync(fd)
+                self.frozen.add(relative)
+                info = os.fstat(fd)
+                require(self.identity(info) == self.directories[relative]
+                        and stat.S_IMODE(info.st_mode) == 0o500,
+                        "sealed source directory custody changed")
+                named = (self.root / relative).lstat()
+                require(self.identity(named) == self.directories[relative]
+                        and stat.S_IMODE(named.st_mode) == 0o500,
+                        "sealed source directory path changed")
+        self.check_root()
+        real_path(self.root)
+
+
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes,
                    *, on_entry: Callable[[int], None] | None = None) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
@@ -700,76 +856,71 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     # The lane lock covers refresh, native checks, Linux compilation and capture.
     # No running Cargo process may observe the source-directory replacement.
     pending = create_fresh_directory(parent / ("source.pending-" + uuid.uuid4().hex), mode=0o700)
-    unchanged_directories = (unchanged_source_directories(previous_entries, entries)
-                             if previous_entries is not None else set())
-    # Batch mode reads exact committed blobs without archive export filters.
-    captured_entries = 0
-    with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
-                          env=child_environment(dict(os.environ), root / "target"),
-                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
-        assert child.stdin is not None and child.stdout is not None
-        try:
-            for row in entries.split(b"\0"):
-                if not row:
-                    continue
-                metadata, relative = row.split(b"\t", 1)
-                mode, oid, _ = metadata.split(b" ")
-                path = pending / os.fsdecode(relative)
-                require(not Path(os.fsdecode(relative)).is_absolute()
-                        and ".." not in Path(os.fsdecode(relative)).parts, "source path escapes capture")
-                ensure_private_directory(path.parent, anchor=pending)
-                if mode == b"160000":
-                    path.mkdir(mode=0o700)
+    with PrivateSourceTree(pending) as writer:
+        unchanged_directories = (unchanged_source_directories(previous_entries, entries)
+                                 if previous_entries is not None else set())
+        # Batch mode reads exact committed blobs without archive export filters.
+        captured_entries = 0
+        with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
+                              env=child_environment(dict(os.environ), root / "target"),
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            assert child.stdin is not None and child.stdout is not None
+            try:
+                for row in entries.split(b"\0"):
+                    if not row:
+                        continue
+                    metadata, relative = row.split(b"\t", 1)
+                    mode, oid, _ = metadata.split(b" ")
+                    path = pending / os.fsdecode(relative)
+                    require(not Path(os.fsdecode(relative)).is_absolute()
+                            and ".." not in Path(os.fsdecode(relative)).parts, "source path escapes capture")
+                    if mode == b"160000":
+                        with writer.directory(path.relative_to(pending), create=True):
+                            pass
+                        captured_entries += 1
+                        if on_entry is not None:
+                            on_entry(captured_entries)
+                        continue
+                    child.stdin.write(oid + b"\n")
+                    child.stdin.flush()
+                    header = child.stdout.readline().split()
+                    require(len(header) == 3 and header[:2] == [oid, b"blob"], "missing signed source blob")
+                    size = int(header[2])
+                    payload = child.stdout.read(size)
+                    require(len(payload) == size and child.stdout.read(1) == b"\n", "truncated source blob")
+                    require(hashlib.sha1(f"blob {size}\0".encode() + payload).hexdigest() == oid.decode(),
+                            "source blob differs from the signed tree")
+                    if mode == b"120000":
+                        writer.symlink(path.relative_to(pending), os.fsdecode(payload))
+                        require(path.resolve(strict=False).is_relative_to(pending), "source symlink escapes capture")
+                    else:
+                        timestamps = None
+                        previous = source / os.fsdecode(relative)
+                        if state is not None and previous.is_file() and not previous.is_symlink():
+                            try:
+                                old = stable_hash_path(previous)
+                            except (ReleaseArtifactError, OSError):
+                                old = None
+                            if old is not None and old.sha256 == hashlib.sha256(payload).hexdigest():
+                                info = previous.stat()
+                                timestamps = (info.st_atime_ns, info.st_mtime_ns)
+                        writer.write(path.relative_to(pending), payload,
+                                     executable=mode == b"100755", timestamps=timestamps)
                     captured_entries += 1
                     if on_entry is not None:
                         on_entry(captured_entries)
-                    continue
-                child.stdin.write(oid + b"\n")
-                child.stdin.flush()
-                header = child.stdout.readline().split()
-                require(len(header) == 3 and header[:2] == [oid, b"blob"], "missing signed source blob")
-                size = int(header[2])
-                payload = child.stdout.read(size)
-                require(len(payload) == size and child.stdout.read(1) == b"\n", "truncated source blob")
-                require(hashlib.sha1(f"blob {size}\0".encode() + payload).hexdigest() == oid.decode(),
-                        "source blob differs from the signed tree")
-                if mode == b"120000":
-                    path.symlink_to(os.fsdecode(payload))
-                    require(path.resolve(strict=False).is_relative_to(pending), "source symlink escapes capture")
-                else:
-                    exclusive_write_bytes(path, payload, mode=0o755 if mode == b"100755" else 0o600)
-                    freeze(path)
-                    previous = source / os.fsdecode(relative)
-                    if state is not None and previous.is_file() and not previous.is_symlink():
-                        try:
-                            old = stable_hash_path(previous)
-                        except (ReleaseArtifactError, OSError):
-                            old = None
-                        if old is not None and old.sha256 == hashlib.sha256(payload).hexdigest():
-                            info = previous.stat()
-                            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
-                captured_entries += 1
-                if on_entry is not None:
-                    on_entry(captured_entries)
-            child.stdin.close()
-            require(child.wait() == 0, "Git source capture failed")
-        finally:
-            child.stdin.close()
-            child.stdout.close()
-            if child.stderr is not None:
-                child.stderr.close()
-    # Some native fixtures use CARGO_MANIFEST_DIR/../../target. Admit only this
-    # exact output binding; inventories never follow it into generated files.
-    (pending / "target").symlink_to(target_dir, target_is_directory=True)
-    for path, directories, _ in os.walk(pending, topdown=False):
-        directory = Path(path)
-        freeze(directory, directory=True)
-        relative = directory.relative_to(pending)
-        if relative in unchanged_directories:
-            info = (source / relative).stat(follow_symlinks=False)
-            require(stat.S_ISDIR(info.st_mode), "unchanged captured directory changed type")
-            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
-    frozen_snapshot(pending, entries, target_dir)
+                child.stdin.close()
+                require(child.wait() == 0, "Git source capture failed")
+            finally:
+                child.stdin.close()
+                child.stdout.close()
+                if child.stderr is not None:
+                    child.stderr.close()
+        # Some native fixtures use CARGO_MANIFEST_DIR/../../target. Admit only this
+        # exact output binding; inventories never follow it into generated files.
+        writer.symlink(Path("target"), str(target_dir))
+        writer.seal(source, unchanged_directories)
+        frozen_snapshot(pending, entries, target_dir)
     retained = None
     if os.path.lexists(source):
         real_path(source)

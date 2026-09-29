@@ -9,7 +9,7 @@ use iroha_data_model::{
     sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneRecord},
 };
 use iroha_sumeragi::{
-    crypto::{NoAttestation, verify_qc},
+    crypto::NoAttestation,
     message::{SyncEntry, VoteKind},
     types::{Hash32, HeightConfig},
 };
@@ -114,15 +114,9 @@ pub fn verify_lane_certificate(
             "header, predecessor, payload or QC subject differs",
         ));
     }
-    verify_qc(
-        &crypto,
-        &NoAttestation,
-        &instance,
-        &config.epoch.id,
-        &config.committee,
-        qc,
-    )
-    .map_err(|error| LaneEntryError::Certificate(format!("{error:?}")))?;
+    iroha_sumeragi::crypto::Verifier::new(&crypto, &instance, &config.epoch.id, &config.committee)
+        .verify_qc(&NoAttestation, qc)
+        .map_err(|error| LaneEntryError::Certificate(format!("{error:?}")))?;
     Ok(config)
 }
 

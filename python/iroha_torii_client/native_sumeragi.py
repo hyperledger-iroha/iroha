@@ -1,4 +1,4 @@
-"""Closed protocol-8 native status observations; these values are not finality proofs."""
+"""Closed protocol-1 native status observations; these values are not finality proofs."""
 from __future__ import annotations
 
 from binascii import crc_hqx
@@ -85,7 +85,7 @@ class SumeragiHaltReason:
 
 @dataclass(frozen=True)
 class SumeragiStatus:
-    """Immutable protocol-8 observation with required nullable fields."""
+    """Immutable protocol-1 observation with required nullable fields."""
     protocol_version: int
     config_fingerprint: str
     beacon_horizon: SumeragiBeaconHorizon | None
@@ -112,7 +112,7 @@ class SumeragiStatus:
     def from_payload(cls, payload: Any) -> "SumeragiStatus":
         """Validate every field against the current native observation schema."""
         r = _record(payload, _STATUS, "native status")
-        if _uint(r["protocol_version"], 16) != 8 or _uint(r["stage"], 16) > 2:
+        if _uint(r["protocol_version"], 16) != 1 or _uint(r["stage"], 16) > 2:
             raise ValueError("unsupported native status protocol or stage")
         if not isinstance(r["instance"], str) or re.fullmatch(r"[0-9a-f]{64}", r["instance"]) is None:
             raise ValueError("native instance must be exact lowercase 32-byte hex")
@@ -139,7 +139,7 @@ class SumeragiStatus:
             else:
                 raise ValueError("invalid native halt reason or details")
             halted = SumeragiHaltReason(h["reason"], detail)
-        return cls(8, _hash(r["config_fingerprint"]), horizon, r["instance"],
+        return cls(1, _hash(r["config_fingerprint"]), horizon, r["instance"],
                    _uint(r["height"]), _uint(r["view"]), r["stage"],
                    _public_key(r["leader"]), _public_key(r["proxy_tail"]),
                    _optional_uint(r["high_qc_view"]), _uint(r["level"], 32),

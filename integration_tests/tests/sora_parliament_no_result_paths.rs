@@ -55,7 +55,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ParliamentBody::PolicyJury,
     ];
     let request_height =
-        next_queue_plan_execution_height(client, 0, "no-result sortition registration").await?;
+        next_execution_height(client, 0, "no-result sortition registration").await?;
     let sortition_pulse_height = request_height + 4;
     let mut election_ids = BTreeMap::new();
     let mut request_ids = Vec::new();
@@ -182,7 +182,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     let roster_seal_height = invitation_close_height
         .checked_add(1)
         .ok_or_else(|| eyre!("no-result roster-seal height overflow"))?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         roster_seal_height,
@@ -318,8 +318,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     )
     .await?;
     let retry_request_height =
-        next_queue_plan_execution_height(client, 0, "deadline retry sortition registration")
-            .await?;
+        next_execution_height(client, 0, "deadline retry sortition registration").await?;
     let retry_pulse_height = retry_request_height
         .checked_add(4)
         .ok_or_else(|| eyre!("deadline retry sortition pulse height overflow"))?;
@@ -444,7 +443,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     let retry_roster_seal_height = retry_invitation_close
         .checked_add(1)
         .ok_or_else(|| eyre!("deadline retry roster-seal height overflow"))?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         retry_roster_seal_height,
@@ -564,7 +563,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     let first_post_deadline_execution = retry_public_finding_deadline
         .checked_add(1)
         .ok_or_else(|| eyre!("deadline retry public-finding height overflow"))?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         first_post_deadline_execution,

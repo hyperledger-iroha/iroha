@@ -136,8 +136,8 @@ pub struct SccpLightClientKeeper {
     pub poll_interval: Duration,
     /// Timeout of one RPC request before failing over to the next endpoint (nonzero).
     pub request_timeout: Duration,
-    /// Largest encoded advance the keeper builds; the on-chain per-instruction bounds are
-    /// enforced at runtime as well.
+    /// Largest encoded advance the keeper submits; a larger built advance is dropped with a
+    /// warning. The on-chain per-instruction bounds still apply.
     pub max_advance_bytes: NonZeroUsize,
     /// Effective endpoint lists per chain (configured lists, or the compiled defaults).
     pub endpoints: SccpLightClientKeeperEndpoints,
@@ -151,16 +151,6 @@ impl SccpLightClientKeeper {
     pub fn advance_after_for(&self, ws_bound_ms: u64) -> Duration {
         self.advance_after
             .unwrap_or_else(|| Duration::from_millis(ws_bound_ms / 4))
-    }
-
-    /// Secret headers configured for exactly `endpoint`.
-    pub fn secret_headers_for<'a>(
-        &'a self,
-        endpoint: &'a Url,
-    ) -> impl Iterator<Item = &'a SccpSecretHeader> + 'a {
-        self.secret_headers
-            .iter()
-            .filter(move |header| &header.endpoint == endpoint)
     }
 }
 
@@ -720,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_keeper_advance_after_and_secret_header_lookup() {
+    fn sccp_keeper_advance_after_defaults_to_quarter_ws_bound() {
         let mut keeper = SccpLightClientKeeper::default();
         assert_eq!(keeper.advance_after, None);
         assert_eq!(
@@ -729,16 +719,6 @@ mod tests {
         );
         keeper.advance_after = Some(Duration::from_secs(5));
         assert_eq!(keeper.advance_after_for(86_400_000), Duration::from_secs(5));
-
-        let endpoint = parse_sccp_http_endpoint("https://rpc.example.org").expect("endpoint");
-        let other = parse_sccp_http_endpoint("https://other.example.org").expect("endpoint");
-        keeper.secret_headers.push(SccpSecretHeader {
-            endpoint: endpoint.clone(),
-            header: "x-api-key".to_owned(),
-            value_file: PathBuf::from("/etc/iroha/api-key"),
-        });
-        assert_eq!(keeper.secret_headers_for(&endpoint).count(), 1);
-        assert_eq!(keeper.secret_headers_for(&other).count(), 0);
     }
 
     #[test]

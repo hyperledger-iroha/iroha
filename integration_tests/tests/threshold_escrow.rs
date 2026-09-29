@@ -269,12 +269,6 @@ async fn submit_contract_call_once(
             .parse()
             .wrap_err_with(|| format!("{stage}: decode exact submitted transaction hash")),
         Err(error) => {
-            if let Some(unknown) =
-                error.downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
-            {
-                // Reconcile this retained local identity without another prepare or POST.
-                return Ok(*unknown.signed_transaction_hash());
-            }
             Err(error).wrap_err_with(|| format!("{stage}: exact public contract submission"))
         }
     }

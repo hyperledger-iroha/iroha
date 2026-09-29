@@ -534,13 +534,10 @@ enum CompoundPredicateWireRef<'a> {
     TxPredicate(&'a CommittedTxPredicate),
 }
 impl CompoundPredicateWireRef<'_> {
-    fn encoded_variant_len(payload: usize, self_delimiting: bool) -> Option<usize> {
-        let outer = if self_delimiting && norito::core::use_packed_struct() {
-            0
-        } else {
-            norito::core::len_prefix_len(payload)
-        };
-        4_usize.checked_add(outer)?.checked_add(payload)
+    fn encoded_variant_len(payload: usize) -> Option<usize> {
+        4_usize
+            .checked_add(norito::core::len_prefix_len(payload))?
+            .checked_add(payload)
     }
 }
 
@@ -550,11 +547,7 @@ impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
             Self::Pass => norito::core::SerializePayload::serialize(&0_u32, writer),
             Self::Json(raw) => {
                 norito::core::SerializePayload::serialize(&1_u32, writer)?;
-                if norito::core::use_packed_struct() {
-                    norito::core::SerializePayload::serialize(raw, writer)
-                } else {
-                    norito::core::write_len_prefixed(writer, raw)
-                }
+                norito::core::write_len_prefixed(writer, raw)
             }
             Self::TxPredicate(tree) => {
                 norito::core::SerializePayload::serialize(&2_u32, writer)?;
@@ -567,11 +560,11 @@ impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
             Self::Pass => Some(4),
             Self::Json(raw) => {
                 let payload = norito::core::SerializePayload::encoded_len_hint(raw)?;
-                Self::encoded_variant_len(payload, true)
+                Self::encoded_variant_len(payload)
             }
             Self::TxPredicate(tree) => {
                 let payload = norito::core::SerializePayload::encoded_len_hint(*tree)?;
-                Self::encoded_variant_len(payload, false)
+                Self::encoded_variant_len(payload)
             }
         }
     }
@@ -580,11 +573,11 @@ impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
             Self::Pass => Some(4),
             Self::Json(raw) => {
                 let payload = norito::core::SerializePayload::encoded_len_exact(raw)?;
-                Self::encoded_variant_len(payload, true)
+                Self::encoded_variant_len(payload)
             }
             Self::TxPredicate(tree) => {
                 let payload = norito::core::SerializePayload::encoded_len_exact(*tree)?;
-                Self::encoded_variant_len(payload, false)
+                Self::encoded_variant_len(payload)
             }
         }
     }
@@ -1983,10 +1976,9 @@ pub trait EvaluateSelector<T: 'static> {
     ///
     /// Returns an error when the lightweight DSL cannot project the provided
     /// items or when conversion fails in downstream codecs.
-    #[allow(unused_variables)]
     fn project_clone<'a, I>(
         &self,
-        batch: I,
+        _batch: I,
     ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail>
     where
         I: Iterator<Item = &'a T> + 'a,
@@ -2001,10 +1993,9 @@ pub trait EvaluateSelector<T: 'static> {
     ///
     /// Returns an error when the lightweight DSL cannot project the provided
     /// items or when conversion fails in downstream codecs.
-    #[allow(unused_variables)]
     fn project(
         &self,
-        batch: impl Iterator<Item = T>,
+        _batch: impl Iterator<Item = T>,
     ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
         Err(crate::query::error::QueryExecutionFail::Conversion(
             "lightweight dsl does not project".to_string(),

@@ -202,7 +202,7 @@ fn store_block_rejects_same_height_different_hash() {
 #[test]
 fn store_block_injected_failure_aborts_sync_append() {
     let (kura, block) = blank_kura_with_next_block();
-    let before = snapshot_regular_files_recursively(kura.store_root());
+    let before = snapshot_regular_files_recursively(&kura.store_root());
     kura.fail_next_store_for_tests();
     let result = kura.store_block(block.clone());
     assert!(result.is_err());
@@ -212,7 +212,7 @@ fn store_block_injected_failure_aborts_sync_append() {
         "failing append should not expose the block in memory"
     );
     assert_eq!(
-        snapshot_regular_files_recursively(kura.store_root()),
+        snapshot_regular_files_recursively(&kura.store_root()),
         before
     );
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
@@ -776,7 +776,7 @@ fn retained_physical_custody_remains_accounted_without_release_authority() {
         baseline.saturating_add(10)
     );
     Arc::get_mut(&mut kura).unwrap().max_disk_usage_bytes = baseline + 10;
-    let before = snapshot_regular_files_recursively(kura.store_root());
+    let before = snapshot_regular_files_recursively(&kura.store_root());
     let block = native_storage_frames(1).pop().unwrap();
     // Exhaustion must not turn physically retained bytes into releasable custody.
     assert!(matches!(
@@ -785,7 +785,7 @@ fn retained_physical_custody_remains_accounted_without_release_authority() {
     ));
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
     assert_eq!(
-        snapshot_regular_files_recursively(kura.store_root()),
+        snapshot_regular_files_recursively(&kura.store_root()),
         before
     );
     assert_eq!(kura.refresh_disk_usage_bytes().unwrap(), baseline + 10);

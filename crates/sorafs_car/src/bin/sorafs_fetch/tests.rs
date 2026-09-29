@@ -1310,7 +1310,7 @@ fn fetch_cli_persists_scoreboard() {
     let mut telemetry_entry = Map::new();
     telemetry_entry.insert(
         "provider_id".into(),
-        Value::String(hex::encode(&provider_id)),
+        Value::String(hex::encode(provider_id)),
     );
     telemetry_entry.insert("qos_score".into(), Value::from(92.0));
     telemetry_entry.insert("latency_p95_ms".into(), Value::from(180.0));
@@ -1613,7 +1613,7 @@ fn fetch_cli_verifies_car_when_manifest_available() {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&spec.digest)),
+                Value::from(hex::encode(spec.digest)),
             );
             Value::Object(obj)
         })
@@ -1713,7 +1713,7 @@ fn fetch_cli_rejects_corrupted_payload_when_manifest_provided() {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&spec.digest)),
+                Value::from(hex::encode(spec.digest)),
             );
             Value::Object(obj)
         })

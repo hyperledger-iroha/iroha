@@ -233,31 +233,25 @@ fn contract_activity_accepted_transaction(
     ));
     let signed = builder
         .with_metadata(metadata)
-        .with_executable(Executable::Instructions(ConstVec::from(Vec::<
-            InstructionBox,
-        >::new())))
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            format!("contract activity {index}"),
+        )])
         .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(signed))
 }
-fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadProfile) {
-    if profile.committed_transactions == 0 {
-        return;
+fn commit_contract_activity_transactions(
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    profile: QueryLoadProfile,
+) {
+    let network_id = chain.network_id();
+    for first in (0..profile.committed_transactions).step_by(512) {
+        let end = (first + 512).min(profile.committed_transactions);
+        let transactions = (first..end)
+            .map(|index| contract_activity_accepted_transaction(network_id, index))
+            .collect();
+        iroha_torii::test_utils::commit_native_accepted_inputs(chain, transactions);
     }
-    let network_id = *state.network_id_ref();
-    let transactions = (0..profile.committed_transactions)
-        .map(|index| contract_activity_accepted_transaction(network_id, index))
-        .collect();
-    let leader = deterministic_bls_key_pair("contract-activity-leader");
-    let unverified = BlockBuilder::new(transactions)
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(unverified.header());
-    let valid: ValidBlock = unverified
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
 }
 fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
     profile.validate().expect("valid query load profile");
@@ -319,12 +313,15 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         }
     }
     let world = World::with_assets(domains, accounts, definitions, assets, []);
-    let state = Arc::new(State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        query_store.clone(),
-    ));
-    commit_contract_activity_transactions(&state, profile);
+    let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(
+            world,
+            CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS,
+        ),
+    )
+    .expect("native query benchmark genesis");
+    commit_contract_activity_transactions(&mut chain, profile);
+    let state = chain.state().clone();
     QueryLoadFixture {
         state,
         query_store,
@@ -1171,7 +1168,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
                         Arc::clone(&tx_state),
                         tx,
                         telemetry.clone(),
-                        iroha_torii_shared::uri::TRANSACTION,
+                        iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
                     ))
                     .expect("transaction handle succeeds");
                 std::hint::black_box(decision);
@@ -1244,15 +1241,15 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                         queue
                             .push(accepted, tx_state.view())
                             .expect("sustained enqueue succeeds");
-                        let mut guards = Vec::new();
-                        queue.get_transactions_for_block(
-                            &tx_state.view(),
-                            NonZeroUsize::new(1).expect("non-zero block limit"),
-                            &mut guards,
-                        );
+                        let candidates = queue
+                            .bounded_pending_snapshot_for_testing(
+                                &tx_state.view(),
+                                NonZeroUsize::new(1).unwrap(),
+                            )
+                            .expect("healthy candidate window");
                         std::hint::black_box(());
                         std::hint::black_box(queue.pressure_snapshot());
-                        drop(guards);
+                        std::hint::black_box(candidates);
                     },
                     BatchSize::SmallInput,
                 );

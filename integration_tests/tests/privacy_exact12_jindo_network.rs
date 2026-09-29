@@ -29,7 +29,7 @@ use iroha_data_model::{
         PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
+    transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::metadata::Metadata;
@@ -41,13 +41,13 @@ use std::{
 use tokio::time::{Instant, sleep, timeout};
 const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
-// A public transaction reaches terminal state through three separately signed
-// QueuePlan carriers. Leave deterministic headroom for healthy view churn.
+// An ordinary transaction executes in one certified native global carrier.
+// Leave deterministic headroom for healthy view churn.
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(300);
 // Let the client's detailed terminal status/error win over the Tokio wrapper.
 const SUBMISSION_TASK_TIMEOUT: Duration = Duration::from_secs(360);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
-const QUEUE_PLAN_LIFECYCLE_BLOCKS: u64 = 3;
+const EXECUTION_CARRIER_BLOCKS: u64 = 1;
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(180);
 // This release-evidence fixture exercises instrumented four-validator body
@@ -199,11 +199,11 @@ async fn committed_height(client: &Client, context: &str) -> Result<u64> {
         .wrap_err_with(|| format!("{context}: query committed height"))?
         .committed_height)
 }
-async fn next_queue_plan_execution_height(client: &Client) -> Result<u64> {
-    committed_height(client, "predict QueuePlan execution")
+async fn next_execution_height(client: &Client) -> Result<u64> {
+    committed_height(client, "predict native transaction execution")
         .await?
-        .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
-        .ok_or_else(|| eyre!("QueuePlan privacy-governance height overflowed"))
+        .checked_add(EXECUTION_CARRIER_BLOCKS)
+        .ok_or_else(|| eyre!("native transaction privacy-governance height overflowed"))
 }
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
@@ -255,13 +255,6 @@ async fn build_jindo_action(
     let provisional =
         prepare_jindo_privacy_action_v1(context.clone(), jindo_witness()?, canonical_genesis_hash)
             .wrap_err("prepare provisional native Jindo action for fee quoting")?;
-    ensure!(
-        provisional
-            .transaction_payload_for_fee_quote_v1()
-            .admission_intent()
-            == TransactionAdmissionIntent::QueuePlanSynced,
-        "provisional Jindo action did not bind QueuePlanSynced admission"
-    );
     let quote = client
         .account_client()
         .quote_fees(FeeQuoteRequest::AccountSignature {
@@ -280,13 +273,6 @@ async fn build_jindo_action(
     let prepared =
         prepare_jindo_privacy_action_v1(context, jindo_witness()?, canonical_genesis_hash)
             .wrap_err("prepare canonical native Jindo action with quoted fees")?;
-    ensure!(
-        prepared
-            .transaction_payload_for_fee_quote_v1()
-            .admission_intent()
-            == TransactionAdmissionIntent::QueuePlanSynced,
-        "canonical Jindo action did not bind QueuePlanSynced admission"
-    );
     quote
         .validate_for_signed_payload(prepared.transaction_payload_for_fee_quote_v1())
         .map_err(|error| eyre!(error))
@@ -334,12 +320,12 @@ async fn submit_instructions(
             no_fee(),
             Metadata::default(),
         ))
-        .wrap_err_with(|| format!("{context}: build QueuePlanSynced instruction payload"))?;
+        .wrap_err_with(|| format!("{context}: build native transaction instruction payload"))?;
     let quote = client
         .account_client()
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await
-        .wrap_err_with(|| format!("{context}: quote QueuePlanSynced instruction"))?;
+        .wrap_err_with(|| format!("{context}: quote native transaction instruction"))?;
     ensure!(
         payload
             .fee_payment
@@ -350,11 +336,7 @@ async fn submit_instructions(
     let transaction = client
         .account_client()
         .sign_transaction(payload)
-        .wrap_err_with(|| format!("{context}: sign QueuePlanSynced instruction"))?;
-    ensure!(
-        transaction.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced,
-        "{context}: client builder did not bind QueuePlanSynced admission"
-    );
+        .wrap_err_with(|| format!("{context}: sign native transaction instruction"))?;
     let submitted_hash = submit_signed_transaction(client, &transaction, context).await?;
     ensure!(
         submitted_hash == transaction.hash(),
@@ -488,15 +470,15 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
         let compiled = compiled_privacy_profile_v1(JINDO_PROTOCOL)
             .wrap_err("load canonical compiled Jindo profile")?;
         let compiled_snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
-        let queue_plan_start_height =
-            committed_height(&client, "begin QueuePlanSynced lifecycle preflight").await?;
-        let queue_plan_transaction = submit_instruction(
+        let submission_start_height =
+            committed_height(&client, "begin native transaction lifecycle preflight").await?;
+        let preflight_transaction = submit_instruction(
             &client,
             Log::new(
                 Level::INFO,
-                "Jindo QueuePlanSynced lifecycle preflight".to_owned(),
+                "Jindo native transaction lifecycle preflight".to_owned(),
             ),
-            "complete Jindo QueuePlanSynced lifecycle preflight",
+            "complete Jindo native transaction lifecycle preflight",
         )
         .await?;
         let preflight_clients = network
@@ -506,31 +488,31 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             .collect::<Vec<_>>();
         wait_for_transaction_on_peers(
             &preflight_clients,
-            &queue_plan_transaction,
-            "QueuePlanSynced preflight terminal visibility",
+            &preflight_transaction,
+            "native transaction preflight terminal visibility",
             PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
-        let queue_plan_end_height =
-            committed_height(&client, "finish QueuePlanSynced lifecycle preflight").await?;
-        let expected_queue_plan_end_height = queue_plan_start_height
-            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
-            .ok_or_else(|| eyre!("QueuePlanSynced lifecycle preflight height overflowed"))?;
+        let submission_end_height =
+            committed_height(&client, "finish native transaction lifecycle preflight").await?;
+        let expected_submission_end_height = submission_start_height
+            .checked_add(EXECUTION_CARRIER_BLOCKS)
+            .ok_or_else(|| eyre!("native transaction lifecycle preflight height overflowed"))?;
         ensure!(
-            queue_plan_end_height == expected_queue_plan_end_height,
-            "QueuePlanSynced lifecycle preflight ended at height {queue_plan_end_height}, expected \
+            submission_end_height == expected_submission_end_height,
+            "native transaction lifecycle preflight ended at height {submission_end_height}, expected \
              exact admission, autonomous payload, and merge carriers through height \
-             {expected_queue_plan_end_height}"
+             {expected_submission_end_height}"
         );
         wait_for_all_peer_activations(
             &network,
-            queue_plan_end_height,
+            submission_end_height,
             compiled_snapshot,
             None,
-            "QueuePlanSynced preflight preserves unregistered Jindo state",
+            "native transaction preflight preserves unregistered Jindo state",
         )
         .await?;
-        let rejected_execution_height = next_queue_plan_execution_height(&client).await?;
+        let rejected_execution_height = next_execution_height(&client).await?;
         let forged_activation_height = rejected_execution_height.checked_add(1)
             .ok_or_else(|| eyre!("forged Jindo activation height overflowed"))?;
         let rejected_error = submit_instructions(&client, vec![
@@ -553,7 +535,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "rejected activation landed at {rejected_terminal_height}, expected {rejected_execution_height}");
         wait_for_all_peer_activations(&network, rejected_terminal_height, compiled_snapshot, None,
             "failed explicit activation rolls back registration on every peer").await?;
-        let mismatch_execution_height = next_queue_plan_execution_height(&client).await?;
+        let mismatch_execution_height = next_execution_height(&client).await?;
         let mut mismatched = proposed_activation(
             compiled,
             mismatch_execution_height,
@@ -578,7 +560,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             committed_height(&client, "observe compiled-digest rejection").await?;
         ensure!(
             mismatch_terminal_height == mismatch_execution_height,
-            "compiled-digest QueuePlan rejection landed at height {mismatch_terminal_height}, \
+            "compiled-digest native transaction rejection landed at height {mismatch_terminal_height}, \
              expected {mismatch_execution_height}"
         );
         wait_for_all_peer_activations(
@@ -589,7 +571,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "compiled-digest rejection must not register state",
         )
         .await?;
-        let forged_execution_height = next_queue_plan_execution_height(&client).await?;
+        let forged_execution_height = next_execution_height(&client).await?;
         let forged_proposal_height = forged_execution_height
             .checked_add(1)
             .ok_or_else(|| eyre!("forged proposal height overflowed"))?;
@@ -612,7 +594,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             committed_height(&client, "observe forged-height rejection").await?;
         ensure!(
             forged_terminal_height == forged_execution_height,
-            "forged-height QueuePlan rejection landed at height {forged_terminal_height}, \
+            "forged-height native transaction rejection landed at height {forged_terminal_height}, \
              expected {forged_execution_height}"
         );
         wait_for_all_peer_activations(
@@ -623,7 +605,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "forged-height rejection must not register state",
         )
         .await?;
-        let registration_height = next_queue_plan_execution_height(&client).await?;
+        let registration_height = next_execution_height(&client).await?;
         let proposed = proposed_activation(compiled, registration_height);
         submit_instruction(
             &client,
@@ -660,7 +642,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "pre-activation action rejected for the wrong reason: {probe_error:?}"
         );
         let expected_probe_terminal_height = preactivation_probe_start_height
-            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+            .checked_add(EXECUTION_CARRIER_BLOCKS)
             .ok_or_else(|| eyre!("pre-activation probe height overflowed"))?;
         let probe_terminal_height =
             committed_height(&client, "observe pre-activation Jindo rejection").await?;
@@ -677,7 +659,7 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             "Jindo remains Proposed after a real rejected action advances the chain",
         )
         .await?;
-        let activation_height = next_queue_plan_execution_height(&client).await?;
+        let activation_height = next_execution_height(&client).await?;
         let active_lifecycle = PrivacyProtocolLifecycleV1::Active(
             iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
                 proposed_at_height: registration_height,

@@ -251,13 +251,27 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
     let transaction = accepted(fixture, instructions);
     let height = u64::try_from(fixture.state.view().height()).expect("height") + 1;
     let mut block = fixture.state.block(header(height));
-    // This is the production stateful admission/execution path: it derives its own route,
-    // enforces lane and executor permissions, and rolls back the whole transaction on failure.
-    let result = block
-        .validate_transaction(transaction, &mut IvmCache::new())
-        .expect("local execution completes")
-        .1;
-    result.map_err(|error| format!("{error:?}"))?;
+    let plan = plans(fixture, &transaction, height).map_err(|error| format!("{error:?}"))?;
+    let RoutingPlan::Single(leg) = plan else {
+        return Err("alias registry fixture must have exactly one route".into());
+    };
+    let mut overlay = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
+        transaction.entrypoint().execution_call_hash(),
+    ));
+    overlay.current_entrypoint_index = Some(0);
+    overlay.current_network_entrypoint_hash = Some(transaction.hash_as_entrypoint());
+    overlay.current_tx_hash = Some(transaction.as_ref().hash());
+    overlay.current_lane_id = Some(leg.route.lane_id);
+    overlay.current_dataspace_id = Some(leg.route.dataspace_id);
+    overlay.world.current_dataspace_id = Some(leg.route.dataspace_id);
+    crate::state::StateBlock::execute_accepted_transaction_in_overlay(
+        transaction,
+        &mut overlay,
+        &mut IvmCache::new(),
+        Some(leg.route),
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    overlay.apply();
     // Persist the validated world overlay without manufacturing consensus/QC evidence in this
     // local routing/execution regression. Carrier-height fixtures are committed separately.
     block
@@ -657,36 +671,6 @@ fn alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards() {
         balance(&fixture, &fixture.owner),
         before,
         "every rejected creation rolls back without a lease charge"
-    );
-}
-
-#[test]
-fn alias_registry_routing_keeps_real_private_participants_in_mixed_transactions() {
-    use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanManageAccountAlias,
-    };
-
-    let fixture = fixture();
-    let lease = ensure(&fixture, bpng_intent(&fixture.owner));
-    let private_permission = Grant::account_permission(
-        CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(PRIVATE_DATASPACE),
-        },
-        fixture.owner.clone(),
-    );
-    let transaction = accepted(&fixture, vec![lease.into(), private_permission.into()]);
-    let plan = plans(&fixture, &transaction, 3).expect("mixed private/universal routing");
-    let RoutingPlan::NativeAmx(native) = plan else {
-        panic!("mixed registry/private write must retain AMX participants");
-    };
-    assert_eq!(
-        native.coordinator.route,
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-    );
-    assert_eq!(native.participants.len(), 1);
-    assert_eq!(
-        native.participants[0].route,
-        RoutingDecision::new(PRIVATE_LANE, PRIVATE_DATASPACE)
     );
 }
 

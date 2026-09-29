@@ -313,7 +313,7 @@ async fn handler_proof_retention_status(
         &app,
         &headers,
         Some(remote_ip),
-        iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
+        iroha_torii_shared::route_catalog::pipeline::PROOF_RETENTION.path(),
         1,
         enforce,
     )
@@ -343,7 +343,7 @@ async fn handler_axt_proof_cache_status(
 ) -> Result<impl IntoResponse, Error> {
     let _ = (headers, remote);
     Ok(telemetry_unavailable_response(
-        iroha_torii_shared::uri::AXT_PROOF_CACHE_STATUS,
+        iroha_torii_shared::route_catalog::telemetry::DEBUG_AXT_CACHE.path(),
         &app.telemetry,
     ))
 }
@@ -386,7 +386,7 @@ async fn handler_pipeline_recovery(
 }
 /// Maximum canonical source size for one persisted recovery sidecar.
 const PIPELINE_RECOVERY_SOURCE_MAX_BYTES: usize =
-    iroha_data_model::merge::MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
+    iroha_core::kura::MAX_PIPELINE_RECOVERY_SIDECAR_BYTES;
 /// Hard transport ceiling for the compact JSON rendering of a recovery sidecar.
 ///
 /// The canonical source is independently limited to one MiB before persistence.

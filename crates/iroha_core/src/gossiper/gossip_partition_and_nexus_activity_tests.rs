@@ -36,14 +36,12 @@ fn partition_respects_frame_cap() {
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&small_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
             GossipBatchEntry {
                 tx: large_accepted,
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&large_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
         ],
     );
@@ -147,48 +145,10 @@ fn gossip_roundtrip_preserves_cached_payload() {
     assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
     assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
     assert_eq!(decoded.plane, GossipPlane::Public);
-    assert!(decoded.txs[0].queue_plan_admitted_input().is_none());
     assert_eq!(
         decoded.txs[0].encoded_len_exact(),
         Some(decoded.txs[0].encode().len())
     );
-}
-#[test]
-fn gossip_roundtrip_preserves_queue_plan_certificate_and_exact_length() {
-    let (_gossiper, signed, _binding, certificate, _journal) =
-        exact_pending_queue_plan_gossip_fixture("certified-gossip");
-    let payload = payload_for(&signed);
-    let message = TransactionGossip {
-        txs: vec![
-            GossipTransaction::from_queue_plan_admitted_input(Arc::new(certificate.clone()))
-                .expect("structural complete input"),
-        ],
-        routes: vec![GossipRoute {
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-        }],
-        plans: vec![default_plan()],
-        plane: GossipPlane::Public,
-    };
-    let encoded = message.encode();
-    assert_eq!(message.encoded_len_hint(), Some(encoded.len()));
-    assert_eq!(message.encoded_len_exact(), Some(encoded.len()));
-    let decoded: TransactionGossip =
-        Decode::decode(&mut encoded.as_slice()).expect("decode certified gossip");
-    assert_eq!(decoded.txs.len(), 1);
-    assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
-    assert_eq!(
-        decoded.txs[0].queue_plan_admitted_input(),
-        Some(certificate.as_slice())
-    );
-    assert_eq!(decoded.txs[0].encoded.as_slice(), certificate.as_slice());
-    assert_eq!(decoded.txs[0].payload().as_slice(), payload.as_slice());
-    assert_eq!(
-        decoded.txs[0].encode().len(),
-        1 + certificate.len(),
-        "one tag and one complete-input frame"
-    );
-    assert_eq!(decoded.encoded_len_exact(), Some(encoded.len()));
 }
 #[test]
 fn gossip_roundtrip_preserves_sealed_commitment_entrypoint() {
@@ -233,7 +193,6 @@ fn partition_gossip_batch_keeps_sealed_commitments() {
             routing: RoutingDecision::default(),
             routing_plan: default_plan(),
             payload,
-            queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
         }],
     );
     assert_eq!(partitioned.message.txs.len(), 1);
@@ -261,58 +220,6 @@ fn gossip_transaction_len_hints_include_explicit_payload_tag() {
         ncore::SerializePayload::encoded_len_exact(&tx),
         Some(wire_len)
     );
-}
-#[test]
-fn partition_withholds_awaiting_certificate_and_counts_certified_wire() {
-    let (_gossiper, signed, _binding, certificate, _journal) =
-        exact_pending_queue_plan_gossip_fixture("awaiting-certificate");
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
-    let awaiting = GossipBatchEntry {
-        tx: accepted.clone(),
-        routing: RoutingDecision::default(),
-        routing_plan: default_plan(),
-        payload: payload_for(&signed),
-        queue_plan_admission: QueuePlanGossipAdmission::AwaitingCertificate,
-    };
-    let withheld =
-        partition_gossip_batch(usize::MAX, usize::MAX, GossipPlane::Public, vec![awaiting]);
-    assert!(withheld.message.txs.is_empty());
-    assert_eq!(withheld.requeue, vec![signed.hash_as_entrypoint()]);
-
-    let certificate = Arc::new(certificate);
-    let certified = GossipBatchEntry {
-        tx: accepted.clone(),
-        routing: RoutingDecision::default(),
-        routing_plan: default_plan(),
-        payload: payload_for(&signed),
-        queue_plan_admission: QueuePlanGossipAdmission::Certified(Arc::clone(&certificate)),
-    };
-    let included =
-        partition_gossip_batch(usize::MAX, usize::MAX, GossipPlane::Public, vec![certified]);
-    assert!(included.requeue.is_empty());
-    assert_eq!(included.message.txs.len(), 1);
-    assert_eq!(
-        included.message.txs[0].queue_plan_admitted_input(),
-        Some(certificate.as_slice())
-    );
-    let exact_len = included.message.encode().len();
-    assert_eq!(included.encoded_len, exact_len);
-    assert_eq!(included.message.encoded_len_exact(), Some(exact_len));
-
-    let excluded = partition_gossip_batch(
-        usize::MAX,
-        exact_len - 1,
-        GossipPlane::Public,
-        vec![GossipBatchEntry {
-            tx: accepted,
-            routing: RoutingDecision::default(),
-            routing_plan: default_plan(),
-            payload: payload_for(&signed),
-            queue_plan_admission: QueuePlanGossipAdmission::Certified(certificate),
-        }],
-    );
-    assert!(excluded.message.txs.is_empty());
-    assert_eq!(excluded.requeue, vec![signed.hash_as_entrypoint()]);
 }
 #[test]
 fn gossip_route_encoded_len_matches_wire() {
@@ -357,42 +264,6 @@ fn gossip_transaction_decode_rejects_trailing_bytes() {
     encoded.extend_from_slice(&[0xAA, 0xBB]);
     let err = ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
     assert!(matches!(err, ncore::Error::LengthMismatch));
-}
-#[test]
-fn gossip_transaction_decode_rejects_oversized_complete_input_before_decode() {
-    let oversized = vec![0; iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 1];
-    assert!(matches!(
-        GossipTransaction::from_queue_plan_admitted_input(Arc::new(oversized)),
-        Err(ncore::Error::LengthMismatch)
-    ));
-    let (_gossiper, _signed, _, mut input, _journal) =
-        exact_pending_queue_plan_gossip_fixture("oversized-wire-input");
-    // A complete canonical frame declaration exceeds the control cap before
-    // semantic decoding; the discriminator selects exactly the complete-input schema.
-    let mut typed = norito::decode_canonical::<
-        iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
-    >(&input)
-    .unwrap();
-    let signed = TransactionBuilder::new(
-        test_network_id(),
-        (*ALICE_ID).clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "x".repeat(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES),
-    )])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-    .sign(ALICE_KEYPAIR.private_key());
-    typed.entrypoint = signed.into();
-    input = norito::encode_canonical(&typed).unwrap();
-    assert!(input.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES);
-    let mut wire = vec![GossipTransactionKind::CertifiedInput as u8];
-    wire.extend_from_slice(&input);
-    assert!(matches!(
-        decode_gossip_transaction_payload(&wire),
-        Err(ncore::Error::LengthMismatch)
-    ));
 }
 #[test]
 fn gossip_network_message_roundtrip_cached_payload_is_context_free() {
@@ -551,56 +422,11 @@ fn partition_yields_empty_when_cap_too_small() {
             routing: RoutingDecision::default(),
             routing_plan: default_plan(),
             payload: payload_for(&signed),
-            queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
         }],
     );
     assert!(partitioned.message.txs.is_empty());
     assert!(partitioned.message.routes.is_empty());
     assert_eq!(partitioned.requeue, vec![signed.hash_as_entrypoint()]);
-}
-#[test]
-fn partition_preserves_native_amx_full_routing_plan() {
-    let (signed, accepted) = build_transaction("native-amx-gossip");
-    let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
-    let first_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
-    let second_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8));
-    let plan = RoutingPlan::native_amx(
-        coordinator,
-        vec![
-            crate::queue::RouteLeg::new(first_participant, crate::queue::RouteLegRole::Participant),
-            crate::queue::RouteLeg::new(
-                second_participant,
-                crate::queue::RouteLegRole::Participant,
-            ),
-        ],
-    );
-    let partitioned = partition_gossip_batch(
-        usize::MAX,
-        usize::MAX,
-        GossipPlane::Public,
-        vec![GossipBatchEntry {
-            tx: accepted,
-            routing: coordinator,
-            routing_plan: plan.clone(),
-            payload: payload_for(&signed),
-            queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
-        }],
-    );
-    assert!(partitioned.requeue.is_empty());
-    assert_eq!(partitioned.message.plans, vec![plan.clone()]);
-    let decoded = decode_gossip_message(&partitioned.message);
-    assert_eq!(decoded.plans, vec![plan]);
-    let RoutingPlan::NativeAmx(native_plan) = &decoded.plans[0] else {
-        panic!("decoded gossip plan should remain native AMX");
-    };
-    assert_eq!(
-        native_plan
-            .participants
-            .iter()
-            .map(|leg| leg.route)
-            .collect::<Vec<_>>(),
-        vec![first_participant, second_participant]
-    );
 }
 #[test]
 fn partition_respects_max_count() {
@@ -636,14 +462,12 @@ fn partition_respects_max_count() {
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&tx_a_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
             GossipBatchEntry {
                 tx: tx_b_accepted,
                 routing: RoutingDecision::default(),
                 routing_plan: default_plan(),
                 payload: payload_for(&tx_b_signed),
-                queue_plan_admission: QueuePlanGossipAdmission::Ordinary,
             },
         ],
     );

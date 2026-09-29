@@ -231,14 +231,14 @@ api_tokens = ["example-token-value-at-least-32-bytes"]
 proof_rate_per_minute = 120           # steady-state tokens/min (None to disable rate limiting)
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
-proof_body_max_inflight = 8           # aggregate pre-parse proof/SCCP/KAGEMUSHA body admission
-proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted proof/SCCP/KAGEMUSHA body
+proof_body_max_inflight = 8           # aggregate pre-parse proof/KAGEMUSHA body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted proof/KAGEMUSHA body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches
 proof_retry_after_secs = 1            # Retry-After value returned on throttling
 proof_egress_bytes_per_sec = 8_388_608 # optional steady-state egress budget (bytes/sec)
-proof_egress_burst_bytes = 67_108_864 # optional egress burst budget (64 MiB; covers worst-case SCCP JSON expansion)
+proof_egress_burst_bytes = 67_108_864 # optional egress burst budget (64 MiB)
 ```
 
 In subprocess mode, install the dedicated `attachment_sanitizer` executable in the same directory
@@ -250,7 +250,7 @@ images include the helper, and Linux images include Bubblewrap.
 
 Configuration must be set via `iroha_config` files. Environment variable overrides exist for developer tooling but are not intended for operator-facing deployments.
 
-The body-admission count and read deadline are shared with the proof-bearing SCCP bridge submission routes. SCCP retains its stricter endpoint-specific byte ceilings; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
+The body-admission count and read deadline are shared with KAGEMUSHA V1 top-up/redemption command bodies; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
 
 When the worker exhausts the byte, time, or bounded directory-work budget, it stops scheduling new attachments, increments `torii_zk_prover_budget_exhausted_total{reason="bytes|time|work"}`, and leaves the remainder queued for the next scan. Discovery retains only a scan-budget-derived window, resumes its directory cursor across cycles, canonically orders that window instead of collecting the complete multi-tenant attachment population, and reserves the latter half of the scan deadline for scheduled work. Live gauges expose the current workload via `torii_zk_prover_inflight` (attachments in progress), `torii_zk_prover_pending` (discovered pending entries plus one sentinel while the sweep is incomplete), and the most recent cycle statistics: `torii_zk_prover_last_scan_bytes` and `torii_zk_prover_last_scan_ms`.
 
@@ -319,29 +319,32 @@ SDK draft decoders reject non-canonical base64, oversized payloads, a signing-me
 not match the payload, the wrong chain or authority, extra instructions, and any registry record
 that does not exactly match the request. Only after these checks should a client sign and submit.
 
-`GET` responses normalise the data to:
+`GET` responses include the normalized record and its Norito encoding. For the
+generated canonical replay-binding key (encoded blobs abbreviated):
 
 ```json5
 {
-  "id": { "backend": "halo2/ipa", "name": "vk_main" },
+  "id": { "backend": "halo2/ipa", "name": "ivm_replay_binding" },
   "record": {
-    "version": 3,
-    "circuit_id": "halo2/ipa::transfer_v3",
+    "version": 1,
+    "circuit_id": "halo2/pasta/ipa/ivm-replay-binding-v1",
+    "owner_manifest_id": null,
+    "namespace": "core",
     "backend": "halo2-ipa-pasta",
     "curve": "pallas",
-    "public_inputs_schema_hash": "…",
-    "commitment": "…",
-    "vk_len": 40960,
-    "max_proof_bytes": 8192,
+    "public_inputs_schema_hash": "03f741ebb9859047e5be057c54e1e468e7dc5ed1cebeb4e3a554f5a04277413b",
+    "commitment": "9ce86e89d81b1fa022ad01130e2e6f78f0038eca11e714e5b0f14100895c05ed",
+    "vk_len": 111,
+    "max_proof_bytes": 8388608,
     "gas_schedule_id": "halo2_default",
-    "metadata_uri_cid": "ipfs://…",
-    "vk_bytes_cid": "ipfs://…",
-    "activation_height": 1200,
-    "deprecation_height": null,
+    "metadata_uri_cid": null,
+    "vk_bytes_cid": null,
+    "activation_height": null,
     "withdraw_height": null,
     "status": "Active",
     "key": { "backend": "halo2/ipa", "bytes_b64": "..." }
-  }
+  },
+  "record_norito_base64": "..."
 }
 ```
 
@@ -358,23 +361,22 @@ configuration; their JSON files contain public registry data only:
 - Update: `iroha app zk vk update --json ./vk_update.json`
 - Get: `iroha app zk vk get --backend <backend> --name <name>`
 
-Example `vk_register.json`:
-```json
-{
-  "authority": "<i105-account-id>",
-  "backend": "halo2/ipa",
-  "name": "vk_main",
-  "version": 1,
-  "circuit_id": "transfer-v1",
-  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "gas_schedule_id": "halo2_default",
-  "max_proof_bytes": 8192,
-  "metadata_uri_cid": "ipfs://CID_FOR_METADATA",
-  "vk_bytes_cid": "ipfs://CID_FOR_VK_BUNDLE",
-  "vk_bytes": "BASE64_BYTES",
-  "vk_len": 40960
-}
+Generate a complete CLI registration file for the supported Halo2 IVM
+replay-binding relation. The helper selects the compiled circuit, key, schema,
+curve and proof limit; the output contains no signing authority or private key.
+
+```bash
+cargo run --locked -p iroha_cli --features dev-tools --bin ivm_replay_binding_keygen -- \
+  --name ivm_replay_binding \
+  --vk-out ./replay-binding.vk \
+  --template-out ./vk_register.json
+iroha app zk vk register --json ./vk_register.json
 ```
+
+The CLI uses the account and signing key in its client configuration. The HTTP
+draft endpoint instead requires the public `authority` field in its own request
+DTO. Do not insert HTTP-only fields into a CLI registration file. Proving-key
+archive export is optional; server proving derives that key automatically.
 
 Notes:
 - Commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`

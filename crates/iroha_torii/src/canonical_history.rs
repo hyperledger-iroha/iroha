@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn read_carrier_rejects_zero_budget_and_missing_finality() {
-        let state = State::new(
+        let state = State::new_for_testing(
             iroha_core::state::World::new(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),

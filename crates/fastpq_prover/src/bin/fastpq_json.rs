@@ -3,19 +3,20 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
 use fastpq_prover::{
-    AXT_DEFAULT_PARAMETER, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
-    axt_proof_blob_from_bound_batch, batch_manifest_sha256 as axt_batch_manifest_sha256,
-    bind_axt_batch_with_proof_metadata, canonicalize_binding, set_axt_remote_spend_claims,
+    AXT_DEFAULT_PARAMETER, TransitionBatch, axt_proof_blob_from_bound_batch,
+    batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch_with_proof_metadata,
+    canonicalize_binding, prove_axt_bound_batch, set_axt_remote_spend_claims,
     set_axt_source_transfer_occurrences, transition_batch_from_model, verify_axt_bound_batch,
 };
+#[cfg(test)]
+use fastpq_prover::{OperationKind, PublicInputs, StateTransition};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1,
-        AxtSourceTransferOccurrenceV1, AxtTouchSpec, LANE_RELAY_FASTPQ_EFFECT_TYPE,
-        LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob, TouchManifest,
-        compute_remote_spend_claim_commitment_v1, lane_relay_fastpq_claim_digest,
+        AxtSourceTransferOccurrenceV1, AxtTouchSpec, TouchManifest,
+        compute_remote_spend_claim_commitment_v1,
     },
 };
 use iroha_model_base::topology::DataSpaceId;
@@ -92,6 +93,7 @@ struct BenchmarkResult {
     verifier_version: String,
 }
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 struct ProofRequest {
     #[norito(default)]
     parameter: String,
@@ -115,10 +117,6 @@ struct ProofRequest {
     #[norito(default)]
     verifier_version: String,
     #[norito(default)]
-    source_lane_id: u32,
-    #[norito(default = "default_relay_block_height")]
-    relay_block_height: u64,
-    #[norito(default)]
     batch_base64: String,
     #[norito(default)]
     effect_binding: Option<EffectBindingRequest>,
@@ -138,15 +136,6 @@ struct ProofRequest {
     /// receipt and transaction index from State-owned finalized source data.
     #[norito(default)]
     source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
-    /// Norito-encoded lane envelope carrying a compact global-finality reference.
-    #[norito(default)]
-    finalized_relay_envelope_hex: String,
-    /// `CommitQC` parent state root accompanying an offline relay proof request.
-    #[norito(default)]
-    relay_parent_state_root: String,
-    /// `CommitQC` post state root accompanying an offline relay proof request.
-    #[norito(default)]
-    relay_post_state_root: String,
 }
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 struct EffectBindingRequest {
@@ -181,17 +170,7 @@ struct ProofResponse {
     axt_descriptor_hex: String,
     touch_manifest_hex: String,
     effect_proof_blob_hex: String,
-    proof_blob_hex: Option<String>,
     manifest_root_hex: String,
-    relay_envelope_hex: Option<String>,
-    relay_ref: Option<RelayRefJson>,
-}
-#[derive(Debug, Clone, JsonSerialize)]
-struct RelayRefJson {
-    dataspace_id: u64,
-    lane_id: u32,
-    lane_incarnation: String,
-    block_height: u64,
 }
 #[derive(Debug, Clone, JsonDeserialize)]
 struct VerifyInput {
@@ -242,9 +221,6 @@ struct TransferInspectionRecord {
     to_balance_before_units: Option<u64>,
     to_balance_after: String,
     to_balance_after_units: Option<u64>,
-}
-fn default_relay_block_height() -> u64 {
-    1
 }
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
@@ -374,10 +350,7 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         axt_descriptor_hex: axt.descriptor,
         touch_manifest_hex: axt.touch_manifest,
         effect_proof_blob_hex: axt.effect_proof_blob,
-        proof_blob_hex: axt.proof_blob,
         manifest_root_hex: axt.manifest_root,
-        relay_envelope_hex: axt.relay_envelope,
-        relay_ref: axt.relay_ref,
     })
 }
 struct AxtArtifacts {
@@ -385,10 +358,7 @@ struct AxtArtifacts {
     descriptor: String,
     touch_manifest: String,
     effect_proof_blob: String,
-    proof_blob: Option<String>,
     manifest_root: String,
-    relay_envelope: Option<String>,
-    relay_ref: Option<RelayRefJson>,
 }
 fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
     let request = ProofRequest {
@@ -501,11 +471,8 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
 fn prove_request(request: &ProofRequest) -> Result<(Vec<u8>, Duration, Duration, String), String> {
     let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
-    let prover = Prover::canonical(&request.parameter)
-        .map_err(|err| format!("failed to construct FASTPQ prover: {err}"))?;
     let prove_started = Instant::now();
-    let proof = prover
-        .prove_axt_bound(&batch, &binding)
+    let proof = prove_axt_bound_batch(&batch, &binding)
         .map_err(|err| format!("FASTPQ prove failed: {err}"))?;
     let prove_time = prove_started.elapsed();
     let verify_started = Instant::now();
@@ -593,175 +560,13 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
         Some(AXT_JSON_PROOF_EXPIRY_SLOT),
     )
     .map_err(|err| format!("failed to package AXT proof envelope: {err}"))?;
-    let relay = (!request.finalized_relay_envelope_hex.trim().is_empty())
-        .then(|| build_relay_artifacts(request, manifest_root))
-        .transpose()?;
     Ok(AxtArtifacts {
         dataspace_id: norito_hex(&dsid)?,
         descriptor: norito_hex(&descriptor)?,
         touch_manifest: norito_hex(&touch_manifest)?,
         effect_proof_blob: norito_hex(&effect_proof_blob)?,
-        proof_blob: relay.as_ref().map(|relay| relay.proof_blob_hex.clone()),
         manifest_root: manifest_root_hex,
-        relay_envelope: relay.as_ref().map(|relay| relay.relay_envelope_hex.clone()),
-        relay_ref: relay.map(|relay| relay.relay_ref),
     })
-}
-struct RelayArtifacts {
-    relay_envelope_hex: String,
-    proof_blob_hex: String,
-    relay_ref: RelayRefJson,
-}
-fn build_relay_artifacts(
-    request: &ProofRequest,
-    manifest_root: [u8; 32],
-) -> Result<RelayArtifacts, String> {
-    debug_assert!(!request.finalized_relay_envelope_hex.trim().is_empty());
-    let encoded = hex::decode(request.finalized_relay_envelope_hex.trim())
-        .map_err(|err| format!("invalid finalized_relay_envelope_hex: {err}"))?;
-    let base = norito::decode_canonical::<LaneRelayEnvelope>(&encoded)
-        .map_err(|err| format!("failed to decode finalized lane relay envelope: {err}"))?;
-    base.verify()
-        .map_err(|err| format!("finalized lane relay envelope is invalid: {err}"))?;
-    base.validate_finality_authority_ref()
-        .map_err(|err| format!("finalized lane relay authority is invalid: {err}"))?;
-    if base.lane_id.as_u32() != request.source_lane_id
-        || base.dataspace_id.as_u64() != request.source_dsid
-        || base.block_height != request.relay_block_height
-        || base.manifest_root != Some(manifest_root)
-    {
-        return Err(
-            "finalized lane relay coordinates or manifest do not match the proof request"
-                .to_string(),
-        );
-    }
-    base.lane_finality_statement_hash()
-        .map_err(|err| format!("finalized lane relay statement is invalid: {err}"))?;
-    let proof_blob = build_lane_relay_proof_blob(request, &base, manifest_root)?;
-    let verified_at_height = base.block_header.height().get();
-    let envelope = base.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-        proof_digest: Hash::new(proof_blob.payload.as_slice()),
-        verified_at_height,
-    }));
-    let relay_ref = envelope.relay_ref();
-    let relay_envelope_hex = norito_hex(&envelope)?;
-    let relay_ref_json = RelayRefJson {
-        dataspace_id: relay_ref.dataspace_id.as_u64(),
-        lane_id: relay_ref.lane_id.as_u32(),
-        lane_incarnation: relay_ref.lane_incarnation.to_string(),
-        block_height: relay_ref.block_height,
-    };
-    Ok(RelayArtifacts {
-        relay_envelope_hex,
-        proof_blob_hex: norito_hex(&proof_blob)?,
-        relay_ref: relay_ref_json,
-    })
-}
-fn build_lane_relay_proof_blob(
-    request: &ProofRequest,
-    envelope: &LaneRelayEnvelope,
-    manifest_root: [u8; 32],
-) -> Result<ProofBlob, String> {
-    let parent_state_root =
-        hex_digest32(&request.relay_parent_state_root, "relay_parent_state_root")?;
-    let post_state_root = hex_digest32(&request.relay_post_state_root, "relay_post_state_root")?;
-    let lane_finality_statement_hash = envelope
-        .lane_finality_statement_hash()
-        .map_err(|err| format!("lane relay finality statement failed: {err}"))?;
-    let relay_ref = envelope.relay_ref();
-    let relay_ref_bytes = encode_canonical(&relay_ref)
-        .map_err(|err| format!("lane relay ref encode failed: {err}"))?;
-    let source_tx_commitment = digest32_with_domain(
-        b"fastpq-json:lane-relay-source-tx:v1",
-        &[relay_ref_bytes.as_slice()],
-    );
-    let claim_digest = lane_relay_fastpq_claim_digest(envelope)
-        .map_err(|err| format!("lane relay claim digest failed: {err}"))?;
-    let witness_commitment = digest32_with_domain(
-        b"fastpq-json:lane-relay-witness:v1",
-        &[envelope.settlement_hash.as_ref()],
-    );
-    let policy_commitment =
-        digest32_with_domain(b"fastpq-json:lane-relay-policy:v1", &[&manifest_root]);
-    let binding = AxtFastpqBinding {
-        parameter: normalized_parameter(&request.parameter),
-        source_dsid: request.source_dsid,
-        source_dataspace: if request.source_dataspace.trim().is_empty() {
-            format!("dataspace-{}", request.source_dsid)
-        } else {
-            request.source_dataspace.trim().to_string()
-        },
-        source_receipt_id: format!("relay-{}", hex::encode(&relay_ref_bytes)),
-        source_tx_commitment: hex::encode(source_tx_commitment),
-        claim_type: "authorization".to_string(),
-        claim_digest: claim_digest.to_string(),
-        witness_commitment: hex::encode(witness_commitment),
-        policy_commitment: hex::encode(policy_commitment),
-        verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_string(),
-        corridor: if request.corridor.trim().is_empty() {
-            "lane-relay".to_string()
-        } else {
-            request.corridor.trim().to_string()
-        },
-        verifier_id: normalized_verifier_id(&request.verifier_id),
-        verifier_version: normalized_verifier_version(&request.verifier_version),
-        target_dsids: if request.target_dsids.is_empty() {
-            vec![request.source_dsid]
-        } else {
-            request.target_dsids.clone()
-        },
-        effect_binding: None,
-        remote_spend_intent_commitments: Vec::new(),
-    };
-    let mut batch = TransitionBatch::new(
-        normalized_parameter(&request.parameter),
-        PublicInputs {
-            dsid: dsid_bytes(request.source_dsid),
-            slot: envelope.block_header.height().get(),
-            old_root: parent_state_root,
-            new_root: post_state_root,
-            perm_root: digest32_with_domain(
-                b"fastpq-json:lane-relay-perm-root:v1",
-                &[&manifest_root],
-            ),
-            tx_set_hash: lane_finality_statement_hash.into(),
-        },
-    );
-    batch.push(StateTransition::new(
-        b"axt/nexus/lane-relay".to_vec(),
-        relay_ref_bytes,
-        claim_digest.as_ref().to_vec(),
-        OperationKind::MetaSet,
-    ));
-    batch.sort();
-    batch
-        .metadata
-        .insert("entry_hash".to_string(), source_tx_commitment.to_vec());
-    let da_commitment = envelope
-        .da_commitment_hash
-        .map(|commitment| Hash::from(commitment).into());
-    bind_axt_batch_with_proof_metadata(
-        &mut batch,
-        &binding,
-        manifest_root,
-        da_commitment,
-        None,
-        Some(AXT_JSON_PROOF_EXPIRY_SLOT),
-    )
-    .map_err(|err| format!("failed to bind lane relay AXT metadata: {err}"))?;
-    let prover = Prover::canonical(&request.parameter)
-        .map_err(|err| format!("failed to construct lane relay FASTPQ prover: {err}"))?;
-    let proof = prover
-        .prove_axt_bound(&batch, &binding)
-        .map_err(|err| format!("lane relay FASTPQ prove failed: {err}"))?;
-    axt_proof_blob_from_bound_batch(
-        &batch,
-        proof,
-        manifest_root,
-        da_commitment,
-        Some(AXT_JSON_PROOF_EXPIRY_SLOT),
-    )
-    .map_err(|err| format!("failed to package lane relay AXT proof envelope: {err}"))
 }
 fn axt_manifest_keys(request: &ProofRequest) -> (String, String) {
     let corridor = if request.corridor.trim().is_empty() {
@@ -836,19 +641,7 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{field} must be 32 bytes of hex"))?;
     Ok(array)
 }
-fn digest32_with_domain(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update([0]);
-    for part in parts {
-        hasher.update((part.len() as u64).to_le_bytes());
-        hasher.update(part);
-    }
-    let digest = hasher.finalize();
-    let mut output = [0_u8; 32];
-    output.copy_from_slice(&digest);
-    output
-}
+#[cfg(test)]
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
     let mut output = [0_u8; 16];
     output[..8].copy_from_slice(&DataSpaceId::new(source_dsid).as_u64().to_le_bytes());
@@ -972,19 +765,14 @@ mod tests {
             claim_digest: "22".repeat(32),
             witness_commitment: "33".repeat(32),
             policy_commitment: "44".repeat(32),
-            verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
+            verified_effect_type: "fixture_effect".to_owned(),
             corridor: "CBUAE_TO_SBP".to_owned(),
             verifier_id: "fastpq".to_owned(),
             verifier_version: "v1".to_owned(),
-            source_lane_id: 1,
-            relay_block_height: 1,
             batch_base64: batch_base64.into(),
             effect_binding: None,
             remote_spend_claims: Vec::new(),
             source_transfer_occurrences: Vec::new(),
-            finalized_relay_envelope_hex: String::new(),
-            relay_parent_state_root: String::new(),
-            relay_post_state_root: String::new(),
         }
     }
     fn empty_batch_base64() -> String {
@@ -1115,6 +903,23 @@ mod tests {
             remote_spend_claim_commitment: compute_remote_spend_claim_commitment_v1(&claim),
         };
         (request, occurrence)
+    }
+    #[test]
+    fn proof_request_rejects_removed_lane_relay_fields() {
+        for field in [
+            "source_lane_id",
+            "relay_block_height",
+            "finalized_relay_envelope_hex",
+            "relay_parent_state_root",
+            "relay_post_state_root",
+        ] {
+            let mut value = json::to_value(&proof_request(empty_batch_base64())).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::from(1_u64));
+            assert!(json::from_value::<ProofRequest>(value).is_err(), "{field}");
+        }
     }
     #[test]
     fn proof_request_requires_exact_typed_source_transfer_occurrences() {

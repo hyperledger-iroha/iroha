@@ -2994,8 +2994,8 @@ mod tests {
     #[test]
     fn register_trigger_rejects_nondeterministic_pipeline_filter() {
         use iroha_data_model::events::pipeline::{
-            BlockEventFilter, BlockStatus, MergeLedgerEventFilter, PipelineEventFilterBox,
-            TransactionEventFilter, TransactionStatus, WitnessEventFilter,
+            BlockEventFilter, BlockStatus, PipelineEventFilterBox, TransactionEventFilter,
+            TransactionStatus, WitnessEventFilter,
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -3061,10 +3061,6 @@ mod tests {
                 PipelineEventFilterBox::from(
                     TransactionEventFilter::new().for_status(TransactionStatus::Expired),
                 ),
-            ),
-            (
-                "pipeline_merge",
-                PipelineEventFilterBox::from(MergeLedgerEventFilter::default()),
             ),
             (
                 "pipeline_witness",

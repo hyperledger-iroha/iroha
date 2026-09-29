@@ -3028,15 +3028,21 @@ mod tests {
             _ => panic!("original retained top-up"),
         };
         record.validate_basic().unwrap();
-        let authorization = result
-            .finality
-            .finality_proof
-            .decode_checked()
-            .unwrap()
+        let verifier =
+            iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint(
+                &anchor.checkpoint,
+                &anchor.network_id,
+                anchor.checkpoint.chain_id(),
+            )
+            .expect("selected native checkpoint");
+        let authorization = verifier
+            .verify_retained_decision(&result.finality.finality_proof)
+            .expect("same authenticated finality decision")
             .commitment()
             .schedule
             .current
-            .authorization;
+            .authorization
+            .clone();
         let credit = &result.mint_credit;
         let checkpoint = KagemushaMintAuthorityCheckpointV1 {
             step: KagemushaMintAuthorityStepV1::Bootstrap,
@@ -3057,7 +3063,8 @@ mod tests {
             releases: BTreeMap::new(),
             lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
         };
-        for runtime in [&unavailable as &dyn KagemushaV1RuntimeVerifier, &empty] {
+        let runtimes: [&dyn KagemushaV1RuntimeVerifier; 2] = [&unavailable, &empty];
+        for runtime in runtimes {
             assert!(
                 runtime
                     .verify_mint_authority_checkpoint(

@@ -8,10 +8,7 @@
 
 use crate::{
     api::CommittedTip,
-    crypto::{
-        AttestationVerifier, CertError, Crypto, verify_proposal_signature, verify_qc,
-        verify_qc_signatures, verify_tc, verify_timeout, verify_vote,
-    },
+    crypto::{AttestationVerifier, CertError, Crypto, Verifier},
     message::{BlockHeader, Defect, Evidence, Proposal, VoteKind},
     topology::{Topology, committee_permutation, demoted_set, demotion_window},
     types::{Bitmap, Hash32, HeightConfig},
@@ -129,16 +126,10 @@ impl EvidenceContext<'_> {
             Some((first, last)) => {
                 let count = last.checked_sub(first).and_then(|n| n.checked_add(1));
                 if count != u64::try_from(self.demotion_headers.len()).ok()
-                    || self
-                        .demotion_headers
-                        .iter()
-                        .enumerate()
-                        .any(|(index, header)| {
-                            u64::try_from(index)
-                                .ok()
-                                .and_then(|offset| first.checked_add(offset))
-                                != Some(header.height)
-                                || header.instance != self.instance
+                    || (first..=last)
+                        .zip(self.demotion_headers)
+                        .any(|(height, header)| {
+                            header.height != height || header.instance != self.instance
                         })
                 {
                     return Err(EvidenceError::DemotionHistory);
@@ -188,6 +179,7 @@ pub fn verify_evidence(
     let config = context.config;
     let epoch = &config.epoch.id;
     let committee = &config.committee;
+    let verifier = Verifier::new(crypto, &context.instance, epoch, committee);
     let mut offenders = Vec::new();
     let mut safety_violation = false;
     match evidence {
@@ -200,22 +192,8 @@ pub fn verify_evidence(
             }
             let topology = context.topology(crypto)?;
             let leader = topology.leader(first.view);
-            let first_value = verify_proposal_signature(
-                crypto,
-                &context.instance,
-                epoch,
-                committee,
-                leader,
-                first,
-            )?;
-            let second_value = verify_proposal_signature(
-                crypto,
-                &context.instance,
-                epoch,
-                committee,
-                leader,
-                second,
-            )?;
+            let first_value = verifier.verify_proposal_signature(leader, first)?;
+            let second_value = verifier.verify_proposal_signature(leader, second)?;
             if first_value == second_value {
                 return Err(EvidenceError::NotConflicting);
             }
@@ -234,8 +212,8 @@ pub fn verify_evidence(
             }
             // A signature on each distinct vote value proves equivocation independently
             // of unsigned attestation attachments; those attachments cannot create a conflict.
-            verify_vote(crypto, &context.instance, epoch, committee, first)?;
-            verify_vote(crypto, &context.instance, epoch, committee, second)?;
+            verifier.verify_vote(first)?;
+            verifier.verify_vote(second)?;
             offenders.push(first.signer);
         }
         Evidence::TimeoutEquivocation(first, second) => {
@@ -247,8 +225,8 @@ pub fn verify_evidence(
             {
                 return Err(EvidenceError::NotConflicting);
             }
-            verify_timeout(crypto, &context.instance, epoch, committee, first)?;
-            verify_timeout(crypto, &context.instance, epoch, committee, second)?;
+            verifier.verify_timeout(first)?;
+            verifier.verify_timeout(second)?;
             offenders.push(first.signer);
         }
         Evidence::InvalidProposal { proposal, defect } => {
@@ -257,14 +235,7 @@ pub fn verify_evidence(
             }
             let topology = context.topology(crypto)?;
             let leader = topology.leader(proposal.view);
-            let (hash, _) = verify_proposal_signature(
-                crypto,
-                &context.instance,
-                epoch,
-                committee,
-                leader,
-                proposal,
-            )?;
+            let (hash, _) = verifier.verify_proposal_signature(leader, proposal)?;
             if proposal_defect(crypto, attestation, context, &topology, proposal, hash)
                 != Some(*defect)
             {
@@ -283,8 +254,8 @@ pub fn verify_evidence(
             }
             // As in the native safety monitor (§7.6), exact Commit signatures alone
             // establish this safety violation; an absent Pasta attachment does not erase it.
-            verify_qc_signatures(crypto, &context.instance, epoch, committee, first)?;
-            verify_qc_signatures(crypto, &context.instance, epoch, committee, second)?;
+            verifier.verify_qc_signatures(first)?;
+            verifier.verify_qc_signatures(second)?;
             safety_violation = true;
             if first.view == second.view {
                 offenders.extend(
@@ -312,102 +283,46 @@ fn proposal_defect(
     block_hash: Hash32,
 ) -> Option<Defect> {
     let config = context.config;
-    match (proposal.view, &proposal.justify) {
-        (0, Some(_)) => return Some(Defect::UnexpectedJustify),
-        (0, None) => {}
-        (_, None) => return Some(Defect::MissingJustify),
-        (view, Some(tc)) => {
-            if tc.height != context.height
-                || Some(tc.view) != view.checked_sub(1)
-                || verify_tc(
+    if let Some(defect) = proposal.justify_defect(context.height, |tc| {
+        crate::crypto::Verifier::new(
+            crypto,
+            &context.instance,
+            &config.epoch.id,
+            &config.committee,
+        )
+        .verify_tc(tc)
+        .is_ok()
+    }) {
+        return Some(defect);
+    }
+    if let Some(defect) = proposal.parent_defect(
+        context.parent.height == context.genesis_height,
+        context.parent.height,
+        (context.parent.block_hash, context.parent.result),
+        |qc| {
+            context.parent_config.is_some_and(|parent| {
+                crate::crypto::Verifier::new(
                     crypto,
                     &context.instance,
-                    &config.epoch.id,
-                    &config.committee,
-                    tc,
+                    &parent.epoch.id,
+                    &parent.committee,
                 )
-                .is_err()
-            {
-                return Some(Defect::InvalidJustify);
-            }
-        }
+                .verify_qc(attestation, qc)
+                .is_ok()
+            })
+        },
+    ) {
+        return Some(defect);
     }
-    if context.parent.height == context.genesis_height {
-        if proposal.parent_qc.is_some() {
-            return Some(Defect::UnexpectedParentQc);
-        }
-    } else {
-        let Some(qc) = &proposal.parent_qc else {
-            return Some(Defect::MissingParentQc);
-        };
-        let parent_config = context.parent_config?;
-        if qc.kind != VoteKind::Commit
-            || qc.height != context.parent.height
-            || qc.value() != (context.parent.block_hash, context.parent.result)
-            || verify_qc(
-                crypto,
-                attestation,
-                &context.instance,
-                &parent_config.epoch.id,
-                &parent_config.committee,
-                qc,
-            )
-            .is_err()
-        {
-            return Some(Defect::InvalidParentQc);
-        }
-    }
-    let header = &proposal.header;
-    for (bad, defect) in [
-        (header.instance != context.instance, Defect::HeaderInstance),
-        (header.height != context.height, Defect::HeaderHeight),
-        (header.epoch != config.epoch.id, Defect::EpochContext),
-        (
-            context.height == config.epoch.last_height && !header.attest,
-            Defect::BoundaryAttestation,
-        ),
-        (
-            header.parent_hash != context.parent.block_hash,
-            Defect::ParentHash,
-        ),
-        (
-            header.parent_result != context.parent.result,
-            Defect::ParentResult,
-        ),
-        (
-            header.payload_len > config.params.max_block_bytes,
-            Defect::PayloadTooLarge,
-        ),
-        (header.payload_len == 0, Defect::EmptyPayload),
-    ] {
-        if bad {
-            return Some(defect);
-        }
-    }
-    if let Some(qc) = proposal
-        .justify
-        .as_ref()
-        .and_then(|tc| tc.high_pqc.as_ref())
-    {
-        return (block_hash != qc.block_hash).then_some(Defect::TcRule);
-    }
-    for (bad, defect) in [
-        (header.origin_view != proposal.view, Defect::OriginView),
-        (
-            header.proposer != topology.leader(proposal.view),
-            Defect::Proposer,
-        ),
-        (
-            header.skipped_leaders
-                != topology.skipped_leader_keys(&config.committee, proposal.view),
-            Defect::SkippedLeaders,
-        ),
-    ] {
-        if bad {
-            return Some(defect);
-        }
-    }
-    None
+    proposal.header_defect(
+        context.instance,
+        context.height,
+        (context.parent.block_hash, context.parent.result),
+        config,
+        topology,
+        block_hash,
+        |_| true,
+    )
 }
 
 #[cfg(test)]

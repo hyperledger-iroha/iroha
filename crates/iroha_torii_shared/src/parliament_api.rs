@@ -6,7 +6,7 @@
 //! state even while reducer internals evolve within the first release.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::Hash;
 use iroha_data_model::isi::governance::{
     PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1, ParliamentLifecycleTransitionKindV1,
     ParliamentLifecycleTransitionV1,
@@ -1356,6 +1356,7 @@ fn validate_release_identity_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route_catalog::runtime_governance as gov_routes;
     use iroha_data_model::governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
@@ -1963,39 +1964,39 @@ mod tests {
             .expect("fixture routes");
         assert_eq!(
             routes.get("attempt_draft").and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_ATTEMPT_DRAFT)
+            Some(gov_routes::GOV_PARLIAMENT_ATTEMPT_DRAFT.path())
         );
         assert_eq!(
             routes.get("attempt_read").and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_ATTEMPT_READ)
+            Some(gov_routes::GOV_PARLIAMENT_ATTEMPT_READ.path())
         );
         assert_eq!(
             routes
                 .get("timed_ovn_casting_context_read")
                 .and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ)
+            Some(gov_routes::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ.path())
         );
         assert_eq!(
             routes
                 .get("timed_ovn_casting_proof")
                 .and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF)
+            Some(gov_routes::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF.path())
         );
         assert_eq!(
             routes
                 .get("tle_release_context_read")
                 .and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ)
+            Some(gov_routes::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ.path())
         );
         assert_eq!(
             routes
                 .get("tle_partial_release")
                 .and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE)
+            Some(gov_routes::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE.path())
         );
         assert_eq!(
             routes.get("transition_draft").and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TRANSITION_DRAFT)
+            Some(gov_routes::GOV_PARLIAMENT_TRANSITION_DRAFT.path())
         );
         let native_wallet = fixture
             .get("timed_ovn_native_wallet")
@@ -2104,7 +2105,7 @@ mod tests {
         );
         assert_eq!(
             native_wallet.get("route").and_then(json::Value::as_str),
-            Some(crate::uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF)
+            Some(gov_routes::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF.path())
         );
         let trust_anchor = native_wallet
             .get("required_external_trust_anchor")

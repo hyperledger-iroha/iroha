@@ -1,11 +1,11 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
-import org.hyperledger.iroha.sdk.sccp.SccpV1
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -52,7 +52,7 @@ class TransferWirePayloadEncoderParityTest {
         assertFailsWith<IllegalArgumentException> {
             TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 reframe(decoded.header, payload),
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
         }
     }
@@ -86,7 +86,7 @@ class TransferWirePayloadEncoderParityTest {
             val wire = assertIs<WirePayload>(instruction.payload).payloadBytes
             val decoded = TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 wire,
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
             assertEquals(assetId, decoded.assetId)
             if (dataspaceId != "0") {
@@ -129,14 +129,14 @@ class TransferWirePayloadEncoderParityTest {
         val decoded =
             TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 wirePayload.payloadBytes,
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
 
         assertEquals(assetId, decoded.assetId)
         assertEquals(amount, decoded.amount)
         assertEquals(destinationAccountId, decoded.destinationAccountId)
         assertEquals(
-            SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            TairaTestnetProfile.I105_DISCRIMINANT,
             AccountAddress.detectI105Discriminant(decoded.destinationAccountId),
         )
 
@@ -152,7 +152,7 @@ class TransferWirePayloadEncoderParityTest {
         assertFailsWith<IllegalArgumentException> {
             TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 wirePayload.payloadBytes.copyOf(12),
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
         }
         val mutated = wirePayload.payloadBytes.copyOf()
@@ -160,7 +160,7 @@ class TransferWirePayloadEncoderParityTest {
         assertFailsWith<IllegalArgumentException> {
             TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 mutated,
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
         }
     }

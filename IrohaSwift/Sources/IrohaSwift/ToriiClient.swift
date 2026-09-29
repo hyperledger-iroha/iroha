@@ -1292,50 +1292,14 @@ public struct ToriiIdentifierBfvPublicParameters: Decodable, Sendable {
     }
 }
 
+/// The sole first-release encrypted-input representation.
 public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
     case encryptedEnvelopeV1 = "encrypted_envelope_v1"
-    case resolverCanonicalizedEnvelopeV1 = "resolver_canonicalized_envelope_v1"
-
-    private struct TaggedModePayload: Decodable {
-        let mode: String
-    }
-
-    private static func normalizedMode(from raw: String) -> ToriiIdentifierRamFheEncryptedInputMode? {
-        switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "encrypted_envelope_v1", "EncryptedEnvelopeV1":
-            return .encryptedEnvelopeV1
-        case "resolver_canonicalized_envelope_v1", "ResolverCanonicalizedEnvelopeV1":
-            return .resolverCanonicalizedEnvelopeV1
-        default:
-            return nil
-        }
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let rawValue = try? container.decode(String.self),
-           let mode = Self.normalizedMode(from: rawValue) {
-            self = mode
-            return
-        }
-        if let taggedPayload = try? container.decode(TaggedModePayload.self),
-           let mode = Self.normalizedMode(from: taggedPayload.mode) {
-            self = mode
-            return
-        }
-        throw DecodingError.dataCorruptedError(
-            in: container,
-            debugDescription: "Unsupported ram_fhe encrypted input mode."
-        )
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
-    }
 }
 
 public struct ToriiIdentifierRamFheProfile: Codable, Sendable {
+    /// Canonical hash binding the compiled secret commitment and initializer.
+    public let initializerDescriptorHash: String
     public let profileVersion: UInt8
     public let registerCount: UInt16
     public let memoryLaneCount: UInt16
@@ -1343,13 +1307,49 @@ public struct ToriiIdentifierRamFheProfile: Codable, Sendable {
     public let encryptedInputMode: ToriiIdentifierRamFheEncryptedInputMode
     public let minCiphertextModulus: UInt64
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case initializerDescriptorHash = "initializer_descriptor_hash"
         case profileVersion = "profile_version"
         case registerCount = "register_count"
         case memoryLaneCount = "memory_lane_count"
         case ciphertextMulPerStep = "ciphertext_mul_per_step"
         case encryptedInputMode = "encrypted_input_mode"
         case minCiphertextModulus = "min_ciphertext_modulus"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.rawValue)),
+            debugName: "ram_fhe_profile"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        initializerDescriptorHash = try container.decode(String.self, forKey: .initializerDescriptorHash)
+        guard initializerDescriptorHash.utf8.count == 64,
+              initializerDescriptorHash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              let marker = initializerDescriptorHash.last,
+              "13579bdf".contains(marker) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .initializerDescriptorHash,
+                in: container,
+                debugDescription: "ram_fhe_profile.initializer_descriptor_hash must be 64 lowercase hex digits with the Iroha Hash marker bit set."
+            )
+        }
+        profileVersion = try container.decode(UInt8.self, forKey: .profileVersion)
+        registerCount = try container.decode(UInt16.self, forKey: .registerCount)
+        memoryLaneCount = try container.decode(UInt16.self, forKey: .memoryLaneCount)
+        ciphertextMulPerStep = try container.decode(UInt8.self, forKey: .ciphertextMulPerStep)
+        encryptedInputMode = try container.decode(ToriiIdentifierRamFheEncryptedInputMode.self,
+                                                  forKey: .encryptedInputMode)
+        minCiphertextModulus = try container.decode(UInt64.self, forKey: .minCiphertextModulus)
+        guard profileVersion > 0, registerCount > 0, memoryLaneCount > 0,
+              ciphertextMulPerStep > 0, minCiphertextModulus > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .profileVersion,
+                in: container,
+                debugDescription: "ram_fhe_profile dimensions must be positive."
+            )
+        }
     }
 }
 
@@ -10712,8 +10712,8 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
             field: "nonce"
         )
         do {
-            try SccpSubmitValidation.requireCanonicalTransactionFeePayment(feePayment)
-            try SccpSubmitValidation.requireEmptyTransactionMetadata(metadata)
+            try TransactionFeePaymentValidation.requireCanonicalTransactionFeePayment(feePayment)
+            try TransactionFeePaymentValidation.requireEmptyTransactionMetadata(metadata)
         } catch {
             throw invalid("verifying-key transaction fee payment or metadata is not canonical")
         }
@@ -20218,9 +20218,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
     private static let kagemushaCapabilityResponseMaximumBytes = 4 * 1024
     private static let kagemushaOperationStatusResponseMaximumBytes = 4 * (36 * 1024 * 1024 + 256)
-    private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
-    private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
-    private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
     private static let contractCallResponseMaximumBytes = 32 * 1_024 * 1_024
     private static let assetTransferResponseMaximumBytes = 32 * 1_024 * 1_024
     private static let accountOnboardingCurrentStateResponseMaximumBytes = 4 * 1_024
@@ -23850,7 +23847,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             headers: ["Accept": "application/json", "Content-Type": "application/json"],
             canonicalAuth: canonicalAuth
         )
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "election tally",
             maximumBytes: ToriiElectionTallyResponseV1.maximumResponseBytes
@@ -24070,7 +24067,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                         "Accept": "application/json",
                                       ],
                                       canonicalAuth: canonicalAuth)
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "contract call",
             maximumBytes: Self.contractCallResponseMaximumBytes
@@ -24643,7 +24640,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private func sendDetachedAssetTransferRequest(
         _ request: URLRequest
     ) async throws -> ToriiAssetTransferResponse {
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "asset transfer",
             maximumBytes: Self.assetTransferResponseMaximumBytes
@@ -24949,7 +24946,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             body: body,
             canonicalAuth: canonicalAuth
         )
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "fee quote",
             maximumBytes: Self.feeQuoteResponseMaximumBytes
@@ -25008,7 +25005,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             body: body,
             canonicalAuth: canonicalAuth
         )
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "fee sponsor program",
             maximumBytes: Self.feeSponsorProgramResponseMaximumBytes
@@ -25047,7 +25044,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func getKagemushaCapability() async throws -> ToriiKagemushaStatus {
         let request = try makeRequest(path: "/v1/kagemusha/readiness",
                                       headers: ["Accept": "application/json"])
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "KAGEMUSHA capability",
             maximumBytes: Self.kagemushaCapabilityResponseMaximumBytes
@@ -25124,7 +25121,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             path: "/v1/kagemusha/operations/\(operationID.hexEncodedString())",
             headers: ["Accept": "application/json"]
         )
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "KAGEMUSHA operation status",
             maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes
@@ -25205,7 +25202,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         acceptedStatuses: Set<Int>,
         withCurrentOwner: ToriiTopUpOwnershipV1? = nil
     ) async throws -> (ToriiUnverifiedKagemushaOperationStatusV1, HTTPURLResponse) {
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "KAGEMUSHA operation status",
             maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes,
@@ -26090,7 +26087,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             ],
             canonicalAuth: canonicalAuth
         )
-        let (responseBody, response) = try await sendBoundedSccpResponse(
+        let (responseBody, response) = try await sendBoundedResponse(
             request,
             context: "Hijiri validation-fee quote",
             maximumBytes: ValidationFeeHijiriQuoteV1.maximumResponseBytes
@@ -26247,7 +26244,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         // any of the exact six privacy ABI25 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: "privacy Exact12 capabilities",
             maximumBytes: PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
@@ -26273,7 +26270,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "privacy Exact12 capabilities must preserve the identity representation"
             )
         }
-        guard let declaredLength = try Self.validatedSccpContentLength(
+        guard let declaredLength = try Self.validatedContentLength(
             response,
             context: "privacy Exact12 capabilities",
             maximumBytes: PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
@@ -26306,152 +26303,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return request
     }
 
-    /// Fetch consensus-derived SCCP capabilities.
-    public func getSccpCapabilities() async throws -> SccpCapabilities {
-        let request = try makeRequest(
-            path: "/v1/sccp/capabilities",
-            method: .get,
-            headers: ["Accept": "application/json"]
-        )
-        return try SccpCapabilities.parse(
-            await exactSccpJSONResponse(
-                request,
-                context: "SCCP capabilities",
-                maximumBytes: Self.sccpCapabilitiesResponseMaximumBytes
-            )
-        )
-    }
-
-    /// Fetch the authoritative typed SCCP route registry.
-    public func getSccpRegistry() async throws -> SccpRegistryV1 {
-        let request = try makeRequest(
-            path: "/v1/sccp/registry",
-            method: .get,
-            headers: ["Accept": "application/json"]
-        )
-        return try SccpRegistryV1.parse(
-            await exactSccpJSONResponse(
-                request,
-                context: "SCCP registry",
-                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
-            )
-        )
-    }
-
-    /// Fetch the authoritative registry as canonical Norito bytes.
-    public func getSccpRegistryNorito() async throws -> Data {
-        try await getExactSccpNorito(
-            path: "/v1/sccp/registry",
-            context: "SCCP registry",
-            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes,
-            expectedTypeNames: [SccpSubmitValidation.registryTypeName]
-        )
-    }
-
-    /// Fetch one finalized SORA-origin SCCP message bundle by its exact message id.
-    public func getSccpMessageBundle(messageIdHex: String) async throws -> SccpMessageBundleV1 {
-        let id = try exactSccpMessageId(messageIdHex)
-        let request = try makeRequest(
-            path: "/v1/sccp/proofs/message/\(id)",
-            method: .get,
-            headers: ["Accept": "application/json"]
-        )
-        let bundle = try SccpMessageBundleV1.parse(
-            await exactSccpJSONResponse(
-                request,
-                context: "SCCP message bundle",
-                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
-            )
-        )
-        guard bundle.messageId == "0x\(id)" else {
-            throw ToriiClientError.invalidPayload("SCCP bundle message id does not match the requested id")
-        }
-        return bundle
-    }
-
-    /// Fetch one finalized SCCP message bundle as canonical Norito bytes.
-    public func getSccpMessageBundleNorito(messageIdHex: String) async throws -> Data {
-        let id = try exactSccpMessageId(messageIdHex)
-        return try await getExactSccpNorito(
-            path: "/v1/sccp/proofs/message/\(id)",
-            context: "SCCP message bundle",
-            maximumBytes: SccpSubmitValidation.maximumNativeArtifactBytes,
-            expectedTypeNames: [SccpSubmitValidation.messageBundleTypeName]
-        )
-    }
-
-    /// Fetch the query-free, state-derived Groth16 request for one finalized message.
-    public func getSccpProofRequest(messageIdHex: String) async throws -> SccpGroth16ProofRequestV1 {
-        let id = try exactSccpMessageId(messageIdHex)
-        let request = try makeRequest(
-            path: "/v1/sccp/proof-requests/\(id)",
-            method: .get,
-            headers: ["Accept": "application/json"]
-        )
-        let proofRequest = try SccpGroth16ProofRequestV1.parse(
-            await exactSccpJSONResponse(
-                request,
-                context: "SCCP proof request",
-                maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
-            )
-        )
-        guard proofRequest.messageId == "0x\(id)" else {
-            throw ToriiClientError.invalidPayload("SCCP proof request message id does not match the requested id")
-        }
-        return proofRequest
-    }
-
-    /// Fetch a state-derived BN254 or TON BLS12-381 Groth16 request as its concrete canonical Norito type.
-    public func getSccpProofRequestNorito(messageIdHex: String) async throws -> Data {
-        let id = try exactSccpMessageId(messageIdHex)
-        return try await getExactSccpNorito(
-            path: "/v1/sccp/proof-requests/\(id)",
-            context: "SCCP proof request",
-            maximumBytes: SccpSubmitValidation.maximumGroth16ArtifactBytes,
-            expectedTypeNames: SccpSubmitValidation.proofRequestTypeNames
-        )
-    }
-
-    /// Fetch newest-first committed outbound SCCP messages.
-    public func getSccpRecentMessages(
-        from: UInt64? = nil,
-        afterIndex: UInt32? = nil,
-        limit: UInt32? = nil
-    ) async throws -> SccpRecentMessages {
-        if from == 0 {
-            throw ToriiClientError.invalidPayload("from must be a positive block height")
-        }
-        if let limit, !(1...50).contains(limit) {
-            throw ToriiClientError.invalidPayload("limit must be in 1...50")
-        }
-        if afterIndex != nil, from == nil {
-            throw ToriiClientError.invalidPayload("afterIndex requires the paired from height")
-        }
-        if let afterIndex, afterIndex > 511 {
-            throw ToriiClientError.invalidPayload("afterIndex must be in 0...511")
-        }
-        var components = URLComponents()
-        components.queryItems = [
-            from.map { URLQueryItem(name: "from", value: String($0)) },
-            afterIndex.map { URLQueryItem(name: "after_index", value: String($0)) },
-            limit.map { URLQueryItem(name: "limit", value: String($0)) },
-        ].compactMap { $0 }
-        let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
-        let request = try makeRequest(
-            path: "/v1/sccp/messages/recent\(query)",
-            method: .get,
-            headers: ["Accept": "application/json"]
-        )
-        return try SccpRecentMessages.parse(
-            await exactSccpJSONResponse(
-                request,
-                context: "SCCP recent messages",
-                maximumBytes: Self.sccpRecentMessagesResponseMaximumBytes
-            )
-        )
-    }
-
-    private func sendBoundedSccpResponse(
+    private func sendBoundedResponse(
         _ request: URLRequest,
         context: String,
         maximumBytes: Int,
@@ -26474,12 +26326,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             let observedAtLocalMs = currentEpochMs()
             if let withCurrentOwner {
                 let task = ToriiOwnedTopUpResponseTask(maximumBytes: maximumBytes) { response in
-                    _ = try Self.validatedSccpContentLength(response, context: context, maximumBytes: maximumBytes)
+                    _ = try Self.validatedContentLength(response, context: context, maximumBytes: maximumBytes)
                 }
                 let (data, response) = try await task.execute(
                     session: session, request: request, withCurrentOwner: withCurrentOwner)
                 recordObservedServerClock(from: response, observedAtLocalMs: observedAtLocalMs)
-                let declaredLength = try Self.validatedSccpContentLength(
+                let declaredLength = try Self.validatedContentLength(
                     response, context: context, maximumBytes: maximumBytes)
                 let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?
                     .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -26502,7 +26354,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
             let declaredLength: Int?
             do {
-                declaredLength = try Self.validatedSccpContentLength(
+                declaredLength = try Self.validatedContentLength(
                     http,
                     context: context,
                     maximumBytes: maximumBytes
@@ -26552,7 +26404,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    private static func validatedSccpContentLength(
+    private static func validatedContentLength(
         _ response: HTTPURLResponse,
         context: String,
         maximumBytes: Int
@@ -26576,12 +26428,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return Int(value)
     }
 
-    private func exactSccpJSONResponse(
+    private func exactJSONResponse(
         _ request: URLRequest,
         context: String,
         maximumBytes: Int
     ) async throws -> Data {
-        let (data, response) = try await sendBoundedSccpResponse(
+        let (data, response) = try await sendBoundedResponse(
             request,
             context: context,
             maximumBytes: maximumBytes
@@ -26590,55 +26442,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try ensureResponseMediaType(response, equals: "application/json")
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
         return data
-    }
-
-    private func getExactSccpNorito(
-        path: String,
-        context: String,
-        maximumBytes: Int,
-        expectedTypeNames: [String]
-    ) async throws -> Data {
-        let request = try makeRequest(
-            path: path,
-            method: .get,
-            headers: ["Accept": "application/x-norito"]
-        )
-        let (data, response) = try await sendBoundedSccpResponse(
-            request,
-            context: context,
-            maximumBytes: maximumBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: data)
-        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
-            .split(separator: ";", maxSplits: 1)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        guard contentType == "application/x-norito" else {
-            throw ToriiClientError.invalidPayload("\(context) response must use application/x-norito")
-        }
-        let expectedSchemas = expectedTypeNames.map(noritoSchemaHash(forTypeName:))
-        guard !data.isEmpty,
-              !expectedSchemas.isEmpty,
-              let frame = noritoDecodeFrame(data),
-              frame.header.compression == .none,
-              expectedSchemas.contains(frame.header.schema),
-              frame.paddingLength == 0,
-              data.prefix(NoritoHeader.encodedLength) == frame.header.encode()
-        else {
-            throw ToriiClientError.invalidPayload(
-                "\(context) response is not the exact canonical uncompressed SCCP Norito type"
-            )
-        }
-        return data
-    }
-
-    private func exactSccpMessageId(_ value: String) throws -> String {
-        do {
-            return try SccpSubmitValidation.responseHash(value, field: "message_id")
-        } catch {
-            throw ToriiClientError.invalidPayload("message_id must be canonical lowercase nonzero prefixless 32-byte hex")
-        }
     }
 
     private func submitNoritoTransactionPayload(path: String,
@@ -26858,7 +26661,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             path: "/v1/sumeragi/status",
             headers: ["Accept": "application/json"]
         )
-        let data = try await exactSccpJSONResponse(
+        let data = try await exactJSONResponse(
             request,
             context: "Sumeragi status",
             maximumBytes: 1 * 1_024 * 1_024

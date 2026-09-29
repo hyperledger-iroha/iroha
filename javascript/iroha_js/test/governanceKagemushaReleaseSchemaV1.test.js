@@ -101,3 +101,35 @@ test("KAGEMUSHA activation predecessor is a complete governed registry", () => {
     /missing required field/u,
   );
 });
+
+test("release manifest requires network identity and an exact scoped purpose", () => {
+  const manifest = fixture(INSTALL_PATH).payload.manifest;
+  for (const field of ["network_id", "purpose"]) {
+    const missing = structuredClone(manifest);
+    delete missing[field];
+    assert.throws(() => validateKagemushaReleaseSchemaV1(ROOTS.manifest, missing), /missing required/u);
+  }
+  const experiment = {
+    ...structuredClone(manifest),
+    purpose: {
+      kind: "testnet_experiment",
+      value: {
+        asset_identity_digest: Array(32).fill(1),
+        asset_incarnation: Array(32).fill(2),
+        asset_scale: 28,
+        liability_pool_id: Array(32).fill(3),
+      },
+    },
+  };
+  assert.doesNotThrow(() => validateKagemushaReleaseSchemaV1(ROOTS.manifest, experiment));
+  for (const purpose of [
+    { kind: "production" },
+    { kind: "production", value: {} },
+    { kind: "unknown", value: null },
+    { kind: "testnet_experiment", value: null },
+    { ...experiment.purpose, value: { ...experiment.purpose.value, asset_scale: 29 } },
+    { ...experiment.purpose, value: { ...experiment.purpose.value, retired: null } },
+  ]) {
+    assert.throws(() => validateKagemushaReleaseSchemaV1(ROOTS.manifest, { ...manifest, purpose }));
+  }
+});

@@ -226,11 +226,6 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
     if projection is None or "_instructionWireSchemaBindings: () => INSTRUCTION_WIRE_SCHEMA_BINDINGS" not in source:
         raise ValueError(f"{path} does not expose the source-derived instruction bindings")
 
-    expected_record_id = "iroha.instruction.v1::bridge::RecordSccpMessage"
-    record_id = _js_string_expression(source, "RECORD_SCCP_MESSAGE_WIRE_ID")
-    if record_id != expected_record_id:
-        raise ValueError(f"{path} changes RECORD_SCCP_MESSAGE_WIRE_ID")
-
     families = {
         "NFT_MARKET": (
             path.with_name("noritoNftMarketCodecs.js"), "nft_market"
@@ -281,8 +276,6 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
         if wire_id in mapping:
             raise ValueError(f"{path} repeats JS instruction wire ID `{wire_id}`")
         mapping[wire_id] = type_name
-    if mapping.get(expected_record_id) != "iroha_data_model::isi::bridge::RecordSccpMessage":
-        raise ValueError(f"{path} must bind RecordSccpMessage to its Rust inner type")
     return mapping
 
 

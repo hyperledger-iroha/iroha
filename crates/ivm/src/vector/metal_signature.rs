@@ -4,6 +4,7 @@ use super::*;
 use crate::signature::{BatchInput, Ed25519BatchItem};
 use std::mem::size_of;
 
+#[cfg(test)]
 pub(crate) fn metal_ed25519_verify_batch_into(
     signatures: &[[u8; 64]],
     public_keys: &[[u8; 32]],

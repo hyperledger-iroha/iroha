@@ -51,7 +51,6 @@ use crate::{
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder},
-    nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
 };
 use base64::Engine as _;
 use bytes::Bytes;
@@ -95,6 +94,7 @@ use iroha_data_model::{
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
     sumeragi::SumeragiStatus,
+    sumeragi_finality::SumeragiFinalityCheckpoint,
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
@@ -236,7 +236,7 @@ use iroha_torii_shared::{
         decode_unverified_kagemusha_operation_status_v1,
         validate_kagemusha_top_up_signed_transaction_v1,
     },
-    uri as torii_uri,
+    route_catalog as torii_routes,
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned};
 use norito::{
@@ -2754,10 +2754,8 @@ pub struct ValidationFeePolicyProofCatchUp {
     pub final_page: ValidationFeeCurrentPolicyProofV1,
     /// Number of independently verified pages.
     pub pages_verified: u32,
-    /// Height of the promoted durable checkpoint.
-    pub promoted_checkpoint_height: u64,
-    /// Context id of the promoted durable checkpoint.
-    pub promoted_checkpoint_context_id: [u8; 32],
+    /// Complete authenticated native checkpoint to persist before the next request.
+    pub promoted_checkpoint: SumeragiFinalityCheckpoint,
 }
 /// Result of verifying one or more bounded Parliament casting checkpoint pages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2766,10 +2764,8 @@ pub struct ParliamentTimedOvnCastingProofCatchUp {
     pub final_page: ParliamentTimedOvnCastingProofResponseV1,
     /// Number of independently verified checkpoint pages.
     pub pages_verified: u32,
-    /// Height of the promoted durable checkpoint.
-    pub promoted_checkpoint_height: u64,
-    /// Context id of the promoted durable checkpoint.
-    pub promoted_checkpoint_context_id: [u8; 32],
+    /// Complete authenticated native checkpoint to persist before the next request.
+    pub promoted_checkpoint: SumeragiFinalityCheckpoint,
 }
 fn canonical_validation_fee_draft_instruction(
     request: &ValidationFeeProposalDraftRequestV1,
@@ -8012,7 +8008,7 @@ impl Client {
     /// negotiated representations, or a response that does not describe the
     /// exact four-field first-release `kagemusha_handoff_v1` capability.
     pub fn get_kagemusha_readiness(&self) -> Result<KagemushaReadinessV1> {
-        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_READINESS);
+        let url = join_torii_url(&self.torii_url, torii_routes::kagemusha::READINESS_PATH);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header())
@@ -8047,7 +8043,7 @@ impl Client {
             validate_kagemusha_top_up_signed_transaction_v1(&self.network_id, transaction)
                 .wrap_err("invalid payer-signed KAGEMUSHA V1 top-up transaction")?;
         self.submit_kagemusha_operation_body(
-            torii_uri::KAGEMUSHA_TOP_UP,
+            torii_routes::kagemusha::TOP_UP_PATH,
             transaction.encode_versioned(),
             request.operation_id,
             KagemushaOperationKindV1::TopUp,
@@ -8071,7 +8067,7 @@ impl Client {
             .validate_shape()
             .wrap_err("invalid KAGEMUSHA V1 redemption request")?;
         self.submit_kagemusha_operation(
-            torii_uri::KAGEMUSHA_REDEEM,
+            torii_routes::kagemusha::REDEEM_PATH,
             request,
             request.operation_id,
             KagemushaOperationKindV1::Redemption,
@@ -8134,7 +8130,8 @@ impl Client {
             return Err(eyre!("KAGEMUSHA V1 operation id must be non-zero"));
         }
         let operation_id_text = hex::encode(operation_id);
-        let path = torii_uri::KAGEMUSHA_OPERATION.replace("{operation_id}", &operation_id_text);
+        let path =
+            torii_routes::kagemusha::OPERATION_PATH.replace("{operation_id}", &operation_id_text);
         let url = join_torii_url(&self.torii_url, &path);
         let max_response_bytes = match self.wire_format_preference {
             WireFormatPreference::NoritoOnly => KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
@@ -8200,8 +8197,20 @@ impl Client {
                 "Failed to decode sumeragi status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
             ));
         };
+        Self::validate_sumeragi_status_version(&status)?;
         Ok(status)
     }
+
+    fn validate_sumeragi_status_version(status: &SumeragiStatus) -> Result<()> {
+        if status.protocol_version != iroha_data_model::sumeragi::PROTOCOL_VERSION {
+            return Err(eyre!(
+                "Unsupported Sumeragi status protocol version {}",
+                status.protocol_version
+            ));
+        }
+        Ok(())
+    }
+
     /// GET `/v1/sumeragi/lanes` — every lane of the committed state with the status of the
     /// node's instance of it (`specs/sumeragi_lanes.md` §8).
     ///
@@ -8222,7 +8231,7 @@ impl Client {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        if Self::is_norito_content_type(content_type) {
+        let lanes = if Self::is_norito_content_type(content_type) {
             decode_from_bytes::<Lanes>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi lanes Norito payload: {err}"))
         } else if Self::is_exact_json_content_type(content_type) {
@@ -8232,7 +8241,13 @@ impl Client {
             Err(eyre!(
                 "Failed to decode sumeragi lanes: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
             ))
+        }?;
+        for lane in &lanes {
+            if let Some(status) = &lane.instance {
+                Self::validate_sumeragi_status_version(status)?;
+            }
         }
+        Ok(lanes)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
     ///
@@ -8257,15 +8272,13 @@ impl Client {
         }
         let status = norito::json::from_slice::<SumeragiStatus>(resp.body())
             .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?;
+        Self::validate_sumeragi_status_version(&status)?;
         norito::json::to_value(&status)
             .map_err(|err| eyre!("Failed to render Sumeragi status JSON: {err}"))
     }
-    /// GET `/v1/sumeragi/diagnostics` with typed decoding and evidence validation.
+    /// GET `/v1/sumeragi/diagnostics` with typed decoding and NPoS field validation.
     ///
-    /// This helper decodes [`SumeragiDiagnosticsStatus`] and rejects malformed
-    /// Native AMX receipt groups or participant-application rows as well as
-    /// invalid lane relay envelopes (e.g., mismatched settlement hashes or
-    /// DA/QC bindings).
+    /// These diagnostic observations are not authenticated finality proofs.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
@@ -8307,37 +8320,7 @@ impl Client {
             npos.validate()
                 .map_err(|reason| eyre!("Invalid NPoS diagnostics payload: {reason}"))?;
         }
-        wire.validate_native_amx_receipts()
-            .map_err(|reason| eyre!("Invalid Native AMX receipt diagnostics payload: {reason}"))?;
-        wire.validate_native_amx_participant_applications()
-            .map_err(|reason| {
-                eyre!("Invalid Native AMX participant diagnostics payload: {reason}")
-            })?;
-        wire.validate_autonomous_lane_executions()
-            .map_err(|reason| eyre!("Invalid autonomous lane diagnostics payload: {reason}"))?;
-        for envelope in &wire.lane_relay_envelopes {
-            envelope
-                .verify()
-                .map_err(|err| eyre!("Invalid lane relay envelope in status payload: {err}"))?;
-        }
         Ok(wire)
-    }
-    /// GET `/v1/sumeragi/diagnostics` and return verified cross-lane transfer proofs.
-    ///
-    /// This helper enforces lane relay envelope validation (settlement hash, DA hash, QC subject)
-    /// and rejects duplicate `(lane_id, dataspace_id, block_height)` tuples before returning the
-    /// wrapped proof objects.
-    ///
-    /// # Errors
-    /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
-    pub async fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_diagnostics().await?;
-        verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
-        Ok(status
-            .lane_relay_envelopes
-            .into_iter()
-            .map(CrossLaneTransferProof::new)
-            .collect())
     }
     /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
@@ -10674,7 +10657,10 @@ mod evidence_http_tests {
                 response.get("pipeline_status").is_some_and(Value::is_null),
                 "admission is not observed queue state"
             );
-            assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
+            assert_eq!(
+                snapshots[1].url.path(),
+                torii_routes::pipeline::TRANSACTION.path()
+            );
             assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
             assert_eq!(
                 response.get("tx_hash_hex"),
@@ -10756,7 +10742,9 @@ mod evidence_http_tests {
                 move |snapshot| {
                     let response = match snapshot.url.path() {
                         "/v1/contracts/call" => prepared_response.clone(),
-                        torii_uri::TRANSACTION => empty_response(StatusCode::OK),
+                        p if p == torii_routes::pipeline::TRANSACTION.path() => {
+                            empty_response(StatusCode::OK)
+                        }
                         unexpected => panic!("unexpected contract workflow request: {unexpected}"),
                     };
                     store.lock().expect("snapshot store").push(snapshot);
@@ -10898,55 +10886,6 @@ mod evidence_http_tests {
     #[test]
     fn post_contract_call_simulate_authenticates_exact_body_with_fresh_client_headers() {
         assert_contract_read_only_request_authentication(true);
-    }
-
-    #[test]
-    fn post_contract_call_rejects_retired_admission_draft_before_signing_or_submission() {
-        let client = client_with_base_url(base_url());
-        let (address, intent, fee_payment, builder) = contract_call_fixture(&client);
-        let retired = builder;
-        let response_value = prepared_contract_call_response(&intent, &retired);
-        let response = json_response(
-            StatusCode::OK,
-            &norito::json::to_json(&response_value).expect("response"),
-        );
-        for private_key in [None, Some(client.key_pair.private_key())] {
-            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-            let result = with_mock_http(
-                respond_with(&snapshots, response.clone()),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    client.post_contract_call_json_for_test(
-                        &client.account,
-                        private_key,
-                        Some(&address),
-                        None,
-                        "ping",
-                        None,
-                        None,
-                        Some(123),
-                        None,
-                        &fee_payment,
-                        &intent,
-                    )
-                },
-            );
-            let error =
-                result.expect_err("retired public draft must fail before signing or dispatch");
-            assert!(
-                format!("{error:#}").contains("must use Ordinary admission"),
-                "{error:#}"
-            );
-            let requests = snapshots.lock().expect("captured requests");
-            assert_eq!(
-                requests.len(),
-                1,
-                "no transaction submission after rejecting prepare"
-            );
-            assert_eq!(requests[0].url.path(), "/v1/contracts/call");
-        }
     }
 
     #[test]
@@ -12641,7 +12580,9 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -12675,7 +12616,7 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -12714,7 +12655,9 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -12751,7 +12694,7 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -12775,7 +12718,9 @@ mod evidence_http_tests {
         );
         let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
             "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-            torii_uri::TRANSACTION_DETAILS => Ok(empty_response(StatusCode::FORBIDDEN)),
+            p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                Ok(empty_response(StatusCode::FORBIDDEN))
+            }
             path => panic!("unexpected rejection-details request path: {path}"),
         };
         let error = with_mock_http(responder, |mock_transport| {
@@ -12834,12 +12779,14 @@ mod evidence_http_tests {
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-                    torii_uri::TRANSACTION_DETAILS
-                        if detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path()
+                        && detail_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
                     {
                         Ok(missing_response.clone())
                     }
-                    torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+                    p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                        Ok(details_response.clone())
+                    }
                     _ => panic!("unexpected rejection-details request path: {path}"),
                 }
             }
@@ -12874,9 +12821,9 @@ mod evidence_http_tests {
             &snapshots,
             &[
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
                 "/v1/pipeline/transactions/status",
-                torii_uri::TRANSACTION_DETAILS,
+                torii_routes::pipeline::TRANSACTION_DETAILS.path(),
             ],
         );
     }
@@ -12900,7 +12847,9 @@ mod evidence_http_tests {
         let details_response = norito_response(StatusCode::OK, &details);
         let responder = move |snapshot: RequestSnapshot| match snapshot.url.path() {
             "/v1/pipeline/transactions/status" => Ok(status_response.clone()),
-            torii_uri::TRANSACTION_DETAILS => Ok(details_response.clone()),
+            p if p == torii_routes::pipeline::TRANSACTION_DETAILS.path() => {
+                Ok(details_response.clone())
+            }
             path => panic!("unexpected rejection-details request path: {path}"),
         };
         let error = with_mock_http(responder, |mock_transport| {
@@ -13723,26 +13672,6 @@ mod evidence_http_tests {
             result.expect(expectation);
             assert_json_accept(&snapshot, path);
         }
-        let (result, snapshot) = capture_request(
-            json_response(StatusCode::OK, r#"{"count":0}"#),
-            |mock_transport| {
-                client_with_base_url(base_url())
-                    .with_test_http_transport(mock_transport.clone())
-                    .get_sumeragi_evidence_count()
-            },
-        );
-        result.expect("typed Sumeragi evidence count");
-        assert_json_accept(&snapshot, "/v1/sumeragi/evidence/count");
-        let (result, snapshot) = capture_request(
-            json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
-            |mock_transport| {
-                client_with_base_url(base_url())
-                    .with_test_http_transport(mock_transport.clone())
-                    .get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
-            },
-        );
-        result.expect("typed Sumeragi evidence list");
-        assert_json_accept(&snapshot, "/v1/sumeragi/evidence");
     }
     fn assert_connection_refused_confirmation(seed: u8) {
         use std::io::{Error, ErrorKind};
@@ -14703,6 +14632,8 @@ impl fmt::Debug for Client {
 mod context;
 #[cfg(test)]
 mod context_tests;
+#[cfg(test)]
+mod native_checkpoint_tests;
 pub use context::ClientBuilder;
 
 include!("client/canonical_request_auth.rs");
@@ -15476,7 +15407,7 @@ impl AccountClient {
         let client = self.client();
         let url = join_torii_url(
             &client.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+            torii_routes::fees::QUOTE_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeQuoteWireRequest {
             payload: payload.clone(),
@@ -15681,7 +15612,10 @@ impl AccountClient {
         let mut request = client
             .default_request(
                 HttpMethod::POST,
-                join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
+                join_torii_url(
+                    &client.torii_url,
+                    torii_routes::pipeline::TRANSACTIONS_BATCH.path(),
+                ),
             )
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", "application/json")
@@ -16323,7 +16257,7 @@ impl Client {
         // TransactionEntrypoint wrapping happens on the server boundary.
         let mut request = DefaultRequestBuilder::new(
             HttpMethod::POST,
-            join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
+            join_torii_url(&self.torii_url, torii_routes::pipeline::TRANSACTION.path()),
         )
         .with_transport(self.http_transport.clone())
         .headers(self.transaction_headers_without_content_type())
@@ -16354,7 +16288,10 @@ impl Client {
                 details: "event WebSocket requires at least one filter".to_owned(),
             });
         }
-        let url = join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::streaming::SUBSCRIPTION_WS.path(),
+        );
         let headers = self
             .account_signed_headers(&HttpMethod::GET, &url, &[])
             .map_err(|error| crate::Error::RequestSigning {
@@ -16379,7 +16316,7 @@ impl Client {
     #[inline]
     fn blocks_handler(&self, height: NonZeroU64) -> crate::Result<blocks_api::flow::Init> {
         let operation = streams::BLOCKS_OPERATION;
-        let url = join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM);
+        let url = join_torii_url(&self.torii_url, torii_routes::streaming::BLOCKS_WS.path());
         let headers = self
             .account_signed_headers(&HttpMethod::GET, &url, &[])
             .map_err(|error| crate::Error::RequestSigning {
@@ -16421,7 +16358,10 @@ impl Client {
         let response = self.send_builder(
             self.default_request(
                 HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::NEXUS_LANE_LIFECYCLE),
+                join_torii_url(
+                    &self.torii_url,
+                    torii_routes::core::NEXUS_LIFECYCLE_GET.path(),
+                ),
             )
             .header(
                 http::header::ACCEPT,
@@ -17531,7 +17471,7 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::FEE_SPONSOR_PROGRAM_BY_ID.trim_start_matches('/'),
+            torii_routes::fees::SPONSOR_PROGRAM_BY_ID_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeSponsorProgramByIdRequest::new(program_id))?;
         let response = self.send_builder(
@@ -19224,7 +19164,10 @@ impl Client {
                 "deploy-contract proposal must select exactly one contract address or alias"
             ));
         }
-        let url = join_torii_url(&self.torii_url, iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PROPOSE_DEPLOY.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode deploy-contract proposal draft request")?;
         let response = self.send_builder(
@@ -19270,7 +19213,7 @@ impl Client {
         validate_sccp_route_governance_draft_request(request, &self.network_id)?;
         let url = join_torii_url(
             &self.torii_url,
-            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE,
+            torii_routes::runtime_governance::GOV_PROPOSE_SCCP.path(),
         );
         let body = norito::json::to_vec(request)?;
         let resp = self.send_builder(
@@ -19313,7 +19256,10 @@ impl Client {
         if request.version != PARLIAMENT_API_VERSION_V1 {
             return Err(eyre!("unsupported Parliament attempt draft version"));
         }
-        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_ATTEMPT_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode Parliament attempt draft request")?;
         let response = self.send_builder(
@@ -19350,7 +19296,10 @@ impl Client {
         request
             .validate_static()
             .map_err(|reason| eyre!("invalid Parliament transition draft request: {reason}"))?;
-        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_TRANSITION_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path(),
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode Parliament transition draft request")?;
         let response = self.send_builder(
@@ -19388,7 +19337,8 @@ impl Client {
         {
             return Err(eyre!("Parliament governance attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ
+            .path()
             .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19432,7 +19382,8 @@ impl Client {
         {
             return Err(eyre!("Parliament governance attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_PLAN
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_ATTEMPT_PLAN
+            .path()
             .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19479,7 +19430,8 @@ impl Client {
         if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(eyre!("Parliament ballot attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19517,19 +19469,25 @@ impl Client {
     pub fn get_parliament_timed_ovn_casting_proof_page(
         &self,
         ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
-    ) -> Result<ParliamentTimedOvnCastingProofResponseV1> {
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
+    ) -> Result<(
+        ParliamentTimedOvnCastingProofResponseV1,
+        SumeragiFinalityCheckpoint,
+    )> {
+        if trusted_checkpoint.network_id() != self.network_id {
+            return Err(eyre!("trusted checkpoint belongs to a different network"));
+        }
         if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(eyre!("Parliament ballot attempt id must be non-zero"));
         }
         let request = ParliamentTimedOvnCastingProofRequestV1 {
             version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
-            trusted_checkpoint_height,
+            trusted_checkpoint_height: trusted_checkpoint.height(),
         };
         let body = to_bytes(&request)
             .wrap_err("failed to encode Parliament casting proof request as Norito")?;
-        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19553,20 +19511,15 @@ impl Client {
         }
         let proof: ParliamentTimedOvnCastingProofResponseV1 = decode_from_bytes(response.body())
             .wrap_err("failed to decode Parliament casting proof response")?;
-        proof
-            .verify_consensus_page_against(
-                self.network_id,
-                trusted_checkpoint_height,
-                trusted_checkpoint_context_id,
-                ballot_attempt_id,
-            )
+        let (_, promoted_checkpoint) = proof
+            .verify_consensus_page_against(self.network_id, trusted_checkpoint, ballot_attempt_id)
             .map_err(|error| eyre!("Parliament casting proof verification failed: {error}"))?;
-        Ok(proof)
+        Ok((proof, promoted_checkpoint))
     }
 
     /// Verify bounded casting-proof pages until the endpoint's observed tip.
     ///
-    /// Applications should durably persist each promoted height/context before
+    /// Applications should durably persist each complete promoted checkpoint before
     /// requesting the next page. This convenience method performs the same
     /// checks in memory and returns only after a terminal page authenticates the
     /// requested ballot's casting archive.
@@ -19577,27 +19530,21 @@ impl Client {
     pub fn catch_up_parliament_timed_ovn_casting_proof(
         &self,
         ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<ParliamentTimedOvnCastingProofCatchUp> {
         const MAX_PAGES_PER_CALL: u32 = 4_096;
-        let mut checkpoint_height = trusted_checkpoint_height;
-        let mut checkpoint_context_id = trusted_checkpoint_context_id;
+        let mut checkpoint = trusted_checkpoint.clone();
         for pages_verified in 1..=MAX_PAGES_PER_CALL {
-            let page = self.get_parliament_timed_ovn_casting_proof_page(
-                ballot_attempt_id,
-                checkpoint_height,
-                checkpoint_context_id,
-            )?;
-            if page.evaluated_block_height < checkpoint_height
-                || (page.more_available && page.evaluated_block_height == checkpoint_height)
+            let (page, promoted_checkpoint) =
+                self.get_parliament_timed_ovn_casting_proof_page(ballot_attempt_id, &checkpoint)?;
+            if page.evaluated_block_height < checkpoint.height()
+                || (page.more_available && page.evaluated_block_height == checkpoint.height())
             {
                 return Err(eyre!(
                     "Parliament casting checkpoint promotion did not advance"
                 ));
             }
-            checkpoint_height = page.evaluated_block_height;
-            checkpoint_context_id = *page.evaluated_context_id.0.as_ref();
+            checkpoint = promoted_checkpoint;
             if !page.more_available {
                 if page.casting_context_archive.is_none() {
                     return Err(eyre!(
@@ -19607,8 +19554,7 @@ impl Client {
                 return Ok(ParliamentTimedOvnCastingProofCatchUp {
                     final_page: page,
                     pages_verified,
-                    promoted_checkpoint_height: checkpoint_height,
-                    promoted_checkpoint_context_id: checkpoint_context_id,
+                    promoted_checkpoint: checkpoint,
                 });
             }
         }
@@ -19633,7 +19579,8 @@ impl Client {
         if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(eyre!("Parliament ballot attempt id must be non-zero"));
         }
-        let path = torii_uri::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ
+            .path()
             .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19673,7 +19620,8 @@ impl Client {
         context
             .validate_for_ballot(context.ballot_attempt_id)
             .map_err(|reason| eyre!(reason))?;
-        let path = torii_uri::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE
+        let path = torii_routes::runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE
+            .path()
             .replace("{ballot_attempt_id}", &context.ballot_attempt_id.to_hex());
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
@@ -19730,7 +19678,7 @@ impl Client {
         }
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+            torii_routes::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
         );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, request_norito.to_vec())?
@@ -19788,18 +19736,23 @@ impl Client {
     /// verification failure.
     pub fn get_validation_fee_current_policy_proof_page(
         &self,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
-    ) -> Result<ValidationFeeCurrentPolicyProofV1> {
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
+    ) -> Result<(
+        ValidationFeeCurrentPolicyProofV1,
+        SumeragiFinalityCheckpoint,
+    )> {
+        if trusted_checkpoint.network_id() != self.network_id {
+            return Err(eyre!("trusted checkpoint belongs to a different network"));
+        }
         let request = ValidationFeeCurrentPolicyProofRequestV1 {
             version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
-            trusted_checkpoint_height,
+            trusted_checkpoint_height: trusted_checkpoint.height(),
         };
         let body = to_bytes(&request)
             .wrap_err("failed to encode validation-fee proof request as Norito")?;
         let url = join_torii_url(
             &self.torii_url,
-            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+            torii_routes::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
         );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
@@ -19822,14 +19775,10 @@ impl Client {
         }
         let proof: ValidationFeeCurrentPolicyProofV1 = decode_from_bytes(response.body())
             .wrap_err("failed to decode validation-fee policy proof")?;
-        proof
-            .verify_against(
-                self.network_id,
-                trusted_checkpoint_height,
-                trusted_checkpoint_context_id,
-            )
+        let promoted_checkpoint = proof
+            .verify_against(self.network_id, trusted_checkpoint)
             .map_err(|error| eyre!("validation-fee policy proof verification failed: {error}"))?;
-        Ok(proof)
+        Ok((proof, promoted_checkpoint))
     }
     /// Request one bounded current-state Hijiri validation-fee quote.
     ///
@@ -19851,7 +19800,10 @@ impl Client {
             .map_err(|error| eyre!("invalid Hijiri validation-fee quote request: {error}"))?;
         let body = to_bytes(request)
             .wrap_err("failed to encode Hijiri validation-fee quote request as Norito")?;
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+        );
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_NORITO)
@@ -19886,7 +19838,7 @@ impl Client {
     /// Repeatedly verify bounded validation-fee proof pages until Torii's observed tip.
     ///
     /// Applications that persist checkpoints should call the page method
-    /// directly and durably store each returned height/context before
+    /// directly and durably store each returned native checkpoint before
     /// requesting the next page. This convenience method verifies the same
     /// sequence in memory and returns the final promoted checkpoint.
     ///
@@ -19896,30 +19848,24 @@ impl Client {
     /// hostile endpoint attempts an unbounded pagination loop.
     pub fn catch_up_validation_fee_current_policy_proof(
         &self,
-        trusted_checkpoint_height: u64,
-        trusted_checkpoint_context_id: [u8; 32],
+        trusted_checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<ValidationFeePolicyProofCatchUp> {
         const MAX_PAGES_PER_CALL: u32 = 4_096;
-        let mut checkpoint_height = trusted_checkpoint_height;
-        let mut checkpoint_context_id = trusted_checkpoint_context_id;
+        let mut checkpoint = trusted_checkpoint.clone();
         for pages_verified in 1..=MAX_PAGES_PER_CALL {
-            let page = self.get_validation_fee_current_policy_proof_page(
-                checkpoint_height,
-                checkpoint_context_id,
-            )?;
-            if page.evaluated_block_height < checkpoint_height
-                || (page.more_available && page.evaluated_block_height == checkpoint_height)
+            let (page, promoted_checkpoint) =
+                self.get_validation_fee_current_policy_proof_page(&checkpoint)?;
+            if page.evaluated_block_height < checkpoint.height()
+                || (page.more_available && page.evaluated_block_height == checkpoint.height())
             {
                 return Err(eyre!("validation-fee checkpoint promotion did not advance"));
             }
-            checkpoint_height = page.evaluated_block_height;
-            checkpoint_context_id = *page.evaluated_context_id.0.as_ref();
+            checkpoint = promoted_checkpoint;
             if !page.more_available {
                 return Ok(ValidationFeePolicyProofCatchUp {
                     final_page: page,
                     pages_verified,
-                    promoted_checkpoint_height: checkpoint_height,
-                    promoted_checkpoint_context_id: checkpoint_context_id,
+                    promoted_checkpoint: checkpoint,
                 });
             }
         }
@@ -19949,7 +19895,10 @@ impl Client {
             .map(decode_validation_fee_proposal_cursor_v1)
             .transpose()
             .map_err(|error| eyre!("invalid validation-fee proposal cursor: {error}"))?;
-        let mut url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSALS);
+        let mut url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_PROPOSALS_PATH,
+        );
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string());
         if let Some(cursor) = cursor {
@@ -20030,7 +19979,8 @@ impl Client {
         proposal_id: &str,
     ) -> Result<ValidationFeeProposalDetailV1> {
         Self::require_lower_hex_32(proposal_id, "proposal_id")?;
-        let path = torii_uri::VALIDATION_FEE_PROPOSAL_DETAIL.replace("{proposal_id}", proposal_id);
+        let path = torii_routes::runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL_PATH
+            .replace("{proposal_id}", proposal_id);
         let url = join_torii_url(&self.torii_url, &path);
         let response = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -20074,7 +20024,10 @@ impl Client {
             ));
         }
         let _ = canonical_validation_fee_draft_instruction(request)?;
-        let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSAL_DRAFT);
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_routes::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
+        );
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode validation-fee proposal draft")?;
         let response = self.send_builder(
@@ -21258,7 +21211,9 @@ impl OperatorClient {
         let client = &self.context;
         let url = join_torii_url(
             &client.torii_url,
-            iroha_torii_shared::uri::PROOF_RETENTION_STATUS.trim_start_matches('/'),
+            torii_routes::pipeline::PROOF_RETENTION
+                .path()
+                .trim_start_matches('/'),
         );
         let request = client
             .identity_signed_request(&self.operator_key_pair, HttpMethod::GET, url, Vec::new())?
@@ -21861,9 +21816,6 @@ where
                         }
                         PipelineEventBox::Warning(_w) => {
                             // Ignore warnings for tx confirmation flow
-                        }
-                        PipelineEventBox::Merge(_merge_event) => {
-                            // Merge-ledger commits are orthogonal to transaction confirmation flow
                         }
                         PipelineEventBox::Witness(_witness) => {
                             // Witness events do not influence transaction confirmation flow.
@@ -23404,21 +23356,12 @@ mod tests {
             AliasTransactionPlanV1, ResolvedAccountAliasV1,
         },
         asset::AssetDefinitionId,
-        block::{
-            BlockHeader,
-            consensus::{
-                LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-                LaneVolatilityClass, NativeAmxReceipt, SumeragiAutonomousLaneExecution,
-                SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
-                SumeragiPipelineExecutionStatus,
-            },
-        },
+        block::{BlockHeader, consensus::SumeragiPipelineExecutionStatus},
         da::{
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, ExtraMetadata, StorageTicketId},
         },
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
-        nexus::{LaneCatalog, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
         privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
@@ -23783,11 +23726,12 @@ mod tests {
                     .lock()
                     .expect("async path log")
                     .push(request.url.path().to_owned());
-                let accepted_count = if request.url.path() == torii_uri::TRANSACTIONS_BATCH {
-                    Some("1")
-                } else {
-                    None
-                };
+                let accepted_count =
+                    if request.url.path() == torii_routes::pipeline::TRANSACTIONS_BATCH.path() {
+                        Some("1")
+                    } else {
+                        None
+                    };
                 Box::pin(async move {
                     let mut response = HttpResponse::builder().status(StatusCode::ACCEPTED);
                     if let Some(count) = accepted_count {
@@ -23833,7 +23777,10 @@ mod tests {
         assert_eq!(sync_sends.load(Ordering::Relaxed), 0);
         assert_eq!(
             *async_paths.lock().expect("async path log"),
-            [torii_uri::TRANSACTION, torii_uri::TRANSACTIONS_BATCH]
+            [
+                torii_routes::pipeline::TRANSACTION.path(),
+                torii_routes::pipeline::TRANSACTIONS_BATCH.path()
+            ]
         );
     }
     #[test]
@@ -24215,7 +24162,10 @@ mod tests {
         });
         assert_eq!(actual.expect("valid Hijiri quote response"), expected);
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), torii_uri::VALIDATION_FEE_HIJIRI_QUOTE);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::runtime_governance::VALIDATION_FEE_HIJIRI_QUOTE_PATH
+        );
         assert_eq!(snapshot.url.query(), None);
         assert_eq!(
             snapshot.max_response_bytes,
@@ -26356,70 +26306,6 @@ mod tests {
         );
     }
     #[test]
-    fn prepared_account_verifiers_reject_signed_retired_admission() {
-        let mut client = client_with_base_url(base_url());
-        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
-        let onboarding_request = onboarding.receipt.body.request.clone();
-        let onboarding_signed = client
-            .verify_account_onboarding_prepared_transaction(
-                &onboarding_request,
-                &onboarding,
-                &onboarding.receipt,
-                &onboarding.binding,
-                &onboarding.fee_payment,
-            )
-            .expect("canonical prepared onboarding uses Ordinary");
-        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
-            .expect("onboarding fixture signer");
-        let retired_onboarding =
-            TransactionBuilder::from_payload(onboarding_signed.payload().clone())
-                .expect("rebuild onboarding payload")
-                .sign(onboarding_signer.private_key());
-        replace_onboarding_prepared_transaction(
-            &mut onboarding,
-            &retired_onboarding,
-            &onboarding_signer,
-        );
-        let onboarding_error = client
-            .verify_account_onboarding_prepared_transaction(
-                &onboarding_request,
-                &onboarding,
-                &onboarding.receipt,
-                &onboarding.binding,
-                &onboarding.fee_payment,
-            )
-            .expect_err("signed retired onboarding must fail verification");
-        assert!(onboarding_error.to_string().contains("Ordinary admission"));
-
-        let mut faucet = faucet_prepared_signature_fixture(&mut client);
-        let policy = faucet_policy_fixture();
-        let faucet_signed = client
-            .verify_account_faucet_prepared_transaction(
-                &faucet,
-                &faucet.claim,
-                &faucet.binding,
-                &faucet.fee_payment,
-                &policy,
-            )
-            .expect("canonical prepared faucet uses Ordinary");
-        let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
-            .expect("faucet fixture signer");
-        let retired_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
-            .expect("rebuild faucet payload")
-            .sign(faucet_signer.private_key());
-        replace_faucet_prepared_transaction(&mut faucet, &retired_faucet, &faucet_signer);
-        let faucet_error = client
-            .verify_account_faucet_prepared_transaction(
-                &faucet,
-                &faucet.claim,
-                &faucet.binding,
-                &faucet.fee_payment,
-                &policy,
-            )
-            .expect_err("signed retired faucet payout must fail verification");
-        assert!(faucet_error.to_string().contains("Ordinary admission"));
-    }
-    #[test]
     fn prepared_transaction_verifiers_reject_an_independent_fee_substitution() {
         let mut client = client_with_base_url(base_url());
         let onboarding = onboarding_prepared_signature_fixture(&mut client);
@@ -27946,7 +27832,7 @@ mod tests {
             .expect("account signature remains valid");
         let requests = requests.lock().expect("fee quote request store");
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url.path(), torii_uri::FEES_QUOTE);
+        assert_eq!(requests[0].url.path(), torii_routes::fees::QUOTE_PATH);
     }
     struct MultisigFeeQuoteFixture {
         client: Client,
@@ -27988,7 +27874,7 @@ mod tests {
             .expect("build exact multisig fee-quote payload");
         let url = join_torii_url(
             &client.torii_url,
-            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+            torii_routes::fees::QUOTE_PATH.trim_start_matches('/'),
         );
         let body = norito::json::to_vec(&FeeQuoteWireRequest {
             payload: payload.clone(),
@@ -28812,49 +28698,8 @@ mod tests {
             .expect("transaction preparation should not read RNG when nonce is disabled");
         assert_eq!(transaction.nonce, None);
     }
-    fn sample_sumeragi_status_with_relay() -> (SumeragiDiagnosticsStatus, LaneRelayEnvelope) {
-        let settlement = LaneBlockCommitment {
-            block_height: 12,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
-            tx_count: 1,
-            total_local_amount: "0.5".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.25".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0.01".parse().expect("valid settlement quantity"),
-            swap_metadata: Some(LaneSwapMetadata {
-                epsilon_bps: 35,
-                twap_window_seconds: 120,
-                liquidity_profile: LaneLiquidityProfile::Tier2,
-                twap_local_per_xor: "123.456".parse().expect("canonical TWAP"),
-                volatility_class: LaneVolatilityClass::Elevated,
-            }),
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x11; 32],
-                local_amount: "0.5".parse().expect("valid settlement quantity"),
-                xor_due: "0.25".parse().expect("valid settlement quantity"),
-                xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
-                xor_variance: "0.01".parse().expect("valid settlement quantity"),
-                timestamp_ms: 1_724_000_000_000,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0xDD; Hash::LENGTH],
-        )));
-        let mut block_header = BlockHeader::new(
-            NonZeroU64::new(12).expect("nonzero height"),
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        block_header.set_da_commitments_hash(da_hash);
-        let relay_envelope = LaneRelayEnvelope::new(block_header, da_hash, settlement.clone(), 256)
-            .expect("construct lane relay envelope");
-        let status = SumeragiDiagnosticsStatus {
+    fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
+        SumeragiDiagnosticsStatus {
             pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
@@ -28868,18 +28713,10 @@ mod tests {
             npos: None,
             lane_commitments: Vec::new(),
             dataspace_commitments: Vec::new(),
-            lane_settlement_commitments: vec![settlement],
-            lane_relay_envelopes: vec![relay_envelope.clone()],
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
-            native_amx_participant_applications: Vec::new(),
-            autonomous_lane_executions: Vec::new(),
-        };
-        (status, relay_envelope)
+        }
     }
     fn encoded_sumeragi_diagnostics_response(
         status: &SumeragiDiagnosticsStatus,
@@ -28909,60 +28746,6 @@ mod tests {
             },
         )
         .0
-    }
-    fn request_cross_lane_transfer_proofs(
-        status: &SumeragiDiagnosticsStatus,
-        content_type: &'static str,
-        context: &'static str,
-    ) -> Result<Vec<CrossLaneTransferProof>> {
-        let client = client_with_base_url(base_url());
-        capture_request(
-            encoded_sumeragi_diagnostics_response(status, content_type, context),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                crate::blocking::Client::from_client(client)?.get_cross_lane_transfer_proofs()
-            },
-        )
-        .0
-    }
-    fn make_lane_relay_for_status(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        block_height: u64,
-        timestamp_ms: u64,
-    ) -> LaneRelayEnvelope {
-        let settlement = LaneBlockCommitment {
-            block_height,
-            lane_id,
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id,
-            tx_count: 1,
-            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x22; 32],
-                local_amount: "0.00001".parse().expect("valid settlement quantity"),
-                xor_due: "0.000005".parse().expect("valid settlement quantity"),
-                xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-                xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-                timestamp_ms,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let block_header = BlockHeader::new(
-            NonZeroU64::new(block_height).expect("nonzero height"),
-            None,
-            None,
-            timestamp_ms,
-            0,
-        );
-        LaneRelayEnvelope::new(block_header, None, settlement, 0).expect("lane relay")
     }
     fn config_factory() -> Config {
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -29156,7 +28939,10 @@ mod tests {
 
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.scheme(), "ws");
-        assert_eq!(snapshot.url.path(), torii_uri::SUBSCRIPTION);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::streaming::SUBSCRIPTION_WS.path()
+        );
         assert_eq!(snapshot.url.query(), None);
         assert!(
             snapshot
@@ -29194,7 +28980,10 @@ mod tests {
 
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.scheme(), "ws");
-        assert_eq!(snapshot.url.path(), torii_uri::BLOCKS_STREAM);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::streaming::BLOCKS_WS.path()
+        );
         assert_eq!(snapshot.url.query(), None);
         assert!(
             snapshot
@@ -30400,7 +30189,10 @@ mod tests {
             });
         let actual = actual.expect("lifecycle status request succeeds");
         assert_eq!(actual, expected);
-        assert_eq!(snapshot.url.path(), torii_uri::NEXUS_LANE_LIFECYCLE);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::core::NEXUS_LIFECYCLE_GET.path()
+        );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept")
                 && value == client.wire_format_preference.accept_header()
@@ -30645,7 +30437,7 @@ mod tests {
         assert_single_accept_header(capabilities_snapshot, APPLICATION_JSON);
         let snapshot = store_guard
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .cloned()
             .expect("transaction snapshot captured");
         let content_type_headers: Vec<_> = snapshot
@@ -30727,7 +30519,7 @@ mod tests {
                             json_response(StatusCode::OK, &compatible_capabilities_body())
                         }
                     }
-                    path if path == torii_uri::TRANSACTION => json_response(
+                    path if path == torii_routes::pipeline::TRANSACTION.path() => json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"bootstrap dispatch observed"}"#,
                     ),
@@ -30913,7 +30705,7 @@ mod tests {
         let store_guard = store.lock().expect("snapshot lock");
         let snapshot = store_guard
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .cloned()
             .expect("transaction snapshot captured");
         let submitted = SignedTransaction::decode_all_versioned(&snapshot.body)
@@ -30970,7 +30762,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot lock");
         let submitted = snapshots
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .expect("multisig transaction request captured");
         let decoded = SignedTransaction::decode_all_versioned(&submitted.body)
             .expect("captured multisig transaction is canonical versioned bytes");
@@ -31086,7 +30878,7 @@ mod tests {
                         })
                     }
                 }
-                path if path == torii_uri::TRANSACTION => {
+                path if path == torii_routes::pipeline::TRANSACTION.path() => {
                     self.transaction_requests.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async {
                         Ok(HttpResponse::builder()
@@ -31244,7 +31036,10 @@ mod tests {
             let request_len = stream
                 .read(&mut request)
                 .expect("read raw transaction request");
-            let expected_request_line = format!("POST {} HTTP/1.1\r\n", torii_uri::TRANSACTION);
+            let expected_request_line = format!(
+                "POST {} HTTP/1.1\r\n",
+                torii_routes::pipeline::TRANSACTION.path()
+            );
             assert!(
                 request[..request_len].starts_with(expected_request_line.as_bytes()),
                 "unexpected raw transaction request: {}",
@@ -31601,7 +31396,10 @@ mod tests {
         assert_eq!(snapshots.len(), 3);
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
         assert_eq!(snapshots[1].url.path(), "/v1/node/capabilities");
-        assert_eq!(snapshots[2].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[2].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[test]
     fn blocking_facade_returns_submit_rejection_without_waiting_for_timeout() {
@@ -31617,11 +31415,11 @@ mod tests {
                 store.lock().expect("snapshot lock").push(snapshot);
                 let response = match path.as_str() {
                     "/v1/node/capabilities" => json_response(StatusCode::OK, &capabilities_body),
-                    p if p == torii_uri::TRANSACTION => json_response(
+                    p if p == torii_routes::pipeline::TRANSACTION.path() => json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"failed to accept transaction: missing gas limit in fee payment intent"}"#,
                     ),
-                    p if p == torii_uri::QUERY => {
+                    p if p == torii_routes::pipeline::QUERY.path() => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple::from_batch(
                                 QueryOutputBatchBox::CommittedTransaction(Vec::new()),
@@ -31685,7 +31483,7 @@ mod tests {
                 let path = snapshot.url.path().to_owned();
                 snapshots.lock().expect("snapshot lock").push(snapshot);
                 match path.as_str() {
-                    p if p == torii_uri::TRANSACTION => Ok(json_response(
+                    p if p == torii_routes::pipeline::TRANSACTION.path() => Ok(json_response(
                         StatusCode::BAD_REQUEST,
                         r#"{"code":"transaction_rejected","message":"timeout snapshot rejection"}"#,
                     )),
@@ -31716,7 +31514,7 @@ mod tests {
         let snapshots = snapshots.lock().expect("snapshot lock");
         let submission = snapshots
             .iter()
-            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .find(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .expect("blocking submission must issue one transaction POST");
         assert_eq!(submission.timeout, Some(configured_timeout));
     }
@@ -31749,7 +31547,7 @@ mod tests {
             let status_checks = Arc::clone(&status_checks);
             let premature_status_checks = Arc::clone(&premature_status_checks);
             move |snapshot: RequestSnapshot| match snapshot.url.path() {
-                path if path == torii_uri::TRANSACTION => {
+                path if path == torii_routes::pipeline::TRANSACTION.path() => {
                     std::thread::sleep(Duration::from_millis(75));
                     post_completed.store(true, Ordering::SeqCst);
                     Ok(empty_response(StatusCode::ACCEPTED))
@@ -31810,7 +31608,10 @@ mod tests {
             &identity.signed_transaction_hash
         );
         assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
-        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[0].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[test]
     fn nonblocking_prepared_native_exact_outcome_unknown_uses_local_identity() {
@@ -31908,7 +31709,10 @@ mod tests {
         assert!(format!("{error:#}").contains("connection reset after"));
         let snapshots = snapshots.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 1, "the client must never auto-resubmit");
-        assert_eq!(snapshots[0].url.path(), torii_uri::TRANSACTION);
+        assert_eq!(
+            snapshots[0].url.path(),
+            torii_routes::pipeline::TRANSACTION.path()
+        );
     }
     #[tokio::test]
     async fn async_nonblocking_native_ambiguities_are_structured_and_never_retried() {
@@ -32075,7 +31879,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_owned();
                 snapshots.lock().expect("snapshot lock").push(snapshot);
-                if path == torii_uri::TRANSACTION {
+                if path == torii_routes::pipeline::TRANSACTION.path() {
                     Err(eyre!("connection reset after dispatch"))
                 } else if path == "/v1/pipeline/transactions/status" {
                     Ok(json_response(StatusCode::OK, &status_body))
@@ -32099,7 +31903,8 @@ mod tests {
         assert_eq!(
             snapshots
                 .iter()
-                .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+                .filter(|snapshot| snapshot.url.path()
+                    == torii_routes::pipeline::TRANSACTION.path())
                 .count(),
             1,
             "blocking reconciliation must never auto-resubmit"
@@ -32178,7 +31983,7 @@ mod tests {
             .count();
         let tx_requests = store_guard
             .iter()
-            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .filter(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .count();
         assert_eq!(
             capability_requests, 1,
@@ -32227,7 +32032,7 @@ mod tests {
             .count();
         let transaction_requests = store_guard
             .iter()
-            .filter(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .filter(|snapshot| snapshot.url.path() == torii_routes::pipeline::TRANSACTION.path())
             .count();
         assert_eq!(
             capability_requests, 2,
@@ -32345,7 +32150,10 @@ mod tests {
             });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
+        assert_eq!(
+            snapshot.url.path(),
+            torii_routes::core::CONFIGURATION_GET.path()
+        );
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
@@ -32893,160 +32701,6 @@ mod tests {
         }
     }
     #[test]
-    fn get_sumeragi_diagnostics_verifies_lane_relay_envelopes() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        assert_eq!(status.lane_relay_envelopes, vec![relay_envelope]);
-        let decoded =
-            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload")
-                .expect("decode sumeragi status");
-        assert_eq!(decoded.lane_settlement_commitments.len(), 1);
-        assert_eq!(decoded.lane_relay_envelopes.len(), 1);
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered = relay_envelope;
-        tampered.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![tampered];
-        let result =
-            request_sumeragi_diagnostics(&status, APPLICATION_NORITO, "encode status payload");
-        assert!(result.is_err(), "tampered relay should be rejected");
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_malformed_autonomous_execution() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        status.autonomous_lane_executions = vec![SumeragiAutonomousLaneExecution {
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-autonomous-incarnation"),
-            lane_block_height: 1,
-            lane_block_view: 0,
-            proposal_height: 1,
-            proposal_view: Some(0),
-            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
-            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
-            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
-            proposal_hash: None,
-            descriptor_hash: None,
-            executable_payload_hash: None,
-            source_bundle_hash: None,
-            merge_entry_hash: None,
-            application_block_height: None,
-            application_block_hash: None,
-            reservation_count: 1,
-            transaction_count: 1,
-            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
-            stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
-            ),
-        }];
-        let error = request_sumeragi_diagnostics(
-            &status,
-            APPLICATION_NORITO,
-            "encode malformed autonomous diagnostics",
-        )
-        .expect_err("malformed autonomous execution must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid autonomous lane diagnostics payload")
-        );
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        let row = SumeragiAutonomousLaneExecution {
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-autonomous-incarnation"),
-            lane_block_height: 1,
-            lane_block_view: 0,
-            proposal_height: 1,
-            proposal_view: None,
-            reservation_owner_hash: Hash::new(b"client-autonomous-owner"),
-            proposal_identity_hash: Hash::new(b"client-autonomous-provisional-slot"),
-            reservation_group_hash: Hash::new(b"client-autonomous-reservation-group"),
-            proposal_hash: None,
-            descriptor_hash: None,
-            executable_payload_hash: None,
-            source_bundle_hash: None,
-            merge_entry_hash: None,
-            application_block_height: None,
-            application_block_hash: None,
-            reservation_count: 1,
-            transaction_count: 1,
-            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
-            stuck_reason: Some(
-                SumeragiAutonomousLaneExecutionStuckReason::AwaitingExecutablePayload,
-            ),
-        };
-        row.validate()
-            .expect("Queue-only client fixture must honestly omit proposal view and final hashes");
-        status.autonomous_lane_executions = vec![row, row];
-        let error = request_sumeragi_diagnostics(
-            &status,
-            APPLICATION_NORITO,
-            "encode duplicate autonomous diagnostics",
-        )
-        .expect_err("duplicate autonomous execution identity must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid autonomous lane diagnostics payload")
-        );
-    }
-    #[test]
-    fn get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container() {
-        let malformed_receipt = |settlement: &LaneBlockCommitment| NativeAmxReceipt {
-            version: 2,
-            source_id: [0xA5; Hash::LENGTH],
-            network_id: test_network_id(),
-            plan_digest: Hash::new(b"client-native-amx-plan"),
-            lane_id: settlement.lane_id,
-            dataspace_id: settlement.dataspace_id,
-            lane_incarnation: settlement.lane_incarnation,
-            authority_context_height: 12,
-            lane_block_height: settlement.block_height,
-            lane_block_view: 1,
-            coordinator_proposal_hash: Hash::new(b"client-native-amx-proposal"),
-            legs: Vec::new(),
-        };
-        let (mut direct, _) = sample_sumeragi_status_with_relay();
-        let receipt = malformed_receipt(&direct.lane_settlement_commitments[0]);
-        direct.lane_settlement_commitments[0]
-            .native_amx_receipts
-            .push(receipt);
-        let error = request_sumeragi_diagnostics(
-            &direct,
-            APPLICATION_NORITO,
-            "encode malformed direct settlement",
-        )
-        .expect_err("malformed direct Native AMX receipt must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid Native AMX receipt diagnostics payload")
-        );
-        let (mut relayed, _) = sample_sumeragi_status_with_relay();
-        let receipt = malformed_receipt(&relayed.lane_relay_envelopes[0].settlement_commitment);
-        relayed.lane_relay_envelopes[0]
-            .settlement_commitment
-            .native_amx_receipts
-            .push(receipt);
-        let error = request_sumeragi_diagnostics(
-            &relayed,
-            APPLICATION_NORITO,
-            "encode malformed relay settlement",
-        )
-        .expect_err("malformed relayed Native AMX receipt must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("Invalid Native AMX receipt diagnostics payload")
-        );
-    }
-    #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
         let client = client_with_base_url(base_url());
         let (result, _) = capture_request(
@@ -33067,7 +32721,7 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_rejects_unknown_json_fields() {
         let client = client_with_base_url(base_url());
-        let (status, _) = sample_sumeragi_status_with_relay();
+        let status = sample_sumeragi_diagnostics();
         let mut value = norito::json::to_value(&status).expect("serialize diagnostics fixture");
         value
             .pointer_mut("/lane_relay_envelopes/0/settlement_commitment")
@@ -33091,7 +32745,7 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
+        let mut status = sample_sumeragi_diagnostics();
         status.npos = Some(
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
@@ -33109,7 +32763,7 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_requires_declared_current_media_type() {
         let client = client_with_base_url(base_url());
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let status = sample_sumeragi_diagnostics();
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
         let (decoded, _) = capture_request(
             mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
@@ -33121,7 +32775,7 @@ mod tests {
             },
         );
         let decoded = decoded.expect("decode declared current diagnostics JSON");
-        assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
+        assert_eq!(decoded, status);
         for content_type in [
             None,
             Some("application/octet-stream"),
@@ -33145,211 +32799,6 @@ mod tests {
                 "{error}"
             );
         }
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_returns_verified_envelopes() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 1);
-        assert_eq!(proofs[0].envelope(), &relay_envelope);
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_json_status_payload() {
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect("decode lane relays from json payload");
-        assert_eq!(proofs.len(), 1);
-        assert_eq!(proofs[0].envelope(), &relay_envelope);
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_returns_empty_for_empty_envelopes() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = Vec::new();
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("empty relay list should decode");
-        assert!(proofs.is_empty(), "expected no cross-lane proofs");
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_rejects_duplicate_keys() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect_err("duplicates should be rejected");
-        assert!(
-            err.to_string().contains("duplicate relay envelope"),
-            "expected duplicate detection error, got {err:?}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_rejects_duplicate_keys_from_json_payload() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect_err("duplicate json relay tuples should be rejected");
-        assert!(
-            err.to_string().contains("duplicate relay envelope"),
-            "expected duplicate detection error, got {err:?}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_distinct_dataspaces_on_same_lane_and_height() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            relay_envelope.lane_id,
-            DataSpaceId::new(relay_envelope.dataspace_id.as_u64() + 1),
-            relay_envelope.block_height,
-            1_700_000_100_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_distinct_lanes_on_same_dataspace_and_height() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            LaneId::new(relay_envelope.lane_id.as_u32() + 1),
-            relay_envelope.dataspace_id,
-            relay_envelope.block_height,
-            1_700_000_105_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_preserves_envelope_order() {
-        let (mut status, first) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            LaneId::new(first.lane_id.as_u32() + 2),
-            DataSpaceId::new(first.dataspace_id.as_u64() + 3),
-            first.block_height + 4,
-            1_700_000_115_000,
-        );
-        status.lane_relay_envelopes = vec![second.clone(), first.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode ordered lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert_eq!(proofs[0].envelope(), &second, "first proof order mismatch");
-        assert_eq!(proofs[1].envelope(), &first, "second proof order mismatch");
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_accepts_same_lane_dataspace_across_heights() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let second = make_lane_relay_for_status(
-            relay_envelope.lane_id,
-            relay_envelope.dataspace_id,
-            relay_envelope.block_height + 1,
-            1_700_000_110_000,
-        );
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), second.clone()];
-        let proofs = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect("decode lane relays");
-        assert_eq!(proofs.len(), 2);
-        assert!(
-            proofs
-                .iter()
-                .any(|proof| proof.envelope() == &relay_envelope)
-        );
-        assert!(proofs.iter().any(|proof| proof.envelope() == &second));
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered_duplicate = relay_envelope.clone();
-        tampered_duplicate.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect_err("invalid relay must be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
-            "unexpected error message: {message}"
-        );
-        assert!(
-            !message.contains("duplicate relay envelope"),
-            "duplicate detection should not run before relay verification: {message}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error_from_json_payload()
-     {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered_duplicate = relay_envelope.clone();
-        tampered_duplicate.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_JSON,
-            "encode status payload as json",
-        )
-        .expect_err("invalid json relay must be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
-            "unexpected error message: {message}"
-        );
-        assert!(
-            !message.contains("duplicate relay envelope"),
-            "duplicate detection should not run before relay verification: {message}"
-        );
     }
     #[test]
     fn sorafs_pin_filter_sets_query_params() {
@@ -33989,56 +33438,6 @@ mod tests {
         account
             .sign_transaction(payload)
             .expect("sign SoraFS transaction")
-    }
-    #[test]
-    fn sorafs_native_transaction_routes_reject_ordinary_intent_before_http() {
-        use iroha_data_model::isi::sorafs::{
-            RequestSorafsReserveMovement, SubmitSorafsModerationCommit, SubmitSorafsRepairTask,
-        };
-
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
-        with_mock_http(responder, |mock_transport| {
-            let client = client_with_base_url(base_url()).with_test_http_transport(mock_transport);
-            let repair = build_transaction(
-                &client,
-                [SubmitSorafsRepairTask::new([0x51; 32], vec![0x01])],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let moderation = build_transaction(
-                &client,
-                [SubmitSorafsModerationCommit::new(vec![0x01])],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            let reserve = build_transaction(
-                &client,
-                [RequestSorafsReserveMovement::new(
-                    [0x62; 32],
-                    iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
-                    iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
-                    "1".parse().expect("reserve quantity"),
-                    1,
-                    [0x65; 32],
-                )],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            );
-            for transaction in [&repair, &moderation, &reserve] {}
-            for result in [
-                client.post_sorafs_repair_report(&repair),
-                client.post_sorafs_moderation_ballot_commit(&moderation),
-                client.post_sorafs_reserve_top_up(&reserve),
-            ] {
-                let error = result.expect_err("ordinary SoraFS intent must fail locally");
-                assert!(error.to_string().contains("requires native admission"));
-            }
-        });
-        assert!(
-            store.lock().expect("snapshot store").is_empty(),
-            "invalid signed intent must not trigger capability lookup or command HTTP"
-        );
     }
     macro_rules! assert_sorafs_routes {
         ($($route:expr => $path:expr),+ $(,)?) => {
@@ -34784,7 +34183,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
             snapshots[0].url.path(),
-            iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY
+            torii_routes::runtime_governance::GOV_PROPOSE_DEPLOY.path()
         );
         assert_eq!(snapshots[0].method, HttpMethod::POST);
         assert_signed_json_headers(&snapshots[0]);
@@ -34994,7 +34393,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
             snapshots[0].url.path(),
-            iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            torii_routes::runtime_governance::GOV_PROPOSE_SCCP.path()
         );
         assert_eq!(snapshots[0].method, HttpMethod::POST);
         assert_signed_json_headers(&snapshots[0]);

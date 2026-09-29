@@ -497,7 +497,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
         let data_path = sidecar_dir.join("absent.data");
         let index_path = sidecar_dir.join("absent.index");
@@ -521,7 +521,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
         .store_root()
         .join("blocks")
         .join("lane")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&sidecar_dir).expect("create absent progress namespace");
     let data_path = sidecar_dir.join("absent.data");
     let index_path = sidecar_dir.join("absent.index");
@@ -548,7 +548,7 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
         let data_path = sidecar_dir.join("prepend.data");
         let index_path = sidecar_dir.join("prepend.index");
@@ -674,7 +674,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .store_root()
             .join("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&sidecar_dir).expect("create bound recovery namespace");
         let data_path = sidecar_dir.join("bound-recovery.norito");
         let index_path = sidecar_dir.join("bound-recovery.index");
@@ -1738,10 +1738,10 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     {
         let (_temp_dir, kura, _data_path, _index_path) = fixture();
         let lane_root = kura.store_root().join("blocks").join("lane");
-        let source_dir = lane_root.join("lane_001").join(LANE_ARTIFACTS_DIR_NAME);
+        let source_dir = lane_root.join("lane_001").join(PIPELINE_DIR_NAME);
         let target_dir = lane_root
             .join("lane_001_copy")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&source_dir).expect("create source lane directory");
         fs::create_dir_all(&target_dir).expect("create target lane directory");
         let source_data = source_dir.join("matching-progress.norito");
@@ -1885,14 +1885,14 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .join("blocks")
             .join("lane")
             .join("lane_0000000001")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         let archive_dir = kura
             .store_root()
             .join("retired")
             .join("lane_geometry")
             .join("transition_fixture")
             .join("lane_0000000001")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         fs::create_dir_all(&active_dir).expect("create active lane directory");
         fs::create_dir_all(&archive_dir).expect("create retired lane archive directory");
         let active_data = active_dir.join("matching-progress.norito");
@@ -1988,7 +1988,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let source_root = source_kura.store_root();
         let relative_sidecar_dir = PathBuf::from("blocks")
             .join("lane")
-            .join(LANE_ARTIFACTS_DIR_NAME);
+            .join(PIPELINE_DIR_NAME);
         let source_sidecar_dir = source_root.join(&relative_sidecar_dir);
         fs::create_dir_all(&source_sidecar_dir).expect("create relocated sidecar directory");
         let source_data = source_sidecar_dir.join("relocated-progress.norito");
@@ -2819,18 +2819,6 @@ mod progress_witness_durability {
         super::absent_progress_namespace_requires_every_directory_barrier();
     }
     #[test]
-    fn certified_lane_block_strict_retry_reissues_every_barrier() {
-        super::certified_lane_block_strict_retry_reissues_every_barrier();
-    }
-    #[test]
-    fn application_receipt_snapshot_preserves_sparse_entries() {
-        super::application_receipt_snapshot_preserves_sparse_entries();
-    }
-    #[test]
-    fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
-        super::lane_block_application_receipt_strict_retry_reissues_every_barrier();
-    }
-    #[test]
     fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         super::initial_preindex_data_sync_failure_rolls_back_payload_before_retry();
     }
@@ -2865,10 +2853,6 @@ mod progress_witness_durability {
         super::progress_prepend_directory_failure_retries_without_corruption();
     }
     #[test]
-    fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
-        super::predecessor_application_receipt_fails_closed_while_durability_barrier_fails();
-    }
-    #[test]
     fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         super::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload();
     }
@@ -2901,8 +2885,8 @@ fn sidecar_append_rejects_zero_height() {
 #[test]
 fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let high_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 1_000 + 37;
     let payload = norito::to_bytes(&DummySidecar {
         height: high_height,
@@ -3018,8 +3002,8 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
 #[test]
 fn based_sidecar_index_pruning_preserves_base_height() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let base_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 2 + 11;
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     for height in base_height..=base_height + 2 {
@@ -3203,8 +3187,8 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
 #[test]
 fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 3 + 17;
     let first_payload = norito::to_bytes(&DummySidecar {
         height: first_height,
@@ -3247,8 +3231,8 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
 #[test]
 fn sidecar_append_rejects_max_height_before_creating_files() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
-    let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: u64::MAX }).expect("encode max sidecar");
     assert!(!Kura::append_indexed_sidecar(
         &data_path,
@@ -3314,7 +3298,7 @@ fn bound_prepend_intent_sizes_match_canonical_frames_at_the_full_window_bound() 
         .store_root()
         .join("blocks")
         .join("sizing")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&parent).unwrap();
     let data = parent.join("window.data");
     let index = parent.join("window.index");
@@ -3434,7 +3418,7 @@ fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
         .store_root()
         .join("blocks")
         .join("marker")
-        .join(LANE_ARTIFACTS_DIR_NAME);
+        .join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&parent).unwrap();
     let data = parent.join("window.data");
     let index = parent.join("window.index");

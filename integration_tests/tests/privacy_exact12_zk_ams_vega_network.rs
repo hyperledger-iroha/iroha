@@ -97,8 +97,8 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 // backoff can cover that work without changing the production timer policy.
 const TEST_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-// These controlled submissions use QueuePlanSynced: plan, seal, then execution.
-const QUEUE_PLAN_LIFECYCLE_BLOCKS: u64 = 3;
+// Each isolated ordinary submission executes in the next native certified global carrier.
+const EXECUTION_CARRIER_BLOCKS: u64 = 1;
 const CANONICAL_GENESIS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const ACTION_TTL: Duration = Duration::from_secs(7_200);
 struct DeterministicCryptoRng {
@@ -295,13 +295,13 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
-async fn next_queue_plan_execution_height(client: &Client) -> Result<u64> {
+async fn next_execution_height(client: &Client) -> Result<u64> {
     privacy_capabilities(&client)
         .await
-        .wrap_err("query committed height before QueuePlan governed transaction")?
+        .wrap_err("query committed height before native transaction governed transaction")?
         .committed_height
-        .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
-        .ok_or_else(|| eyre!("QueuePlan privacy-governance execution height overflowed"))
+        .checked_add(EXECUTION_CARRIER_BLOCKS)
+        .ok_or_else(|| eyre!("native transaction privacy-governance execution height overflowed"))
 }
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
@@ -1505,7 +1505,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             (ZK_AMS_PROTOCOL, zk_compiled, zk_snapshot),
             (VEGA_PROTOCOL, vega_compiled, vega_snapshot),
         ] {
-            let incoming = next_queue_plan_execution_height(&client).await?;
+            let incoming = next_execution_height(&client).await?;
             let mut mismatched = proposed_activation(compiled, incoming);
             mismatched.parameter_digest = PrivacyParameterDigestV1::new([0xA5; 32]);
             ensure!(
@@ -1543,9 +1543,9 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
                 "local mismatch row",
             )?;
         }
-        let zk_registration_height = next_queue_plan_execution_height(&client).await?;
+        let zk_registration_height = next_execution_height(&client).await?;
         let expected_vega_registration_height = zk_registration_height
-            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+            .checked_add(EXECUTION_CARRIER_BLOCKS)
             .ok_or_else(|| eyre!("Vega registration height overflowed"))?;
         let zk_proposed = proposed_activation(zk_compiled, zk_registration_height);
         submit_instruction(
@@ -1554,7 +1554,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "register exact compiled ZK-AMS activation",
         )
         .await?;
-        let vega_registration_height = next_queue_plan_execution_height(&client).await?;
+        let vega_registration_height = next_execution_height(&client).await?;
         ensure!(
             vega_registration_height == expected_vega_registration_height,
             "Vega proposal landed at {vega_registration_height}, expected \
@@ -1674,7 +1674,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "both protocols remain Proposed after real rejected actions advance the chain",
         )
         .await?;
-        let activation_height = next_queue_plan_execution_height(&client).await?;
+        let activation_height = next_execution_height(&client).await?;
         let zk_active = zk_compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height: zk_registration_height,
@@ -2124,7 +2124,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "grant CanEnactGovernance for Vega",
         )
         .await?;
-        let mismatch_height = next_queue_plan_execution_height(&client).await?;
+        let mismatch_height = next_execution_height(&client).await?;
         let mut mismatched = proposed_activation(
             compiled,
             mismatch_height,
@@ -2145,7 +2145,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             error_chain_contains(&mismatch_error, "does not match compiled native profile"),
             "Vega compiled-digest rejection had wrong reason: {mismatch_error:?}"
         );
-        let registration_height = next_queue_plan_execution_height(&client).await?;
+        let registration_height = next_execution_height(&client).await?;
         let proposed = proposed_activation(compiled, registration_height);
         submit_instruction(
             &client,
@@ -2183,7 +2183,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             &["activation is not active"],
         )
         .await?;
-        let activation_height = next_queue_plan_execution_height(&client).await?;
+        let activation_height = next_execution_height(&client).await?;
         let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height: registration_height,

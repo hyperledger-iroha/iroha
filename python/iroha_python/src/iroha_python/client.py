@@ -88,7 +88,7 @@ from iroha_torii_client.client import (
     VpnReceiptSubmitRequest,
     VpnSession,
     VpnSessionCreateRequest,
-    _read_bounded_sccp_response_body,
+    _read_bounded_response_body,
     build_canonical_request_headers,
     canonical_network_request_signature_message,
     canonical_query_string,
@@ -142,8 +142,6 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
     GovernanceRuntimeUpgradeManifest,
-    GovernanceSccpRouteAction,
-    GovernanceSccpRouteActionKind,
     GovernanceSorafsProviderAction,
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
@@ -12176,8 +12174,6 @@ __all__ = [
     "GovernanceProposalValidationFeePayoutLifecycle",
     "GovernanceProposalValidationFeePolicy",
     "GovernanceRuntimeUpgradeManifest",
-    "GovernanceSccpRouteAction",
-    "GovernanceSccpRouteActionKind",
     "GovernanceSorafsProviderAction",
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
@@ -12498,7 +12494,7 @@ def _fetch_authenticated_privacy_capabilities_archive_v1(
             raise ValueError("Exact12 capability response Content-Encoding must be identity")
         if response.status_code != 200:
             raise ValueError("Exact12 capability response status must be 200")
-        body = _read_bounded_sccp_response_body(response, 256 * 1024, context)
+        body = _read_bounded_response_body(response, 256 * 1024, context)
         declared_length = response.headers.get("Content-Length")
         if not body or (declared_length is not None and int(declared_length) != len(body)):
             raise ValueError("Exact12 capability response must have an exact nonempty body length")
@@ -12841,7 +12837,7 @@ class ToriiClient(
                 "and must not be public"
             )
         declared_content_length = response.headers.get("Content-Length")
-        response_norito = _read_bounded_sccp_response_body(
+        response_norito = _read_bounded_response_body(
             response,
             VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
             "Hijiri validation-fee quote",
@@ -21225,7 +21221,7 @@ class ToriiClient(
         return self._maybe_json(response)
 
     def get_sumeragi_status(self) -> Optional[Any]:
-        """Fetch the raw native protocol-8 observation JSON."""
+        """Fetch the raw native protocol-1 observation JSON."""
         return self._sumeragi_operator_json(
             "/v1/sumeragi/status",
             context="sumeragi status",

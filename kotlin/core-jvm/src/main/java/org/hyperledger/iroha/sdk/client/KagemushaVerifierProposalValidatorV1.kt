@@ -198,7 +198,7 @@ internal object KagemushaVerifierProposalValidatorV1 {
 
     private fun hardwareProfile(value: Any?, label: String) {
         val record = objectValue(value, label)
-        exact(record, setOf("version", "protocol_version", "hardware_profile_id", "provider_id", "platform_class", "product_class_digest", "firmware_policy_digest", "enrollment_attestation_verifier_digest", "attestation_trust_roots_digest", "allowed_suite_commitment", "policy_epoch", "governance_credential_public_key", "capability_mask", "qualification_report_digest", "valid_from_ms", "expires_at_ms"), label)
+        exact(record, setOf("version", "protocol_version", "hardware_profile_id", "provider_id", "platform_class", "product_class_digest", "firmware_policy_digest", "enrollment_attestation_verifier_digest", "attestation_trust_roots_digest", "allowed_suite_commitment", "policy_epoch", "governance_credential_public_key", "capability_mask", "qualification_report_digest", "valid_from_ms", "expires_at_ms", "app_attestation_authority_policy_digest"), label)
         require(uint(record["version"], EXACT_JSON_MAX, "$label.version") == BigInteger("1")) { "$label.version must be 1" }
         require(uint(record["protocol_version"], EXACT_JSON_MAX, "$label.protocol_version") == BigInteger("1")) { "$label.protocol_version must be 1" }
         bytes32(record["hardware_profile_id"], "$label.hardware_profile_id")
@@ -215,6 +215,7 @@ internal object KagemushaVerifierProposalValidatorV1 {
         bytes32(record["qualification_report_digest"], "$label.qualification_report_digest")
         uint(record["valid_from_ms"], EXACT_JSON_MAX, "$label.valid_from_ms")
         uint(record["expires_at_ms"], EXACT_JSON_MAX, "$label.expires_at_ms")
+        bytes32(record["app_attestation_authority_policy_digest"], "$label.app_attestation_authority_policy_digest")
     }
 
     private fun helperProtocol(value: Any?, label: String) {
@@ -393,10 +394,31 @@ internal object KagemushaVerifierProposalValidatorV1 {
         }
     }
 
+    private fun releasePurpose(value: Any?, label: String) {
+        val record = objectValue(value, label)
+        exact(record, setOf("kind", "value"), label)
+        when (string(record["kind"], "$label.kind")) {
+            "production" -> require(record["value"] == null) { "$label.value must be explicit null" }
+            "testnet_experiment" -> testnetExperimentScope(record["value"], "$label.value")
+            else -> throw IllegalArgumentException("$label.kind has unknown release purpose")
+        }
+    }
+
+    private fun testnetExperimentScope(value: Any?, label: String) {
+        val record = objectValue(value, label)
+        exact(record, setOf("asset_identity_digest", "asset_incarnation", "asset_scale", "liability_pool_id"), label)
+        bytes32(record["asset_identity_digest"], "$label.asset_identity_digest")
+        bytes32(record["asset_incarnation"], "$label.asset_incarnation")
+        uint(record["asset_scale"], BigInteger.valueOf(28), "$label.asset_scale")
+        bytes32(record["liability_pool_id"], "$label.liability_pool_id")
+    }
+
     private fun releaseManifest(value: Any?, label: String) {
         val record = objectValue(value, label)
-        exact(record, setOf("version", "release_id", "source_tree_digest", "cargo_lock_digest", "profile_digest", "eq_protocol_digest", "ep_protocol_digest", "hardware_policy_digest", "validation_receipt_digest", "halo2_k", "helper_protocols", "enabled_profiles", "artifacts"), label)
+        exact(record, setOf("version", "network_id", "purpose", "release_id", "source_tree_digest", "cargo_lock_digest", "profile_digest", "eq_protocol_digest", "ep_protocol_digest", "hardware_policy_digest", "validation_receipt_digest", "halo2_k", "helper_protocols", "enabled_profiles", "artifacts"), label)
         require(uint(record["version"], EXACT_JSON_MAX, "$label.version") == BigInteger("1")) { "$label.version must be 1" }
+        NetworkId.parse(string(record["network_id"], "$label.network_id"))
+        releasePurpose(record["purpose"], "$label.purpose")
         bytes32(record["release_id"], "$label.release_id")
         bytes32(record["source_tree_digest"], "$label.source_tree_digest")
         bytes32(record["cargo_lock_digest"], "$label.cargo_lock_digest")

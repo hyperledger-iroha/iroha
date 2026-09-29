@@ -12,7 +12,7 @@ The runner has two deliberately separate phases:
   matrix passes.
 
 The external harness is the component that must start real Iroha processes,
-exercise authenticated message control and persistence cuts, and capture the
+exercise authenticated HTTP route control and process restarts, and capture the
 network/storage surfaces.  This script never substitutes synthetic values for
 missing harness output.  The harness protocol is a JSON request/response file
 contract described by :func:`invoke_harness` and validated below.
@@ -83,17 +83,15 @@ MAX_BOOTSTRAP_ITERATIONS = 10_000_000
 MAX_OBSERVATION_COUNT = (1 << 64) - 1
 DEFAULT_BOOTSTRAP_ITERATIONS = 2_000
 MAX_HARNESS_RESPONSE_BYTES = 16 * 1024 * 1024
-# Keep this timing contract synchronized with the real-process fixture.
-# Privacy is active in genesis. A fault job still advances four deliberately
-# non-finalized crash trials past their bundle expiries. Preserve that expiry
-# budget before startup, proof, restart, transaction, and polling overhead.
+# Each fresh trial needs a Prepare registration and a finalization carrier.
+# There are nine route-loss trials, three route holds, and one restart trial;
+# this live harness injects no in-node persistence cuts or expiry-only trials.
 REAL_PROCESS_BLOCK_CADENCE_SECONDS = 4
-FAULT_NONFINALIZED_EXPIRY_TRIALS = 4
+FAULT_CAMPAIGN_TRIALS = 13
 FAULT_BUNDLE_EXPIRY_BLOCKS = 96
-FAULT_EXPIRY_ADVANCE_BLOCKS = FAULT_BUNDLE_EXPIRY_BLOCKS + 1
 FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS = (
-    FAULT_NONFINALIZED_EXPIRY_TRIALS * FAULT_EXPIRY_ADVANCE_BLOCKS
-) * REAL_PROCESS_BLOCK_CADENCE_SECONDS
+    FAULT_CAMPAIGN_TRIALS * 2 * REAL_PROCESS_BLOCK_CADENCE_SECONDS
+)
 # Leave substantial headroom above the deterministic floor for 16 processes,
 # native proofs, restart recovery, and control acknowledgements.
 DEFAULT_HARNESS_TIMEOUT_SECONDS = 7_200
@@ -137,7 +135,7 @@ COMMON_RESPONSE_FIELDS = {
     "passed",
     "mandatory_signed_rs16_da_rbc",
     "signed_rs16_da_observations",
-    "authenticated_message_control",
+    "authenticated_private_settlement_route_control",
     "process_inventory",
     "payload",
 }
@@ -650,7 +648,7 @@ def build_configuration(
             "minimum_signed_rs16_da_observations_per_run": (
                 minimum_signed_rs16_da_observations(participants)
             ),
-            "authenticated_message_control": True,
+            "authenticated_private_settlement_route_control": True,
             "maximum_simultaneously_unavailable_per_committee": 1,
             "legacy_rbc_bypass_permitted": False,
         },
@@ -1588,8 +1586,8 @@ def validate_common_response(
             f"validator process (minimum {minimum_observations})"
         )
     require_true(
-        record["authenticated_message_control"],
-        "harness response.authenticated_message_control",
+        record["authenticated_private_settlement_route_control"],
+        "harness response.authenticated_private_settlement_route_control",
     )
     validate_process_inventory(
         record["process_inventory"],
@@ -1884,7 +1882,7 @@ def validate_fault_control_records(
             or row["seed"] != seed
             or row["run"] != run
             or row["collection"]
-            not in {"loss_trials", "phase_cut_partitions", "crash_recoveries"}
+            not in {"loss_trials", "phase_cut_partitions"}
             or isinstance(row["trial_index"], bool)
             or not isinstance(row["trial_index"], int)
             or row["trial_index"] < 0
@@ -1914,8 +1912,6 @@ def validate_fault_control_records(
                 "restricted_da",
                 "prepare",
                 "commit",
-                "consensus_carrier",
-                "persistence_cut",
                 "validator_restart",
                 "global_restart",
                 "coordinator_restart",
@@ -1962,12 +1958,6 @@ def validate_fault_control_records(
                 if command_object.get("bundle_id") != bundle_id:
                     raise RunnerError(
                         f"fault control evidence[{index}].controls[{control_index}] binds another APS bundle"
-                    )
-                bundle_bound = True
-            elif control_type == "persistence_cut":
-                if command_object.get("source_id") != bundle_id:
-                    raise RunnerError(
-                        f"fault control evidence[{index}].controls[{control_index}] cuts another APS bundle"
                     )
                 bundle_bound = True
             elif control_type == "coordinator_restart":
@@ -2031,8 +2021,6 @@ def validate_fault_control_records(
         "restricted_da",
         "prepare",
         "commit",
-        "consensus_carrier",
-        "persistence_cut",
         "validator_restart",
         "global_restart",
         "coordinator_restart",
@@ -2145,130 +2133,6 @@ def _validate_route_control_pair(
     return command, acknowledgement
 
 
-def _validate_consensus_carrier_control(
-    control: Mapping[str, Any], label: str
-) -> tuple[str, int]:
-    """Validate one exact Sumeragi carrier Hold or drain acknowledgement."""
-
-    command, acknowledgement = _decoded_control_pair(control, label)
-    command = exact_fields(
-        command,
-        {"drain", "queue_capacity", "release", "revision", "rules", "version"},
-        f"{label}.command",
-    )
-    acknowledgement = exact_fields(
-        acknowledgement,
-        {
-            "command_digest",
-            "delivered",
-            "dropped",
-            "drain_fence",
-            "draining",
-            "fatal",
-            "held",
-            "held_bytes",
-            "in_flight",
-            "in_flight_bytes",
-            "last_error",
-            "overflowed",
-            "queue_capacity",
-            "rejected_commands",
-            "release_pending",
-            "retired",
-            "revision",
-            "rules",
-            "version",
-        },
-        f"{label}.acknowledgement",
-    )
-    revision = positive_integer(command["revision"], f"{label}.command.revision")
-    queue_capacity = positive_integer(
-        command["queue_capacity"], f"{label}.command.queue_capacity"
-    )
-    digest_literal = acknowledgement["command_digest"]
-    try:
-        digest_body = canonical_iroha_hash_body(
-            digest_literal, f"{label}.acknowledgement.command_digest"
-        )
-    except RunnerError as error:
-        raise RunnerError(f"{label} carrier command acknowledgement is substituted") from error
-    rules = command["rules"]
-    release = command["release"]
-    held = acknowledgement["held"]
-    delivered = acknowledgement["delivered"]
-    retired = acknowledgement["retired"]
-    release_pending = acknowledgement["release_pending"]
-    if (
-        command["version"] != 5
-        or acknowledgement["version"] != 5
-        or acknowledgement["revision"] != revision
-        or digest_body != control["command_sha256"]
-        or not isinstance(command["drain"], bool)
-        or not isinstance(rules, list)
-        or not isinstance(release, list)
-        or not isinstance(held, list)
-        or not isinstance(delivered, list)
-        or not isinstance(retired, list)
-        or not isinstance(release_pending, list)
-        or acknowledgement["rules"] != rules
-        or acknowledgement["queue_capacity"] != queue_capacity
-        or acknowledgement["fatal"] is not False
-        or acknowledgement["last_error"] is not None
-        or acknowledgement["draining"] is not False
-        or acknowledgement["in_flight"] is not None
-        or acknowledgement["in_flight_bytes"] != 0
-        or release_pending
-        or nonnegative_integer(
-            acknowledgement["dropped"], f"{label}.acknowledgement.dropped"
-        )
-        != 0
-        or nonnegative_integer(
-            acknowledgement["overflowed"],
-            f"{label}.acknowledgement.overflowed",
-        )
-        != 0
-        or nonnegative_integer(
-            acknowledgement["rejected_commands"],
-            f"{label}.acknowledgement.rejected_commands",
-        )
-        != 0
-    ):
-        raise RunnerError(f"{label} carrier command acknowledgement is substituted")
-    held_bytes = nonnegative_integer(
-        acknowledgement["held_bytes"], f"{label}.acknowledgement.held_bytes"
-    )
-    if command["drain"]:
-        if (
-            queue_capacity != 512
-            or rules
-            or release
-            or held
-            or held_bytes != 0
-            or acknowledgement["drain_fence"] != revision
-            or not delivered + retired
-        ):
-            raise RunnerError(f"{label} does not prove a completed carrier drain")
-        return "heal", revision
-    if (
-        queue_capacity != 256
-        or release
-        or not rules
-        or not held
-        or held_bytes <= 0
-        or acknowledgement["drain_fence"] is not None
-        or delivered
-        or retired
-        or any(
-            not isinstance(rule, dict)
-            or rule.get("action") != "hold"
-            or rule.get("kind") != "proposal"
-            for rule in rules
-        )
-    ):
-        raise RunnerError(f"{label} does not prove an active carrier Hold")
-    return "hold", revision
-
-
 def validate_fault_trial_control_semantics(
     control_row: Mapping[str, Any],
     *,
@@ -2322,12 +2186,7 @@ def validate_fault_trial_control_semantics(
             "commit_before_complete_barrier": "commit",
         }
         cut = trial["cut"]
-        if cut == "carrier_before_global_finality":
-            carrier_controls = [
-                control
-                for control in controls
-                if control["control_type"] == "consensus_carrier"
-            ]
+        if cut == "restart_before_global_finality":
             validator_restarts = [
                 control
                 for control in controls
@@ -2355,31 +2214,6 @@ def validate_fault_trial_control_semantics(
                 == 1
                 for dataspace_ordinal in range(participants)
             )
-            carrier_actions: dict[int, list[tuple[str, int]]] = {
-                peer_index: [] for peer_index in range(VALIDATORS_PER_DATASPACE)
-            }
-            for control_index, control in enumerate(controls):
-                if control["control_type"] != "consensus_carrier":
-                    continue
-                peer_index = control["peer_index"]
-                if peer_index not in carrier_actions:
-                    raise RunnerError(
-                        f"{label} controls a carrier outside the global lane"
-                    )
-                carrier_actions[peer_index].append(
-                    _validate_consensus_carrier_control(
-                        control, f"{label}.controls[{control_index}]"
-                    )
-                )
-            carrier_peer_coverage = all(
-                len(actions) == 2
-                and {action for action, _revision in actions} == {"hold", "heal"}
-                and next(
-                    revision for action, revision in actions if action == "hold"
-                )
-                < next(revision for action, revision in actions if action == "heal")
-                for actions in carrier_actions.values()
-            )
             restart_controls = [
                 *validator_restarts,
                 *global_restarts,
@@ -2394,10 +2228,7 @@ def validate_fault_trial_control_semantics(
             if (
                 route_controls
                 or len(controls)
-                != 2 * VALIDATORS_PER_DATASPACE + participants + 2
-                or
-                len(carrier_controls) != 2 * VALIDATORS_PER_DATASPACE
-                or not carrier_peer_coverage
+                != participants + 2
                 or len(validator_restarts) != participants
                 or not participant_restart_coverage
                 or len(global_restarts) != 1
@@ -2409,7 +2240,7 @@ def validate_fault_trial_control_semantics(
                 or len(after_pids) != len(restart_controls)
             ):
                 raise RunnerError(
-                    f"{label} does not prove the exact carrier control/restart topology"
+                    f"{label} does not prove the exact participant/global/coordinator restart topology"
                 )
             return
         phase = cut_to_phase.get(cut)
@@ -2442,58 +2273,7 @@ def validate_fault_trial_control_semantics(
             raise RunnerError(f"{label} does not prove an acknowledged Hold-to-Pass phase cut")
         return
 
-    boundary_to_phase = {
-        "sidecar_fsync": "after_private_settlement_sidecar_fsync",
-        "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
-        "prepare_qc": "after_private_settlement_prepare_qc_fsync",
-        "prepare_registration_kura_append": "after_private_settlement_kura_append",
-        "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
-        "commit_qc": "after_private_settlement_commit_qc_fsync",
-        "finalization_kura_append": "after_private_settlement_kura_append",
-        "finalization_wsv_application": "after_private_settlement_wsv_application",
-        "receipt_publication": "after_private_settlement_receipt_publication",
-    }
-    expected_phase = boundary_to_phase.get(trial["boundary"])
-    cuts = []
-    restarts = []
-    for index, control in enumerate(controls):
-        if control["control_type"] == "persistence_cut":
-            command, acknowledgement = _decoded_control_pair(control, f"{label}.controls[{index}]")
-            if command != acknowledgement or command.get("phase") != expected_phase:
-                raise RunnerError(f"{label} persistence cut acknowledgement is substituted")
-            cuts.append(control)
-        if control["control_type"].endswith("restart"):
-            restarts.append(control)
-    boundary = trial["boundary"]
-    expected_global_target = boundary in {
-        "prepare_registration_kura_append",
-        "prepare_registration_wsv_application",
-        "finalization_kura_append",
-        "finalization_wsv_application",
-    }
-    expected_restart_type = (
-        "global_restart" if expected_global_target else "validator_restart"
-    )
-    if (
-        expected_phase is None
-        or len(controls) != 2
-        or len(cuts) != 1
-        or len(restarts) != 1
-        or restarts[0]["control_type"] != expected_restart_type
-        or restarts[0]["peer_index"] != cuts[0]["peer_index"]
-        or (
-            expected_global_target
-            and cuts[0]["peer_index"] not in range(VALIDATORS_PER_DATASPACE)
-        )
-        or (
-            not expected_global_target
-            and not VALIDATORS_PER_DATASPACE
-            <= cuts[0]["peer_index"]
-            < (control_row["participants"] + 1) * VALIDATORS_PER_DATASPACE
-        )
-        or restarts[0]["before_pid"] == restarts[0]["after_pid"]
-    ):
-        raise RunnerError(f"{label} does not prove its persistence cut and process recovery")
+    raise RunnerError(f"{label} uses a retired in-node process-cut scenario")
 
 
 def _validate_fault_state_response(
@@ -2722,11 +2502,7 @@ def _fault_observation_phase_contract(
 
     if collection == "phase_cut_partitions" and trial_index == 3:
         participants = control_row["participants"]
-        expected_types = (
-            ["validator_restart"] * participants
-            + ["global_restart", "coordinator_restart"]
-            + ["consensus_carrier"] * (2 * VALIDATORS_PER_DATASPACE)
-        )
+        expected_types = ["validator_restart"] * participants + ["global_restart", "coordinator_restart"]
         if (
             len(controls) != len(expected_types)
             or [control["control_type"] for control in controls] != expected_types
@@ -2760,27 +2536,6 @@ def _fault_observation_phase_contract(
             or controls[participants + 1]["peer_index"] is not None
         ):
             raise RunnerError(f"{label} has a non-canonical global recovery topology")
-        carrier_controls = controls[participants + 2 :]
-        carrier_actions = [
-            _validate_consensus_carrier_control(
-                control, f"{label}.controls[{participants + 2 + index}]"
-            )
-            for index, control in enumerate(carrier_controls)
-        ]
-        expected_carrier_sequence = [
-            *(('hold', peer_index) for peer_index in range(VALIDATORS_PER_DATASPACE)),
-            *(('heal', peer_index) for peer_index in range(VALIDATORS_PER_DATASPACE)),
-        ]
-        actual_carrier_sequence = [
-            (action, control["peer_index"])
-            for control, (action, _revision) in zip(
-                carrier_controls, carrier_actions, strict=True
-            )
-        ]
-        if actual_carrier_sequence != expected_carrier_sequence:
-            raise RunnerError(f"{label} has a non-canonical carrier control sequence")
-        hold_controls = carrier_controls[:VALIDATORS_PER_DATASPACE]
-        healing_controls = carrier_controls[VALIDATORS_PER_DATASPACE:]
         return [
             ("preflight", empty, False, ()),
             (
@@ -2810,80 +2565,11 @@ def _fault_observation_phase_contract(
                 False,
                 (acknowledgement_binding(global_control),),
             ),
-            (
-                "consensus_carrier_hold",
-                empty,
-                False,
-                tuple(
-                    acknowledgement_binding(control) for control in hold_controls
-                ),
-            ),
-            (
-                "post_recovery",
-                empty,
-                True,
-                tuple(
-                    acknowledgement_binding(control) for control in healing_controls
-                ),
-            ),
+            ("post_recovery", empty, True, ()),
             ("terminal", empty, True, ()),
         ]
 
-    if collection == "crash_recoveries":
-        if not 0 <= trial_index < len(fault_report.REQUIRED_CRASH_BOUNDARIES):
-            raise RunnerError(f"{label} has a non-canonical crash trial identity")
-        expected_phase = {
-            "sidecar_fsync": "after_private_settlement_sidecar_fsync",
-            "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
-            "prepare_qc": "after_private_settlement_prepare_qc_fsync",
-            "prepare_registration_kura_append": "after_private_settlement_kura_append",
-            "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
-            "commit_qc": "after_private_settlement_commit_qc_fsync",
-            "finalization_kura_append": "after_private_settlement_kura_append",
-            "finalization_wsv_application": "after_private_settlement_wsv_application",
-            "receipt_publication": "after_private_settlement_receipt_publication",
-        }[fault_report.REQUIRED_CRASH_BOUNDARIES[trial_index]]
-        if len(controls) != 2 or controls[0]["control_type"] != "persistence_cut":
-            raise RunnerError(f"{label} has a non-canonical persistence control set")
-        cut_command, cut_ack = _decoded_control_pair(controls[0], f"{label}.controls[0]")
-        restart_command, _restart_ack = _decoded_control_pair(
-            controls[1], f"{label}.controls[1]"
-        )
-        expected_global_target = trial_index in {3, 4, 6, 7}
-        expected_restart_type = (
-            "global_restart" if expected_global_target else "validator_restart"
-        )
-        cut_target = controls[0]["peer_index"]
-        if (
-            cut_command != cut_ack
-            or cut_command.get("phase") != expected_phase
-            or controls[1]["control_type"] != expected_restart_type
-            or controls[1]["peer_index"] != cut_target
-            or restart_command.get("operation") != "recover_crashed_validator"
-            or (expected_global_target and cut_target != 0)
-            or (not expected_global_target and cut_target != VALIDATORS_PER_DATASPACE)
-        ):
-            raise RunnerError(f"{label} has a non-canonical persistence control set")
-        finalization_cut = trial_index in {6, 7, 8}
-        expected_finalized = trial_index in {3, 4, 6, 7, 8}
-        return [
-            ("preflight", empty, False, ()),
-            (
-                "persistence_cut",
-                frozenset({cut_target}),
-                finalization_cut,
-                (acknowledgement_binding(controls[0]),),
-            ),
-            (
-                "post_recovery",
-                empty,
-                expected_finalized,
-                (acknowledgement_binding(controls[1]),),
-            ),
-            ("terminal", empty, expected_finalized, ()),
-        ]
-
-    raise RunnerError(f"{label} has no continuous-observation phase contract")
+    raise RunnerError(f"{label} has an unsupported fault scenario")
 
 
 def _fault_attempt_response(
@@ -2984,7 +2670,7 @@ def validate_fault_observation_records(
             or row["seed"] != seed
             or row["run"] != run
             or row["collection"]
-            not in {"loss_trials", "phase_cut_partitions", "crash_recoveries"}
+            not in {"loss_trials", "phase_cut_partitions"}
             or isinstance(row["trial_index"], bool)
             or not isinstance(row["trial_index"], int)
             or row["trial_index"] < 0
@@ -3008,40 +2694,9 @@ def validate_fault_observation_records(
             raise RunnerError(
                 f"fault observation evidence[{index}].expected_after_state is invalid"
             )
-        requires_full_prepare_locks = row["collection"] != "crash_recoveries"
-        if row["collection"] == "crash_recoveries":
-            pre_application = {
-                "sidecar_fsync",
-                "staged_delta_fsync",
-                "prepare_qc",
-                "commit_qc",
-            }
-            post_carrier = {
-                "prepare_registration_kura_append",
-                "prepare_registration_wsv_application",
-                "finalization_kura_append",
-                "finalization_wsv_application",
-                "receipt_publication",
-            }
-            # The boundary is bound to the payload below. Here the ordered trial
-            # index already has the canonical crash-boundary meaning.
-            if row["trial_index"] >= len(fault_report.REQUIRED_CRASH_BOUNDARIES):
-                raise RunnerError(
-                    f"fault observation evidence[{index}].trial_index is out of range"
-                )
-            boundary = fault_report.REQUIRED_CRASH_BOUNDARIES[row["trial_index"]]
-            requires_full_prepare_locks = boundary not in {
-                "sidecar_fsync",
-                "staged_delta_fsync",
-                "prepare_qc",
-            }
-            required_after_state = (
-                "reverted" if boundary in pre_application else "finalized"
-            )
-            if boundary not in pre_application | post_carrier or expected_after_state != required_after_state:
-                raise RunnerError(
-                    f"fault observation evidence[{index}] misclassifies crash recovery outcome"
-                )
+        if expected_after_state != "finalized":
+            raise RunnerError(f"fault observation evidence[{index}] must recover finalization")
+        requires_full_prepare_locks = True
         checks = positive_integer(
             row["continuous_checks"], f"fault observation evidence[{index}].continuous_checks"
         )
@@ -3617,11 +3272,9 @@ def materialize_fault_response(
     participants = job["participants"]
     seed = job["seed"]
     run = job["run"]
-    collections = (
-        "loss_trials",
-        "phase_cut_partitions",
-        "crash_recoveries",
-    )
+    if payload["crash_recoveries"] != []:
+        raise RunnerError("fault payload cannot claim retired persistence-cut trials")
+    collections = ("loss_trials", "phase_cut_partitions")
     trial_fields = {
         "loss_trials": {
             "phase",
@@ -3640,17 +3293,6 @@ def materialize_fault_response(
             "control_acknowledged",
             "delayed_delivery",
             "healed",
-            "converged",
-            "partial_visibility_observed",
-            "control_transcript_sha256",
-            "control_transcript_record",
-            "observation_capture_sha256",
-            "observation_capture_record",
-        },
-        "crash_recoveries": {
-            "boundary",
-            "process_restarted",
-            "durable_state_reconciled",
             "converged",
             "partial_visibility_observed",
             "control_transcript_sha256",
@@ -3788,7 +3430,7 @@ def materialize_fault_response(
         "validators_per_dataspace": VALIDATORS_PER_DATASPACE,
         "quorum": QUORUM,
         "mandatory_signed_rs16_da_rbc": True,
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "committee_validator_restarts": payload[
             "committee_validator_restarts"
         ],
@@ -3802,7 +3444,7 @@ def materialize_fault_response(
         "global_node_restarted": payload["global_node_restarted"],
         "loss_trials": prepared["loss_trials"],
         "phase_cut_partitions": prepared["phase_cut_partitions"],
-        "crash_recoveries": prepared["crash_recoveries"],
+        "crash_recoveries": [],
         "atomicity": payload["atomicity"],
         "all_nodes_converged": payload["all_nodes_converged"],
     }
@@ -4484,7 +4126,7 @@ def _validate_leakage_atomicity_observations(
             raise RunnerError("atomicity evidence lacks a finalized ledger binding")
         final_ledgers.add(peer_final_ledger)
         if peer_final_state is None:
-            raise RunnerError("atomicity evidence lacks a complete final state")
+            raise RunnerError("finalized atomicity evidence retained staged locks without a complete final state")
         final_states.add(peer_final_state)
         if first_height is None or previous_height is None:
             raise RunnerError("atomicity evidence lacks a complete height interval")
@@ -5428,7 +5070,7 @@ def build_request(
         "minimum_signed_rs16_da_observations": (
             minimum_signed_rs16_da_observations(job["participants"])
         ),
-        "authenticated_message_control": True,
+        "authenticated_private_settlement_route_control": True,
         "seed": job["seed"],
         "configuration": configuration,
     }

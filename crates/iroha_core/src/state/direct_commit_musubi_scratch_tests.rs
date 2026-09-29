@@ -86,7 +86,6 @@ pub(super) fn staged_block(
     block.verify_execution_output_publication().unwrap();
     block.validate_canonical_runtime_projection().unwrap();
     block.verify_sumeragi_lane_state_publication().unwrap();
-    block.validate_merge_carrier_entrypoint_binding().unwrap();
     block
 }
 

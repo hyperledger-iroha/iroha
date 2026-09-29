@@ -1,14 +1,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
+#[path = "contracts/ivm_proved.rs"]
+mod ivm_proved;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
-    block::{
-        consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
-        consensus_v2::recommended_data_availability_layout,
-    },
+    block::consensus_v2::recommended_data_availability_layout,
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
         OfferContractOwnership, SetContractParliamentDelegation,
@@ -285,10 +284,6 @@ async fn submit_contract_probe_detached(
     );
     let builder = TransactionBuilder::decode_payload(&payload_bytes)?;
     assert_eq!(builder.encode_payload(), payload_bytes);
-    assert_eq!(
-        builder.payload().admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    );
     let signing_message_b64 = prepared["signing_message_b64"]
         .as_str()
         .ok_or_else(|| eyre!("validated detached draft has no signing message"))?;
@@ -1103,1286 +1098,61 @@ fn signed_consensus_handshake(
     norito::json::from_str(custom.payload().get())
         .map_err(|error| eyre!("decode signed consensus handshake metadata: {error}"))
 }
-fn lane_payload_contains_applied_transaction(
-    proposal_height: u64,
-    accepted_transaction_hashes: &[Hash],
-    applied_height: u64,
-    transaction_hash: &Hash,
-) -> bool {
-    // Payload planning precedes or coincides with execution in a certified global merge.
-    // Its proposal coordinate need not equal the transaction's authoritative Applied height.
-    proposal_height != 0
-        && proposal_height <= applied_height
-        && accepted_transaction_hashes.contains(transaction_hash)
-}
-
-#[test]
-fn contract_v1_rbc_transaction_uses_distinct_proposal_and_applied_heights() {
-    let transaction_hash = Hash::new(b"contract probe transaction");
-    let other_hash = Hash::new(b"different contract probe transaction");
-    let accepted = [transaction_hash];
-    assert!(lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        3,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        5,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        0,
-        &accepted,
-        4,
-        &transaction_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        3,
-        &accepted,
-        4,
-        &other_hash
-    ));
-    assert!(!lane_payload_contains_applied_transaction(
-        3,
-        &[],
-        4,
-        &transaction_hash
-    ));
-}
-
-// These tests replay a finite canonical prefix through the authenticated Blocks
-// API. Each connection, read and close stays within the current attempt deadline.
-const CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT: u64 = 64;
-const CONTRACT_RBC_FAILURE_LIMIT: usize = 8;
-const CONTRACT_RBC_QUERY_ATTEMPT_LIMIT: usize = 4;
-const CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Clone, Debug)]
-enum CanonicalContractRbcBinding {
-    Ordinary(iroha_data_model::block::consensus::LaneBlockProposalV1),
-    Autonomous(iroha_data_model::block::consensus::LaneBlockProposalV1),
-}
-
-#[derive(Clone, Debug, Default)]
-struct CanonicalContractRbcCache {
-    bindings: Option<Vec<CanonicalContractRbcBinding>>,
-    attempts: usize,
-    errors: Vec<String>,
-}
-
-impl CanonicalContractRbcCache {
-    fn can_query(&self) -> bool {
-        self.bindings.is_none() && self.attempts < CONTRACT_RBC_QUERY_ATTEMPT_LIMIT
-    }
-
-    fn record_query(
-        &mut self,
-        result: std::result::Result<Vec<CanonicalContractRbcBinding>, String>,
-    ) -> Result<()> {
-        if !self.can_query() {
-            return Err(eyre!(
-                "canonical RBC query attempted after success or budget exhaustion"
-            ));
-        }
-        self.attempts += 1;
-        match result {
-            Ok(bindings) => self.bindings = Some(bindings),
-            Err(error) => self.errors.push(error.chars().take(512).collect()),
-        }
-        Ok(())
-    }
-}
-
-fn canonical_ordinary_contract_binding(
-    ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
-) -> Result<CanonicalContractRbcBinding> {
-    use iroha_data_model::block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1};
-    ownership
-        .validate_replay_material()
-        .map_err(|error| eyre!("canonical ordinary ownership: {error}"))?;
-    let descriptor = LaneBlockDescriptorV1 {
-        lane_id: ownership.lane_id,
-        dataspace_id: ownership.dataspace_id,
-        lane_incarnation: ownership.lane_incarnation,
-        proposal_height: ownership.proposal_height,
-        previous_lane_block_height: ownership.previous_lane_block_height,
-        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-        lane_block_height: ownership.lane_block_height,
-        lane_block_view: ownership.lane_block_view,
-        subject_hash: ownership.subject_hash,
-        payload_ownership_hash: ownership.payload_ownership_hash,
-        rbc_instance_hash: ownership.rbc_instance_hash,
-        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
-        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-        validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-        validator_count: ownership.lane_block_descriptor_validator_count,
-        min_quorum: ownership.lane_block_descriptor_min_quorum,
-        qc_mode_tag: ownership.qc_mode_tag.clone(),
-        descriptor_hash: ownership
-            .lane_block_descriptor_hash
-            .ok_or_else(|| eyre!("ordinary descriptor missing"))?,
-    };
-    let mut proposal = LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        // A recovery hint is excluded from the public consensus hash preimage.
-        // The caller separately checks the ownership's exact canonical header.
-        payload_block_hint: None,
-    };
-    proposal.proposal_hash = proposal.computed_proposal_hash();
-    iroha_core::lane_consensus::validate_lane_block_proposal(&proposal)
-        .map_err(|error| eyre!("canonical ordinary proposal: {error}"))?;
-    Ok(CanonicalContractRbcBinding::Ordinary(proposal))
-}
-
-fn canonical_contract_replay_hashes(
-    descriptor: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
-) -> Result<(Hash, Hash, Hash)> {
-    use iroha_data_model::block::consensus::SumeragiLanePayloadOwnership;
-    let subject = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-        descriptor.lane_incarnation,
-        descriptor.lane_block_height,
-        descriptor.lane_block_view,
-        &descriptor.accepted_candidate_indices,
-        &descriptor.accepted_transaction_hashes,
-        &descriptor.qc_mode_tag,
-    )
-    .map_err(|error| eyre!("canonical autonomous subject preimage: {error}"))?;
-    let ownership = SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-        descriptor.lane_incarnation,
-        descriptor.lane_block_height,
-        descriptor.lane_block_view,
-        subject,
-        &descriptor.accepted_candidate_indices,
-        &descriptor.accepted_transaction_hashes,
-        &descriptor.qc_mode_tag,
-    )
-    .map_err(|error| eyre!("canonical autonomous ownership preimage: {error}"))?;
-    let rbc = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-        descriptor.lane_incarnation,
-        descriptor.lane_block_height,
-        descriptor.lane_block_view,
-        subject,
-        ownership,
-    )
-    .map_err(|error| eyre!("canonical autonomous RBC preimage: {error}"))?;
-    Ok((subject, ownership, rbc))
-}
-
-fn canonical_autonomous_contract_binding(
-    envelope: &iroha_data_model::block::execution_context::AutonomousLanePayloadEnvelopeV1,
-    block_height: u64,
-    network_id: iroha_data_model::NetworkId,
-) -> Result<CanonicalContractRbcBinding> {
-    use iroha_core::lane_consensus::{LaneExecutablePayloadV1, validate_lane_block_proposal};
-    use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
-    if envelope.version != iroha_data_model::block::AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1
-        || envelope.canonical_payload.is_empty()
-        || envelope.canonical_payload.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES
-    {
-        return Err(eyre!("canonical autonomous envelope version/byte bound"));
-    }
-    let payload: LaneExecutablePayloadV1 = norito::decode_canonical(&envelope.canonical_payload)
-        .map_err(|error| eyre!("canonical autonomous payload codec: {error}"))?;
-    if norito::encode_canonical(&payload)? != envelope.canonical_payload {
-        return Err(eyre!("canonical autonomous payload roundtrip"));
-    }
-    // The current Core constructor and validator use internal payload version1
-    // (LANE_EXECUTABLE_PAYLOAD_VERSION_V1), independently of envelope versioning.
-    if payload.version != 1 {
-        return Err(eyre!("canonical autonomous payload version"));
-    }
-    let proposal = &payload.origin_proposal;
-    let descriptor = &proposal.descriptor;
-    validate_lane_block_proposal(proposal)
-        .map_err(|error| eyre!("canonical autonomous proposal: {error}"))?;
-    if canonical_contract_replay_hashes(descriptor)?
-        != (
-            descriptor.subject_hash,
-            descriptor.payload_ownership_hash,
-            descriptor.rbc_instance_hash,
-        )
-    {
-        return Err(eyre!("canonical autonomous replay commitments"));
-    }
-    let hashes = payload
-        .entrypoints
-        .iter()
-        .map(|entrypoint| Hash::from(entrypoint.hash()))
-        .collect::<Vec<_>>();
-    // The finalized queried block supplies canonical provenance. This helper
-    // joins that exact body to diagnostics; it does not mint payload custody or
-    // replace consensus signature/lifecycle validation with a test-side policy.
-    if proposal.payload_block_hint.is_some()
-        || descriptor.lane_block_view != 0
-        || descriptor.proposal_height != block_height
-        || envelope.network_id != network_id
-        || payload.network_id != network_id
-        || envelope.epoch != payload.epoch
-        || envelope.lane_id != descriptor.lane_id
-        || envelope.dataspace_id != descriptor.dataspace_id
-        || envelope.lane_incarnation != descriptor.lane_incarnation
-        || envelope.proposal_height != descriptor.proposal_height
-        || envelope.lane_block_height != descriptor.lane_block_height
-        || envelope.lane_block_view != descriptor.lane_block_view
-        || envelope.proposal_hash != proposal.proposal_hash
-        || envelope.descriptor_hash != descriptor.descriptor_hash
-        || envelope.payload_hash != payload.payload_hash
-        || envelope.producer != payload.producer
-        || !descriptor.validator_set.contains(&payload.producer)
-        || payload.producer_signature.is_empty()
-        || hashes != payload.entrypoint_hashes
-        || hashes != descriptor.accepted_transaction_hashes
-    {
-        return Err(eyre!(
-            "canonical autonomous envelope/proposal/transaction binding"
-        ));
-    }
-    Ok(CanonicalContractRbcBinding::Autonomous(
-        payload.origin_proposal,
-    ))
-}
-
-fn contract_rbc_remaining(deadline: Instant) -> Result<Duration> {
-    deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or_else(|| eyre!("canonical RBC replay deadline expired"))
-}
-
-fn contract_rbc_replay_end(head: u64, required_height: Option<u64>) -> Result<u64> {
-    if required_height.is_some_and(|height| {
-        !(2..=CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT).contains(&height) || height > head
-    }) {
-        return Err(eyre!(
-            "canonical RBC replay head does not cover required Applied height"
-        ));
-    }
-    let end = head.min(CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT);
-    if end < 2 {
-        return Err(eyre!("canonical RBC replay has no non-genesis prefix"));
-    }
-    Ok(end)
-}
-
-// The same finite stream consumer is exercised with fake rows below. Canonical
-// provenance in the network case belongs to the authenticated Blocks API.
-async fn receive_contract_rbc_prefix<S, T, F>(
-    stream: &mut S,
-    end: u64,
-    deadline: Instant,
-    mut identity: F,
-) -> Result<Vec<T>>
-where
-    S: futures_util::Stream<Item = Result<T>> + Unpin,
-    F: FnMut(&T) -> (u64, HashOf<BlockHeader>, Option<HashOf<BlockHeader>>),
-{
-    use futures_util::TryStreamExt as _;
-
-    if !(2..=CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT).contains(&end) {
-        return Err(eyre!("canonical RBC replay end exceeds the fixture bound"));
-    }
-    let mut blocks = Vec::new();
-    blocks
-        .try_reserve_exact((end - 1) as usize)
-        .map_err(|_| eyre!("cannot reserve bounded canonical RBC prefix"))?;
-    let mut previous_hash = None;
-    for expected_height in 2..=end {
-        contract_rbc_remaining(deadline)?;
-        let block =
-            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), stream.try_next())
-                .await
-                .map_err(|_| eyre!("canonical RBC replay timed out at height {expected_height}"))??
-                .ok_or_else(|| {
-                    eyre!("canonical RBC replay ended before height {expected_height}")
-                })?;
-        // An async timer cannot interrupt the synchronous Norito decoder.
-        contract_rbc_remaining(deadline)?;
-        let (height, hash, parent) = identity(&block);
-        contract_rbc_remaining(deadline)?;
-        if height != expected_height || parent.is_none() || (height > 2 && parent != previous_hash)
-        {
-            return Err(eyre!(
-                "canonical RBC replay is not an ascending contiguous hash chain"
-            ));
-        }
-        previous_hash = Some(hash);
-        blocks.push(block);
-    }
-    // Receiving exactly the frozen end avoids waiting for a future block or
-    // performing lookahead beyond the admitted canonical prefix.
-    Ok(blocks)
-}
-
-async fn stream_contract_rbc_prefix(
-    client: &iroha::client::Client,
-    end: u64,
-    deadline: Instant,
-) -> Result<Vec<SignedBlock>> {
-    let remaining = contract_rbc_remaining(deadline)?;
-    // Reserve a bounded portion of this same attempt for the close handshake.
-    let close_reserve = Duration::from_secs(1).min(remaining / 4);
-    let receive_deadline = deadline - close_reserve;
-    let mut stream = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(receive_deadline),
-        client
-            .account_client()?
-            .blocks()
-            .subscribe(NonZeroU64::new(2).expect("nonzero replay start")),
-    )
-    .await
-    .map_err(|_| eyre!("canonical RBC replay connection timed out"))??;
-    let mut decoded = futures_util::TryStreamExt::map_err(&mut stream, eyre::Report::from);
-    let result = receive_contract_rbc_prefix(&mut decoded, end, receive_deadline, |block| {
-        (
-            block.header().height().get(),
-            block.hash(),
-            block.header().prev_block_hash(),
-        )
-    })
-    .await;
-    finish_contract_rbc_replay(result, stream.close(), deadline).await
-}
-
-async fn finish_contract_rbc_replay<T>(
-    result: Result<Vec<T>>,
-    close: impl std::future::Future<Output = iroha::Result<()>>,
-    deadline: Instant,
-) -> Result<Vec<T>> {
-    let close = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), close).await;
-    match (result, close) {
-        (Ok(blocks), Ok(Ok(()))) => {
-            contract_rbc_remaining(deadline)?;
-            Ok(blocks)
-        }
-        (Err(error), Ok(Ok(()))) => Err(error),
-        (Ok(_), Ok(Err(error))) => Err(error.into()),
-        (Err(error), Ok(Err(close_error))) => Err(eyre!(
-            "{error:#}; canonical RBC replay close failed: {close_error}"
-        )),
-        (Ok(_), Err(_)) => Err(eyre!("canonical RBC replay close timed out")),
-        (Err(error), Err(_)) => Err(eyre!("{error:#}; canonical RBC replay close timed out")),
-    }
-}
-
-async fn replay_canonical_contract_rbc_bindings(
-    client: &iroha::client::Client,
-    deadline: Instant,
-    required_height: Option<u64>,
-) -> Result<Vec<CanonicalContractRbcBinding>> {
-    let mut builder = client.to_builder();
-    builder.torii_request_timeout = contract_rbc_remaining(deadline)?;
-    let client = builder.build()?;
-    let head = client.status().get().await?.blocks;
-    contract_rbc_remaining(deadline)?;
-    let end = contract_rbc_replay_end(head, required_height)?;
-    let blocks = stream_contract_rbc_prefix(&client, end, deadline).await?;
-    let mut bindings = Vec::new();
-    for block in blocks {
-        contract_rbc_remaining(deadline)?;
-        let height = block.header().height().get();
-        let Some(context) = block.execution_context() else {
-            continue;
-        };
-        if context.lane_payload_ownerships.len() > 64 || context.autonomous_lane_payloads.len() > 64
-        {
-            return Err(eyre!("canonical RBC ownership count exceeds fixture bound"));
-        }
-        for ownership in &context.lane_payload_ownerships {
-            if ownership.proposal_height != height
-                || ownership.proposal_view != block.header().view_change_index()
-            {
-                return Err(eyre!(
-                    "ordinary ownership is bound to another canonical block"
-                ));
-            }
-            bindings.push(canonical_ordinary_contract_binding(ownership)?);
-            contract_rbc_remaining(deadline)?;
-        }
-        for envelope in &context.autonomous_lane_payloads {
-            bindings.push(canonical_autonomous_contract_binding(
-                envelope,
-                height,
-                *client.network_id(),
-            )?);
-            contract_rbc_remaining(deadline)?;
-        }
-    }
-    contract_rbc_remaining(deadline)?;
-    Ok(bindings)
-}
-
-fn contract_rbc_binding_matches(
-    binding: &CanonicalContractRbcBinding,
-    record: &SumeragiCommittedLaneBlock,
-    expected_validator_set: &[PeerId],
-    required_applied_transaction: Option<(u64, &Hash)>,
-) -> bool {
-    let (CanonicalContractRbcBinding::Ordinary(proposal)
-    | CanonicalContractRbcBinding::Autonomous(proposal)) = binding;
-    let descriptor = &proposal.descriptor;
-    iroha_core::lane_consensus::validate_lane_block_proposal(proposal).is_ok()
-        && proposal.proposal_hash == record.proposal_hash
-        && descriptor.lane_id == record.lane_id
-        && descriptor.dataspace_id == record.dataspace_id
-        && descriptor.lane_incarnation == record.lane_incarnation
-        && descriptor.lane_block_height == record.lane_block_height
-        && descriptor.lane_block_view == record.lane_block_view
-        && descriptor.descriptor_hash == record.descriptor_hash
-        && descriptor.subject_hash == record.subject_hash
-        && descriptor.payload_ownership_hash == record.payload_ownership_hash
-        && descriptor.rbc_instance_hash == record.rbc_instance_hash
-        && descriptor.qc_mode_tag == record.qc_mode_tag
-        && descriptor.validator_count == record.validator_count
-        && descriptor.min_quorum == record.min_quorum
-        && descriptor.validator_set.as_slice() == expected_validator_set
-        && required_applied_transaction.is_none_or(|(height, hash)| {
-            lane_payload_contains_applied_transaction(
-                descriptor.proposal_height,
-                &descriptor.accepted_transaction_hashes,
-                height,
-                hash,
-            )
-        })
-}
-
-fn shared_contract_rbc_record(
-    observations: &[Vec<SumeragiCommittedLaneBlock>],
-) -> Option<SumeragiCommittedLaneBlock> {
-    if observations.len() != 4 {
-        return None;
-    }
-    observations[0]
-        .iter()
-        .filter(|record| observations[1..].iter().all(|peer| peer.contains(record)))
-        .max_by_key(|record| (record.lane_block_height, record.lane_block_view))
-        .cloned()
-}
-
-fn contract_rbc_progress_failures(
-    record: &SumeragiCommittedLaneBlock,
-    after: Option<&SumeragiCommittedLaneBlock>,
-    validator_count: u32,
-    min_quorum: u32,
-) -> Vec<&'static str> {
-    let mut failures = Vec::new();
-    if !after.is_none_or(|baseline| {
-        record.lane_id == baseline.lane_id
-            && record.dataspace_id == baseline.dataspace_id
-            && record.lane_incarnation == baseline.lane_incarnation
-            && (record.lane_block_height, record.lane_block_view)
-                > (baseline.lane_block_height, baseline.lane_block_view)
-    }) {
-        failures.push("not_later_in_same_lane_incarnation");
-    }
-    if !record.executable_payload_available {
-        failures.push("payload_unavailable");
-    }
-    if !committed_lane_block_status_counts_as_progress(
-        &record.execution_status,
-        record.executable_payload_available,
-    ) {
-        failures.push("execution_status");
-    }
-    if record.validator_count != validator_count || record.min_quorum != min_quorum {
-        failures.push("committee_geometry");
-    }
-    if record.prepare_qc_signer_count != min_quorum || record.commit_qc_signer_count != min_quorum {
-        failures.push("exact_quorum_signers");
-    }
-    let zero = Hash::prehashed([0; Hash::LENGTH]);
-    if [
-        record.descriptor_hash,
-        record.proposal_hash,
-        record.subject_hash,
-        record.payload_ownership_hash,
-        record.rbc_instance_hash,
-    ]
-    .contains(&zero)
-    {
-        failures.push("zero_identity");
-    }
-    failures
-}
-
-async fn wait_for_cross_peer_rbc_diagnostics(
+/// Authenticate the original contiguous native chain on every peer and, when
+/// selected, join the exact successful transaction to its certified execution.
+async fn verify_contract_finality_everywhere(
     network: &sandbox::SerializedNetwork,
-    timeout: Duration,
-    after: Option<&SumeragiCommittedLaneBlock>,
-    required_applied_transaction: Option<(u64, &Hash)>,
-) -> Result<SumeragiCommittedLaneBlock> {
-    let expected_validator_count = u32::try_from(network.peers().len())
-        .map_err(|_| eyre!("peer count does not fit in u32"))?;
-    let expected_min_quorum =
-        u32::try_from(iroha_sumeragi::types::quorum(network.peers().len()).max(1))
-            .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
-    if required_applied_transaction
-        .is_some_and(|(height, _)| height > CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT)
-    {
-        return Err(eyre!(
-            "required transaction exceeds the bounded canonical RBC prefix"
-        ));
-    }
-    let mut expected_validator_set = network
-        .peers()
-        .iter()
-        .map(|peer| peer.id())
-        .collect::<Vec<_>>();
-    expected_validator_set.sort();
-    let deadline = Instant::now() + timeout;
-    // Freeze only a successfully validated prefix, after an eligible certificate
-    // exists. Failed reads remain visible and may retry within a four-attempt cap.
-    let mut canonical = vec![CanonicalContractRbcCache::default(); network.peers().len()];
-    loop {
-        let tasks = network
-            .peers()
-            .iter()
-            .enumerate()
-            .map(|(index, peer)| {
-                let mut builder = peer.client().client().to_builder();
-                let can_query = canonical[index].can_query();
-                let baseline = after.cloned();
-                let validators = expected_validator_set.clone();
-                let required = required_applied_transaction.map(|(height, hash)| (height, *hash));
-                tokio::spawn(async move {
-                    let attempt_deadline =
-                        deadline.min(Instant::now() + CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT);
-                    builder.torii_request_timeout = contract_rbc_remaining(attempt_deadline)?;
-                    let client = builder.build()?;
-                    let diagnostics = client.get_sumeragi_diagnostics().await?;
-                    contract_rbc_remaining(attempt_deadline)?;
-                    let queried = if can_query
-                        && diagnostics.npos.is_some()
-                        && diagnostics.committed_lane_blocks.iter().any(|record| {
-                            contract_rbc_progress_failures(
-                                record,
-                                baseline.as_ref(),
-                                expected_validator_count,
-                                expected_min_quorum,
-                            )
-                            .is_empty()
-                        })
-                    {
-                        Some(async {
-                            let bindings = replay_canonical_contract_rbc_bindings(
-                                &client,
-                                attempt_deadline,
-                                required.as_ref().map(|(height, _)| *height),
-                            )
-                            .await
-                            .map_err(|error| format!("{error:#}"))?;
-                            let requested = required.as_ref().map(|(height, hash)| (*height, hash));
-                            let joined = diagnostics.committed_lane_blocks.iter().any(|record| {
-                                contract_rbc_progress_failures(record, baseline.as_ref(), expected_validator_count, expected_min_quorum).is_empty()
-                                    && bindings.iter().any(|binding| contract_rbc_binding_matches(binding, record, &validators, requested))
-                            });
-                            contract_rbc_remaining(attempt_deadline).map_err(|error| format!("{error:#}"))?;
-                            if !joined {
-                                return Err("canonical prefix does not yet contain an eligible certified transaction binding".to_owned());
-                            }
-                            Ok(bindings)
-                        }.await)
-                    } else {
-                        None
-                    };
-                    Ok::<_, eyre::Report>((diagnostics, queried))
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut observations = Vec::with_capacity(tasks.len());
-        let mut errors = Vec::new();
-        let mut predicate_failures = Vec::new();
-        for (index, task) in tasks.into_iter().enumerate() {
-            match task.await {
-                Ok(Ok((diagnostics, queried))) if diagnostics.npos.is_some() => {
-                    if let Some(result) = queried {
-                        canonical[index].record_query(result)?;
-                    }
-                    let mut matches = Vec::new();
-                    let mut rejected = Vec::new();
-                    for record in diagnostics.committed_lane_blocks {
-                        let mut failures = contract_rbc_progress_failures(
-                            &record,
-                            after,
-                            expected_validator_count,
-                            expected_min_quorum,
-                        );
-                        let binding_matches =
-                            canonical[index].bindings.as_ref().is_some_and(|bindings| {
-                                bindings.iter().any(|binding| {
-                                    contract_rbc_binding_matches(
-                                        binding,
-                                        &record,
-                                        &expected_validator_set,
-                                        required_applied_transaction,
-                                    )
-                                })
-                            });
-                        if !binding_matches {
-                            failures.push("canonical_proposal_committee_or_transaction_join");
-                        }
-                        if failures.is_empty() {
-                            matches.push(record);
-                        } else if rejected.len() < CONTRACT_RBC_FAILURE_LIMIT {
-                            rejected.push(format!(
-                                "lane={}/height={}/view={}/proposal={}: {:?}",
-                                record.lane_id.as_u32(),
-                                record.lane_block_height,
-                                record.lane_block_view,
-                                record.proposal_hash,
-                                failures
-                            ));
-                        }
-                    }
-                    let (ordinary, autonomous) =
-                        canonical[index]
-                            .bindings
-                            .as_ref()
-                            .map_or((0, 0), |bindings| {
-                                bindings
-                                    .iter()
-                                    .fold((0, 0), |(o, a), binding| match binding {
-                                        CanonicalContractRbcBinding::Ordinary(_) => (o + 1, a),
-                                        CanonicalContractRbcBinding::Autonomous(_) => (o, a + 1),
-                                    })
-                            });
-                    predicate_failures.push(format!(
-                        "peer {index}: canonical ordinary={ordinary} autonomous={autonomous}; queries={}/{}; query_errors={:?}; rejected={rejected:?}",
-                        canonical[index].attempts, CONTRACT_RBC_QUERY_ATTEMPT_LIMIT, canonical[index].errors,
-                    ));
-                    observations.push(matches);
+    height: u64,
+    transaction_hash: Option<Hash>,
+) -> Result<()> {
+    use iroha_data_model::sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier};
+    let genesis = network.genesis().0;
+    let validators = iroha_genesis::signed_genesis_validator_pops(&genesis)?
+        .into_iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key,
+            proof_of_possession,
+        })
+        .collect();
+    let selected =
+        SumeragiFinalityVerifier::new(&genesis, &network.chain_id().to_string(), validators)?;
+    let deadline = Instant::now() + network.sync_timeout();
+    let mut common = None;
+    for peer in network.peers() {
+        wait_for_contract_applied_height(peer, height, network.sync_timeout()).await?;
+        let context = read_on_dedicated_thread({
+            let client = peer
+                .client()
+                .client()
+                .clone()
+                .with_request_deadline(deadline);
+            let mut verifier = selected.clone();
+            move || -> Result<Hash> {
+                let mut tip = None;
+                for current in 1..=height {
+                    let proof =
+                        client.get_sumeragi_finality_proof(NonZeroU64::new(current).unwrap())?;
+                    tip = Some(verifier.verify(&proof)?);
                 }
-                Ok(Ok(_)) => {
-                    errors.push(format!(
-                        "peer {index} diagnostics did not expose NPoS state"
-                    ));
-                    observations.push(Vec::new());
+                let tip = tip.ok_or_else(|| eyre!("finality height must be positive"))?;
+                if let Some(hash) = transaction_hash {
+                    let details =
+                        client.get_transaction_details(HashOf::from_untyped_unchecked(hash))?;
+                    tip.verify_committed_transaction(client.network_id(), &details.transaction)?;
                 }
-                Ok(Err(error)) => {
-                    errors.push(
-                        format!("peer {index}: {error:#}")
-                            .chars()
-                            .take(512)
-                            .collect(),
-                    );
-                    observations.push(Vec::new());
-                }
-                Err(error) => {
-                    errors.push(format!("peer {index} diagnostics task failed: {error}"));
-                    observations.push(Vec::new());
-                }
+                Ok(tip.context_id())
             }
-        }
-        if Instant::now() < deadline {
-            if let Some(shared) = shared_contract_rbc_record(&observations) {
-                return Ok(shared);
-            }
-        }
-        let evidence_counts = observations.iter().map(Vec::len).collect::<Vec<_>>();
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for identical four-peer certified RBC diagnostics; eligible_counts={evidence_counts:?}; errors={errors:?}; predicates={predicate_failures:?}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-// A structural query/diagnostic join fixture. Quorum and producer-signature
-// execution remain covered by the real four-validator scenarios.
-fn contract_rbc_autonomous_join_fixture() -> (
-    iroha_data_model::block::AutonomousLanePayloadEnvelopeV1,
-    SumeragiCommittedLaneBlock,
-    Vec<PeerId>,
-    Hash,
-) {
-    use iroha_core::lane_consensus::LaneExecutablePayloadV1;
-    use iroha_data_model::block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1};
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    let mut validators = (1..=4)
-        .map(|seed| {
-            PeerId::new(
-                KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            )
         })
-        .collect::<Vec<_>>();
-    validators.sort();
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
-        HashOf::from_untyped_unchecked(Hash::new(b"RBC join fixture genesis")),
-    );
-    let signed = TransactionBuilder::new(
-        network_id,
-        iroha_test_samples::ALICE_ID.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "RBC canonical join".to_owned())])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let entrypoint = iroha_data_model::transaction::TransactionEntrypoint::External(signed);
-    let transaction_hash = Hash::from(entrypoint.hash());
-    let mut descriptor = LaneBlockDescriptorV1 {
-        lane_id: LaneId::new(0),
-        dataspace_id: DataSpaceId::new(0),
-        lane_incarnation: Hash::new(b"RBC join fixture incarnation"),
-        proposal_height: 3,
-        previous_lane_block_height: 0,
-        previous_lane_block_descriptor_hash: None,
-        lane_block_height: 1,
-        lane_block_view: 0,
-        subject_hash: Hash::new(b"subject"),
-        payload_ownership_hash: Hash::new(b"ownership"),
-        rbc_instance_hash: Hash::new(b"rbc"),
-        accepted_candidate_indices: vec![0],
-        accepted_transaction_hashes: vec![transaction_hash],
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validators),
-        validator_set: validators.clone(),
-        validator_count: 4,
-        min_quorum: 3,
-        qc_mode_tag: "npos".to_owned(),
-        descriptor_hash: Hash::prehashed([0; 32]),
-    };
-    (
-        descriptor.subject_hash,
-        descriptor.payload_ownership_hash,
-        descriptor.rbc_instance_hash,
-    ) = canonical_contract_replay_hashes(&descriptor).expect("fixture replay commitments");
-    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-    let mut proposal = LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; 32]),
-        payload_block_hint: None,
-    };
-    proposal.proposal_hash = proposal.computed_proposal_hash();
-    iroha_core::lane_consensus::validate_lane_block_proposal(&proposal)
-        .expect("valid structural proposal");
-    let d = &proposal.descriptor;
-    let record = SumeragiCommittedLaneBlock {
-        lane_id: d.lane_id,
-        dataspace_id: d.dataspace_id,
-        lane_incarnation: d.lane_incarnation,
-        lane_block_height: d.lane_block_height,
-        lane_block_view: d.lane_block_view,
-        descriptor_hash: d.descriptor_hash,
-        proposal_hash: proposal.proposal_hash,
-        execution_status: "state_applied_by_canonical_block".to_owned(),
-        executable_payload_available: true,
-        subject_hash: d.subject_hash,
-        payload_ownership_hash: d.payload_ownership_hash,
-        rbc_instance_hash: d.rbc_instance_hash,
-        qc_mode_tag: d.qc_mode_tag.clone(),
-        validator_count: 4,
-        min_quorum: 3,
-        prepare_qc_signer_count: 3,
-        commit_qc_signer_count: 3,
-    };
-    let payload = LaneExecutablePayloadV1 {
-        version: 1,
-        network_id,
-        epoch: 0,
-        origin_proposal: proposal.clone(),
-        entrypoint_hashes: vec![transaction_hash],
-        entrypoints: vec![entrypoint],
-        reservation_keys: Vec::new(),
-        routing_plans: Vec::new(),
-        native_amx_receipts: Vec::new(),
-        payload_hash: Hash::new(b"structural fixture payload commitment"),
-        producer: validators[0].clone(),
-        producer_signature: vec![1; 96],
-    };
-    let envelope = iroha_data_model::block::AutonomousLanePayloadEnvelopeV1 {
-        version: iroha_data_model::block::AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-        network_id,
-        epoch: 0,
-        lane_id: d.lane_id,
-        dataspace_id: d.dataspace_id,
-        lane_incarnation: d.lane_incarnation,
-        proposal_height: d.proposal_height,
-        lane_block_height: d.lane_block_height,
-        lane_block_view: d.lane_block_view,
-        proposal_hash: proposal.proposal_hash,
-        descriptor_hash: d.descriptor_hash,
-        payload_hash: payload.payload_hash,
-        producer: payload.producer.clone(),
-        canonical_payload: norito::encode_canonical(&payload).expect("canonical fixture payload"),
-    };
-    (envelope, record, validators, transaction_hash)
-}
-
-#[test]
-fn contract_v1_rbc_autonomous_join_matches_without_ordinary_ownership() {
-    iroha_data_model::isi::set_instruction_registry(
-        iroha_data_model::instruction_registry::default(),
-    );
-    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
-    let binding = canonical_autonomous_contract_binding(&envelope, 3, envelope.network_id)
-        .expect("join canonical autonomous body");
-    assert!(matches!(
-        binding,
-        CanonicalContractRbcBinding::Autonomous(_)
-    ));
-    assert!(contract_rbc_binding_matches(
-        &binding,
-        &record,
-        &validators,
-        Some((4, &hash))
-    ));
-    assert!(contract_rbc_progress_failures(&record, None, 4, 3).is_empty());
-}
-
-#[test]
-fn contract_v1_rbc_autonomous_join_rejects_identity_committee_and_transaction_substitution() {
-    iroha_data_model::isi::set_instruction_registry(
-        iroha_data_model::instruction_registry::default(),
-    );
-    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
-    let binding = canonical_autonomous_contract_binding(&envelope, 3, envelope.network_id).unwrap();
-    for field in [
-        "proposal",
-        "descriptor",
-        "incarnation",
-        "subject",
-        "ownership",
-        "rbc",
-        "view",
-    ] {
-        let mut wrong = record.clone();
-        match field {
-            "proposal" => wrong.proposal_hash = Hash::new(b"other"),
-            "descriptor" => wrong.descriptor_hash = Hash::new(b"other"),
-            "incarnation" => wrong.lane_incarnation = Hash::new(b"other"),
-            "subject" => wrong.subject_hash = Hash::new(b"other"),
-            "ownership" => wrong.payload_ownership_hash = Hash::new(b"other"),
-            "rbc" => wrong.rbc_instance_hash = Hash::new(b"other"),
-            "view" => wrong.lane_block_view += 1,
-            _ => unreachable!(),
+        .await?;
+        if let Some(expected) = common {
+            assert_eq!(
+                context, expected,
+                "validators disagree on the certified execution context"
+            );
         }
-        assert!(
-            !contract_rbc_binding_matches(&binding, &wrong, &validators, Some((4, &hash))),
-            "{field}"
-        );
+        common = Some(context);
     }
-    let mut wrong_roster = validators.clone();
-    wrong_roster.swap(0, 1);
-    assert!(!contract_rbc_binding_matches(
-        &binding,
-        &record,
-        &wrong_roster,
-        Some((4, &hash))
-    ));
-    assert!(!contract_rbc_binding_matches(
-        &binding,
-        &record,
-        &validators,
-        Some((2, &hash))
-    ));
-    assert!(!contract_rbc_binding_matches(
-        &binding,
-        &record,
-        &validators,
-        Some((4, &Hash::new(b"unrelated transaction")))
-    ));
-}
-
-#[test]
-fn contract_v1_rbc_autonomous_envelope_rejects_wrong_canonical_body_and_malformed_bytes() {
-    iroha_data_model::isi::set_instruction_registry(
-        iroha_data_model::instruction_registry::default(),
-    );
-    let (envelope, _, _, _) = contract_rbc_autonomous_join_fixture();
-    assert!(canonical_autonomous_contract_binding(&envelope, 4, envelope.network_id).is_err());
-    let mut wrong = envelope.clone();
-    wrong.proposal_hash = Hash::new(b"other");
-    assert!(canonical_autonomous_contract_binding(&wrong, 3, envelope.network_id).is_err());
-    // Rehashing the enclosing structures cannot substitute arbitrary DA
-    // commitments for the canonical accepted-work preimages.
-    let mut wrong_replay = envelope.clone();
-    let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
-        norito::decode_canonical(&wrong_replay.canonical_payload).unwrap();
-    payload.origin_proposal.descriptor.subject_hash = Hash::new(b"wrong subject preimage");
-    payload.origin_proposal.descriptor.descriptor_hash = payload
-        .origin_proposal
-        .descriptor
-        .computed_descriptor_hash();
-    payload.origin_proposal.proposal_hash = payload.origin_proposal.computed_proposal_hash();
-    wrong_replay.descriptor_hash = payload.origin_proposal.descriptor.descriptor_hash;
-    wrong_replay.proposal_hash = payload.origin_proposal.proposal_hash;
-    wrong_replay.canonical_payload = norito::encode_canonical(&payload).unwrap();
-    iroha_core::lane_consensus::validate_lane_block_proposal(&payload.origin_proposal)
-        .expect("outer hashes remain internally consistent");
-    assert!(
-        canonical_autonomous_contract_binding(&wrong_replay, 3, envelope.network_id)
-            .unwrap_err()
-            .to_string()
-            .contains("replay commitments")
-    );
-    for version in [0, 2] {
-        let mut wrong_version = envelope.clone();
-        let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
-            norito::decode_canonical(&envelope.canonical_payload).unwrap();
-        payload.version = version;
-        wrong_version.canonical_payload = norito::encode_canonical(&payload).unwrap();
-        assert!(
-            canonical_autonomous_contract_binding(&wrong_version, 3, envelope.network_id)
-                .unwrap_err()
-                .to_string()
-                .contains("payload version")
-        );
-    }
-    let mut wrong_hashes = envelope.clone();
-    let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
-        norito::decode_canonical(&envelope.canonical_payload).unwrap();
-    payload.entrypoint_hashes = vec![Hash::new(b"different entrypoint")];
-    wrong_hashes.canonical_payload = norito::encode_canonical(&payload).unwrap();
-    assert!(
-        canonical_autonomous_contract_binding(&wrong_hashes, 3, envelope.network_id)
-            .unwrap_err()
-            .to_string()
-            .contains("transaction binding")
-    );
-    let mut trailing = envelope.clone();
-    trailing.canonical_payload.push(0);
-    assert!(canonical_autonomous_contract_binding(&trailing, 3, envelope.network_id).is_err());
-    let mut malformed = envelope.clone();
-    malformed.canonical_payload = vec![1, 2, 3];
-    assert!(canonical_autonomous_contract_binding(&malformed, 3, envelope.network_id).is_err());
-}
-
-#[test]
-fn contract_v1_rbc_progress_rejects_missing_quorum_payload_and_baseline_only() {
-    let (_, record, _, _) = contract_rbc_autonomous_join_fixture();
-    assert_eq!(
-        contract_rbc_progress_failures(&record, Some(&record), 4, 3),
-        vec!["not_later_in_same_lane_incarnation"]
-    );
-    let mut wrong = record.clone();
-    wrong.prepare_qc_signer_count = 2;
-    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"exact_quorum_signers"));
-    wrong.prepare_qc_signer_count = 4;
-    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"exact_quorum_signers"));
-    wrong = record.clone();
-    wrong.executable_payload_available = false;
-    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"payload_unavailable"));
-    wrong = record.clone();
-    wrong.execution_status = "rejected_preflight".to_owned();
-    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"execution_status"));
-    wrong = record.clone();
-    wrong.rbc_instance_hash = Hash::prehashed([0; 32]);
-    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"zero_identity"));
-    wrong = record.clone();
-    wrong.lane_block_height += 1;
-    assert!(contract_rbc_progress_failures(&wrong, Some(&record), 4, 3).is_empty());
-    wrong.lane_incarnation = Hash::new(b"other incarnation");
-    assert!(
-        contract_rbc_progress_failures(&wrong, Some(&record), 4, 3)
-            .contains(&"not_later_in_same_lane_incarnation")
-    );
-}
-
-#[test]
-fn contract_v1_rbc_ordinary_join_rejects_wrong_proposal_and_replay_material() {
-    use iroha_data_model::block::consensus::SumeragiLanePayloadOwnership;
-    iroha_data_model::isi::set_instruction_registry(
-        iroha_data_model::instruction_registry::default(),
-    );
-    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
-    let payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
-        norito::decode_canonical(&envelope.canonical_payload).unwrap();
-    let d = payload.origin_proposal.descriptor;
-    // This models an actual ordinary canonical ownership, not an autonomous
-    // envelope reclassified by the query helper.
-    let ownership = SumeragiLanePayloadOwnership {
-        proposal_height: d.proposal_height,
-        proposal_view: 0,
-        lane_id: d.lane_id,
-        dataspace_id: d.dataspace_id,
-        lane_incarnation: d.lane_incarnation,
-        lane_block_height: d.lane_block_height,
-        lane_block_view: d.lane_block_view,
-        subject_hash: d.subject_hash,
-        qc_mode_tag: d.qc_mode_tag.clone(),
-        accepted_candidate_indices: d.accepted_candidate_indices.clone(),
-        accepted_transaction_hashes: d.accepted_transaction_hashes.clone(),
-        previous_lane_block_height: d.previous_lane_block_height,
-        previous_lane_block_descriptor_hash: d.previous_lane_block_descriptor_hash,
-        lane_block_descriptor_hash: Some(d.descriptor_hash),
-        lane_block_descriptor_validator_set: d.validator_set,
-        lane_block_descriptor_validator_count: d.validator_count,
-        lane_block_descriptor_min_quorum: d.min_quorum,
-        payload_ownership_hash: d.payload_ownership_hash,
-        rbc_instance_hash: d.rbc_instance_hash,
-    };
-    let binding = canonical_ordinary_contract_binding(&ownership).expect("valid ordinary replay");
-    assert!(matches!(binding, CanonicalContractRbcBinding::Ordinary(_)));
-    assert!(contract_rbc_binding_matches(
-        &binding,
-        &record,
-        &validators,
-        Some((4, &hash))
-    ));
-    let mut wrong = record.clone();
-    wrong.proposal_hash = Hash::new(b"unrelated ordinary proposal");
-    assert!(!contract_rbc_binding_matches(
-        &binding,
-        &wrong,
-        &validators,
-        Some((4, &hash))
-    ));
-    let mut wrong_replay = ownership;
-    wrong_replay.accepted_transaction_hashes = vec![Hash::new(b"different work")];
-    assert!(
-        canonical_ordinary_contract_binding(&wrong_replay)
-            .unwrap_err()
-            .to_string()
-            .contains("ordinary ownership")
-    );
-}
-
-#[test]
-fn contract_v1_rbc_canonical_query_retries_retain_errors_and_stop_at_budget_or_success() {
-    let mut cache = CanonicalContractRbcCache::default();
-    cache
-        .record_query(Err("transient first read".to_owned()))
-        .unwrap();
-    assert!(cache.can_query());
-    assert!(cache.bindings.is_none());
-    assert_eq!(cache.errors, vec!["transient first read"]);
-    cache.record_query(Ok(Vec::new())).unwrap();
-    assert_eq!(cache.attempts, 2);
-    assert!(cache.bindings.is_some());
-    assert!(!cache.can_query());
-    assert_eq!(cache.errors, vec!["transient first read"]);
-    assert!(cache.record_query(Err("must not run".to_owned())).is_err());
-    assert_eq!(cache.attempts, 2);
-
-    let mut exhausted = CanonicalContractRbcCache::default();
-    for attempt in 0..CONTRACT_RBC_QUERY_ATTEMPT_LIMIT {
-        assert!(exhausted.can_query());
-        exhausted
-            .record_query(Err(format!("failed attempt {attempt}")))
-            .unwrap();
-    }
-    assert!(!exhausted.can_query());
-    assert_eq!(exhausted.errors.len(), CONTRACT_RBC_QUERY_ATTEMPT_LIMIT);
-    assert!(exhausted.record_query(Ok(Vec::new())).is_err());
-    assert!(exhausted.bindings.is_none());
-    assert_eq!(exhausted.attempts, CONTRACT_RBC_QUERY_ATTEMPT_LIMIT);
-}
-
-#[test]
-fn contract_v1_rbc_four_peer_intersection_ignores_different_local_maxima() {
-    let (_, common, _, _) = contract_rbc_autonomous_join_fixture();
-    let mut observations = (0..4)
-        .map(|index| {
-            let mut later = common.clone();
-            later.lane_block_height += index + 1;
-            later.proposal_hash = Hash::new(index.to_le_bytes());
-            vec![common.clone(), later]
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        shared_contract_rbc_record(&observations),
-        Some(common.clone())
-    );
-    observations[3].remove(0);
-    assert_eq!(shared_contract_rbc_record(&observations), None);
-    observations[3].push(common.clone());
-    observations[3].last_mut().unwrap().commit_qc_signer_count = 2;
-    assert_eq!(shared_contract_rbc_record(&observations), None);
-    assert_eq!(shared_contract_rbc_record(&observations[..3]), None);
-}
-
-#[test]
-fn contract_v1_rbc_stream_end_covers_applied_height_within_the_fixture_cap() {
-    assert_eq!(contract_rbc_replay_end(3, Some(3)).unwrap(), 3);
-    assert_eq!(contract_rbc_replay_end(100, Some(64)).unwrap(), 64);
-    assert_eq!(contract_rbc_replay_end(2, None).unwrap(), 2);
-    for (head, required) in [
-        (0, None),
-        (1, None),
-        (2, Some(3)),
-        (100, Some(65)),
-        (3, Some(1)),
-    ] {
-        assert!(contract_rbc_replay_end(head, required).is_err());
-    }
-}
-
-// Fake stream rows exercise only finite replay order and cleanup. They are not
-// represented as signed blocks or consensus/provenance acceptance evidence.
-type ContractRbcReplayRow = (u64, HashOf<BlockHeader>, Option<HashOf<BlockHeader>>);
-
-fn contract_rbc_fake_replay_row(height: u64) -> ContractRbcReplayRow {
-    let hash = |height: u64| {
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(height.to_le_bytes()))
-    };
-    (height, hash(height), Some(hash(height - 1)))
-}
-
-#[tokio::test]
-async fn contract_v1_rbc_stream_reads_exact_end_without_lookahead() {
-    use futures_util::{StreamExt as _, TryStreamExt as _};
-
-    let polls = std::cell::Cell::new(0);
-    let mut stream =
-        futures_util::stream::iter((2..=65).map(|height| Ok(contract_rbc_fake_replay_row(height))))
-            .inspect(|_| polls.set(polls.get() + 1));
-    let blocks = receive_contract_rbc_prefix(
-        &mut stream,
-        64,
-        Instant::now() + Duration::from_secs(10),
-        |row| *row,
-    )
-    .await
-    .unwrap();
-    assert_eq!(blocks.len(), 63);
-    assert_eq!(blocks.first().unwrap().0, 2);
-    assert_eq!(blocks.last().unwrap().0, 64);
-    assert_eq!(polls.get(), 63);
-    assert_eq!(stream.try_next().await.unwrap().unwrap().0, 65);
-}
-
-#[tokio::test]
-async fn contract_v1_rbc_stream_rejects_gap_duplicate_hash_truncation_and_frame_errors() {
-    let two = contract_rbc_fake_replay_row(2);
-    let three = contract_rbc_fake_replay_row(3);
-    let four = contract_rbc_fake_replay_row(4);
-    let mut wrong_parent = three;
-    wrong_parent.2 = Some(four.1);
-    let mut absent_parent = two;
-    absent_parent.2 = None;
-    let cases: Vec<Vec<Result<ContractRbcReplayRow>>> = vec![
-        vec![Ok(three), Ok(two)],
-        vec![Ok(two), Ok(two)],
-        vec![Ok(two), Ok(four)],
-        vec![Ok(two), Ok(wrong_parent)],
-        vec![Ok(absent_parent), Ok(three)],
-        vec![Ok(two)],
-        vec![Ok(two), Err(eyre!("retained malformed frame error"))],
-    ];
-    for rows in cases {
-        let mut stream = futures_util::stream::iter(rows);
-        assert!(
-            receive_contract_rbc_prefix(
-                &mut stream,
-                3,
-                Instant::now() + Duration::from_secs(10),
-                |row| *row,
-            )
-            .await
-            .is_err()
-        );
-    }
-    for end in [0, 1, 65] {
-        let mut stream = futures_util::stream::pending::<Result<ContractRbcReplayRow>>();
-        let error = receive_contract_rbc_prefix(
-            &mut stream,
-            end,
-            Instant::now() + Duration::from_secs(10),
-            |row| *row,
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("fixture bound"));
-    }
-}
-
-#[tokio::test]
-async fn contract_v1_rbc_stream_pending_and_expired_deadlines_are_failures() {
-    let mut stream = futures_util::stream::pending::<Result<ContractRbcReplayRow>>();
-    let error = receive_contract_rbc_prefix(
-        &mut stream,
-        2,
-        Instant::now() + Duration::from_millis(1),
-        |row| *row,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("timed out") || error.to_string().contains("deadline expired")
-    );
-    let error = receive_contract_rbc_prefix(&mut stream, 2, Instant::now(), |row| *row)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("deadline expired"));
-}
-
-#[tokio::test]
-async fn contract_v1_rbc_stream_close_is_bounded_and_retains_the_read_failure() {
-    let error = finish_contract_rbc_replay::<ContractRbcReplayRow>(
-        Err(eyre!("original replay failure")),
-        std::future::pending(),
-        Instant::now() + Duration::from_millis(1),
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("original replay failure"));
-    assert!(error.to_string().contains("close timed out"));
-    let row = contract_rbc_fake_replay_row(2);
-    assert_eq!(
-        finish_contract_rbc_replay(
-            Ok(vec![row]),
-            async { Ok(()) },
-            Instant::now() + Duration::from_secs(10)
-        )
-        .await
-        .unwrap(),
-        vec![row],
-    );
-    let error = finish_contract_rbc_replay(Ok(vec![row]), std::future::pending(), Instant::now())
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("close timed out"));
-}
-
-#[tokio::test]
-async fn contract_v1_rbc_stream_close_failure_retains_the_read_failure() {
-    let close = || async {
-        Err(iroha::Error::Timeout {
-            operation: "blocks.close",
-        })
-    };
-    let error = finish_contract_rbc_replay::<ContractRbcReplayRow>(
-        Err(eyre!("original replay failure")),
-        close(),
-        Instant::now() + Duration::from_secs(10),
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("original replay failure"));
-    assert!(error.to_string().contains("close failed"));
-    assert!(error.to_string().contains("blocks.close"));
-    let error = finish_contract_rbc_replay(
-        Ok(vec![contract_rbc_fake_replay_row(2)]),
-        close(),
-        Instant::now() + Duration::from_secs(10),
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<iroha::Error>(),
-        Some(iroha::Error::Timeout {
-            operation: "blocks.close"
-        })
-    ));
+    Ok(())
 }
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
@@ -3689,8 +2459,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
     network.ensure_blocks(1).await?;
-    let rbc_baseline =
-        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
     let deploy_client = network.peers()[0].client();
     let http = integration_tests::http::client();
     let (contract_address, deployment_tx_hash, deploy_height) = deploy_contract_artifact(
@@ -3702,13 +2470,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     )
     .await?;
     network.ensure_blocks(deploy_height).await?;
-    wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        Some(&rbc_baseline),
-        Some((deploy_height, &deployment_tx_hash)),
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, deploy_height, Some(deployment_tx_hash)).await?;
     let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
         read_on_dedicated_thread({
             let client = deploy_client.clone();
@@ -4063,25 +2825,25 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     Ok(())
 }
 #[test]
-fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<()> {
-    run_contract_v1_four_peer_da_rbc_restart(
+fn contract_v1_executes_and_survives_four_peer_native_finality_restart() -> Result<()> {
+    run_contract_v1_four_peer_native_finality_restart(
         false,
-        stringify!(contract_v1_executes_and_survives_four_peer_da_rbc_restart),
+        stringify!(contract_v1_executes_and_survives_four_peer_native_finality_restart),
     )
 }
 
 #[test]
-fn contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart()
+fn contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_native_finality_restart()
 -> Result<()> {
-    run_contract_v1_four_peer_da_rbc_restart(
+    run_contract_v1_four_peer_native_finality_restart(
         true,
         stringify!(
-            contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart
+            contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_native_finality_restart
         ),
     )
 }
 
-fn run_contract_v1_four_peer_da_rbc_restart(
+fn run_contract_v1_four_peer_native_finality_restart(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
@@ -4098,7 +2860,7 @@ fn run_contract_v1_four_peer_da_rbc_restart(
                 .enable_all()
                 .build()
                 .expect("build four-validator contract runtime")
-                .block_on(contract_v1_four_peer_da_rbc_restart_impl(
+                .block_on(contract_v1_four_peer_native_finality_restart_impl(
                     registered_in_genesis,
                     context,
                 ))
@@ -4110,7 +2872,7 @@ fn run_contract_v1_four_peer_da_rbc_restart(
     }
 }
 
-async fn contract_v1_four_peer_da_rbc_restart_impl(
+async fn contract_v1_four_peer_native_finality_restart_impl(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
@@ -4138,8 +2900,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
                     ["logger", "filter"],
                     "iroha_core::sumeragi=trace,iroha_p2p=debug",
                 )
-                // This gate exercises consensus and mandatory DA/RBC, not
-                // SoraNet admission-puzzle cost. Keep PoW enabled at the
+                // Keep SoraNet PoW enabled at the
                 // production difficulty while bounding full-mesh startup work.
                 .write(
                     [
@@ -4286,8 +3047,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         }
     })
     .await?;
-    // Applied follows successive admission, autonomous-anchor, and execution
-    // carriers. Keep its wait outside the signed-cadence round budget.
+    // Observe state application, then authenticate its original native certificate.
     let deployment_height = wait_for_tx_applied(
         &http,
         client.client().endpoint(),
@@ -4298,16 +3058,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     .await?;
     network.ensure_blocks(deployment_height).await?;
     let deployment_hash = Hash::from(deployment_tx_hash);
-    // Genesis has a global QC but bootstraps the lane catalog without a lane-block
-    // certificate. The applied deployment is the first normal work whose certified
-    // lane payload can establish this test's cross-peer RBC baseline.
-    let deployment_rbc = wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        None,
-        Some((deployment_height, &deployment_hash)),
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, deployment_height, Some(deployment_hash)).await?;
     // CommitContractDeployment already activates the address, binds its alias and stages
     // hajimari; its transaction also grants Alice the exact hook invocation token.
     // Pin the address/code in a trusted intent, then sign the SDK's exact quoted
@@ -4404,13 +3155,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         );
     }
 
-    wait_for_cross_peer_rbc_diagnostics(
-        &network,
-        Duration::from_secs(120),
-        Some(&deployment_rbc),
-        None,
-    )
-    .await?;
+    verify_contract_finality_everywhere(&network, verification_height, None).await?;
     let restart_index = network.peers().len() - 1;
     let restart_peer = network.peers()[restart_index].clone();
     let config_layers = network.config_layers().collect::<Vec<_>>();

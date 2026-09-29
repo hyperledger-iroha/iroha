@@ -50,6 +50,8 @@ pub(crate) mod p256_window_air;
 mod private_table;
 pub(crate) mod profile;
 pub(crate) mod projection_air;
+#[cfg(test)]
+mod prover_observation;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod relation;
 pub(crate) mod rfc5280_stark;

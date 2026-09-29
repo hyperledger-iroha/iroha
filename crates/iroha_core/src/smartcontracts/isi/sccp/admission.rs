@@ -132,12 +132,6 @@ impl SccpAdmissionRejectV1 {
             reason: reason.into(),
         }
     }
-
-    /// Build the rejection of a pre-verification that is not implemented yet.
-    #[must_use]
-    pub fn not_wired(what: &str, owner: &str) -> Self {
-        Self::new(format!("SCCP: {what} not implemented yet (TODO({owner}))"))
-    }
 }
 
 fn downcast<T: 'static>(instruction: &InstructionBox) -> Option<&T> {
@@ -311,7 +305,7 @@ pub fn classify(
 }
 
 /// Test-only replacement of the pre-verification step of [`classify`], per thread, standing in
-/// for ws31's pre-verifiers in queue tests.
+/// for the real pre-verifiers in queue tests.
 #[cfg(test)]
 pub(crate) mod test_override {
     use super::{SccpAdmissionKeysV1, SccpAdmissionRejectV1, SignedTransaction};
@@ -881,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn skeleton_classification_is_neutral() {
+    fn classification_without_sccp_is_neutral() {
         let state = blank_state();
         let view = state.world_view();
         let transaction = sample_signed_transaction();
@@ -892,7 +886,5 @@ mod tests {
         ));
         assert!(block_exempt_cap_ok(&view, &[SccpExemptClassV1::Fault]));
         assert_eq!(exempt_cap(&view), None);
-        let reject = SccpAdmissionRejectV1::not_wired("attestation pre-verification", "ws31");
-        assert!(reject.to_string().contains("TODO(ws31)"));
     }
 }

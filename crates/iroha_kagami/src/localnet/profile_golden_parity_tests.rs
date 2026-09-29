@@ -10,8 +10,6 @@
 //!   given Kagami's catalog ([`CATALOG_FIELDS`]) and both are staged against Kagami's own signed
 //!   genesis, so no other Nexus value is copied.
 //! - **Cadence** (listed). Kagami is generated with the profile's `block_cadence_ms`.
-//! - **Authenticated capacity 4** (listed). `sumeragi.queues.authenticated_non_validator_sources`
-//!   and the ingress geometry derived from it are bound by neither hash; nothing is normalized.
 //! - **Protocol custody account** (not listed in the spec; found by this test). Kagami derives a
 //!   keyless custody account from each genesis public key; a compiled profile cannot know that
 //!   key, so it fixes one keyless account ([`iroha_config::profile::protocol_custody_account`]).
@@ -132,27 +130,6 @@ impl KagamiTaira {
             &fs::read_to_string(self.path(&format!("peer{peer}.toml"))).expect("Taira peer"),
         )
         .expect("Taira peer TOML")
-    }
-
-    /// The signed `(nexus_amx_context_hash, execution_policy_hash)`.
-    fn signed_hashes(&self) -> (Hash, Hash) {
-        let context = self.manifest.sumeragi_v2_context_parameters();
-        (
-            Hash::prehashed(context.nexus_amx_context_hash),
-            Hash::prehashed(context.execution_policy_hash),
-        )
-    }
-
-    /// Restage the signed genesis under `config`, as prepared-bundle admission does.
-    fn staged_hashes(&self, config: &actual::Root, side: &str) -> (Hash, Hash) {
-        crate::genesis::staged_signed_sumeragi_v2_context_hashes(
-            &self.manifest,
-            &self.signed,
-            config,
-        )
-        .unwrap_or_else(|error| {
-            panic!("restage the signed Taira genesis under the {side}: {error:?}")
-        })
     }
 }
 
@@ -535,86 +512,6 @@ fn governance_normalization_sets_exactly_the_six_governance_roles() {
     assert_eq!(
         to.viral_incentives.halt, halt,
         "a non-account field must not change"
-    );
-}
-
-/// The profile render plus Kagami's Taira genesis reproduces both signed hashes.
-#[test]
-fn sora_nexus_v1_render_reproduces_kagami_taira_policy_and_amx_hashes() {
-    let profile = Profile::compiled(ProfileId::SoraNexusV1).expect("compiled profile");
-    let kagami = KagamiTaira::generate(profile.genesis_recipe().block_cadence_ms);
-    let signed = kagami.signed_hashes();
-    let kagami_config = read_node_config(&kagami.path(&format!("peer{PEER}.toml")), true);
-    assert_eq!(
-        kagami.staged_hashes(&kagami_config, "Kagami peer config"),
-        signed,
-        "Kagami's own peer config must reproduce its signed genesis hashes"
-    );
-    let root = tempfile::tempdir().expect("profile node directory");
-    let root = fs::canonicalize(root.path())
-        .map(|path| (root, path))
-        .expect("canonical root");
-    let node_file = render_profile_node(&kagami, PEER, &root.1);
-    let mut rendered = read_node_config(&node_file, false);
-    copy_kagami_catalog(&mut rendered.nexus, &kagami_config.nexus);
-    let genesis_public_key: iroha_crypto::PublicKey =
-        fs::read_to_string(kagami.path("genesis.public_key"))
-            .expect("Kagami genesis public key")
-            .trim()
-            .parse()
-            .expect("genesis public key");
-    let kagami_custody = localnet_gas_account_id(&genesis_public_key);
-    let profile_custody = iroha_config::profile::protocol_custody_account(ProfileId::SoraNexusV1);
-    for (field, (kagami_account, profile_account)) in CUSTODY_ACCOUNT_FIELDS.iter().zip(
-        custody_accounts(&kagami_config.pipeline, &kagami_config.nexus)
-            .into_iter()
-            .zip(custody_accounts(&rendered.pipeline, &rendered.nexus)),
-    ) {
-        assert_eq!(
-            kagami_account, kagami_custody,
-            "Kagami {field} is not keyless"
-        );
-        assert_eq!(
-            profile_account, profile_custody,
-            "profile {field} is not keyless"
-        );
-    }
-    copy_kagami_custody_account(
-        (&mut rendered.pipeline, &mut rendered.nexus),
-        (&kagami_config.pipeline, &kagami_config.nexus),
-    );
-    let published_sample = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
-    let keyless_roles = KeylessRole::ALL.into_iter().filter(|role| role.is_static());
-    for ((field, role), (kagami_account, profile_account)) in
-        GOVERNANCE_ACCOUNT_FIELDS.iter().zip(keyless_roles).zip(
-            governance_accounts(&kagami_config.gov)
-                .into_iter()
-                .zip(governance_accounts(&rendered.gov)),
-        )
-    {
-        assert_eq!(
-            kagami_account, published_sample,
-            "Kagami {field} is not the published sample account"
-        );
-        assert_eq!(
-            profile_account,
-            keyless_role_account(ProfileId::SoraNexusV1, role),
-            "profile {field} is not its keyless role account"
-        );
-    }
-    copy_kagami_governance_accounts(&mut rendered.gov, &kagami_config.gov);
-    let staged = kagami.staged_hashes(&rendered, "sora-nexus-v1 render");
-    assert!(
-        staged == signed,
-        "sora-nexus-v1 differs from Kagami Taira outside the intentional differences\n\
-         nexus_amx_context_hash: kagami {} profile {}\n\
-         execution_policy_hash: kagami {} profile {}\n\
-         differing hash inputs:\n{}",
-        signed.0,
-        staged.0,
-        signed.1,
-        staged.1,
-        section_differences(&kagami_config, &rendered)
     );
 }
 

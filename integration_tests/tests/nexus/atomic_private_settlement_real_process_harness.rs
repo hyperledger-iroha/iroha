@@ -7,17 +7,12 @@ use matched_benchmark_workload::*;
 
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use iroha::data_model::block::consensus_v2::{
-    HeightContextId, recommended_data_availability_layout,
-};
+use iroha::data_model::block::consensus_v2::HeightContextId;
 use iroha::data_model::events::{
     EventBox,
     pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
 };
-use iroha_test_network::{
-    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
-    NativeAmxFaultPhase, PrivateSettlementRouteControlAction, PrivateSettlementRouteControlPhase,
-};
+use iroha_test_network::{PrivateSettlementRouteControlAction, PrivateSettlementRouteControlPhase};
 use norito::json::Value as HarnessJsonValue;
 use sha2::{Digest as Sha2Digest, Sha256};
 use std::{
@@ -56,18 +51,10 @@ const HARNESS_MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const FAULT_CONTROL_EVIDENCE_FILE: &str = "fault-control.jsonl";
 const FAULT_OBSERVATION_EVIDENCE_FILE: &str = "fault-observations.jsonl";
 const FAULT_ROUTE_MATCHES: u64 = 20;
-const PRIVATE_SETTLEMENT_CRASH_BOUNDARIES: &[&str] = &[
-    "sidecar_fsync",
-    "staged_delta_fsync",
-    "prepare_qc",
-    "prepare_registration_kura_append",
-    "prepare_registration_wsv_application",
-    "commit_qc",
-    "finalization_kura_append",
-    "finalization_wsv_application",
-    "receipt_publication",
-];
-const FAULT_CAMPAIGN_TRIALS: usize = 9 + 4 + PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len();
+// Node-internal process cuts belong to deterministic protocol/storage owner tests. The live
+// harness qualifies authenticated HTTP loss/hold and externally observed restart recovery.
+const PRIVATE_SETTLEMENT_CRASH_BOUNDARIES: &[&str] = &[];
+const FAULT_CAMPAIGN_TRIALS: usize = 9 + 3 + 1;
 const FAULT_BUNDLE_EXPIRY_BLOCKS: u64 = 96;
 const FAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 const FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1: &[u8] =
@@ -188,7 +175,7 @@ struct RealProcessBenchmarkRequestV1 {
     quorum: String,
     mandatory_signed_rs16_da_rbc: bool,
     minimum_signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     seed: u64,
     session_id: String,
     session_invocation_nonce: String,
@@ -243,7 +230,7 @@ struct RealProcessFaultRequestV1 {
     quorum: String,
     mandatory_signed_rs16_da_rbc: bool,
     minimum_signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     seed: u64,
     run: u64,
     configuration: HarnessJsonValue,
@@ -295,7 +282,7 @@ struct RealProcessLeakageRequestV1 {
     quorum: String,
     mandatory_signed_rs16_da_rbc: bool,
     minimum_signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     seed: u64,
     run: u64,
     configuration: HarnessJsonValue,
@@ -352,7 +339,7 @@ struct RealProcessBenchmarkResultV1 {
     participants: usize,
     mandatory_signed_rs16_da_rbc: bool,
     signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: RealProcessBenchmarkResultPayloadV1,
 }
@@ -364,7 +351,7 @@ enum BenchmarkDeadlineStageV1 {
     StateConvergence,
     TransparentConsents,
     TransparentBalances,
-    NativeAmxReceipt,
+    SettlementFinality,
     CanonicalCarrier,
     PrivateReceipt,
 }
@@ -376,7 +363,7 @@ impl BenchmarkDeadlineStageV1 {
             Self::StateConvergence => "state_convergence",
             Self::TransparentConsents => "transparent_consents",
             Self::TransparentBalances => "transparent_balances",
-            Self::NativeAmxReceipt => "native_amx_receipt",
+            Self::SettlementFinality => "settlement_finality",
             Self::CanonicalCarrier => "canonical_carrier",
             Self::PrivateReceipt => "private_receipt",
         }
@@ -388,7 +375,7 @@ impl BenchmarkDeadlineStageV1 {
             "state_convergence" => Some(Self::StateConvergence),
             "transparent_consents" => Some(Self::TransparentConsents),
             "transparent_balances" => Some(Self::TransparentBalances),
-            "native_amx_receipt" => Some(Self::NativeAmxReceipt),
+            "settlement_finality" => Some(Self::SettlementFinality),
             "canonical_carrier" => Some(Self::CanonicalCarrier),
             "private_receipt" => Some(Self::PrivateReceipt),
             _ => None,
@@ -656,7 +643,7 @@ struct RealProcessFaultResultV1 {
     participants: usize,
     mandatory_signed_rs16_da_rbc: bool,
     signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: HarnessJsonValue,
 }
@@ -700,7 +687,7 @@ struct RealProcessLeakageResultV1 {
     participants: usize,
     mandatory_signed_rs16_da_rbc: bool,
     signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: RealProcessLeakageResultPayloadV1,
 }
@@ -1039,7 +1026,7 @@ fn validate_real_process_request_common(
     quorum: &str,
     mandatory_signed_rs16_da_rbc: bool,
     minimum_signed_rs16_da_observations: u64,
-    authenticated_message_control: bool,
+    authenticated_private_settlement_route_control: bool,
     configuration: &HarnessJsonValue,
 ) -> Result<()> {
     let shape = TopologyShape::new(participants);
@@ -1060,7 +1047,7 @@ fn validate_real_process_request_common(
             && global_validators == VALIDATORS_PER_LANE
             && quorum == "3-of-4"
             && mandatory_signed_rs16_da_rbc
-            && authenticated_message_control,
+            && authenticated_private_settlement_route_control,
         "request weakens the required real-process topology"
     );
     ensure!(
@@ -1120,7 +1107,7 @@ fn validate_real_process_request_common(
             && harness_json_object_bool(
                 configuration,
                 "consensus",
-                "authenticated_message_control",
+                "authenticated_private_settlement_route_control",
             ) == Some(true),
         "embedded configuration does not bind the required topology and execution widths"
     );
@@ -1166,7 +1153,7 @@ fn validate_real_process_request(request: &RealProcessBenchmarkRequestV1) -> Res
         &request.quorum,
         request.mandatory_signed_rs16_da_rbc,
         request.minimum_signed_rs16_da_observations,
-        request.authenticated_message_control,
+        request.authenticated_private_settlement_route_control,
         &request.configuration,
     )?;
     ensure!(
@@ -1238,7 +1225,7 @@ fn validate_real_process_fault_request(request: &RealProcessFaultRequestV1) -> R
         &request.quorum,
         request.mandatory_signed_rs16_da_rbc,
         request.minimum_signed_rs16_da_observations,
-        request.authenticated_message_control,
+        request.authenticated_private_settlement_route_control,
         &request.configuration,
     )?;
     let normalization = &request.payload.prepare_qc_normalization;
@@ -1251,7 +1238,7 @@ fn validate_real_process_fault_request(request: &RealProcessFaultRequestV1) -> R
                     "da_before_availability_qc",
                     "prepare_before_complete_barrier",
                     "commit_before_complete_barrier",
-                    "carrier_before_global_finality",
+                    "restart_before_global_finality",
                 ]
             && request.payload.crash_boundaries == PRIVATE_SETTLEMENT_CRASH_BOUNDARIES
             && request.payload.committee_validator_restarts
@@ -1293,7 +1280,7 @@ fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) 
         &request.quorum,
         request.mandatory_signed_rs16_da_rbc,
         request.minimum_signed_rs16_da_observations,
-        request.authenticated_message_control,
+        request.authenticated_private_settlement_route_control,
         &request.configuration,
     )?;
     ensure!(
@@ -2830,27 +2817,19 @@ fn leakage_operator_log_records(
     Ok((rows, sources))
 }
 
-fn verify_controller_readiness(network: &Network, runtime: &tokio::runtime::Runtime) -> Result<()> {
+fn verify_controller_readiness(
+    network: &Network,
+    _runtime: &tokio::runtime::Runtime,
+) -> Result<()> {
     for peer in network.all_peers() {
-        let control = peer
-            .consensus_message_control()
-            .ok_or_else(|| eyre!("peer {} lacks authenticated message control", peer.id()))?;
-        let acknowledgement = runtime
-            .block_on(control.wait_until_ready(Duration::from_secs(30)))
-            .wrap_err_with(|| format!("wait for controller on {}", peer.id()))?;
         ensure!(
-            acknowledgement.revision == 1
-                && acknowledgement.rules.is_empty()
-                && acknowledgement.held.is_empty()
-                && acknowledgement.release_pending.is_empty()
-                && acknowledgement.in_flight.is_none()
-                && acknowledgement.last_error.is_none()
-                && !acknowledgement.fatal
-                && !acknowledgement.draining,
-            "peer {} did not acknowledge a clean controller state",
+            peer.private_settlement_route_control().is_some() && peer.is_running(),
+            "peer {} lacks the configured live HTTP route controller",
             peer.id()
         );
+        peer.client().status().get()?;
     }
+    // Exact acknowledgements are required after each real route request by its scenario.
     Ok(())
 }
 
@@ -5634,7 +5613,6 @@ fn collect_signed_rs16_finality(
 ) -> Result<(SignedRs16FinalityObservationsV1, Vec<SmokeEvidenceFileV1>)> {
     let height = NonZeroU64::new(finalized_height)
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
-    let expected_layout = recommended_data_availability_layout();
     let expected_roster = network.validators().iter().map(|peer| peer.id()).collect();
     let peers = network.all_peers().cloned().collect::<Vec<_>>();
     let expected_observations = peers.len();
@@ -5642,41 +5620,44 @@ fn collect_signed_rs16_finality(
         expected_observations > 0,
         "finality observations omitted every validator"
     );
-    let network_id = network.network_id();
     let responses = collect_bounded_observations(peers, TEST_STACK_BYTES, |peer| {
-        let response = peer
-            .client()
-            .client()
-            .get_bridge_finality_anchor(height, network_id);
-        (peer.id(), response)
+        let client = peer.client();
+        let response = client.client().get_sumeragi_finality_proof(height);
+        (peer.id(), client, response)
     });
     let mut observations = 0_u64;
     let mut anchor = None;
     let mut files = Vec::new();
     let mut failures = Vec::new();
-    for (peer_index, (peer_id, response)) in responses.into_iter().enumerate() {
+    for (peer_index, (peer_id, client, response)) in responses.into_iter().enumerate() {
         let validated = (|| -> Result<()> {
-            let (proof, block_hash) =
-                response.wrap_err_with(|| format!("fetch signed finality proof from {peer_id}"))?;
-            let artifact = &proof.finality_artifact;
+            let proof =
+                response.wrap_err_with(|| format!("fetch native finality proof from {peer_id}"))?;
+            let certified = authenticated_native_history(network, &client)?
+                .into_iter()
+                .find(|block| block.committed().height() == finalized_height)
+                .ok_or_else(|| eyre!("peer omitted the requested certified native height"))?;
+            let committed = certified.committed();
             ensure!(
-                proof.block_header.hash() == block_hash
-                    && proof.block_header.height() == height
-                    && artifact.height_context.roster.len() == VALIDATORS_PER_LANE
-                    && artifact.height_context.quorum.min_signers == 3
-                    && artifact.commit_qc.signers.len() == 3
-                    && artifact.height_context.da_layout == expected_layout,
-                "peer {peer_id} did not return a signed 3-of-4 RS16 finality artifact"
+                proof.block_header.height() == height
+                    && proof.block_header == committed.block().header()
+                    && proof.block_wire == committed.block().encode_wire()?
+                    && certified
+                        .commit_qc()
+                        .is_some_and(|qc| qc.signers.count_ones() == 3),
+                "peer {peer_id} native proof does not bind the original exact quorum carrier"
             );
             let observed_anchor = SignedRs16FinalityAnchorV1 {
-                block_hash,
-                context_id: artifact.height_context.id(),
+                block_hash: committed.block_hash(),
+                context_id: committed.id(),
             };
-            let observed_roster = artifact
-                .height_context
-                .roster
+            let observed_roster = committed
+                .commitment()
+                .schedule
+                .current
+                .committee
                 .iter()
-                .map(|entry| entry.validator.clone())
+                .map(|member| member.validator.clone())
                 .collect::<Vec<_>>();
             ensure_signed_rs16_finality_identity(
                 &expected_roster,
@@ -5705,6 +5686,7 @@ fn collect_signed_rs16_finality(
         usize::try_from(observations)? == expected_observations,
         "signed finality omitted a configured peer"
     );
+    require_signed_rs16_transport()?;
     Ok((
         SignedRs16FinalityObservationsV1 {
             observations,
@@ -5712,6 +5694,21 @@ fn collect_signed_rs16_finality(
         },
         files,
     ))
+}
+
+/// Fail closed until the node supplies authenticated RS16 manifest/chunk custody evidence.
+fn require_signed_rs16_transport() -> Result<()> {
+    // TODO: Bind signed PayloadManifest/PayloadChunk source evidence from the native transport
+    // when specs/sumeragi_goals.md open question 8 is implemented. A full carrier proves finality
+    // and application execution, but cannot qualify that separate availability requirement.
+    Err(eyre!(
+        "native finality verified; required signed RS16 PayloadManifest/PayloadChunk evidence is not integrated"
+    ))
+}
+
+#[test]
+fn full_body_finality_cannot_qualify_signed_rs16_transport() {
+    assert!(require_signed_rs16_transport().is_err());
 }
 
 #[test]
@@ -6015,7 +6012,7 @@ where
     observer.begin_phase(&format!("{}_loss", route_control_type(phase)), &[], false)?;
     let peer = process_peer(network, peer_index);
     let control = peer
-        .consensus_message_control()
+        .private_settlement_route_control()
         .ok_or_else(|| eyre!("fault peer lacks APS route control"))?;
     let drop_first = FAULT_ROUTE_MATCHES
         .checked_mul(u64::from(loss_percent))
@@ -6118,7 +6115,7 @@ where
     observer.begin_phase(&format!("{}_hold", route_control_type(phase)), &[], false)?;
     let peer = process_peer(network, peer_index);
     let control = peer
-        .consensus_message_control()
+        .private_settlement_route_control()
         .ok_or_else(|| eyre!("fault peer lacks APS route control"))?;
     let hold = control.arm_private_settlement_route_control(
         phase,
@@ -6592,134 +6589,6 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
     Ok(())
 }
 
-fn carrier_hold_rules(
-    receiver_index: usize,
-    global_peer_ids: &[PeerId],
-    height: u64,
-) -> Vec<ConsensusMessageControlRule> {
-    global_peer_ids
-        .iter()
-        .enumerate()
-        .filter(|(sender_index, _)| *sender_index != receiver_index)
-        .flat_map(|(_, sender)| {
-            (0..16).map(move |view| {
-                ConsensusMessageControlRule::exact(
-                    sender.clone(),
-                    ConsensusMessageControlKind::Proposal,
-                    height,
-                    view,
-                    ConsensusMessageControlAction::Hold,
-                )
-            })
-        })
-        .collect()
-}
-
-fn exercise_consensus_carrier_hold(
-    network: &Network,
-    runtime: &tokio::runtime::Runtime,
-    observer: &mut FaultContinuousObserverV1,
-    sponsor: &Client,
-    submit: PrivateSettlementBundleSubmitRequestV1,
-) -> Result<(Vec<FaultControlOccurrenceV1>, FaultStateSnapshotV1)> {
-    observer.begin_phase("consensus_carrier_hold", &[], false)?;
-    let height = sponsor
-        .status()
-        .get()?
-        .blocks
-        .checked_add(1)
-        .ok_or_else(|| eyre!("carrier control height overflow"))?;
-    let global_peer_ids = network.validators()[0..VALIDATORS_PER_LANE]
-        .iter()
-        .map(NetworkPeer::id)
-        .collect::<Vec<_>>();
-    for receiver_index in 0..VALIDATORS_PER_LANE {
-        let control = network.validators()[receiver_index]
-            .consensus_message_control()
-            .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?;
-        runtime.block_on(control.apply(
-            &carrier_hold_rules(receiver_index, &global_peer_ids, height),
-            &[],
-            256,
-            FAULT_CONTROL_TIMEOUT,
-        ))?;
-    }
-    let submitter = sponsor.clone();
-    let submit_thread = thread::Builder::new()
-        .name("aps-fault-carrier-submit".to_owned())
-        .spawn(move || {
-            submitter
-                .client()
-                .submit_private_settlement_bundle_v1(&submit)
-                .map(|_| ())
-        })?;
-    let started = Instant::now();
-    let hold_evidence = loop {
-        let evidence = (0..VALIDATORS_PER_LANE)
-            .map(|index| {
-                network.validators()[index]
-                    .consensus_message_control()
-                    .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?
-                    .read_current_evidence()
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if evidence
-            .iter()
-            .all(|item| !item.acknowledgement.held.is_empty())
-        {
-            break evidence;
-        }
-        ensure!(
-            started.elapsed() <= FAULT_CONTROL_TIMEOUT,
-            "carrier controls did not durably hold an authenticated proposal"
-        );
-        thread::sleep(POLL_INTERVAL);
-    };
-    let nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
-    let mut controls = Vec::new();
-    for (peer_index, evidence) in hold_evidence.into_iter().enumerate() {
-        controls.push(fault_control_occurrence(
-            "consensus_carrier",
-            Some(peer_index),
-            evidence.command_bytes,
-            evidence.acknowledgement_bytes,
-            None,
-            None,
-        )?);
-    }
-    let hold_bindings = controls
-        .iter()
-        .map(fault_checkpoint_acknowledgement_binding)
-        .collect::<Vec<_>>();
-    observer.checkpoint_active_phase(&hold_bindings)?;
-    observer.complete_phase()?;
-    for peer_index in 0..VALIDATORS_PER_LANE {
-        let control = network.validators()[peer_index]
-            .consensus_message_control()
-            .ok_or_else(|| eyre!("global peer lacks consensus carrier control"))?;
-        runtime.block_on(control.heal_and_release_all(FAULT_CONTROL_TIMEOUT))?;
-        let evidence = control.read_current_evidence()?;
-        controls.push(fault_control_occurrence(
-            "consensus_carrier",
-            Some(peer_index),
-            evidence.command_bytes,
-            evidence.acknowledgement_bytes,
-            None,
-            None,
-        )?);
-    }
-    observer.begin_phase("post_recovery", &[], true)?;
-    let healing_bindings = controls[VALIDATORS_PER_LANE..]
-        .iter()
-        .map(fault_checkpoint_acknowledgement_binding)
-        .collect::<Vec<_>>();
-    observer.checkpoint_active_phase(&healing_bindings)?;
-    submit_thread
-        .join()
-        .map_err(|_| eyre!("carrier submit thread panicked"))??;
-    Ok((controls, nonfinalized))
-}
-
 fn restart_ack_occurrence(
     peer_index: usize,
     revision: u64,
@@ -6753,87 +6622,6 @@ fn restart_ack_occurrence(
         Some(before_pid),
         Some(after_pid),
     )
-}
-
-fn trigger_persistence_cut_and_restart<F>(
-    network: &Network,
-    runtime: &tokio::runtime::Runtime,
-    observer: &mut FaultContinuousObserverV1,
-    peer_index: usize,
-    phase: NativeAmxFaultPhase,
-    bundle_id: Hash,
-    restart_revision: u64,
-    persistence_finalization_allowed: bool,
-    post_recovery_finalization_allowed: bool,
-    trigger: F,
-) -> Result<Vec<FaultControlOccurrenceV1>>
-where
-    F: FnOnce() -> Result<()>,
-{
-    observer.begin_phase(
-        "persistence_cut",
-        &[peer_index],
-        persistence_finalization_allowed,
-    )?;
-    let peer = process_peer(network, peer_index).clone();
-    let control = peer
-        .consensus_message_control()
-        .ok_or_else(|| eyre!("crash target lacks persistence control"))?;
-    let before_pid = runtime
-        .block_on(peer.process_id())
-        .ok_or_else(|| eyre!("crash target has no live PID"))?;
-    let command = control.arm_native_amx_fault_with_evidence(phase, *bundle_id.as_ref())?;
-    let _trigger_result = trigger();
-    let acknowledgement = runtime.block_on(control.wait_for_native_amx_fault(
-        command.revision,
-        phase,
-        *bundle_id.as_ref(),
-        FAULT_CONTROL_TIMEOUT,
-    ))?;
-    let (acknowledgement_bytes, readback) = control.read_native_amx_fault_ack_bytes()?;
-    ensure!(
-        acknowledgement == readback && acknowledgement_bytes == command.canonical_bytes,
-        "persistence-cut acknowledgement did not copy the exact fsynced command"
-    );
-    let persistence = fault_control_occurrence(
-        "persistence_cut",
-        Some(peer_index),
-        command.canonical_bytes,
-        acknowledgement_bytes,
-        None,
-        None,
-    )?;
-    let config_layers = network.config_layers_for_peer(&peer).collect::<Vec<_>>();
-    ensure!(
-        runtime.block_on(peer.shutdown_if_started())
-            && runtime.block_on(peer.process_id()).is_none(),
-        "crash-cut child was not reapable"
-    );
-    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&persistence)])?;
-    observer.complete_phase()?;
-    runtime.block_on(peer.start_checked(config_layers.iter(), None))?;
-    let after_pid = runtime
-        .block_on(peer.process_id())
-        .ok_or_else(|| eyre!("recovered crash target has no PID"))?;
-    ensure!(
-        before_pid != after_pid && peer.client().status().get().is_ok(),
-        "crash recovery did not produce a healthy new process"
-    );
-    let restart_type = if peer_index < VALIDATORS_PER_LANE {
-        "global_restart"
-    } else {
-        "validator_restart"
-    };
-    let restart = restart_ack_occurrence(
-        peer_index,
-        restart_revision,
-        restart_type,
-        before_pid,
-        after_pid,
-    )?;
-    observer.begin_phase("post_recovery", &[], post_recovery_finalization_allowed)?;
-    observer.checkpoint_active_phase(&[fault_checkpoint_acknowledgement_binding(&restart)])?;
-    Ok(vec![persistence, restart])
 }
 
 fn wait_for_fault_state_reverted(
@@ -6940,7 +6728,7 @@ enum FreshRouteFaultV1 {
         phase: PrivateSettlementRouteControlPhase,
         trial_index: usize,
     },
-    CarrierHold,
+    RestartRecovery,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7100,7 +6888,7 @@ fn run_fresh_route_fault_trial(
         _ => {}
     }
     let endpoint_matrix = fault_endpoint_matrix(committees);
-    let (barrier, normalization) = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
+    let (barrier, normalization) = if matches!(fault, FreshRouteFaultV1::RestartRecovery) {
         let (barrier, normalization) =
             prepare_fault_bundle_with_normalization(sponsor, &bundle, committees)?;
         (barrier, Some(normalization))
@@ -7188,7 +6976,7 @@ fn run_fresh_route_fault_trial(
         }
         _ => {}
     }
-    let unavailable = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
+    let unavailable = if matches!(fault, FreshRouteFaultV1::RestartRecovery) {
         let expected_unavailable = (0..request.participants)
             .map(|dataspace_ordinal| (dataspace_ordinal + 1) * VALIDATORS_PER_LANE)
             .collect::<Vec<_>>();
@@ -7256,7 +7044,7 @@ fn run_fresh_route_fault_trial(
         controls.extend(recovery_controls);
     }
     let fee_before_finalization = sponsor_nexus_fee_balance(sponsor)?;
-    let (nonfinalized, receipt) = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
+    let (nonfinalized, receipt) = if matches!(fault, FreshRouteFaultV1::RestartRecovery) {
         controls.push(restart_peer_with_evidence(
             network,
             runtime,
@@ -7312,9 +7100,12 @@ fn run_fresh_route_fault_trial(
             &recovered.commit_certificates,
         )?;
         let replay = submit.clone();
-        let (carrier_controls, nonfinalized) =
-            exercise_consensus_carrier_hold(network, runtime, &mut observer, sponsor, submit)?;
-        controls.extend(carrier_controls);
+        let nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
+        observer.begin_phase("post_recovery", &[], true)?;
+        sponsor
+            .client()
+            .submit_private_settlement_bundle_v1(&submit)?;
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
         ensure!(
             sponsor
@@ -7352,7 +7143,7 @@ fn run_fresh_route_fault_trial(
     let (collection, trial_index) = match fault {
         FreshRouteFaultV1::Loss { trial_index, .. } => ("loss_trials", trial_index),
         FreshRouteFaultV1::Hold { trial_index, .. } => ("phase_cut_partitions", trial_index),
-        FreshRouteFaultV1::CarrierHold => ("phase_cut_partitions", 3),
+        FreshRouteFaultV1::RestartRecovery => ("phase_cut_partitions", 3),
     };
     Ok((
         FaultTrialDraftV1 {
@@ -7368,410 +7159,6 @@ fn run_fresh_route_fault_trial(
         after,
         normalization,
         inventory,
-        signed_rs16,
-    ))
-}
-
-fn crash_boundary_phase(index: usize) -> Result<NativeAmxFaultPhase> {
-    match index {
-        0 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync),
-        1 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync),
-        2 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync),
-        3 | 6 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend),
-        4 | 7 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication),
-        5 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync),
-        8 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication),
-        _ => Err(eyre!("unknown APS crash boundary")),
-    }
-}
-
-fn crash_boundary_peer_index(phase: NativeAmxFaultPhase) -> usize {
-    if matches!(
-        phase,
-        NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend
-            | NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication
-    ) {
-        0
-    } else {
-        VALIDATORS_PER_LANE
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_fresh_crash_trial(
-    request: &RealProcessFaultRequestV1,
-    bundle_ordinal: usize,
-    trial_index: usize,
-    network: &Network,
-    runtime: &tokio::runtime::Runtime,
-    sponsor: &Client,
-    routes: &[PrivateSettlementRouteV1],
-    committees: &[CommitteeEndpoints],
-) -> Result<(FaultTrialDraftV1, FaultStateSnapshotV1, u64)> {
-    let mut bundle = prepare_fault_bundle(
-        request,
-        bundle_ordinal,
-        sponsor,
-        network,
-        routes,
-        committees,
-    )?;
-    let before = wait_for_converged_fault_state_snapshot(network, "before")?;
-    let mut observer = FaultContinuousObserverV1::start(
-        network,
-        &before,
-        request.participants,
-        &bundle.manifest.bundle_id,
-        false,
-    )?;
-    let fee_before_settlement_carriers = sponsor_nexus_fee_balance(sponsor)?;
-    let mut fee_after_registration = None;
-    let phase = crash_boundary_phase(trial_index)?;
-    let registration_cut = matches!(trial_index, 3 | 4);
-    let commit_qc_cut = trial_index == 5;
-    let finalization_cut = matches!(trial_index, 6..=8);
-    let expected_finalized = registration_cut || finalization_cut;
-    // Registration and finalization Kura/WSV cuts target the global lane.
-    // Receipt publication deliberately targets a participant: its crash hook
-    // follows fsync of that committee's restricted sidecar lifecycle record,
-    // which a global-only peer does not possess.
-    let peer_index = crash_boundary_peer_index(phase);
-    let mut barrier = None;
-    let mut commits = None;
-
-    if trial_index > 0 {
-        certify_and_upload_fault_bundle(sponsor, &mut bundle, committees)?;
-        audit_fault_bundle(sponsor, &bundle, committees)?;
-    }
-    if trial_index >= 3 {
-        let endpoint_matrix = fault_endpoint_matrix(committees);
-        barrier = Some(sponsor.client().prepare_private_settlement_bundle_v1(
-            &endpoint_matrix,
-            &bundle.manifest,
-            &bundle.authorities,
-            &bundle.deltas,
-        )?);
-        if commit_qc_cut || finalization_cut {
-            submit_prepare_registration_and_wait_v1(
-                sponsor,
-                barrier
-                    .as_ref()
-                    .expect("Prepare registration follows barrier construction"),
-            )?;
-            let after = sponsor_nexus_fee_balance(sponsor)?;
-            ensure_exact_private_settlement_carrier_fee(
-                &fee_before_settlement_carriers,
-                &after,
-                "crash-trial Prepare registration",
-            )?;
-            fee_after_registration = Some(after);
-        }
-    }
-    if finalization_cut {
-        let endpoint_matrix = fault_endpoint_matrix(committees);
-        commits = Some(
-            sponsor.client().commit_private_settlement_bundle_v1(
-                &endpoint_matrix,
-                barrier
-                    .as_ref()
-                    .ok_or_else(|| eyre!("post-carrier crash lacks Prepare barrier"))?,
-            )?,
-        );
-    }
-    let registration_request = if registration_cut {
-        Some(
-            sponsor
-                .client()
-                .build_private_settlement_prepare_registration_request_v1(
-                    barrier
-                        .as_ref()
-                        .ok_or_else(|| eyre!("registration crash lacks Prepare barrier"))?,
-                    u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
-                        .expect("V1 carrier ceiling fits u64"),
-                )?,
-        )
-    } else {
-        None
-    };
-    let registration_hash = registration_request
-        .as_ref()
-        .map(|request| request.transaction.hash());
-    let mut nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
-    ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
-    if commit_qc_cut || finalization_cut {
-        ensure_fault_prepare_lock_planes_full_v1(&before, &nonfinalized, request.participants)?;
-    }
-    let fee_before_finalization = if finalization_cut {
-        Some(sponsor_nexus_fee_balance(sponsor)?)
-    } else {
-        None
-    };
-    if finalization_cut {
-        ensure!(
-            fee_before_finalization.as_ref() == fee_after_registration.as_ref(),
-            "crash-trial Commit certification charged an extra carrier fee"
-        );
-    }
-
-    let controls = match trial_index {
-        0 => trigger_persistence_cut_and_restart(
-            network,
-            runtime,
-            &mut observer,
-            peer_index,
-            phase,
-            bundle.manifest.bundle_id,
-            u64::try_from(trial_index + 1)?,
-            finalization_cut,
-            expected_finalized,
-            || {
-                sponsor
-                    .client()
-                    .request_private_settlement_availability_share_v1(
-                        &committees[0].endpoints[0],
-                        &bundle.materials[0],
-                    )
-                    .map(|_| ())
-            },
-        )?,
-        1 => trigger_persistence_cut_and_restart(
-            network,
-            runtime,
-            &mut observer,
-            peer_index,
-            phase,
-            bundle.manifest.bundle_id,
-            u64::try_from(trial_index + 1)?,
-            finalization_cut,
-            expected_finalized,
-            || {
-                sponsor
-                    .client()
-                    .request_private_settlement_prepare_vote_v1(
-                        &committees[0].endpoints[0],
-                        &bundle.manifest,
-                        bundle.manifest.legs[0].payload_digest,
-                        &committees[0].authority,
-                    )
-                    .map(|_| ())
-            },
-        )?,
-        2 => {
-            let certificate = phase_certificate_for_leg(
-                sponsor,
-                &bundle,
-                &committees[0],
-                0,
-                iroha::data_model::nexus::PrivateSettlementPhaseV1::Prepare,
-                None,
-            )?;
-            trigger_persistence_cut_and_restart(
-                network,
-                runtime,
-                &mut observer,
-                peer_index,
-                phase,
-                bundle.manifest.bundle_id,
-                u64::try_from(trial_index + 1)?,
-                finalization_cut,
-                expected_finalized,
-                || {
-                    sponsor
-                        .client()
-                        .persist_private_settlement_phase_certificate_v1(
-                            &committees[0].endpoints[0],
-                            &bundle.manifest,
-                            bundle.manifest.legs[0].payload_digest,
-                            &certificate,
-                        )
-                        .map(|_| ())
-                },
-            )?
-        }
-        3 | 4 => {
-            let submit = registration_request
-                .as_ref()
-                .ok_or_else(|| eyre!("registration crash lacks registration carrier"))?
-                .clone();
-            trigger_persistence_cut_and_restart(
-                network,
-                runtime,
-                &mut observer,
-                peer_index,
-                phase,
-                bundle.manifest.bundle_id,
-                u64::try_from(trial_index + 1)?,
-                finalization_cut,
-                expected_finalized,
-                || {
-                    sponsor
-                        .client()
-                        .submit_private_settlement_bundle_v1(&submit)
-                        .map(|_| ())
-                },
-            )?
-        }
-        5 => {
-            let barrier = barrier
-                .as_ref()
-                .ok_or_else(|| eyre!("Commit-QC crash lacks Prepare barrier"))?;
-            let certificate = phase_certificate_for_leg(
-                sponsor,
-                &bundle,
-                &committees[0],
-                0,
-                iroha::data_model::nexus::PrivateSettlementPhaseV1::Commit,
-                Some(barrier),
-            )?;
-            trigger_persistence_cut_and_restart(
-                network,
-                runtime,
-                &mut observer,
-                peer_index,
-                phase,
-                bundle.manifest.bundle_id,
-                u64::try_from(trial_index + 1)?,
-                finalization_cut,
-                expected_finalized,
-                || {
-                    sponsor
-                        .client()
-                        .persist_private_settlement_phase_certificate_v1(
-                            &committees[0].endpoints[0],
-                            &bundle.manifest,
-                            bundle.manifest.legs[0].payload_digest,
-                            &certificate,
-                        )
-                        .map(|_| ())
-                },
-            )?
-        }
-        6..=8 => {
-            let submit = build_fault_carrier_submit(
-                sponsor,
-                &bundle,
-                barrier
-                    .as_ref()
-                    .ok_or_else(|| eyre!("post-carrier crash lacks Prepare barrier"))?,
-                commits
-                    .as_ref()
-                    .ok_or_else(|| eyre!("post-carrier crash lacks Commit QCs"))?,
-            )?;
-            trigger_persistence_cut_and_restart(
-                network,
-                runtime,
-                &mut observer,
-                peer_index,
-                phase,
-                bundle.manifest.bundle_id,
-                u64::try_from(trial_index + 1)?,
-                finalization_cut,
-                expected_finalized,
-                || {
-                    sponsor
-                        .client()
-                        .submit_private_settlement_bundle_v1(&submit)
-                        .map(|_| ())
-                },
-            )?
-        }
-        _ => unreachable!(),
-    };
-
-    if trial_index < 3 {
-        ensure!(
-            sponsor_nexus_fee_balance(sponsor)? == fee_before_settlement_carriers,
-            "pre-registration crash charged a settlement carrier fee"
-        );
-    } else if commit_qc_cut {
-        ensure!(
-            sponsor_nexus_fee_balance(sponsor)?
-                == fee_after_registration
-                    .as_ref()
-                    .expect("Commit-QC cut follows Prepare registration")
-                    .clone(),
-            "Commit-QC crash charged a financial carrier fee"
-        );
-    }
-
-    let (after, signed_rs16) = if registration_cut {
-        sponsor.wait_for_transaction_applied(
-            registration_hash.ok_or_else(|| eyre!("registration crash lacks transaction hash"))?,
-            iroha::client::TransactionWaitOptions {
-                timeout: FINALITY_TIMEOUT,
-                poll_interval: POLL_INTERVAL,
-            },
-        )?;
-        let fee_after_recovered_registration = sponsor_nexus_fee_balance(sponsor)?;
-        ensure_exact_private_settlement_carrier_fee(
-            &fee_before_settlement_carriers,
-            &fee_after_recovered_registration,
-            "recovered crash-trial Prepare registration",
-        )?;
-        nonfinalized =
-            wait_for_recovered_prepare_registration(network, &before, request.participants)?;
-        ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
-        let barrier = barrier
-            .take()
-            .ok_or_else(|| eyre!("recovered registration lacks Prepare barrier"))?;
-        let endpoint_matrix = fault_endpoint_matrix(committees);
-        let recovered_commits = sponsor
-            .client()
-            .commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
-        let fee_before_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
-        let receipt = finalize_fault_bundle(sponsor, network, &bundle, barrier, recovered_commits)?;
-        let fee_after_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
-        ensure_exact_private_settlement_carrier_fee(
-            &fee_before_recovered_finalization,
-            &fee_after_recovered_finalization,
-            "recovered crash-trial financial finalization",
-        )?;
-        let after = wait_for_converged_fault_state_snapshot(network, "after")?;
-        ensure_fault_state_finalized_once(&before, &after, request.participants)?;
-        (
-            after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
-        )
-    } else if finalization_cut {
-        let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
-        let fee_after_finalization = sponsor_nexus_fee_balance(sponsor)?;
-        ensure_exact_private_settlement_carrier_fee(
-            fee_before_finalization
-                .as_ref()
-                .expect("finalization cut captures its pre-carrier fee balance"),
-            &fee_after_finalization,
-            "crash-trial financial finalization",
-        )?;
-        let after = wait_for_converged_fault_state_snapshot(network, "after")?;
-        ensure_fault_state_finalized_once(&before, &after, request.participants)?;
-        (
-            after,
-            verify_signed_rs16_finality(network, receipt.finalized_height)?.observations,
-        )
-    } else {
-        advance_fault_bundle_past_expiry(sponsor, &bundle)?;
-        let after = wait_for_fault_state_reverted(network, &before)?;
-        ensure_fault_state_reverted(&before, &after)?;
-        (after, 0)
-    };
-    observer.complete_phase()?;
-    let continuous_observations = observer.finish(&after)?;
-    Ok((
-        FaultTrialDraftV1 {
-            collection: "crash_recoveries",
-            trial_index,
-            bundle_id: hex::encode(bundle.manifest.bundle_id.as_ref()),
-            expected_after_state: if expected_finalized {
-                "finalized"
-            } else {
-                "reverted"
-            },
-            controls,
-            before,
-            nonfinalized,
-            continuous_observations,
-        },
-        after,
         signed_rs16,
     ))
 }
@@ -7958,7 +7345,7 @@ fn materialize_fault_campaign_payload(
         "da_before_availability_qc",
         "prepare_before_complete_barrier",
         "commit_before_complete_barrier",
-        "carrier_before_global_finality",
+        "restart_before_global_finality",
     ]
     .into_iter()
     .enumerate()
@@ -7966,7 +7353,7 @@ fn materialize_fault_campaign_payload(
         norito::json!({
             "cut": cut,
             "control_acknowledged": true,
-            "delayed_delivery": true,
+            "delayed_delivery": (index < 3),
             "healed": true,
             "converged": true,
             "partial_visibility_observed": false,
@@ -8034,7 +7421,7 @@ fn run_real_process_fault_campaign(
             "atomic-private-settlement-fault-v1-n{}-seed-{}-run-{}",
             request.participants, request.seed, request.run
         ))
-        .with_consensus_message_control();
+        .with_private_settlement_route_control();
     let started = sandbox::start_network_blocking_or_skip(builder, &context)?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, &context)?
     else {
@@ -8112,7 +7499,7 @@ fn run_real_process_fault_campaign(
         run_fresh_route_fault_trial(
             &request,
             bundle_ordinal,
-            FreshRouteFaultV1::CarrierHold,
+            FreshRouteFaultV1::RestartRecovery,
             &network,
             &runtime,
             &sponsor,
@@ -8130,21 +7517,6 @@ fn run_real_process_fault_campaign(
     trials.push((draft, after));
     bundle_ordinal += 1;
 
-    for trial_index in 0..PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len() {
-        let (draft, after, signed_rs16) = run_fresh_crash_trial(
-            &request,
-            bundle_ordinal,
-            trial_index,
-            &network,
-            &runtime,
-            &sponsor,
-            &routes,
-            &committees,
-        )?;
-        signed_rs16_da_observations = signed_rs16_da_observations.max(signed_rs16);
-        trials.push((draft, after));
-        bundle_ordinal += 1;
-    }
     ensure!(
         bundle_ordinal == FAULT_CAMPAIGN_TRIALS
             && signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
@@ -8163,7 +7535,7 @@ fn run_real_process_fault_campaign(
         participants: request.participants,
         mandatory_signed_rs16_da_rbc: true,
         signed_rs16_da_observations,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         process_inventory,
         payload,
     })
@@ -8416,77 +7788,128 @@ fn wait_for_transparent_control_balances(
     .wrap_err(format!("{context}: exact balances did not converge")))
 }
 
-fn native_receipt_from_diagnostics(
-    diagnostics: &SumeragiDiagnosticsStatus,
-    source_id: [u8; 32],
-) -> Result<Option<NativeAmxReceipt>> {
-    diagnostics
-        .validate_native_amx_receipts()
-        .map_err(|error| eyre!("invalid Native AMX diagnostics receipt: {error}"))?;
-    let mut receipts = diagnostics
-        .lane_settlement_commitments
-        .iter()
-        .flat_map(|commitment| &commitment.native_amx_receipts)
-        .chain(
-            diagnostics
-                .lane_relay_envelopes
-                .iter()
-                .flat_map(|relay| &relay.settlement_commitment.native_amx_receipts),
-        )
-        .filter(|receipt| receipt.source_id == source_id)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    ensure!(
-        receipts.len() <= 1,
-        "diagnostics exposed conflicting Native AMX receipts for one source"
-    );
-    Ok(receipts.pop_first())
+/// Exact original native carrier, independently verified from the configured signed genesis.
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+struct CertifiedSettlement {
+    block_header: BlockHeader,
+    block_wire: Vec<u8>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 
-fn wait_for_identical_native_amx_receipt(
+fn authenticated_native_history(
+    network: &Network,
+    client: &Client,
+) -> Result<Vec<iroha_core::sumeragi::certified_chain::CertifiedBlock>> {
+    let mut blocks = client.client().query(FindBlocks).execute_all()?;
+    blocks.sort_by_key(|block| block.header().height().get());
+    let first = blocks
+        .first()
+        .ok_or_else(|| eyre!("native history omitted original genesis"))?;
+    ensure!(
+        first.canonical_resultless_proposal().encode_wire()?
+            == network
+                .genesis()
+                .0
+                .canonical_resultless_proposal()
+                .encode_wire()?,
+        "peer substituted the independently signed genesis"
+    );
+    let mut verifier = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+        &network.chain_id(),
+        network.network_id(),
+        Arc::new(first.clone()),
+    )?;
+    blocks
+        .into_iter()
+        .skip(1)
+        .map(|block| {
+            verifier
+                .push(Arc::new(block))
+                .map(|step| step.into_parts().0)
+                .map_err(Into::into)
+        })
+        .collect()
+}
+
+fn certified_settlement(
+    network: &Network,
+    client: &Client,
+    source_id: [u8; 32],
+) -> Result<Option<CertifiedSettlement>> {
+    let mut receipt = None;
+    for certified in authenticated_native_history(network, client)? {
+        let committed = certified.committed();
+        for (index, entrypoint) in committed.block().network_entrypoints().enumerate() {
+            let TransactionEntrypoint::External(transaction) = entrypoint else {
+                continue;
+            };
+            if transaction.hash().as_ref() != &source_id {
+                continue;
+            }
+            ensure!(
+                receipt.is_none(),
+                "settlement appears more than once in certified history"
+            );
+            let (_, output) = committed
+                .block()
+                .network_output_at(u32::try_from(index)?)
+                .ok_or_else(|| eyre!("certified settlement omitted its exact Network output"))?;
+            ensure!(
+                output.result.0.is_ok(),
+                "certified settlement was rejected: {:?}",
+                output.result
+            );
+            ensure!(
+                certified
+                    .commit_qc()
+                    .is_some_and(|qc| qc.signers.count_ones() == 3),
+                "settlement lacks exact three-of-four native quorum"
+            );
+            receipt = Some(CertifiedSettlement {
+                block_header: committed.block().header(),
+                block_wire: committed.block().encode_wire()?,
+                entrypoint_hash: transaction.hash_as_entrypoint(),
+            });
+        }
+    }
+    Ok(receipt)
+}
+
+fn wait_for_identical_settlement_finality(
     network: &Network,
     source_id: [u8; 32],
-) -> Result<NativeAmxReceipt> {
+) -> Result<CertifiedSettlement> {
     let started = Instant::now();
     let mut last_observed = Vec::new();
     while started.elapsed() <= FINALITY_TIMEOUT {
-        let process_count = network.all_peers().count();
-        let mut receipts = Vec::with_capacity(process_count);
+        let mut receipts = Vec::new();
         last_observed.clear();
         for (peer_index, peer) in network.all_peers().enumerate() {
-            match peer.client().get_sumeragi_diagnostics() {
-                Ok(diagnostics) => match native_receipt_from_diagnostics(&diagnostics, source_id) {
-                    Ok(Some(receipt)) => {
-                        last_observed.push(format!(
-                            "peer#{peer_index}:receipt:legs={}",
-                            receipt.legs.len()
-                        ));
-                        receipts.push(receipt);
-                    }
-                    Ok(None) => last_observed.push(format!("peer#{peer_index}:pending")),
-                    Err(error) => {
-                        last_observed.push(format!("peer#{peer_index}:error={error}"));
-                    }
-                },
+            match certified_settlement(network, &peer.client(), source_id) {
+                Ok(Some(receipt)) => receipts.push(receipt),
+                Ok(None) => last_observed.push(format!("peer#{peer_index}:pending")),
                 Err(error) => last_observed.push(format!("peer#{peer_index}:error={error}")),
             }
         }
-        if receipts.len() == process_count {
-            let expected = receipts[0].clone();
+        if receipts.len() == network.all_peers().count() {
+            let expected = receipts.remove(0);
             ensure!(
                 receipts.iter().all(|receipt| *receipt == expected),
-                "validators exposed different Native AMX receipts for one carrier"
+                "validators differ on certified settlement carrier"
             );
             return Ok(expected);
         }
         thread::sleep(POLL_INTERVAL);
     }
     Err(benchmark_deadline_error(
-        BenchmarkDeadlineStageV1::NativeAmxReceipt,
+        BenchmarkDeadlineStageV1::SettlementFinality,
         FINALITY_TIMEOUT,
         started.elapsed(),
-    ).wrap_err(format!(
-        "timed out waiting for the production Native AMX receipt on every validator: {last_observed:?}"
+    )
+    .wrap_err(format!(
+        "exact native settlement finality did not converge: {last_observed:?}"
     )))
 }
 
@@ -8541,7 +7964,7 @@ fn wait_for_identical_canonical_carrier(
             let expected = headers[0].clone();
             ensure!(
                 headers.iter().all(|header| *header == expected),
-                "validators disagree on the canonical Native AMX carrier"
+                "validators disagree on the canonical native settlement carrier"
             );
             return Ok(expected);
         }
@@ -8558,63 +7981,22 @@ fn wait_for_identical_canonical_carrier(
 }
 
 fn validate_transparent_native_receipt(
-    receipt: &NativeAmxReceipt,
+    receipt: &CertifiedSettlement,
     transaction: &SignedTransaction,
-    participants: usize,
+    _participants: usize,
 ) -> Result<()> {
-    let entrypoint_hash = transaction.hash_as_entrypoint();
-    let mut source_id = [0_u8; Hash::LENGTH];
-    source_id.copy_from_slice(transaction.hash().as_ref());
     ensure!(
-        receipt.source_id == source_id && receipt.legs.len() == participants,
-        "Native AMX receipt source or participant count mismatch"
+        receipt.entrypoint_hash == transaction.hash_as_entrypoint(),
+        "native carrier does not bind the original settlement transaction"
     );
-    let expected_routes = (0..participants)
-        .map(|ordinal| {
-            (
-                LaneId::new(u32::try_from(ordinal + 1).expect("lane fits u32")),
-                DataSpaceId::new(u64::try_from(ordinal + 1).expect("dataspace fits u64")),
-            )
-        })
-        .collect::<Vec<_>>();
-    let observed_routes = receipt
-        .legs
-        .iter()
-        .map(|leg| (leg.lane_id, leg.dataspace_id))
-        .collect::<Vec<_>>();
+    let block = iroha_data_model::block::decode_versioned_signed_block(&receipt.block_wire)?;
     ensure!(
-        observed_routes == expected_routes
-            && observed_routes
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-                .len()
-                == receipt.legs.len(),
-        "Native AMX receipt omitted, duplicated, or reordered a participant route"
+        block.header() == receipt.block_header
+            && block
+                .external_transactions()
+                .any(|candidate| candidate == transaction),
+        "native certified carrier changed the exact original transaction bytes"
     );
-    for leg in &receipt.legs {
-        let prepare_signers = leg
-            .prepare_qc
-            .signers_bitmap
-            .iter()
-            .map(|byte| byte.count_ones() as usize)
-            .sum::<usize>();
-        let commit_signers = leg
-            .commit_qc
-            .signers_bitmap
-            .iter()
-            .map(|byte| byte.count_ones() as usize)
-            .sum::<usize>();
-        ensure!(
-            leg.prepare_qc.body.tx_entrypoint_hash == entrypoint_hash
-                && leg.commit_qc.body.tx_entrypoint_hash == entrypoint_hash
-                && leg.prepare_qc.validator_set().len() == VALIDATORS_PER_LANE
-                && leg.commit_qc.validator_set().len() == VALIDATORS_PER_LANE
-                && prepare_signers == 3
-                && commit_signers == 3,
-            "Native AMX receipt lacks an exact 3-of-4 participant certificate"
-        );
-    }
     Ok(())
 }
 
@@ -8792,10 +8174,6 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
     assert_eq!(transaction.network_id(), Some(&network_id));
     assert_eq!(transaction.authority(), &authority);
     assert_eq!(transaction.fee_payment_intent(), &bounded_nexus_fee());
-    assert_eq!(
-        transaction.admission_intent(),
-        iroha::data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    );
     transaction
         .signature()
         .0
@@ -8887,16 +8265,16 @@ fn run_real_process_transparent_control_benchmark(
     let finality_started = Instant::now();
     authority
         .submit_transaction_and_wait(&transaction)
-        .wrap_err("submit production transparent Native AMX carrier")?;
-    let receipt = wait_for_identical_native_amx_receipt(&network, source_id)?;
+        .wrap_err("submit production transparent native settlement carrier")?;
+    let receipt = wait_for_identical_settlement_finality(&network, source_id)?;
     validate_transparent_native_receipt(&receipt, &transaction, request.participants)?;
     let carrier_started = Instant::now();
     let carrier = wait_for_identical_canonical_carrier(&network, entrypoint_hash)?;
     let business_receipt =
         wait_for_matched_business_receipt(&network, &settlement, &carrier, carrier_started)?;
     ensure!(
-        receipt.authority_context_height == carrier.height().get(),
-        "Native AMX receipt authority context differs from its canonical carrier"
+        receipt.block_header.height().get() == carrier.height().get(),
+        "native settlement certificate authority context differs from its canonical carrier"
     );
     // Match the private endpoint: the expected authenticated receipts agree
     // on every peer. Finalized balances and observer completion remain
@@ -8943,9 +8321,9 @@ fn run_real_process_transparent_control_benchmark(
         "business receipt changed after rejected replay"
     );
     ensure!(
-        wait_for_identical_native_amx_receipt(&network, source_id)? == receipt
+        wait_for_identical_settlement_finality(&network, source_id)? == receipt
             && wait_for_identical_canonical_carrier(&network, entrypoint_hash)? == carrier,
-        "replay changed the durable Native AMX receipt or canonical carrier"
+        "replay changed the durable native settlement certificate or canonical carrier"
     );
     // Rejected results may be recorded in canonical history. Their exact
     // typed failure was authenticated on every peer above; no applied replay is accepted.
@@ -8977,7 +8355,7 @@ fn run_real_process_transparent_control_benchmark(
         participants: request.participants,
         mandatory_signed_rs16_da_rbc: true,
         signed_rs16_da_observations,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         process_inventory: inventory,
         payload: RealProcessBenchmarkResultPayloadV1 {
             economic_vector_sha256,
@@ -8992,7 +8370,7 @@ fn run_real_process_transparent_control_benchmark(
             receipt_bytes,
             storage_growth_bytes,
             finalized_receipt_observed: true,
-            successful_leg_applications: receipt.legs.len(),
+            successful_leg_applications: request.participants,
             each_leg_applied_exactly_once: true,
             // The full-topology observer rejected every mixed balance snapshot.
             partial_visible_observations: 0,
@@ -9104,7 +8482,7 @@ fn run_real_process_leakage_campaign(
             "atomic-private-settlement-real-process-leakage-v1-n{}-seed-{}-run-{}",
             request.participants, request.seed, request.run
         ))
-        .with_consensus_message_control();
+        .with_private_settlement_route_control();
     let started = sandbox::start_network_blocking_or_skip(builder, &context)?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, &context)?
     else {
@@ -9696,7 +9074,7 @@ fn run_real_process_leakage_campaign(
         participants: request.participants,
         mandatory_signed_rs16_da_rbc: true,
         signed_rs16_da_observations,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         process_inventory: inventory,
         payload: RealProcessLeakageResultPayloadV1 {
             variant: request.payload.variant,
@@ -9710,7 +9088,7 @@ fn run_real_process_leakage_campaign(
             only_secret_fields_changed: true,
             nonpacket_capture_complete: true,
             finalized_receipt_observed: true,
-            successful_leg_applications: receipt.legs.len(),
+            successful_leg_applications: request.participants,
             each_leg_applied_exactly_once: true,
             continuous_atomicity_checks,
             partial_visible_observations: 0,
@@ -10067,7 +9445,7 @@ fn run_real_process_private_benchmark(
         participants: request.participants,
         mandatory_signed_rs16_da_rbc: true,
         signed_rs16_da_observations,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         process_inventory: inventory,
         payload: RealProcessBenchmarkResultPayloadV1 {
             economic_vector_sha256,
@@ -10088,7 +9466,7 @@ fn run_real_process_private_benchmark(
             receipt_bytes,
             storage_growth_bytes,
             finalized_receipt_observed: true,
-            successful_leg_applications: receipt.legs.len(),
+            successful_leg_applications: request.participants,
             each_leg_applied_exactly_once: true,
             // The full-topology observer accepted only the exact baseline or complete
             // finalized private-state vector throughout the measured workflow.
@@ -10695,7 +10073,7 @@ fn fault_continuous_observer_hashes_expected_outages_and_rejects_wrong_coverage(
     accumulator.record(&baseline, &baseline, 2, 0).unwrap();
     accumulator.record(&baseline, &baseline, 2, 0).unwrap();
     let outage = accumulator
-        .start_phase("persistence_cut", true, false)
+        .start_phase("committee_unavailable", true, false)
         .unwrap();
     assert!(accumulator.record_poll_failure(outage).unwrap());
     assert!(!accumulator.phase_coverage_met(outage).unwrap());
@@ -10724,7 +10102,12 @@ fn fault_continuous_observer_hashes_expected_outages_and_rejects_wrong_coverage(
             .iter()
             .map(|phase| phase.phase.as_str())
             .collect::<Vec<_>>(),
-        vec!["preflight", "persistence_cut", "post_recovery", "terminal"]
+        vec![
+            "preflight",
+            "committee_unavailable",
+            "post_recovery",
+            "terminal"
+        ]
     );
     let outage = &summary.phase_coverage[1];
     assert!(outage.expected_unavailable);
@@ -10755,7 +10138,7 @@ fn fault_continuous_observer_hashes_expected_outages_and_rejects_wrong_coverage(
             .unwrap();
     }
     let outage = unobserved_outage
-        .start_phase("persistence_cut", true, false)
+        .start_phase("committee_unavailable", true, false)
         .unwrap();
     unobserved_outage
         .checkpoint_phase(outage, &[format!("command:{}", "b".repeat(64))])
@@ -10829,31 +10212,9 @@ fn fault_continuous_observer_normalizes_only_connect_or_timeout_errors() {
 }
 
 #[test]
-fn fault_crash_boundary_inventory_is_exact() {
-    let expected = [
-        NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
-        NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
-        NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
-        NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
-        NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
-        NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
-        NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
-        NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
-        NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
-    ];
-    for (index, expected) in expected.into_iter().enumerate() {
-        let phase = crash_boundary_phase(index).unwrap();
-        assert_eq!(phase, expected);
-        assert_eq!(
-            crash_boundary_peer_index(phase),
-            if matches!(index, 3 | 4 | 6 | 7) {
-                0
-            } else {
-                VALIDATORS_PER_LANE
-            }
-        );
-    }
-    assert!(crash_boundary_phase(PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len()).is_err());
+fn fault_inventory_uses_http_routes_and_external_restarts() {
+    assert!(PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.is_empty());
+    assert_eq!(FAULT_CAMPAIGN_TRIALS, 13);
 }
 
 #[test]
@@ -10987,7 +10348,7 @@ fn benchmark_terminal_request_fixture() -> RealProcessBenchmarkRequestV1 {
         quorum: "2f+1".to_owned(),
         mandatory_signed_rs16_da_rbc: true,
         minimum_signed_rs16_da_observations: 1,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         seed: 1,
         session_id: "1".repeat(64),
         session_invocation_nonce: "2".repeat(64),
@@ -11019,7 +10380,7 @@ fn benchmark_terminal_fixture() -> (BenchmarkTerminalIdentityV1, RealProcessBenc
         participants: identity.participants,
         mandatory_signed_rs16_da_rbc: true,
         signed_rs16_da_observations: 1,
-        authenticated_message_control: true,
+        authenticated_private_settlement_route_control: true,
         process_inventory: Vec::new(),
         payload: RealProcessBenchmarkResultPayloadV1 {
             economic_vector_sha256: "a".repeat(64),
@@ -11046,7 +10407,7 @@ fn benchmark_terminal_deadline_classification_preserves_typed_causes() {
         BenchmarkDeadlineStageV1::StateConvergence,
         BenchmarkDeadlineStageV1::TransparentConsents,
         BenchmarkDeadlineStageV1::TransparentBalances,
-        BenchmarkDeadlineStageV1::NativeAmxReceipt,
+        BenchmarkDeadlineStageV1::SettlementFinality,
         BenchmarkDeadlineStageV1::CanonicalCarrier,
         BenchmarkDeadlineStageV1::PrivateReceipt,
     ] {

@@ -2,11 +2,11 @@
 //! logic.  [`Kura`] is the main entity which should be used to store
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
+mod block_hash_range;
 mod fastpq_artifact_store;
 mod lane_geometry;
 mod lane_storage;
 mod membership_storage;
-mod snapshot_hash_journal;
 use crate::telemetry::StateTelemetry;
 use crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityCheckpointV1;
 use crate::{
@@ -14,16 +14,15 @@ use crate::{
     secure_file_metadata::{self, SecureMetadata},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use block_hash_range::checked_block_hash_read_range;
 pub use fastpq_artifact_store::{FastpqDurableArtifactReceipt, FastpqStoredArtifactReference};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
     parameters::{
-        actual::{Fastpq as FastpqConfig, Kura as Config, LaneConfig, SnapshotBootstrapPolicy},
+        actual::{Fastpq as FastpqConfig, Kura as Config, LaneConfig},
         defaults::{
-            kura::{
-                BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MAX_DISK_USAGE_BYTES,
-            },
+            kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES},
             zk::fastpq as FASTPQ_DEFAULTS,
         },
     },
@@ -36,8 +35,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     AccountId, NetworkId,
     block::{
-        BlockHeader, SignedBlock,
-        consensus_v2::{MAX_EXECUTED_BLOCK_WIRE_BYTES, SnapshotV2BootstrapRecord},
+        BlockHeader, SignedBlock, consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
         decode_framed_signed_block,
     },
     isi::kagemusha_v1::{
@@ -71,7 +69,6 @@ use norito::{
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex};
-use snapshot_hash_journal::{checked_block_hash_read_range, verified_snapshot_hash_journal_digest};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fmt::Debug,
@@ -110,13 +107,12 @@ const BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:bound-progress-append-intent:v1\0";
 const MAX_BLOCK_COMMIT_MARKER_BYTES: usize = 1024;
 const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
-const MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES: usize = 1024;
 const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
-const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 /// Retired pre-release rollback marker. No first-release code writes or recovers it;
 /// its presence is rejected so operators must remove stale state explicitly.
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
-const MAX_PIPELINE_RECOVERY_SIDECAR_BYTES: usize = 1024 * 1024;
+/// Maximum canonical pipeline recovery sidecar accepted by storage and read APIs.
+pub const MAX_PIPELINE_RECOVERY_SIDECAR_BYTES: usize = 1024 * 1024;
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
@@ -173,12 +169,6 @@ const INDEXED_SIDECAR_BASE_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 const MAX_INDEXED_SIDECAR_GAP_ENTRIES: u64 = 4_096;
 const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
-/// Whether this target provides the descriptor-relative, crash-safe storage
-/// primitives required by Sumeragi v2 validator progress witnesses.
-#[must_use]
-pub(crate) const fn sumeragi_v2_validator_storage_supported() -> bool {
-    cfg!(any(target_os = "linux", target_os = "macos"))
-}
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
 /// V1 rewrite stage: at most one maximum old body, one maximum new body, and 1 MiB framing.
@@ -222,24 +212,6 @@ fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
 fn checked_peer_id() -> PeerId {
     PeerId::new(checked_keypair().public_key().clone())
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HashOnlySnapshotExtensionMode {
-    HardForkBootstrap,
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    VerifiedLocalSnapshot,
-}
-impl HashOnlySnapshotExtensionMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::HardForkBootstrap => "hard-fork snapshot bootstrap",
-            #[cfg(any(test, feature = "iroha-core-tests"))]
-            Self::VerifiedLocalSnapshot => "verified local snapshot recovery",
-        }
-    }
-    fn marks_hash_only_prefix(self) -> bool {
-        matches!(self, Self::HardForkBootstrap)
-    }
-}
 fn default_fastpq_proof_sidecar_queue_cap() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()
 }
@@ -274,9 +246,6 @@ mod physical_resource_accounting_tests;
 #[cfg(test)]
 #[path = "kura/physical_resource_initialization_tests.rs"]
 mod physical_resource_initialization_tests;
-#[cfg(test)]
-#[path = "kura/resource_inventory_snapshot_tests.rs"]
-mod resource_inventory_snapshot_tests;
 
 use crate::publication_lock::{PublicationGuard, PublicationMutex};
 mod publication_lease;
@@ -331,8 +300,6 @@ pub struct Kura {
     block_data: ResidentMutex<BlockData>,
     /// Whether emergency Fast startup deliberately left historical auxiliary indexes unknown.
     auxiliary_history_deferred: bool,
-    /// Number of pre-fork blocks whose body schema is intentionally not decoded in bootstrap mode.
-    hard_fork_hash_only_block_count: AtomicUsize,
     /// Reverse lookup for committed block hash to block height.
     block_height_index: ResidentMutex<BlockHeightIndex>,
     /// Reverse lookup for committed transaction entrypoint hash to containing block heights.
@@ -402,8 +369,6 @@ pub struct Kura {
     /// Number of most recent non-genesis blocks stored in memory.
     /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
-    /// Number of recent pipeline history entries retained.
-    lane_history_retention: NonZeroUsize,
     fastpq_artifact_policy: iroha_config::parameters::actual::KuraFastpqArtifactPolicy,
     /// Optional telemetry sink for storage and durable finality reporting.
     telemetry: OnceLock<StateTelemetry>,
@@ -411,8 +376,6 @@ pub struct Kura {
     writer_fault: Mutex<Option<String>>,
     /// Fail-stop latch for an ambiguous canonical-journal publication boundary.
     canonical_storage_poisoned: AtomicBool,
-    /// Hash-only opening authority still awaiting signed snapshot authentication.
-    provisional_snapshot_bootstrap: Mutex<SnapshotBootstrapRuntimeState>,
     /// Permanent storage-owner gate shared by global and lane consensus instances.
     native_consensus_gate: Arc<crate::sumeragi::driver::NodeGate>,
     /// Test hook that pauses canonical poison after publishing its latch.
@@ -487,12 +450,6 @@ pub struct Kura {
     /// Test hook indicating the durable-count fallback is about to acquire `block_data`.
     #[cfg(test)]
     durable_blocks_count_fallback_reached: AtomicBool,
-    /// Test hook pausing hash-only snapshot extension while it owns `block_data`.
-    #[cfg(test)]
-    pause_hash_only_extension_before_store: AtomicBool,
-    /// Test hook indicating hash-only snapshot extension is paused before block-store access.
-    #[cfg(test)]
-    hash_only_extension_paused_before_store: AtomicBool,
     /// Test hook that pauses a total-usage refresh after its filesystem scan.
     #[cfg(test)]
     pause_total_disk_usage_scan_after_scan: AtomicBool,
@@ -661,9 +618,9 @@ impl Kura {
     ) {
         Self::remove_transaction_entrypoint_height(index, height);
         if u64::try_from(height.get()).ok() != Some(block.header().height().get())
-            || block.execution_context().is_some_and(|context| {
-                !context.has_current_version() || context.merge_entry.is_some()
-            })
+            || block
+                .execution_context()
+                .is_some_and(|context| !context.has_current_version())
             || block.validate_output_merkle_cache().is_err()
             || u32::try_from(block.network_entrypoint_count()).is_err()
         {
@@ -1012,7 +969,7 @@ impl Kura {
         lane_config: &LaneConfig,
     ) -> Result<(Arc<Self>, BlockCount)> {
         Self::validate_fresh_single_lane_store(config, lane_config)?;
-        Self::new_inner(config, lane_config, None, None, false)
+        Self::new_inner(config, lane_config, None)
     }
     fn validate_fresh_single_lane_store(config: &Config, lane_config: &LaneConfig) -> Result<()> {
         let store_root = config.store_dir.resolve_relative_path();
@@ -1145,57 +1102,12 @@ impl Kura {
         lane_config: &LaneConfig,
         configured_lane_catalog: &LaneCatalog,
     ) -> Result<(Arc<Self>, BlockCount)> {
-        Self::new_with_configured_lane_catalog_inner(
-            config,
-            lane_config,
-            configured_lane_catalog,
-            None,
-            false,
-        )
-    }
-    /// Initialize authenticated Kura with exact fingerprint-bound Sumeragi v2
-    /// pending-control persistence limits.
-    ///
-    /// This is the production constructor. It validates the limits before any
-    /// Kura-owned path is created or opened, then applies them to crash
-    /// recovery and every subsequent pending-sidecar operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when snapshot policy, lane geometry, or pending-control
-    /// limits are invalid, or when authenticated Kura startup fails.
-    pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap(
-        config: &Config,
-        lane_config: &LaneConfig,
-        configured_lane_catalog: &LaneCatalog,
-        bootstrap_policy: &SnapshotBootstrapPolicy,
-    ) -> Result<(Arc<Self>, BlockCount)> {
-        bootstrap_policy.validate().map_err(|message| {
-            Error::IO(
-                std::io::Error::new(ErrorKind::InvalidInput, message),
-                config.store_dir.resolve_relative_path(),
-            )
-        })?;
-        let provisional_hash_only_prefix = bootstrap_policy
-            .enabled
-            .then_some(bootstrap_policy.audited_height)
-            .flatten()
-            .map(usize::try_from)
-            .transpose()?;
-        Self::new_with_configured_lane_catalog_inner(
-            config,
-            lane_config,
-            configured_lane_catalog,
-            provisional_hash_only_prefix,
-            !bootstrap_policy.enabled,
-        )
+        Self::new_with_configured_lane_catalog_inner(config, lane_config, configured_lane_catalog)
     }
     fn new_with_configured_lane_catalog_inner(
         config: &Config,
         lane_config: &LaneConfig,
         configured_lane_catalog: &LaneCatalog,
-        provisional_hash_only_prefix: Option<usize>,
-        discover_signed_lineage_marker: bool,
     ) -> Result<(Arc<Self>, BlockCount)> {
         let authenticated_lane_config = LaneConfig::from_catalog(configured_lane_catalog);
         let Some(configured_primary) = authenticated_lane_config.entries().first() else {
@@ -1231,8 +1143,6 @@ impl Kura {
             Some(LaneLifecycleParameterV1::catalog_hash(
                 configured_lane_catalog,
             )),
-            provisional_hash_only_prefix,
-            discover_signed_lineage_marker,
         )
     }
     /// Initialize an authenticated Kura in an isolated temporary directory.
@@ -1388,13 +1298,12 @@ impl Kura {
     }
 }
 include!("kura/retired_pipeline_roster_rejection.rs");
+include!("kura/retired_snapshot_rejection.rs");
 impl Kura {
     fn new_inner(
         config: &Config,
         _lane_config: &LaneConfig,
         configured_catalog_hash: Option<Hash>,
-        provisional_hash_only_prefix: Option<usize>,
-        discover_signed_lineage_marker: bool,
     ) -> Result<(Arc<Self>, BlockCount)> {
         let init_started_at = Instant::now();
         let configured_store_dir = config.store_dir.resolve_relative_path();
@@ -1440,6 +1349,7 @@ impl Kura {
         if configured_store_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
+        Self::reject_retired_snapshot_tail(&Self::canonical_storage_path(&configured_store_dir))?;
         if config.init_mode == InitMode::Strict {
             create_dir_all_with_context(&configured_store_dir)?;
         }
@@ -1469,52 +1379,11 @@ impl Kura {
         } else {
             config.blocks_in_memory
         };
-        let lane_history_retention = if config.init_mode == InitMode::Fast {
-            NonZeroUsize::MIN
-        } else {
-            config.lane_history_retention
-        };
         Self::reject_retired_merge_storage(&store_dir)?;
-        let authenticated_configured_catalog = configured_catalog_hash.is_some();
-        let mut provisional_open = provisional_hash_only_prefix.is_some();
-        if provisional_open && config.init_mode == InitMode::Fast {
-            return Err(Error::InvalidSnapshotBootstrapMarker {
-                path: store_root,
-                reason: "emergency Fast mode cannot authenticate or finalize an imported snapshot; restart in strict mode"
-                    .to_owned(),
-            });
-        }
+        // A local marker cannot authorize imported history or replace native execution.
+        Self::reject_retired_snapshot_tail(&Self::canonical_storage_path(&store_dir))?;
         if let Some(configured_catalog_hash) = configured_catalog_hash {
-            if config.init_mode == InitMode::Fast {
-                warn!(
-                    "emergency Fast startup skipped configured-catalog and lane-geometry journal decoding"
-                );
-            } else if provisional_open {
-                Self::verify_configured_lane_catalog_baseline_read_only(
-                    &store_dir,
-                    configured_catalog_hash,
-                    &store_root_lock_file,
-                )?;
-            } else if discover_signed_lineage_marker {
-                match Self::verify_configured_lane_catalog_baseline_read_only(
-                    &store_dir,
-                    configured_catalog_hash,
-                    &store_root_lock_file,
-                ) {
-                    Ok(()) => {
-                        let marker_path = Self::canonical_storage_path(&store_dir)
-                            .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME);
-                        provisional_open = match std::fs::symlink_metadata(&marker_path) {
-                            Ok(_) => true,
-                            Err(error) if error.kind() == ErrorKind::NotFound => false,
-                            Err(error) => return Err(Error::IO(error, marker_path)),
-                        };
-                    }
-                    Err(Error::IO(error, _)) if error.kind() == ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            if !provisional_open && config.init_mode == InitMode::Strict {
+            if config.init_mode == InitMode::Strict {
                 Self::establish_or_verify_configured_lane_catalog_baseline_with_lock(
                     &store_dir,
                     configured_catalog_hash,
@@ -1522,10 +1391,14 @@ impl Kura {
                 )?;
                 #[cfg(test)]
                 Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
+            } else {
+                warn!(
+                    "emergency Fast startup skipped configured-catalog and lane-geometry journal decoding"
+                );
             }
         }
         // Canonical bodies do not depend on a current LaneId or lane namespace.
-        // State installs the authenticated instance catalog after genesis/snapshot
+        // State installs the authenticated instance catalog after genesis
         // authentication; this open guesses and provisions no lane path.
         let blocks_root = Self::canonical_storage_path(&store_dir);
         let mut canonical_preflight = (config.init_mode == InitMode::Strict)
@@ -1592,124 +1465,56 @@ impl Kura {
         }
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
-        let mut provisional_snapshot_bootstrap = None;
-        let durable_height_bound;
         let mut fast_preflight_height = None;
-        if provisional_open {
-            block_store.require_existing_journal_bound_canonical_files()?;
-            let logical_count = block_store.read_index_count()?;
-            let hashes_count = block_store.read_hashes_count()?;
-            let durable_marker = block_store
-                .validated_verified_snapshot_tail_read_only(logical_count, hashes_count)?;
-            let prefix = if let Some(configured_prefix) = provisional_hash_only_prefix {
-                configured_prefix
-            } else {
-                let marker = durable_marker.as_ref().ok_or_else(|| {
-                    Error::InvalidSnapshotBootstrapMarker {
-                        path: blocks_root.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
-                        reason:
-                            "signed-lineage provisional opening requires a durable snapshot marker"
-                                .to_owned(),
-                    }
-                })?;
-                if marker.body_prefix_count != marker.snapshot_height
-                    || marker.bootstrap_lineage_hash.is_none()
+        match config.init_mode {
+            InitMode::Fast => {
+                if canonical_preflight
+                    .as_ref()
+                    .is_some_and(|preflight| preflight.requires_existing_files)
                 {
-                    return Err(Error::InvalidSnapshotBootstrapMarker {
-                        path: blocks_root.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
-                        reason: "marker is not an imported-prefix lineage binding".to_owned(),
-                    });
+                    block_store.require_existing_journal_bound_canonical_files()?;
                 }
-                usize::try_from(marker.snapshot_height)?
-            };
-            durable_height_bound =
-                block_store.initialize_provisional_snapshot_bootstrap_read_only(prefix)?;
-            provisional_snapshot_bootstrap = Some(ProvisionalSnapshotBootstrap {
-                hash_only_prefix_height: prefix,
-                bootstrap_lineage_hash: durable_marker
-                    .as_ref()
-                    .and_then(|marker| marker.bootstrap_lineage_hash),
-                hash_journal_digest: durable_marker
-                    .as_ref()
-                    .map(|marker| marker.hash_journal_digest),
-            });
-        } else {
-            let snapshot_marker_path = blocks_root.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME);
-            if std::fs::symlink_metadata(&snapshot_marker_path).is_ok() {
-                return Err(Error::InvalidSnapshotBootstrapMarker {
-                    path: snapshot_marker_path,
-                    reason: "hash-only imported history must be opened provisionally and reauthenticated from a signed snapshot lineage"
-                        .to_owned(),
-                });
+                fast_preflight_height = Some(block_store.preflight_fast_durable_prefix()?);
+                block_store.open_fast_prevalidated_files_read_only()?;
             }
-            match config.init_mode {
-                InitMode::Fast => {
-                    if canonical_preflight
-                        .as_ref()
-                        .is_some_and(|preflight| preflight.requires_existing_files)
-                    {
-                        block_store.require_existing_journal_bound_canonical_files()?;
-                    }
-                    let height = block_store.preflight_fast_durable_prefix()?;
-                    fast_preflight_height = Some(height);
-                    durable_height_bound = height;
+            InitMode::Strict => {
+                block_store.recover_canonical_storage_stages()?;
+                if canonical_preflight
+                    .as_ref()
+                    .is_some_and(|preflight| preflight.requires_existing_files)
+                {
+                    block_store.require_existing_journal_bound_canonical_files()?;
                 }
-                InitMode::Strict => {
-                    block_store.recover_canonical_storage_stages()?;
-                    if canonical_preflight
-                        .as_ref()
-                        .is_some_and(|preflight| preflight.requires_existing_files)
-                    {
-                        block_store.require_existing_journal_bound_canonical_files()?;
-                    }
-                    durable_height_bound = block_store
-                        .read_commit_marker()?
-                        .map_or(0, |marker| marker.count);
-                }
+                block_store.read_commit_marker()?;
+                block_store.create_files_if_they_do_not_exist()?;
             }
         }
-        if !provisional_open {
-            match config.init_mode {
-                InitMode::Fast => block_store.open_fast_prevalidated_files_read_only()?,
-                InitMode::Strict => block_store.create_files_if_they_do_not_exist()?,
-            }
-            if let Some(expected_height) = fast_preflight_height {
-                let actual_height = block_store.read_exact_durable_index_count()?;
-                if actual_height != expected_height {
-                    return Err(Error::IO(
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "Kura fast init recovery changed the committed block boundary",
-                        ),
-                        blocks_root.clone(),
-                    ));
-                }
+        if let Some(expected_height) = fast_preflight_height {
+            if block_store.read_exact_durable_index_count()? != expected_height {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura fast init recovery changed the committed block boundary",
+                    ),
+                    blocks_root.clone(),
+                ));
             }
         }
         if let Some(preflight) = canonical_preflight.as_mut() {
             Self::reverify_canonical_blocks_open(preflight, &blocks_root, true)?;
         }
-
-        if let Some(preflight) = canonical_preflight.as_mut() {}
-        if let Some(preflight) = canonical_preflight.as_mut() {}
 
         let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
         let block_plain_text_path = config
             .debug_output_new_blocks
             .then(|| blocks_root.join("blocks.jsonl"));
-        let mut chain_validation = Kura::init(
-            &mut block_store,
-            config.init_mode,
-            provisional_snapshot_bootstrap
-                .as_ref()
-                .map(|bootstrap| bootstrap.hash_only_prefix_height),
-        )?;
+        let mut chain_validation = Kura::init(&mut block_store, config.init_mode)?;
         if let Some(preflight) = canonical_preflight.as_mut() {
             Self::reverify_canonical_blocks_open(preflight, &blocks_root, true)?;
         }
 
         let block_count = usize::try_from(block_store.read_exact_durable_index_count()?)?;
-        let block_data = if config.init_mode == InitMode::Fast && !provisional_open {
+        let block_data = if config.init_mode == InitMode::Fast {
             BlockData::deferred(block_count)
         } else {
             std::mem::take(&mut chain_validation.hashes)
@@ -1719,23 +1524,11 @@ impl Kura {
         };
         let block_height_index = Self::build_block_height_index(&block_data);
         let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
-        let hard_fork_hash_only_block_count = chain_validation
-            .hard_fork_hash_only_block_count
-            .min(block_count);
-        if hard_fork_hash_only_block_count > 0 {
-            warn!(
-                hard_fork_hash_only_block_count,
-                block_count,
-                "hard-fork snapshot bootstrap: treating pre-fork block bodies as unavailable"
-            );
-        }
         info!(
             mode = ?config.init_mode,
             block_count,
             "Kura block journal init complete"
         );
-        if !provisional_open && let Some(preflight) = canonical_preflight.as_mut() {}
-        if !provisional_open && let Some(preflight) = canonical_preflight.as_mut() {}
         let startup_lane_storage_entries = BTreeMap::new();
 
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
@@ -1758,8 +1551,7 @@ impl Kura {
             prune_in_progress: AtomicBool::new(false),
             prune_recovery_required: AtomicBool::new(false),
             block_data: ResidentMutex::new(block_data, &resource_inventory),
-            auxiliary_history_deferred: config.init_mode == InitMode::Fast && !provisional_open,
-            hard_fork_hash_only_block_count: AtomicUsize::new(hard_fork_hash_only_block_count),
+            auxiliary_history_deferred: config.init_mode == InitMode::Fast,
             block_height_index: ResidentMutex::new(block_height_index, &resource_inventory),
             transaction_entrypoint_index: ResidentMutex::new(
                 transaction_entrypoint_index,
@@ -1811,16 +1603,11 @@ impl Kura {
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory,
-            lane_history_retention,
             fastpq_artifact_policy: config.fastpq_artifacts,
             native_context_archive_max_bytes: config.native_context_archive_max_bytes,
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
-            provisional_snapshot_bootstrap: Mutex::new(provisional_snapshot_bootstrap.map_or(
-                SnapshotBootstrapRuntimeState::Authenticated,
-                SnapshotBootstrapRuntimeState::Pending,
-            )),
             native_consensus_gate: Arc::new(crate::sumeragi::driver::NodeGate::new()),
             #[cfg(test)]
             pause_canonical_poison_after_latch: AtomicBool::new(false),
@@ -1871,10 +1658,6 @@ impl Kura {
             #[cfg(test)]
             durable_blocks_count_fallback_reached: AtomicBool::new(false),
             #[cfg(test)]
-            pause_hash_only_extension_before_store: AtomicBool::new(false),
-            #[cfg(test)]
-            hash_only_extension_paused_before_store: AtomicBool::new(false),
-            #[cfg(test)]
             pause_total_disk_usage_scan_after_scan: AtomicBool::new(false),
             #[cfg(test)]
             total_disk_usage_scan_paused: AtomicBool::new(false),
@@ -1882,14 +1665,10 @@ impl Kura {
         });
 
         if config.init_mode == InitMode::Strict {
-            if !provisional_open {
-                kura.recover_journal_owned_lane_instances_on_startup()?;
-            }
+            kura.recover_journal_owned_lane_instances_on_startup()?;
         }
         if config.init_mode == InitMode::Strict {
-            kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(
-                !provisional_open,
-            )?;
+            kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         } else {
             warn!(
                 configured_limit = config.max_disk_usage_bytes.get(),
@@ -2013,7 +1792,6 @@ impl Kura {
             prune_recovery_required: AtomicBool::new(false),
             block_data: ResidentMutex::new(BlockData::default(), &resource_inventory),
             auxiliary_history_deferred: false,
-            hard_fork_hash_only_block_count: AtomicUsize::new(0),
             block_height_index: ResidentMutex::new(HashMap::new(), &resource_inventory),
             transaction_entrypoint_index: ResidentMutex::new(
                 TransactionEntrypointIndex::complete_empty(),
@@ -2058,7 +1836,6 @@ impl Kura {
             disk_usage_total_initialized: AtomicBool::new(true),
             disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory,
-            lane_history_retention: LANE_HISTORY_RETENTION,
             fastpq_artifact_policy:
                 iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             native_context_archive_max_bytes:
@@ -2066,9 +1843,6 @@ impl Kura {
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
-            provisional_snapshot_bootstrap: Mutex::new(
-                SnapshotBootstrapRuntimeState::Authenticated,
-            ),
             native_consensus_gate: Arc::new(crate::sumeragi::driver::NodeGate::new()),
             #[cfg(test)]
             pause_canonical_poison_after_latch: AtomicBool::new(false),
@@ -2118,10 +1892,6 @@ impl Kura {
             force_durable_blocks_count_fallback: AtomicBool::new(false),
             #[cfg(test)]
             durable_blocks_count_fallback_reached: AtomicBool::new(false),
-            #[cfg(test)]
-            pause_hash_only_extension_before_store: AtomicBool::new(false),
-            #[cfg(test)]
-            hash_only_extension_paused_before_store: AtomicBool::new(false),
             #[cfg(test)]
             pause_total_disk_usage_scan_after_scan: AtomicBool::new(false),
             #[cfg(test)]
@@ -2568,22 +2338,6 @@ impl Kura {
         }
     }
     #[cfg(test)]
-    fn maybe_pause_hash_only_extension_before_store_for_tests(&self) {
-        if self
-            .pause_hash_only_extension_before_store
-            .swap(false, Ordering::AcqRel)
-        {
-            self.hash_only_extension_paused_before_store
-                .store(true, Ordering::Release);
-            while self
-                .hash_only_extension_paused_before_store
-                .load(Ordering::Acquire)
-            {
-                std::thread::yield_now();
-            }
-        }
-    }
-    #[cfg(test)]
     fn maybe_pause_canonical_poison_after_latch_for_tests(&self) {
         if self
             .pause_canonical_poison_after_latch
@@ -2718,11 +2472,6 @@ impl Kura {
     #[must_use]
     pub(crate) fn blocks_in_memory(&self) -> NonZeroUsize {
         self.blocks_in_memory
-    }
-    /// Retention window for pipeline recovery history.
-    #[must_use]
-    pub fn lane_history_retention(&self) -> NonZeroUsize {
-        self.lane_history_retention
     }
     fn lane_storage_entries_from_geometry(
         &self,
@@ -5092,12 +4841,10 @@ impl Kura {
         Self::read_regular_sidecar_bytes_for(&self.store_root, path, expected_directory, byte_limit)
     }
 
-    /// Start the background block writer after all provisional startup authority is finalized.
+    /// Start the background writer after native startup has authenticated its execution prefix.
     ///
     /// # Errors
-    /// Returns an error in read-only emergency Fast mode, when the immutable
-    /// signed snapshot
-    /// authentication is pending, or canonical storage is fail-stop poisoned.
+    /// Returns an error in read-only emergency Fast mode or when canonical storage is poisoned.
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Result<Child> {
         kura.durable_mutation_authorized()?;
 
@@ -5128,110 +4875,22 @@ impl Kura {
     /// - file storage is unavailable
     /// - data in file storage is invalid or corrupted
     #[iroha_logger::log(skip_all, name = "kura_init")]
-    fn init(
-        block_store: &mut BlockStore,
-        mode: InitMode,
-        provisional_hash_only_prefix: Option<usize>,
-    ) -> Result<ChainValidation> {
+    fn init(block_store: &mut BlockStore, mode: InitMode) -> Result<ChainValidation> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
-        let chain_validation = if let Some(audited_height) = provisional_hash_only_prefix {
-            Kura::init_provisional_snapshot_bootstrap(
-                block_store,
-                block_index_count,
-                audited_height,
-            )?
-        } else {
-            match mode {
-                InitMode::Fast => {
-                    warn!(
-                        "Kura fast init trusts the durable local journal and defers full block validation; restart in strict mode after emergency recovery"
-                    );
-                    Kura::init_fast_mode(block_store, block_index_count)
-                }
-                InitMode::Strict => Kura::init_canonical_chain(block_store, block_index_count),
-            }?
-        };
+        let chain_validation = match mode {
+            InitMode::Fast => {
+                warn!(
+                    "Kura fast init trusts the durable local journal and defers full block validation; restart in strict mode after emergency recovery"
+                );
+                Kura::init_fast_mode(block_store, block_index_count)
+            }
+            InitMode::Strict => Kura::init_canonical_chain(block_store, block_index_count),
+        }?;
 
         Ok(chain_validation)
-    }
-    fn init_provisional_snapshot_bootstrap(
-        block_store: &mut BlockStore,
-        block_index_count: usize,
-        audited_height: usize,
-    ) -> Result<ChainValidation, Error> {
-        let hashes_count = usize::try_from(block_store.read_hashes_count()?)?;
-        if hashes_count != block_index_count || block_index_count < audited_height {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        let hashes = block_store.read_block_hashes(0, hashes_count)?;
-        let mut block_indices = vec![BlockIndex::default(); block_index_count];
-        block_store.read_block_indices(0, &mut block_indices)?;
-        let data_file_len = block_store.data_file_len()?;
-        let mut buffer = Vec::new();
-        let mut previous_hash = audited_height
-            .checked_sub(1)
-            .and_then(|index| hashes.get(index))
-            .copied();
-        for (index, block_index) in block_indices.iter().enumerate().skip(audited_height) {
-            let height = u64::try_from(index)?.saturating_add(1);
-            if block_index.length == 0 || block_index.length > STRICT_INIT_MAX_BLOCK_BYTES {
-                return Err(Error::InvalidProvisionalSnapshotSuffix {
-                    height,
-                    reason: format!(
-                        "block length {} is zero or exceeds the strict limit",
-                        block_index.length
-                    ),
-                });
-            }
-            let header = if block_index.is_evicted() {
-                block_store.canonical_evicted_block_header(
-                    height,
-                    hashes[index],
-                    block_index.length,
-                )?
-            } else {
-                let end = block_index.start.checked_add(block_index.length).ok_or(
-                    Error::CorruptedBlockRange {
-                        start: block_index.start,
-                        length: block_index.length,
-                        data_len: data_file_len,
-                    },
-                )?;
-                if end > data_file_len {
-                    return Err(Error::CorruptedBlockRange {
-                        start: block_index.start,
-                        length: block_index.length,
-                        data_len: data_file_len,
-                    });
-                }
-                buffer.resize(usize::try_from(block_index.length)?, 0);
-                block_store.read_block_data(block_index.start, &mut buffer)?;
-                decode_framed_signed_block(&buffer)
-                    .map_err(|error| Error::InvalidProvisionalSnapshotSuffix {
-                        height,
-                        reason: format!("canonical block body is not decodable: {error}"),
-                    })?
-                    .header()
-            };
-            if header.height().get() != height
-                || header.prev_block_hash() != previous_hash
-                || header.hash() != hashes[index]
-            {
-                return Err(Error::InvalidProvisionalSnapshotSuffix {
-                    height,
-                    reason: "block height, parent hash, or canonical header hash mismatches the durable journal"
-                        .to_owned(),
-                });
-            }
-            previous_hash = Some(hashes[index]);
-        }
-        Ok(ChainValidation {
-            hashes,
-            hard_fork_hash_only_block_count: audited_height,
-        })
     }
     /// Open the exact durable journal without decoding historical block bodies.
     ///
@@ -5261,7 +4920,6 @@ impl Kura {
             // Fast keeps only the durable count and reads exact hashes on demand. This avoids
             // startup I/O and RAM proportional to total chain height.
             hashes: Vec::new(),
-            hard_fork_hash_only_block_count: 0,
         })
     }
     /// Audit every committed slot without repairing occupied native history.
@@ -5275,27 +4933,32 @@ impl Kura {
         let mut indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut indices)?;
         let hashes = block_store.read_block_hashes(0, block_index_count)?;
-        Self::validate_block_chain(block_store, &indices, Some(&hashes), 0)
+        Self::validate_block_chain(block_store, &indices, Some(&hashes))
     }
     /// Validate committed canonical frame identities; corruption never authorizes pruning.
     fn validate_block_chain(
         block_store: &mut BlockStore,
         block_indices: &[BlockIndex],
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
-        mut hash_only_prefix: usize,
     ) -> Result<ChainValidation, Error> {
-        let expected = expected_hashes.ok_or(Error::HashesFileHeightMismatch)?;
-        let count = u64::try_from(block_indices.len())?;
-        if expected.len() != block_indices.len() || block_store.read_hashes_count()? != count {
+        if block_store.read_hashes_count()? != u64::try_from(block_indices.len())? {
             return Err(Error::HashesFileHeightMismatch);
         }
-        let snapshot = block_store.validated_verified_snapshot_tail(count, count)?;
-        if let Some(marker) = &snapshot
-            && marker.body_prefix_count == marker.snapshot_height
+        Self::validate_committed_block_prefix(
+            block_store,
+            block_indices,
+            expected_hashes.ok_or(Error::HashesFileHeightMismatch)?,
+        )
+    }
+    /// Audit the durable prefix before reconciling any uncommitted journal suffix.
+    fn validate_committed_block_prefix(
+        block_store: &mut BlockStore,
+        block_indices: &[BlockIndex],
+        expected: &[HashOf<BlockHeader>],
+    ) -> Result<ChainValidation, Error> {
+        if expected.len() != block_indices.len()
+            || block_store.read_hashes_count()? < u64::try_from(block_indices.len())?
         {
-            hash_only_prefix = hash_only_prefix.max(usize::try_from(marker.snapshot_height)?);
-        }
-        if hash_only_prefix > block_indices.len() {
             return Err(Error::HashesFileHeightMismatch);
         }
         let data_len = block_store.data_file_len()?;
@@ -5305,17 +4968,6 @@ impl Kura {
             let height = u64::try_from(position)?
                 .checked_add(1)
                 .ok_or(Error::HashesFileHeightMismatch)?;
-            let hash_only = position < hash_only_prefix
-                || (slot.is_evicted()
-                    && slot.length == 0
-                    && snapshot.as_ref().is_some_and(|marker| {
-                        let position = position as u64;
-                        position >= marker.body_prefix_count && position < marker.snapshot_height
-                    }));
-            if hash_only {
-                previous = Some(expected[position]);
-                continue;
-            }
             if slot.length == 0 || slot.length > STRICT_INIT_MAX_BLOCK_BYTES {
                 return Err(Error::CorruptedBlockLength {
                     length: slot.length,
@@ -5374,7 +5026,6 @@ impl Kura {
         }
         Ok(ChainValidation {
             hashes: expected.to_vec(),
-            hard_fork_hash_only_block_count: hash_only_prefix,
         })
     }
     #[iroha_logger::log(skip_all)]
@@ -5847,13 +5498,6 @@ impl Kura {
                 return None;
             }
             let idx = block_height.get() - 1;
-            if self.is_hard_fork_hash_only_block(idx) {
-                debug!(
-                    block_index = idx,
-                    "hard-fork snapshot bootstrap: hash-only block body is unavailable"
-                );
-                return None;
-            }
             let known_hash = data.known_hash(idx);
             let known_previous_hash = idx
                 .checked_sub(1)
@@ -5919,7 +5563,7 @@ impl Kura {
                     block_index,
                     height = block_index.saturating_add(1),
                     evicted = is_evicted,
-                    "Kura block body is unavailable for hash-only metadata"
+                    "Kura block body is unavailable for an invalid zero-length canonical slot"
                 );
                 return None;
             }
@@ -5955,15 +5599,6 @@ impl Kura {
                 let decoded = match decode_framed_signed_block(&bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
-                        if self.is_hard_fork_hash_only_block(block_index) {
-                            debug!(
-                                ?error,
-                                block_index,
-                                height,
-                                "hard-fork snapshot bootstrap: audited block body is unavailable"
-                            );
-                            return None;
-                        }
                         error!(
                             ?error,
                             block_index, height, "Failed to decode evicted block payload"
@@ -5991,14 +5626,6 @@ impl Kura {
                 match decode_framed_signed_block(bytes) {
                     Ok(decoded) => decoded,
                     Err(error) => {
-                        if self.is_hard_fork_hash_only_block(block_index) {
-                            debug!(
-                                ?error,
-                                block_index,
-                                "hard-fork snapshot bootstrap: audited block body is unavailable"
-                            );
-                            return None;
-                        }
                         error!(?error, block_index, "Failed to decode block from disk");
                         drop(block_store);
                         self.poison_corrupt_canonical_read(
@@ -6112,50 +5739,6 @@ impl Kura {
         }
         Some(block_arc)
     }
-    fn is_hard_fork_hash_only_block(&self, block_index: usize) -> bool {
-        block_index < self.hard_fork_hash_only_block_count.load(Ordering::Relaxed)
-    }
-    /// Return the provisional imported-prefix boundary and lineage digest.
-    ///
-    /// This is classification metadata only. Presence does not authenticate
-    /// either the Kura hashes or the snapshot lineage.
-    pub(crate) fn provisional_snapshot_bootstrap_metadata(&self) -> Option<(usize, Option<Hash>)> {
-        self.provisional_snapshot_bootstrap
-            .lock()
-            .pending_metadata()
-            .map(|pending| {
-                (
-                    pending.hash_only_prefix_height,
-                    pending.bootstrap_lineage_hash,
-                )
-            })
-    }
-    /// Return whether Kura is open only for provisional signed-snapshot authentication.
-    #[must_use]
-    pub fn provisional_snapshot_bootstrap_pending(&self) -> bool {
-        !self
-            .provisional_snapshot_bootstrap
-            .lock()
-            .is_authenticated()
-    }
-    /// Return whether this height belongs to the imported snapshot prefix.
-    ///
-    /// The result deliberately includes a provisional prefix so startup
-    /// planning can classify unavailable bodies before authentication. No
-    /// mutation or output may use that classification until finalization.
-    pub(crate) fn is_audited_snapshot_import_height(&self, block_height: NonZeroUsize) -> bool {
-        self.is_hard_fork_hash_only_block(block_height.get().saturating_sub(1))
-    }
-    fn ensure_snapshot_bootstrap_authenticated(&self) -> Result<()> {
-        if !self
-            .provisional_snapshot_bootstrap
-            .lock()
-            .is_authenticated()
-        {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        Ok(())
-    }
     /// Authorize a durable sidecar or journal mutation which does not require
     /// canonical block-stage recovery.
     fn durable_mutation_authorized(&self) -> Result<()> {
@@ -6164,20 +5747,14 @@ impl Kura {
                 subsystem: "canonical mutation",
             });
         }
-        self.ensure_snapshot_bootstrap_authenticated()?;
         self.ensure_canonical_storage_not_poisoned()
     }
-    /// Returns `true` when the canonical block is represented only by its
-    /// hash from a hard-fork snapshot bootstrap and the local body is
-    /// intentionally unavailable.
-    pub(crate) fn is_hash_only_block_height(&self, block_height: NonZeroUsize) -> bool {
+    /// Diagnose an invalid zero-length canonical body slot. This grants no replay authority.
+    pub(crate) fn is_canonical_body_missing(&self, block_height: NonZeroUsize) -> bool {
         if self.prune_recovery_is_required() {
             return false;
         }
         let idx = block_height.get().saturating_sub(1);
-        if self.is_hard_fork_hash_only_block(idx) {
-            return true;
-        }
         let data = self.block_data.lock();
         if self.prune_recovery_is_required() {
             return false;
@@ -6190,17 +5767,17 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return false;
         }
-        let is_hash_only = matches!(
+        let missing_body = matches!(
             store.read_block_index(idx as u64),
             Ok(index) if index.length == 0
         );
-        !self.prune_recovery_is_required() && is_hash_only
+        !self.prune_recovery_is_required() && missing_body
     }
-    /// Force a stored block height into hash-only form when constructing snapshot tests.
+    /// Corrupt a stored block body into a zero-length slot for fail-closed read tests.
     #[doc(hidden)]
     #[cfg(any(test, feature = "iroha-core-tests"))]
     #[allow(dead_code)]
-    pub fn force_hash_only_block_for_testing(&self, block_height: NonZeroUsize) -> Result<()> {
+    pub fn corrupt_canonical_body_for_testing(&self, block_height: NonZeroUsize) -> Result<()> {
         let idx = block_height.get().saturating_sub(1);
         let (block_hash, block_count) = {
             let mut data = self.block_data.lock();
@@ -6220,19 +5797,8 @@ impl Kura {
         store.write_block_hash(u64::try_from(idx)?, block_hash)?;
         store.write_block_index(u64::try_from(idx)?, EVICTED_BLOCK_START, 0)?;
         store.publish_commit_marker(u64::try_from(block_count)?)?;
-        // This fixture evicts exactly one body. A hard-fork prefix would also
-        // hide unrelated earlier bodies that are still durably available.
+        // Deliberate corruption of one body cannot authorize other missing history.
         Ok(())
-    }
-    pub(crate) fn hash_only_unavailable_prefix_len(&self, limit: usize) -> usize {
-        if self.prune_recovery_is_required() {
-            return 0;
-        }
-        let hash_only_count = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
-        if hash_only_count == 0 || limit == 0 {
-            return 0;
-        }
-        hash_only_count.min(limit).min(self.block_data.lock().len())
     }
 }
 include!("kura/canonical_wire_identity.rs");
@@ -6333,17 +5899,6 @@ impl Kura {
             store.body_read_calls.load(Ordering::Relaxed),
             store.body_bytes_read.load(Ordering::Relaxed),
         )
-    }
-    /// Return the chain-scoped root for consensus-v2 journals and transport stores.
-    ///
-    /// The directory is rooted directly below the immutable Kura store root, not
-    /// below the relabelable primary-lane block directory. Live consensus stores
-    /// therefore keep a stable pathname while a lane alias changes. A configured
-    /// chain still never shares a safety WAL or body store with another Kura
-    /// instance. Callers create and synchronise their own children; Kura
-    /// deliberately does not create this path as a side effect of lookup.
-    pub(crate) fn sumeragi_v2_storage_root(&self) -> PathBuf {
-        self.store_root.join("sumeragi_v2")
     }
     /// Project a comparison-only identity for this exact live Kura owner.
     pub(crate) fn instance_identity(&self) -> KuraInstanceIdentity {
@@ -7789,263 +7344,6 @@ impl Kura {
         data.get(height.get().saturating_sub(1))
             .map(|(hash, _)| *hash)
     }
-    /// Reconcile an exact outer-authenticated bootstrap snapshot while Kura remains provisional.
-    pub(crate) fn reconcile_exact_audited_snapshot_bootstrap(
-        &self,
-        payload: &crate::snapshot::AuthenticatedSnapshotBootstrapPayload,
-    ) -> Result<usize> {
-        if !payload.is_exact_audited_boundary() {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        let snapshot_hashes = payload.block_hashes();
-        self.reconcile_authenticated_hash_only_snapshot(
-            snapshot_hashes,
-            HashOnlySnapshotExtensionMode::HardForkBootstrap,
-            Some(payload.record()),
-            true,
-        )
-    }
-    /// Stage an exact authenticated snapshot prefix for recovery tests.
-    ///
-    /// Production callers must enter through
-    /// [`Self::reconcile_exact_audited_snapshot_bootstrap`] while Kura owns a
-    /// provisional startup transition. Tests which exercise only the later
-    /// recovery boundary use this typed capability instead of reconstructing
-    /// the retired raw record-and-hash admission shape.
-    #[cfg(test)]
-    pub(crate) fn install_authenticated_snapshot_prefix_for_testing(
-        &self,
-        payload: &crate::snapshot::AuthenticatedSnapshotBootstrapPayload,
-    ) -> Result<usize> {
-        if !payload.is_exact_audited_boundary() {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        self.reconcile_authenticated_hash_only_snapshot(
-            payload.block_hashes(),
-            HashOnlySnapshotExtensionMode::HardForkBootstrap,
-            Some(payload.record()),
-            false,
-        )
-    }
-    /// Extend Kura's canonical hash chain using an audited hard-fork snapshot.
-    ///
-    /// The snapshot payload is the source of truth for hashes above the durable block body log.
-    /// Missing bodies are persisted as hash-only placeholders so the next committed block can
-    /// append at the snapshot height without replaying unavailable block bodies.
-    #[cfg(test)]
-    pub(crate) fn extend_hash_only_prefix_from_snapshot(
-        &self,
-        snapshot_hashes: &[HashOf<BlockHeader>],
-    ) -> Result<usize> {
-        self.reconcile_authenticated_hash_only_snapshot(
-            snapshot_hashes,
-            HashOnlySnapshotExtensionMode::HardForkBootstrap,
-            None,
-            false,
-        )
-    }
-    /// Extend Kura's canonical hash chain using a verified local state snapshot.
-    ///
-    /// This is used when the signed WSV snapshot is ahead of a truncated durable block-body log.
-    /// Existing block bodies remain readable; only the missing suffix is persisted as hash-only
-    /// entries so startup can resume from the signed state without replaying unavailable bodies.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn extend_hash_only_suffix_from_verified_snapshot(
-        &self,
-        snapshot_hashes: &[HashOf<BlockHeader>],
-    ) -> Result<usize> {
-        self.reconcile_authenticated_hash_only_snapshot(
-            snapshot_hashes,
-            HashOnlySnapshotExtensionMode::VerifiedLocalSnapshot,
-            None,
-            false,
-        )
-    }
-    fn reconcile_authenticated_hash_only_snapshot(
-        &self,
-        snapshot_hashes: &[HashOf<BlockHeader>],
-        mode: HashOnlySnapshotExtensionMode,
-        bootstrap_lineage: Option<&SnapshotV2BootstrapRecord>,
-        provisional_transition: bool,
-    ) -> Result<usize> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        if snapshot_hashes.is_empty() {
-            return Ok(0);
-        }
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        if provisional_transition {
-            self.raw_geometry_claim.ensure_unclaimed()?;
-            if !self.provisional_snapshot_bootstrap_pending() {
-                return Err(Error::SnapshotBootstrapAuthenticationPending);
-            }
-            self.ensure_canonical_storage_not_poisoned()?;
-        } else {
-            self.resolve_canonical_storage_before_mutation()?;
-        }
-        let mut block_data = self.block_data.lock();
-        let current = block_data.len();
-        let target = snapshot_hashes.len();
-        let shared = current.min(target);
-        let bootstrap_lineage_hash = bootstrap_lineage.map(snapshot_bootstrap_lineage_digest);
-        let rewrite_from = current;
-        let complete_entries =
-            block_data
-                .dense_entries()
-                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
-                    subsystem: "complete canonical history",
-                })?;
-        for (idx, (existing, _)) in complete_entries.iter().enumerate().take(shared) {
-            let actual = snapshot_hashes[idx];
-            if *existing == actual {
-                continue;
-            }
-            return Err(Error::BlockHeightConflict {
-                height: u64::try_from(idx.saturating_add(1))?,
-                expected: *existing,
-                actual,
-            });
-        }
-        if target < current {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        if target == current {
-            if mode.marks_hash_only_prefix() {
-                let marker_result = (|| -> Result<()> {
-                    let _write_guard = self.block_store_write_lock.lock();
-                    let mut block_store = self.block_store.lock();
-                    let resources = self
-                        .begin_total_disk_usage_mutation()
-                        .with_resource_paths(Self::canonical_physical_fixed_paths(&block_store));
-                    block_store.sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)?;
-                    block_store.sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)?;
-                    block_store.write_verified_snapshot_tail_marker(
-                        u64::try_from(target)?,
-                        snapshot_hashes,
-                        bootstrap_lineage_hash,
-                    )?;
-                    resources.finish_resources_before_disk_rescan();
-                    Ok(())
-                })();
-                if let Err(error) = marker_result {
-                    self.poison_canonical_storage(
-                        "audited snapshot prefix marker publication",
-                        &error,
-                    );
-                    return Err(error);
-                }
-                let previous = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
-                if previous != target {
-                    self.hard_fork_hash_only_block_count
-                        .store(target, Ordering::Relaxed);
-                    info!(
-                        previous_hash_only_block_count = previous,
-                        snapshot_height = target,
-                        recovery = mode.label(),
-                        "aligned existing Kura hash-only snapshot entries"
-                    );
-                }
-            }
-            return Ok(0);
-        }
-        self.ensure_no_retired_rollback_intents()?;
-
-        let start = u64::try_from(rewrite_from)?;
-        let target_u64 = u64::try_from(target)?;
-        #[cfg(test)]
-        self.maybe_pause_hash_only_extension_before_store_for_tests();
-        let publication = (|| -> Result<()> {
-            let _write_guard = self.block_store_write_lock.lock();
-            let mut block_store = self.block_store.lock();
-            let before_bytes = Self::block_store_tracked_bytes(&mut block_store).ok();
-            let accounting_mutation = self
-                .begin_total_disk_usage_mutation()
-                .with_resource_paths(Self::canonical_physical_fixed_paths(&block_store));
-            let hashes_file = block_store.ensure_hashes_file()?;
-            hashes_file.try_io(|file| {
-                file.set_len(target_u64.saturating_mul(SIZE_OF_BLOCK_HASH))?;
-                file.seek(SeekFrom::Start(start.saturating_mul(SIZE_OF_BLOCK_HASH)))?;
-                for hash in &snapshot_hashes[rewrite_from..] {
-                    file.write_all(hash.as_ref())?;
-                }
-                file.flush()
-            })?;
-            let index_file = block_store.ensure_index_file()?;
-            index_file.try_io(|file| {
-                file.set_len(target_u64.saturating_mul(BlockIndex::SIZE))?;
-                file.seek(SeekFrom::Start(start.saturating_mul(BlockIndex::SIZE)))?;
-                let entry = BlockIndex {
-                    start: EVICTED_BLOCK_START,
-                    length: 0,
-                }
-                .encode();
-                for _ in rewrite_from..target {
-                    file.write_all(&entry)?;
-                }
-                file.flush()
-            })?;
-            // This marker is the durable capability proving that zero-length entries were
-            // published only after snapshot authentication. Sync its hash/index inputs first
-            // even when normal Kura fsync is deferred by batching, then publish the ordinary
-            // count marker.
-            block_store.sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)?;
-            block_store.sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)?;
-            let marker_body_prefix = if mode.marks_hash_only_prefix() {
-                target_u64
-            } else {
-                start
-            };
-            block_store.write_verified_snapshot_tail_marker(
-                marker_body_prefix,
-                snapshot_hashes,
-                bootstrap_lineage_hash,
-            )?;
-            block_store.publish_commit_marker(target_u64)?;
-            if let Some(before_bytes) = before_bytes
-                && let Ok(after_bytes) = Self::block_store_tracked_bytes(&mut block_store)
-            {
-                self.update_disk_usage_delta(before_bytes, after_bytes);
-                accounting_mutation.finish();
-            }
-            Ok(())
-        })();
-        match publication {
-            Ok(publication) => publication,
-            Err(error) => {
-                self.poison_canonical_storage("hash-only snapshot marker publication", &error);
-                return Err(error);
-            }
-        };
-        block_data.truncate(rewrite_from);
-        block_data.extend(
-            snapshot_hashes[rewrite_from..]
-                .iter()
-                .copied()
-                .map(|hash| (hash, None)),
-        );
-        let rebuilt_height_index = Self::build_block_height_index(&block_data);
-        let rebuilt_transaction_index = Self::build_transaction_entrypoint_index(&block_data);
-        let mut block_height_index = self.block_height_index.lock();
-        *block_height_index = rebuilt_height_index;
-        drop(block_height_index);
-        let mut transaction_entrypoint_index = self.transaction_entrypoint_index.lock();
-        *transaction_entrypoint_index = rebuilt_transaction_index;
-        drop(transaction_entrypoint_index);
-        if mode.marks_hash_only_prefix() {
-            self.hard_fork_hash_only_block_count
-                .store(target, Ordering::Relaxed);
-        }
-        self.publish_durable_budget_snapshot(target, 0);
-        let added = target.saturating_sub(current);
-        info!(
-            previous_height = current,
-            rewrite_from_height = rewrite_from.saturating_add(1),
-            snapshot_height = target,
-            recovery = mode.label(),
-            "extended Kura with hash-only snapshot entries"
-        );
-        Ok(added)
-    }
 }
 include!("kura/block_store_definition_and_test_controls.rs");
 /// Read-only mirror of the block data file backed either by a memory mapping or a heap copy.
@@ -8262,53 +7560,11 @@ struct EvictionCompactionStageV1 {
     /// Dense canonical identities of all bodies newly moved to DA storage.
     evicted: Vec<EvictionCompactionEntryV1>,
 }
-/// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
-#[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::VerifiedSnapshotTailMarkerV1")]
-struct VerifiedSnapshotTailMarkerV1 {
-    /// Marker format version.
-    version: u32,
-    /// Count of entries preceding the recovered body-less suffix.
-    body_prefix_count: u64,
-    /// Signed snapshot height represented by the hash journal and zero-length indices.
-    snapshot_height: u64,
-    /// Domain-separated digest of the canonical hash journal through `snapshot_height`.
-    hash_journal_digest: Hash,
-    /// Domain-separated digest of the typed, originally authenticated bootstrap lineage.
-    ///
-    /// This is a consistency binding only. The marker is never an authority;
-    /// startup must reauthenticate the exact record from a signed snapshot (or
-    /// the one-time explicitly audited digest policy) before enabling output.
-    bootstrap_lineage_hash: Option<Hash>,
-}
-impl VerifiedSnapshotTailMarkerV1 {
-    const VERSION: u32 = 1;
-    fn new(
-        body_prefix_count: u64,
-        snapshot_height: u64,
-        hash_journal_digest: Hash,
-        bootstrap_lineage_hash: Option<Hash>,
-    ) -> Self {
-        Self {
-            version: Self::VERSION,
-            body_prefix_count,
-            snapshot_height,
-            hash_journal_digest,
-            bootstrap_lineage_hash,
-        }
-    }
-}
-const SNAPSHOT_BOOTSTRAP_LINEAGE_DIGEST_DOMAIN: &[u8] =
-    b"iroha:kura:snapshot-bootstrap-lineage:v1\0";
 /// Exact authenticated canonical hash-journal image used by startup replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExactReplayBoundary {
     pub(crate) count: u64,
     pub(crate) hashes: Vec<HashOf<BlockHeader>>,
-}
-fn snapshot_bootstrap_lineage_digest(record: &SnapshotV2BootstrapRecord) -> Hash {
-    let encoded = record.encode();
-    Hash::new_from_chunks(&[SNAPSHOT_BOOTSTRAP_LINEAGE_DIGEST_DOMAIN, &encoded])
 }
 impl BlockStoreCommitMarker {
     const VERSION: u32 = 1;
@@ -8519,6 +7775,9 @@ impl Kura {}
 include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
 include!("kura/native_execution_reads.rs");
+#[cfg(test)]
+#[path = "kura/native_compaction_recovery_tests.rs"]
+mod native_compaction_recovery_tests;
 #[cfg(test)]
 #[path = "kura/native_journal_tests.rs"]
 mod native_journal_tests;
@@ -8971,30 +8230,6 @@ impl BlockStore {
                 .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
         }
         Ok(())
-    }
-    fn canonical_evicted_block_header(
-        &self,
-        height: u64,
-        canonical_hash: HashOf<BlockHeader>,
-        expected_wire_len: u64,
-    ) -> Result<BlockHeader> {
-        let bytes = self.read_optional_da_cache(height)?.ok_or_else(|| {
-            Error::InvalidProvisionalSnapshotSuffix {
-                height,
-                reason: "provisional suffix is missing its canonical frame".to_owned(),
-            }
-        })?;
-        if bytes.len() as u64 != expected_wire_len {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        let block = decode_framed_signed_block(&bytes)?;
-        if block.header().height().get() != height
-            || block.hash() != canonical_hash
-            || block.encode_wire()? != bytes
-        {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        Ok(block.header())
     }
     fn read_optional_da_cache(&self, height: u64) -> Result<Option<Vec<u8>>> {
         let path = self.da_block_path(height);
@@ -9945,6 +9180,9 @@ impl BlockStore {
             )
         })?;
         if marker == stage.old_marker {
+            remove_commit_marker_temp_and_sync(
+                &self.commit_marker_path().with_extension("norito.tmp"),
+            )?;
             self.restore_old_da_block_rewrite_stage(&stage)?;
         } else if marker == stage.new_marker {
             self.promote_new_da_block_rewrite_stage(&stage)?;
@@ -10025,276 +9263,6 @@ impl BlockStore {
     fn commit_marker_path(&self) -> PathBuf {
         self.path_to_blockchain.join(COUNT_FILE_NAME)
     }
-    fn verified_snapshot_tail_marker_path(&self) -> PathBuf {
-        self.path_to_blockchain
-            .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME)
-    }
-    fn remove_verified_snapshot_tail_marker(&self) -> Result<()> {
-        if self.path_to_blockchain.as_os_str().is_empty() {
-            return Ok(());
-        }
-        let path = self.verified_snapshot_tail_marker_path();
-        let tmp_path = path.with_extension("norito.tmp");
-        for candidate in [&path, &tmp_path] {
-            match std::fs::remove_file(candidate) {
-                Ok(()) => {}
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => return Err(Error::IO(err, candidate.clone())),
-            }
-        }
-        if let Some(parent) = path.parent() {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        }
-        Ok(())
-    }
-    fn write_verified_snapshot_tail_marker(
-        &self,
-        body_prefix_count: u64,
-        snapshot_hashes: &[HashOf<BlockHeader>],
-        bootstrap_lineage_hash: Option<Hash>,
-    ) -> Result<()> {
-        if self.path_to_blockchain.as_os_str().is_empty() {
-            return Ok(());
-        }
-        let snapshot_height = u64::try_from(snapshot_hashes.len())?;
-        if body_prefix_count > snapshot_height {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                "verified snapshot marker body prefix exceeds its snapshot height".to_owned(),
-            )));
-        }
-        let marker = VerifiedSnapshotTailMarkerV1::new(
-            body_prefix_count,
-            snapshot_height,
-            verified_snapshot_hash_journal_digest(snapshot_hashes)
-                .add_err_context(&self.path_to_blockchain.join(HASHES_FILE_NAME))?,
-            bootstrap_lineage_hash,
-        );
-        let bytes = norito::encode_canonical(&marker).map_err(Error::NoritoFrame)?;
-        if bytes.len() > MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "verified snapshot tail marker exceeds its hard byte limit",
-                ),
-                self.verified_snapshot_tail_marker_path(),
-            ));
-        }
-        let path = self.verified_snapshot_tail_marker_path();
-        let parent = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "verified snapshot tail marker has no parent",
-                ),
-                path.clone(),
-            )
-        })?;
-        let Some((canonical_parent, parent_before)) =
-            Kura::canonical_sidecar_directory_for(&self.path_to_blockchain, parent)?
-        else {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "verified snapshot tail marker parent is missing",
-                ),
-                parent.to_path_buf(),
-            ));
-        };
-        let _ = Kura::regular_sidecar_metadata_for(&self.path_to_blockchain, &path, parent)?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".verified-snapshot-tail-")
-            .tempfile_in(&canonical_parent)
-            .map_err(|error| Error::IO(error, canonical_parent.clone()))?;
-        temporary
-            .as_file_mut()
-            .write_all(&bytes)
-            .and_then(|()| temporary.as_file_mut().flush())
-            .and_then(|()| temporary.as_file().sync_all())
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        let persisted = temporary
-            .persist(&path)
-            .map_err(|error| Error::IO(error.error, path.clone()))?;
-        persisted
-            .sync_all()
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        let parent_after = secure_file_metadata::from_path(parent)
-            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        if !Kura::sidecar_metadata_same_object(&parent_before, &parent_after) {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "verified snapshot tail marker parent changed during publication",
-                ),
-                parent.to_path_buf(),
-            ));
-        }
-        let Some(readback) = Kura::read_regular_sidecar_bytes_for(
-            &self.path_to_blockchain,
-            &path,
-            parent,
-            MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES,
-        )?
-        else {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "verified snapshot tail marker disappeared after publication",
-                ),
-                path,
-            ));
-        };
-        if readback != bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "verified snapshot tail marker readback differs from its publication",
-                ),
-                path,
-            ));
-        }
-        Ok(())
-    }
-    fn read_verified_snapshot_tail_marker(&self) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
-        if self.path_to_blockchain.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        let path = self.verified_snapshot_tail_marker_path();
-        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
-            &self.path_to_blockchain,
-            &path,
-            &self.path_to_blockchain,
-            MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES,
-        )?
-        else {
-            return Ok(None);
-        };
-        match norito::decode_canonical::<VerifiedSnapshotTailMarkerV1>(&bytes) {
-            Ok(marker) if marker.version == VerifiedSnapshotTailMarkerV1::VERSION => {
-                Ok(Some(marker))
-            }
-            Ok(marker) => {
-                warn!(
-                    version = marker.version,
-                    "discarding verified snapshot tail marker with unsupported version"
-                );
-                self.remove_verified_snapshot_tail_marker()?;
-                Ok(None)
-            }
-            Err(err) => {
-                warn!(?err, "discarding malformed verified snapshot tail marker");
-                self.remove_verified_snapshot_tail_marker()?;
-                Ok(None)
-            }
-        }
-    }
-    /// Read and validate the structural snapshot marker without repairing or deleting it.
-    ///
-    /// The returned marker is only provisional metadata.  Its self-digest does
-    /// not authenticate the hash journal or the bootstrap lineage.
-    fn validated_verified_snapshot_tail_read_only(
-        &mut self,
-        logical_count: u64,
-        hashes_count: u64,
-    ) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
-        if self.path_to_blockchain.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        let path = self.verified_snapshot_tail_marker_path();
-        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
-            &self.path_to_blockchain,
-            &path,
-            &self.path_to_blockchain,
-            MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES,
-        )?
-        else {
-            return Ok(None);
-        };
-        let invalid = |reason: String| Error::InvalidSnapshotBootstrapMarker {
-            path: path.clone(),
-            reason,
-        };
-        let marker = norito::decode_canonical::<VerifiedSnapshotTailMarkerV1>(&bytes)
-            .map_err(|error| invalid(format!("failed to decode marker: {error}")))?;
-        if marker.version != VerifiedSnapshotTailMarkerV1::VERSION {
-            return Err(invalid(
-                "marker version or canonical encoding is invalid".to_owned(),
-            ));
-        }
-        if marker.body_prefix_count > marker.snapshot_height
-            || marker.snapshot_height > logical_count
-            || marker.snapshot_height > hashes_count
-        {
-            return Err(invalid(format!(
-                "marker bounds prefix={} snapshot={} index={} hashes={}",
-                marker.body_prefix_count, marker.snapshot_height, logical_count, hashes_count
-            )));
-        }
-        for index_pos in marker.body_prefix_count..marker.snapshot_height {
-            let index = self.read_block_index(index_pos)?;
-            if !index.is_evicted() || index.length != 0 {
-                return Err(invalid(format!(
-                    "marker hash-only position {index_pos} is not a zero-length evicted entry"
-                )));
-            }
-        }
-        let actual_digest =
-            self.verified_snapshot_hash_journal_digest_from_store(marker.snapshot_height)?;
-        if actual_digest != marker.hash_journal_digest {
-            return Err(invalid(
-                "marker hash-journal digest does not match durable hashes".to_owned(),
-            ));
-        }
-        Ok(Some(marker))
-    }
-    fn validated_verified_snapshot_tail(
-        &mut self,
-        logical_count: u64,
-        hashes_count: u64,
-    ) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
-        let Some(marker) = self.read_verified_snapshot_tail_marker()? else {
-            return Ok(None);
-        };
-        let valid_bounds = marker.body_prefix_count <= marker.snapshot_height
-            && marker.snapshot_height <= logical_count
-            && marker.snapshot_height <= hashes_count;
-        if !valid_bounds {
-            warn!(
-                body_prefix_count = marker.body_prefix_count,
-                snapshot_height = marker.snapshot_height,
-                logical_count,
-                hashes_count,
-                "discarding verified snapshot tail marker with invalid bounds"
-            );
-            self.remove_verified_snapshot_tail_marker()?;
-            return Ok(None);
-        }
-        for index_pos in marker.body_prefix_count..marker.snapshot_height {
-            let index = self.read_block_index(index_pos)?;
-            if !index.is_evicted() || index.length != 0 {
-                warn!(
-                    index_pos,
-                    start = index.start,
-                    length = index.length,
-                    "discarding verified snapshot tail marker with non-placeholder index"
-                );
-                self.remove_verified_snapshot_tail_marker()?;
-                return Ok(None);
-            }
-        }
-        let actual_digest =
-            self.verified_snapshot_hash_journal_digest_from_store(marker.snapshot_height)?;
-        if actual_digest != marker.hash_journal_digest {
-            warn!(
-                expected = %marker.hash_journal_digest,
-                actual = %actual_digest,
-                "discarding verified snapshot tail marker with mismatched hash journal digest"
-            );
-            self.remove_verified_snapshot_tail_marker()?;
-            return Ok(None);
-        }
-        Ok(Some(marker))
-    }
     fn read_bounded_commit_marker_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
         let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
@@ -10304,8 +9272,7 @@ impl BlockStore {
         if before.file_type().is_symlink()
             || !before.file_type().is_file()
             || !Kura::sidecar_is_single_link(&before)
-            || before.len()
-                > u64::try_from(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES).unwrap_or(u64::MAX)
+            || before.len() > u64::try_from(MAX_BLOCK_COMMIT_MARKER_BYTES).unwrap_or(u64::MAX)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -10334,7 +9301,7 @@ impl BlockStore {
         let mut bytes = Vec::with_capacity(usize::try_from(before.len())?);
         (&mut file)
             .take(
-                u64::try_from(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES)
+                u64::try_from(MAX_BLOCK_COMMIT_MARKER_BYTES)
                     .unwrap_or(u64::MAX)
                     .saturating_add(1),
             )
@@ -10377,92 +9344,24 @@ impl BlockStore {
                 path,
             ));
         }
-        let tmp_path = path.with_extension("norito.tmp");
-        let mut main_invalid = false;
-        let mut stable_marker = None;
-        match Self::read_bounded_commit_marker_bytes(&path)? {
-            Some(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
-                Ok(marker) => {
-                    if marker.version == BlockStoreCommitMarker::VERSION {
-                        if (marker.count == 0) == marker.tip_hash.is_none() {
-                            stable_marker = Some(marker);
-                        } else {
-                            return Err(Error::IO(
-                                std::io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    "block commit marker has an invalid empty/tip invariant",
-                                ),
-                                path,
-                            ));
-                        }
-                    } else {
-                        warn!(
-                            version = marker.version,
-                            "unsupported block store marker version; ignoring"
-                        );
-                        main_invalid = true;
-                    }
+        let marker = Self::read_bounded_commit_marker_bytes(&path)?
+            .map(|bytes| {
+                let marker = norito::decode_canonical::<BlockStoreCommitMarker>(&bytes)
+                    .map_err(|error| Error::IO(std::io::Error::new(ErrorKind::InvalidData,
+                        format!("invalid canonical block commit marker: {error}")), path.clone()))?;
+                if marker.version != BlockStoreCommitMarker::VERSION
+                    || (marker.count == 0) != marker.tip_hash.is_none()
+                {
+                    return Err(Error::IO(std::io::Error::new(ErrorKind::InvalidData,
+                        "block commit marker has an unsupported version or invalid empty/tip invariant"), path.clone()));
                 }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        "failed to decode block store marker; ignoring corrupted marker"
-                    );
-                    main_invalid = true;
-                }
-            },
-            None => {}
-        }
-        if main_invalid {
-            remove_commit_marker_temp_and_sync(&path)?;
-        }
-        match Self::read_bounded_commit_marker_bytes(&tmp_path)? {
-            Some(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
-                Ok(marker) => {
-                    if marker.version != BlockStoreCommitMarker::VERSION {
-                        warn!(
-                            version = marker.version,
-                            "unsupported block store temp marker version; ignoring"
-                        );
-                        remove_commit_marker_temp_and_sync(&tmp_path)?;
-                        return Ok(stable_marker);
-                    }
-                    if (marker.count == 0) != marker.tip_hash.is_none() {
-                        remove_commit_marker_temp_and_sync(&tmp_path)?;
-                        return Ok(stable_marker);
-                    }
-                    warn!(
-                        path = %tmp_path.display(),
-                        "recovered block store marker from temp file"
-                    );
-                    promote_commit_marker_temp_and_sync(&tmp_path, &path)?;
-                    let readback = Self::read_required_bounded_commit_marker_bytes(
-                        &path,
-                        "recovered block commit marker disappeared before readback",
-                    )?;
-                    if readback != bytes {
-                        return Err(Error::IO(
-                            std::io::Error::new(
-                                ErrorKind::InvalidData,
-                                "recovered block commit marker differs from its temp",
-                            ),
-                            path,
-                        ));
-                    }
-                    Ok(Some(marker))
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %tmp_path.display(),
-                        "failed to decode temp block store marker"
-                    );
-                    remove_commit_marker_temp_and_sync(&tmp_path)?;
-                    Ok(stable_marker)
-                }
-            },
-            None => Ok(stable_marker),
-        }
+                Ok(marker)
+            }).transpose()?;
+        // The rename to the stable path is the publication boundary. A temporary
+        // file never replaces that authority merely because it can be decoded.
+        // Validate its filesystem shape without publishing, deleting or adopting it.
+        Self::read_bounded_commit_marker_bytes(&path.with_extension("norito.tmp"))?;
+        Ok(marker)
     }
     fn commit_marker_for_count(&mut self, count: u64) -> Result<BlockStoreCommitMarker> {
         let tip_hash = if count == 0 {
@@ -10529,7 +9428,7 @@ impl BlockStore {
             )
         })?;
         std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        if bytes.is_empty() || bytes.len() > MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES {
+        if bytes.is_empty() || bytes.len() > MAX_BLOCK_COMMIT_MARKER_BYTES {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -10647,10 +9546,6 @@ impl BlockStore {
             if journal_tip == marker.tip_hash {
                 return Ok(());
             }
-        } else {
-            // `init_commit_marker` explicitly reconciles a marker beyond the available hash
-            // journal to the data-backed prefix below.
-            return Ok(());
         }
         Err(Error::IO(
             std::io::Error::new(
@@ -10676,12 +9571,7 @@ impl BlockStore {
         }
         Ok(aligned / SIZE_OF_BLOCK_HASH)
     }
-    fn data_backed_count(
-        &mut self,
-        mut candidate: u64,
-        hashes_count: u64,
-        trusted_hash_only_tail: Option<(u64, u64)>,
-    ) -> Result<u64> {
+    fn data_backed_count(&mut self, mut candidate: u64, hashes_count: u64) -> Result<u64> {
         if candidate > hashes_count {
             warn!(
                 index_count = candidate,
@@ -10694,28 +9584,11 @@ impl BlockStore {
             return Ok(0);
         }
         let data_len = self.data_file_len()?;
-        if data_len == 0 {
-            return Ok(
-                if trusted_hash_only_tail.is_some_and(|(start, end)| start == 0 && candidate <= end)
-                {
-                    candidate
-                } else {
-                    0
-                },
-            );
-        }
         let initial = candidate;
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
                     if index.is_evicted() {
-                        if index.length == 0
-                            && trusted_hash_only_tail.is_some_and(|(start, end)| {
-                                candidate > start && candidate <= end && candidate <= hashes_count
-                            })
-                        {
-                            break;
-                        }
                         if index.length == 0
                             || index.length > STRICT_INIT_MAX_BLOCK_BYTES
                             || candidate > hashes_count
@@ -10785,21 +9658,7 @@ impl BlockStore {
         let invalid = |path: PathBuf, reason: &'static str| {
             Error::IO(std::io::Error::new(ErrorKind::InvalidData, reason), path)
         };
-        // Imported hash-only history has different trust semantics and cannot be
-        // authorized by an ordinary emergency manifest. All other auxiliary
-        // recovery artifacts are deliberately ignored until the Strict restart.
-        let snapshot_tail_marker = self.verified_snapshot_tail_marker_path();
-        match std::fs::symlink_metadata(&snapshot_tail_marker) {
-            Ok(_) => {
-                return Err(invalid(
-                    snapshot_tail_marker,
-                    "Kura Fast init cannot authorize imported hash-only history",
-                ));
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => return Err(Error::IO(error, snapshot_tail_marker)),
-        }
-
+        Kura::reject_retired_snapshot_tail(&self.path_to_blockchain)?;
         let marker_path = self.commit_marker_path();
         let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
             &marker_path,
@@ -10928,72 +9787,73 @@ impl BlockStore {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
-        let logical_count = {
-            let index_file = self.ensure_index_file()?;
-            let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
-            let aligned = len - (len % BlockIndex::SIZE);
-            if aligned != len {
-                warn!(
-                    len,
-                    aligned, "block index length misaligned; truncating trailing bytes"
-                );
-                index_file.try_io(|file| file.set_len(aligned))?;
-            }
-            aligned / BlockIndex::SIZE
-        };
-        let hashes_count = self.align_hashes_len()?;
+        Kura::reject_retired_snapshot_tail(&self.path_to_blockchain)?;
+        let index_len = self
+            .ensure_index_file()?
+            .try_io(|file| file.metadata().map(|meta| meta.len()))?;
+        let logical_count = index_len / BlockIndex::SIZE;
+        let hashes_count = self.read_hashes_count()?;
         let existing_marker = self.read_commit_marker()?;
-        // When the hash journal was durably shortened before its marker, the
-        // old tip is no longer readable. Defer that one case to the
-        // conservative common-prefix reconciliation below; markers whose tip
-        // is still addressable remain fully validated.
-        if let Some(marker) = existing_marker.as_ref()
-            && marker.count <= hashes_count
-        {
+        if let Some(marker) = existing_marker.as_ref() {
             self.validate_commit_marker_tip(marker, hashes_count)?;
+            if marker.count > logical_count {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "committed block prefix exceeds the index journal",
+                    ),
+                    self.path_to_blockchain.join(INDEX_FILE_NAME),
+                ));
+            }
+            // Bounds alone cannot detect an in-range offset or shortened frame
+            // that would trim another committed body. Check the original frame
+            // and hash correspondence before changing any journal bytes.
+            let count = usize::try_from(marker.count)?;
+            let mut indices = vec![BlockIndex::default(); count];
+            self.read_block_indices(0, &mut indices)?;
+            let hashes = self.read_block_hashes(0, count)?;
+            Kura::validate_committed_block_prefix(self, &indices, &hashes)?;
         }
-        let verified_snapshot_tail =
-            self.validated_verified_snapshot_tail(logical_count, hashes_count)?;
-        let trusted_hash_only_tail = verified_snapshot_tail.as_ref().map(|marker| {
-            let start = if marker.body_prefix_count == marker.snapshot_height {
-                0
-            } else {
-                marker.body_prefix_count
-            };
-            (start, marker.snapshot_height)
-        });
-        let data_backed_count =
-            self.data_backed_count(logical_count, hashes_count, trusted_hash_only_tail)?;
-        let mut durable_count = if let Some(marker) = existing_marker {
+        let data_backed_count = self.data_backed_count(logical_count, hashes_count)?;
+        if existing_marker.is_none()
+            && (index_len != 0 || hashes_count != 0 || self.data_file_len()? != 0)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "nonempty canonical journals have no stable commit marker",
+                ),
+                self.commit_marker_path(),
+            ));
+        }
+        // The prefix is intact and any staged owner has completed recovery.
+        // Abort an unpublished temporary; the stable marker remains authoritative.
+        remove_commit_marker_temp_and_sync(
+            &self.commit_marker_path().with_extension("norito.tmp"),
+        )?;
+        let durable_count = if let Some(marker) = existing_marker {
+            if marker.count > data_backed_count {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "committed block prefix contains unavailable or corrupt canonical storage",
+                    ),
+                    self.path_to_blockchain.clone(),
+                ));
+            }
             marker.count
         } else {
             self.write_commit_marker(data_backed_count)?;
             data_backed_count
         };
-        if let Some(marker) = &verified_snapshot_tail
-            && durable_count < marker.snapshot_height
-            && data_backed_count >= marker.snapshot_height
-        {
-            durable_count = marker.snapshot_height;
-            self.write_commit_marker(durable_count)?;
+        // Reconciliation may discard only an uncommitted suffix. Validate the
+        // durable boundary before changing even partial trailing journal bytes.
+        let aligned = logical_count * BlockIndex::SIZE;
+        if aligned != index_len {
+            self.ensure_index_file()?
+                .try_io(|file| file.set_len(aligned))?;
         }
-        if durable_count > data_backed_count {
-            warn!(
-                durable_count,
-                data_backed_count,
-                "block store marker exceeds data-backed count; truncating marker"
-            );
-            durable_count = data_backed_count;
-            self.write_commit_marker(durable_count)?;
-        }
-        if logical_count < durable_count {
-            warn!(
-                logical_count,
-                durable_count, "block store marker exceeds index length; truncating marker"
-            );
-            durable_count = logical_count;
-            self.write_commit_marker(durable_count)?;
-        }
+        self.align_hashes_len()?;
         if logical_count > durable_count {
             warn!(
                 logical_count,
@@ -11007,12 +9867,6 @@ impl BlockStore {
         }
         self.truncate_hashes_to_count(durable_count)?;
         self.truncate_data_to_index(durable_count)?;
-        if verified_snapshot_tail
-            .as_ref()
-            .is_some_and(|marker| durable_count < marker.snapshot_height)
-        {
-            self.remove_verified_snapshot_tail_marker()?;
-        }
         self.commit_marker_count = durable_count;
         self.commit_marker_pending = None;
         Ok(())
@@ -11838,78 +10692,6 @@ impl BlockStore {
         }
         Ok(())
     }
-    /// Open an existing canonical journal without recovery or repair.
-    ///
-    /// This is the first half of signed-lineage snapshot startup. It may set
-    /// only process-local file handles and the cached durable count; every
-    /// durable byte remains unchanged until snapshot authentication succeeds.
-    fn initialize_provisional_snapshot_bootstrap_read_only(
-        &mut self,
-        audited_prefix_height: usize,
-    ) -> Result<u64> {
-        self.require_existing_journal_bound_canonical_files()?;
-        for path in [
-            self.da_block_rewrite_stage_path(),
-            self.eviction_compaction_stage_path(),
-            self.commit_marker_path().with_extension("norito.tmp"),
-        ] {
-            if std::fs::symlink_metadata(&path).is_ok() {
-                return Err(Error::InvalidSnapshotBootstrapMarker {
-                    path,
-                    reason: "unresolved canonical transaction requires recovery before provisional snapshot opening"
-                        .to_owned(),
-                });
-            }
-        }
-        let index_len = self.index_file_len()?;
-        let hashes_len = self.hashes_file_len()?;
-        if index_len % BlockIndex::SIZE != 0 || hashes_len % SIZE_OF_BLOCK_HASH != 0 {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        let index_count = index_len / BlockIndex::SIZE;
-        let hashes_count = hashes_len / SIZE_OF_BLOCK_HASH;
-        if index_count != hashes_count || index_count < u64::try_from(audited_prefix_height)? {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        let marker_path = self.commit_marker_path();
-        let marker_bytes = Kura::read_regular_sidecar_bytes_for(
-            &self.path_to_blockchain,
-            &marker_path,
-            &self.path_to_blockchain,
-            MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES,
-        )?
-        .ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "canonical block commit marker is missing",
-                ),
-                marker_path.clone(),
-            )
-        })?;
-        let marker =
-            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|error| {
-                Error::InvalidSnapshotBootstrapMarker {
-                    path: marker_path.clone(),
-                    reason: format!("failed to decode canonical block marker: {error}"),
-                }
-            })?;
-        if marker.version != BlockStoreCommitMarker::VERSION
-            || (marker.count == 0) != marker.tip_hash.is_none()
-            || marker.count != index_count
-        {
-            return Err(Error::InvalidSnapshotBootstrapMarker {
-                path: marker_path,
-                reason: format!(
-                    "canonical marker does not exactly bind the index/hash height {index_count}"
-                ),
-            });
-        }
-        self.validate_commit_marker_tip(&marker, hashes_count)?;
-        self.commit_marker_count = marker.count;
-        self.commit_marker_pending = None;
-        Ok(index_count)
-    }
     /// Open the prefix accepted by [`Self::preflight_fast_durable_prefix`] read-only.
     ///
     /// Fast mode leaves all published and unpublished bytes untouched. A later Strict restart owns
@@ -11978,6 +10760,49 @@ impl BlockStore {
     /// Fails if any of the files don't exist and couldn't be
     /// created.
     pub fn create_files_if_they_do_not_exist(&mut self) -> Result<()> {
+        Kura::reject_retired_snapshot_tail(&self.path_to_blockchain)?;
+        // An exact retained compaction/rewrite stage may own replacement of a
+        // missing live file. Recover that owner before generic absence checks.
+        self.drop_cached_handles();
+        self.recover_canonical_storage_stages()?;
+        let stable_marker = self.read_commit_marker()?;
+        if stable_marker.is_none() {
+            for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+                let path = self.path_to_blockchain.join(name);
+                match secure_file_metadata::from_path(&path) {
+                    Ok(metadata) if metadata.file_type().is_file() && metadata.len() == 0 => {}
+                    Ok(_) => {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "existing canonical journal has no stable commit marker",
+                            ),
+                            path,
+                        ));
+                    }
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(Error::IO(error, path)),
+                }
+            }
+        }
+        if stable_marker.is_some_and(|marker| marker.count > 0) {
+            // Existing committed custody cannot be repaired by creating an empty
+            // replacement journal. Preserve both absent paths and surviving bytes.
+            for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+                let path = self.path_to_blockchain.join(name);
+                let metadata = secure_file_metadata::from_path(&path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if !metadata.file_type().is_file() || !Kura::sidecar_is_single_link(&metadata) {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "committed canonical journal is not a direct single-link file",
+                        ),
+                        path,
+                    ));
+                }
+            }
+        }
         std::fs::create_dir_all(&*self.path_to_blockchain)
             .map_err(|e| Error::MkDir(e, self.path_to_blockchain.clone()))?;
         for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
@@ -11987,7 +10812,6 @@ impl BlockStore {
             })?;
         }
         self.drop_cached_handles();
-        self.recover_canonical_storage_stages()?;
         self.init_commit_marker()?;
         self.drop_cached_handles();
         Ok(())
@@ -12450,47 +11274,6 @@ pub(crate) mod tests {
             check(&eviction, "iroha_core::kura::EvictionCompactionStageV1"),
             eviction
         );
-        let association = CanonicalAssociationStageV1 {
-            format_version: CANONICAL_ASSOCIATION_STAGE_VERSION,
-            height: 2,
-            block_hash: second.hash(),
-            canonical_wire_hash: Hash::new(&second_wire),
-            block_wire: second_wire,
-            merge_entry: None,
-        };
-        Kura::blank_kura_for_testing()
-            .validate_canonical_association_stage(&association)
-            .expect("valid canonical association fixture");
-        assert_eq!(
-            check(
-                &association,
-                "iroha_core::kura::CanonicalAssociationStageV1"
-            ),
-            association
-        );
-        let snapshot = VerifiedSnapshotTailMarkerV1::new(
-            1,
-            2,
-            verified_snapshot_hash_journal_digest(&hashes).expect("snapshot hash journal digest"),
-            Some(Hash::new(b"storage-owner-snapshot-lineage")),
-        );
-        let decoded = check(&snapshot, "iroha_core::kura::VerifiedSnapshotTailMarkerV1");
-        assert_eq!(
-            (
-                decoded.version,
-                decoded.body_prefix_count,
-                decoded.snapshot_height,
-                decoded.hash_journal_digest,
-                decoded.bootstrap_lineage_hash
-            ),
-            (
-                snapshot.version,
-                snapshot.body_prefix_count,
-                snapshot.snapshot_height,
-                snapshot.hash_journal_digest,
-                snapshot.bootstrap_lineage_hash
-            )
-        );
         let rewrite_frame = norito::encode_canonical(&rewrite).expect("encode rewrite owner");
         assert!(matches!(
             norito::decode_canonical::<EvictionCompactionStageV1>(&rewrite_frame),
@@ -12731,39 +11514,26 @@ pub(crate) mod tests {
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/00_bounded_sidecar_read_tests.rs");
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
-    include!("kura/tests/01_prune_capacity_support.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
     include!("kura/tests/02a_fresh_single_lane_preflight.rs");
     include!("kura/tests/03_preflight_and_merge_entry.rs");
     include!("kura/tests/04_merge_log_and_associations.rs");
     include!("kura/tests/05_merge_resolution_and_eviction.rs");
-    include!("kura/tests/05a_replica_advert_and_body_eviction.rs");
     include!("kura/tests/05b_canonical_physical_resource_tests.rs");
-    include!("kura/tests/05c_canonical_stage_identity_tests.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");
     include!("kura/tests/07e_autonomous_publication_temp_recovery_tests.rs");
-    include!("kura/tests/07l_pending_canonical_capacity_tests.rs");
-    include!("kura/tests/08_lane_receipts_and_artifacts.rs");
-    include!("kura/tests/08a_certified_lane_block_read_tests.rs");
-    include!("kura/tests/08b_receipt_namespace_durability_tests.rs");
-    include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
-    include!("kura/tests/10_native_amx_and_roster.rs");
-    include!("kura/tests/10b_native_amx_prepublication_transition.rs");
-    include!("kura/tests/10d_native_amx_publication_capacity.rs");
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");
     include!("kura/tests/14_pipeline_and_lane_frame_owners.rs");
     include!("kura/tests/14b_sidecar_physical_resource_tests.rs");
-    include!("kura/tests/14_resource_evidence.rs");
     include!("kura/tests/14a_physical_resource_guard_tests.rs");
     include!("kura/tests/14b_metadata_physical_resource_tests.rs");
     include!("kura/tests/15_remaining_physical_writer_tests.rs");
-    include!("kura/tests/15a_merge_recovery_resource_failure_tests.rs");
     include!("kura/tests/16_resource_file_admission_tests.rs");
     #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
     include!("kura/tests/17_read_only_evidence_tests.rs");
-    include!("kura/tests/18_snapshot_hash_streaming.rs");
+    include!("kura/tests/18_block_hash_ranges.rs");
     include!("kura/tests/19_transaction_history_budget.rs");
 }

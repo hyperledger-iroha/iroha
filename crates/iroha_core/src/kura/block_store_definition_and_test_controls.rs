@@ -148,20 +148,6 @@ impl Kura {
         }
         accounting_mutation.finish();
     }
-    fn pause_next_store_after_pending_merge_stage_for_tests(&self) {
-        self.store_paused_after_pending_merge_stage
-            .store(false, Ordering::Release);
-        self.pause_store_after_pending_merge_stage
-            .store(true, Ordering::Release);
-    }
-    fn store_paused_after_pending_merge_stage_for_tests(&self) -> bool {
-        self.store_paused_after_pending_merge_stage
-            .load(Ordering::Acquire)
-    }
-    fn resume_store_after_pending_merge_stage_for_tests(&self) {
-        self.store_paused_after_pending_merge_stage
-            .store(false, Ordering::Release);
-    }
     fn pause_next_eviction_after_snapshot_for_tests(&self) {
         self.eviction_paused_after_snapshot
             .store(false, Ordering::Release);
@@ -213,20 +199,6 @@ impl Kura {
         self.durable_blocks_count_fallback_reached
             .load(Ordering::Acquire)
     }
-    fn pause_next_hash_only_extension_before_store_for_tests(&self) {
-        self.hash_only_extension_paused_before_store
-            .store(false, Ordering::Release);
-        self.pause_hash_only_extension_before_store
-            .store(true, Ordering::Release);
-    }
-    fn hash_only_extension_paused_before_store_for_tests(&self) -> bool {
-        self.hash_only_extension_paused_before_store
-            .load(Ordering::Acquire)
-    }
-    fn resume_hash_only_extension_before_store_for_tests(&self) {
-        self.hash_only_extension_paused_before_store
-            .store(false, Ordering::Release);
-    }
     fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
         self.total_disk_usage_scan_paused
             .store(false, Ordering::Release);
@@ -240,14 +212,6 @@ impl Kura {
         self.total_disk_usage_scan_paused
             .store(false, Ordering::Release);
     }
-    fn fail_retained_rewrite_discard_after_for_tests(&self, removed_index: usize) {
-        self.fail_retained_rewrite_discard_after
-            .store(removed_index, Ordering::Release);
-    }
-    fn fail_next_retained_rewrite_recovery_for_tests(&self) {
-        self.fail_next_retained_rewrite_recovery
-            .store(true, Ordering::Release);
-    }
     /// Return raw cache state together with independent exact scans without refreshing caches.
     pub(crate) fn disk_usage_accounting_snapshot_for_tests(
         &self,
@@ -260,10 +224,6 @@ impl Kura {
             exact_enforced_bytes: self.kura_disk_usage_bytes()?,
             exact_total_bytes: self.kura_total_disk_usage_bytes()?,
         })
-    }
-    fn fail_next_retired_tree_purge_after_one_removal_for_tests(&self) {
-        self.fail_next_retired_tree_purge_after_one_removal
-            .store(true, Ordering::Release);
     }
     pub(crate) fn fail_next_store_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
@@ -317,28 +277,12 @@ impl Kura {
         store.commit_marker_count = index_count;
         Ok(())
     }
-    pub(crate) fn fail_next_wsv_checkpoint_write_for_tests(&self) {
-        self.fail_next_wsv_checkpoint_write
-            .store(true, Ordering::Relaxed);
-    }
-    pub(crate) fn fail_next_commit_manifest_write_for_tests(&self) {
-        self.fail_next_commit_manifest_write
-            .store(true, Ordering::Relaxed);
-    }
     pub(crate) fn fail_prune_after_stage_for_tests(&self, stage: usize) {
         self.fail_prune_after_stage.store(stage, Ordering::Relaxed);
     }
     pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
         self.fail_prune_sidecar_promotion_stage
             .store(stage, Ordering::Relaxed);
-    }
-    pub(crate) fn fail_next_v2_finality_write_for_tests(&self) {
-        self.fail_next_v2_finality_write
-            .store(true, Ordering::Relaxed);
-    }
-    pub(crate) fn fail_next_native_amx_prepublication_for_tests(&self) {
-        self.fail_next_native_amx_prepublication
-            .store(true, Ordering::Relaxed);
     }
     #[cfg(test)]
     pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
@@ -347,102 +291,6 @@ impl Kura {
         failures: usize,
     ) {
         fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
-    }
-    /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_commit_manifest_without_binding_for_tests(
-        &self,
-        manifest: &CommitManifest,
-    ) -> Result<()> {
-        self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;
-        let path = self.commit_manifest_path(manifest.height);
-        let dir = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::other("manifest path has no parent"),
-                path.clone(),
-            )
-        })?;
-        std::fs::create_dir_all(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
-        std::fs::write(&path, manifest.encode()).map_err(|err| Error::IO(err, path))
-    }
-    /// Remove manifest bytes without updating the checkpoint digest, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn remove_commit_manifest_without_binding_for_tests(
-        &self,
-        height: u64,
-    ) -> Result<()> {
-        let path = self.commit_manifest_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-    /// Remove checkpoint bytes without changing any companion sidecar, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn remove_wsv_checkpoint_without_binding_for_tests(
-        &self,
-        height: u64,
-    ) -> Result<()> {
-        let path = self.wsv_checkpoint_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-    /// Replace checkpoint state and optional manifest binding without validating either value.
-    ///
-    /// This deliberately bypasses the production publication protocol so replay tests can model
-    /// independently corrupted and mutually correlated sidecars.
-    #[cfg(test)]
-    pub(crate) fn overwrite_wsv_checkpoint_without_validation_for_tests(
-        &self,
-        height: u64,
-        state_hash: Hash,
-        manifest: Option<&CommitManifest>,
-    ) -> Result<()> {
-        let path = self.wsv_checkpoint_path(height);
-        let Some(mut checkpoint) = Self::decode_wsv_checkpoint_at(&path)? else {
-            return Err(Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "WSV checkpoint is missing"),
-                path,
-            ));
-        };
-        checkpoint.state_hash = state_hash;
-        checkpoint.commit_manifest_hash = manifest.map(CommitManifest::encoded_hash);
-        std::fs::write(&path, checkpoint.encode()).map_err(|err| Error::IO(err, path))
-    }
-    /// Remove v2 finality bytes without changing the durable block or manifest, for tests.
-    #[cfg(test)]
-    pub(crate) fn remove_v2_finality_without_binding_for_tests(&self, height: u64) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-    /// Replace durable v2-finality bytes without decoding them, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_v2_finality_bytes_for_tests(
-        &self,
-        height: u64,
-        bytes: &[u8],
-    ) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        std::fs::write(&path, bytes).map_err(|err| Error::IO(err, path))
-    }
-    /// Replace the artifact inside an existing finality envelope without validation, for tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_v2_finality_without_validation_for_tests(
-        &self,
-        height: u64,
-        artifact: V2FinalityArtifact,
-    ) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        let dir = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::other("v2 finality path has no parent"),
-                path.clone(),
-            )
-        })?;
-        let Some((mut record, _)) = self.decode_v2_finality_record_at(&path, dir)? else {
-            return Err(Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "v2 finality sidecar is missing"),
-                path,
-            ));
-        };
-        record.artifact = artifact;
-        std::fs::write(&path, record.encode()).map_err(|err| Error::IO(err, path))
     }
 }
 /// Loaded block count

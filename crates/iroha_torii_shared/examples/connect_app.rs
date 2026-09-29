@@ -171,7 +171,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     else {
         anyhow::bail!("expected the one-shot wallet Approve control");
     };
-    let account: AccountId = account_id.parse()?;
+    let account = AccountId::parse_encoded(&account_id)?;
     let signatory = account
         .try_signatory()
         .ok_or_else(|| anyhow::anyhow!("Connect demo requires a single-key account"))?;

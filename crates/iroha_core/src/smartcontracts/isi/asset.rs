@@ -6631,7 +6631,6 @@ pub mod isi {
             (None, _) => Ok(()),
         }
     }
-    // TODO(ws32): re-add custody guards for SCCP v1 route escrows.
     fn ensure_numeric_asset_transfer_policies_with_scope(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,

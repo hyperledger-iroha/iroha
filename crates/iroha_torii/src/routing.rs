@@ -394,26 +394,6 @@ impl DataspaceReadVisibility {
         let Some(bundle) = block.execution_context() else {
             return None;
         };
-        if let Some(batch) = bundle.native_lane_decisions.as_ref() {
-            if block.external_entrypoint_count() != 0 {
-                return None;
-            }
-            bundle.validate_native_lane_decisions_shape().ok()?;
-            let group = batch.groups.get(index)?;
-            let source = block.network_entrypoint_at(index)?;
-            if source.hash() != group.payload.input.entrypoint.hash() {
-                return None;
-            }
-            return Some(
-                group
-                    .payload
-                    .descriptor
-                    .slots
-                    .iter()
-                    .map(|slot| slot.route.dataspace_id)
-                    .collect(),
-            );
-        }
         if !bundle.has_current_version()
             || bundle.external.len() != block.network_entrypoint_count()
         {
@@ -485,9 +465,9 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiCommittedLaneBlock, SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
-        SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
+        SumeragiLaneGovernance, SumeragiNposDiagnostics, SumeragiPipelineExecutionStatus,
+        SumeragiRuntimeUpgradeHook,
     },
     events::{
         EventBox,
@@ -3505,8 +3485,7 @@ impl MaybeTelemetry {
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-                lane_history_retention:
-                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+
                 native_context_archive_max_bytes:
                     iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes:
@@ -3516,7 +3495,6 @@ impl MaybeTelemetry {
                 membership_storage:
                     iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
                 debug_output_new_blocks: false,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
@@ -3714,14 +3692,19 @@ fn quote_app_api_transaction_builder(
     let mut payload = builder
         .into_payload()
         .map_err(|err| app_api_transaction_signing_error(context, err))?;
-    let route = queue
-        .route_payload_with_state(&payload, state)
+    let plan = queue
+        .route_payload_plan_with_state(&payload, state)
         .map_err(|_| {
             conversion_error(format!(
                 "failed to quote {context} transaction fees: {}",
                 iroha_data_model::nexus::FeeRejectionCode::InvalidProgramConfiguration
             ))
         })?;
+    let RoutingPlan::Single(route) = plan else {
+        return Err(conversion_error(format!(
+            "failed to quote {context} transaction fees: multi-route execution is unsupported"
+        )));
+    };
     let latest_header = state.latest_block_header_fast();
     let observation_time_ms = latest_header
         .as_ref()
@@ -3740,7 +3723,7 @@ fn quote_app_api_transaction_builder(
             &payload,
             observation_time_ms,
             next_block_height,
-            Some(route.dataspace_id),
+            Some(route.route.dataspace_id),
         )
     }
     .map_err(|error| {
@@ -6478,8 +6461,7 @@ mod bridge_finality_attestation_progress_tests {
 }
 
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
-const BLS_KEY_RESPONSE_CAP: usize =
-    iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
+const BLS_KEY_RESPONSE_CAP: usize = iroha_sumeragi::types::MAX_COMMITTEE_SIZE;
 #[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_bls_key_map<'a>(
     peers: impl IntoIterator<Item = &'a PeerId>,
@@ -7570,7 +7552,7 @@ fn bounded_sumeragi_evidence_list_json_response(
         .map_err(|_| sumeragi_evidence_response_encode_error())?;
     Ok(application_json_response(body))
 }
-/// GET /v1/sumeragi/evidence/count — returns the number of unique admitted v2 proofs.
+/// GET /v1/sumeragi/evidence/count — returns the number of committed native evidence records.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -8248,7 +8230,7 @@ mod zk_roots_selector_tests {
         }
         tx.apply();
         block
-            .commit_empty_block_for_testing()
+            .commit_world_overlay_for_testing()
             .expect("commit zk asset frontier for test");
         root
     }
@@ -8277,7 +8259,7 @@ mod zk_roots_selector_tests {
         }
         tx.apply();
         block
-            .commit_empty_block_for_testing()
+            .commit_world_overlay_for_testing()
             .expect("commit frontier checkpoints for test");
     }
     fn assert_query_conversion_contains(err: Error, expected: &str) {
@@ -9939,11 +9921,14 @@ mod lane_admission_latency_tests {
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         let before = histogram.get_sample_count();
         observe_lane_admission_latency(
             &gate,
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             LaneId::SINGLE,
             0.25,
         );
@@ -21488,46 +21473,10 @@ mod multisig_selector_tests {
         assert!(expect_conversion(error).contains("detached signature verification failed"));
         assert_eq!(queue.active_len(), 0);
     }
-    routing_test! { async contract_call_detached_handler_requires_durable_public_admission
-        let (mut state, queue, key, request) = public_contract_call_fixture();
-        let validators = (0xc1_u8..=0xc4)
-            .map(|seed| super::checked_routing_fixture_keypair(
-                seed, iroha_crypto::Algorithm::BlsNormal, "derive contract-call validator",
-            ))
-            .collect::<Vec<_>>();
-        {
-            let state = Arc::get_mut(&mut state).expect("unique contract-call state");
-            {
-                let mut world = state.world.block();
-                let mut peers = world.peers_mut_for_testing().transaction();
-                for validator in &validators {
-                    peers.push(iroha_model_base::peer::PeerId::new(validator.public_key().clone()));
-                }
-                peers.apply();
-                world.commit();
-            }
-            for validator in &validators {
-                let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
-                    .expect("prove contract-call validator possession");
-                state.world.register_validator_pop_for_testing(validator.public_key().clone(), pop);
-            }
-        }
-        let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let transaction = builder.try_sign(key.private_key()).expect("sign retained call");
-        let encoded = iroha_version::codec::EncodeVersioned::encode_versioned(&transaction);
-        let decoded = iroha_core::tx::DecodedVersionedSignedTransaction::decode_versioned(&encoded)
-            .expect("decode current public call envelope");
-        let accepted = accept_decoded_signed_transaction_for_ingress(
-            state.clone(), decoded, &MaybeTelemetry::disabled(),
-        ).expect("fixture must pass public transaction policy before testing absent custody");
-        let plan = queue.route_plan_with_state(&accepted, &state)
-            .expect("current contract-call route");
-        let context = queue.plan_admission_context_with_state(&state, &plan)
-            .expect("fixture must have current route authority before testing absent custody");
-        assert_eq!(context.authority_height, 0);
-        assert_eq!(context.proposal_height, 1);
-        assert_eq!(context.route_incarnations.len(), 1);
-        assert_eq!(context.route_incarnations[0].validator_count, 4);
+    #[cfg(feature = "connect")]
+    routing_test! { async contract_call_detached_handler_requires_authenticated_route_authority
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
         let mut app = crate::mk_app_state_for_tests();
         let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
         inner.state = state;
@@ -21538,15 +21487,9 @@ mod multisig_selector_tests {
             axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
             NoritoJson(request),
         ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
-        let status = response.status();
-        let bytes = response.into_body().collect().await.expect("response body").to_bytes();
-        let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error:?}");
-        #[cfg(feature = "connect")]
-        assert_eq!(error.code(), "queue_plan_journal_unavailable");
-        #[cfg(not(feature = "connect"))]
-        assert_eq!(error.code(), "queue_plan_synced_transport_unavailable");
-        assert_eq!(queue.active_len(), 0, "no local enqueue can mask absent public admission authority");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("x-iroha-reject-code").and_then(|v| v.to_str().ok()), Some("route_unavailable"));
+        assert_eq!(queue.active_len(), 0, "missing authenticated route authority cannot acquire custody");
     }
     routing_test! { sync contract_call_detached_submission_requires_complete_retained_envelope
         let (state, queue, key, request) = public_contract_call_fixture();
@@ -30119,7 +30062,7 @@ mod sorafs_capacity_tests {
             Arc::clone(&state),
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await;
         assert!(
@@ -30184,12 +30127,12 @@ mod sorafs_capacity_tests {
             v.get("tx_hash_hex").and_then(norito::json::Value::as_str),
             Some(hex::encode(expected_hash.as_ref()).as_str())
         );
-        let mut guards = Vec::new();
-        queue.get_transactions_for_block(
-            &state.view(),
-            std::num::NonZeroUsize::new(1).expect("one"),
-            &mut guards,
-        );
+        let guards = queue
+            .bounded_pending_snapshot_for_testing(
+                &state.view(),
+                std::num::NonZeroUsize::new(1).expect("one"),
+            )
+            .expect("healthy pending inputs");
         assert!(
             guards
                 .iter()
@@ -39066,20 +39009,6 @@ mod explorer_lookup_tests {
     ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
         build_state_with_executables_and_route_plans(executables, None, None)
     }
-    fn build_state_with_executables_and_mixed_scope(
-        executables: Vec<dm::Executable>,
-        mixed_scope: Option<(LaneId, DataSpaceId, LaneId, DataSpaceId)>,
-    ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
-        let route_plans = mixed_scope.map(
-            |(coordinator_lane, coordinator_dataspace, participant_lane, participant_dataspace)| {
-                vec![vec![
-                    (coordinator_lane, coordinator_dataspace),
-                    (participant_lane, participant_dataspace),
-                ]]
-            },
-        );
-        build_state_with_executables_and_route_plans(executables, route_plans, None)
-    }
     fn build_state_with_routed_transactions(
         instruction_batches: Vec<Vec<dm::InstructionBox>>,
         dataspaces: Vec<DataSpaceId>,
@@ -39111,97 +39040,62 @@ mod explorer_lookup_tests {
         route_plans: Option<Vec<Vec<(LaneId, DataSpaceId)>>>,
         creation_times_ms: Option<Vec<u64>>,
     ) -> (Arc<State>, Vec<HashOf<TransactionEntrypoint>>) {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
-        let (authority, authority_key) =
-            checked_explorer_lookup_account(0x20, "derive explorer lookup authority fixture key");
-        let mut hashes = Vec::new();
-        let mut txs = Vec::new();
-        let creation_times_ms = creation_times_ms.unwrap_or_else(|| {
-            (0..executables.len())
-                .map(|index| 1_710_000_000_000 + index as u64)
-                .collect()
-        });
-        assert_eq!(creation_times_ms.len(), executables.len());
-        for (executable, creation_time_ms) in executables.into_iter().zip(creation_times_ms) {
-            let gas_limit = executable
-                .requires_transaction_gas_limit()
-                .then(|| NonZeroU64::new(10_000).expect("non-zero test gas limit"));
-            let mut builder = dm::TransactionBuilder::new_genesis(
-                authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
-            );
-            builder.set_creation_time(Duration::from_millis(creation_time_ms));
-            let signed = builder
-                .with_executable(executable)
-                .sign(authority_key.private_key());
-            hashes.push(signed.hash_as_entrypoint());
-            txs.push(AcceptedTransaction::new_unchecked(Cow::Owned(signed)));
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute};
+        let keys = (0..executables.len()).map(|index| {
+            checked_explorer_lookup_keypair(u8::try_from(0x20 + index).unwrap(), Algorithm::Ed25519, "explorer input authority")
+        }).collect::<Vec<_>>();
+        let accounts = keys.iter().map(|key| {
+            let authority = dm::AccountId::new(key.public_key().clone());
+            dm::Account::new(authority.clone()).build(&authority)
+        }).collect::<Vec<_>>();
+        let mut config = TestChainConfig::new(World::with([], accounts, []), 1_710_000_000_000);
+        let routed = route_plans.is_some();
+        if let Some(plans) = route_plans {
+            assert_eq!(plans.len(), keys.len());
+            let mut committee = (0xA0..=0xA3).map(|seed| {
+                let pair = checked_explorer_lookup_keypair(seed, Algorithm::BlsNormal, "explorer lane committee");
+                SumeragiLaneMember { peer: iroha_model_base::peer::PeerId::new(pair.public_key().clone()), pop: iroha_crypto::bls_normal_pop_prove(pair.private_key()).unwrap() }
+            }).collect::<Vec<_>>();
+            committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+            let mut fixed = Vec::new();
+            let mut routes = Vec::new();
+            let mut dataspaces = BTreeSet::from([DataSpaceId::UNIVERSAL]);
+            for (index, (plan, key)) in plans.into_iter().zip(&keys).enumerate() {
+                assert_eq!(plan.len(), 1, "current native history has one execution route");
+                let lane = LaneId::new(u32::try_from(index + 1).unwrap());
+                let dataspace = plan[0].1;
+                dataspaces.insert(dataspace);
+                fixed.push(SumeragiFixedLane { lane, dataspace, committee: committee.clone() });
+                routes.push(SumeragiLaneRoute { lane, account: Some(dm::AccountId::new(key.public_key().clone()).to_string()), instruction: None });
+            }
+            let policy = SumeragiLanePolicy { anchor_freshness: 16, max_merge_blocks: 32, stall_window: 256, lane_params: Default::default(), fixed, routes, autoscale: None };
+            config.genesis_parameters.push(dm::Parameter::Custom(policy.into_custom_parameter()));
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            nexus.dataspace_catalog = DataSpaceCatalog::new(dataspaces.into_iter().map(|id| {
+                if id == DataSpaceId::UNIVERSAL { iroha_data_model::nexus::DataSpaceMetadata::default() }
+                else { iroha_data_model::nexus::DataSpaceMetadata { id, alias: format!("explorer-{}", id.as_u64()), description: None, fault_tolerance: 1 } }
+            }).collect()).expect("native visibility dataspaces");
+            config.nexus = Some(nexus);
         }
-        let leader = checked_explorer_lookup_keypair(
-            0x21,
-            Algorithm::BlsNormal,
-            "derive explorer lookup block leader fixture key",
-        );
-        let _topology = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
-        let execution_context = route_plans.map(|route_plans| {
-            use iroha_data_model::block::{
-                BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
-                ExternalExecutionRouteRole,
-            };
-            assert_eq!(route_plans.len(), hashes.len());
-            let contexts = hashes
-                .iter()
-                .copied()
-                .zip(route_plans)
-                .map(|(entrypoint_hash, route_plan)| {
-                    let (coordinator_lane, coordinator_dataspace) = route_plan
-                        .first()
-                        .copied()
-                        .expect("test route plan has a coordinator");
-                    let legs = route_plan
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (lane, dataspace))| {
-                            ExternalExecutionRouteLeg::new(
-                                lane,
-                                dataspace,
-                                if index == 0 {
-                                    ExternalExecutionRouteRole::Coordinator
-                                } else {
-                                    ExternalExecutionRouteRole::Participant
-                                },
-                            )
-                        })
-                        .collect();
-                    ExternalExecutionContext::with_routing_plan(
-                        entrypoint_hash,
-                        coordinator_lane,
-                        coordinator_dataspace,
-                        Hash::new(b"explorer visibility route plan"),
-                        legs,
-                    )
-                })
-                .collect();
-            BlockExecutionContextBundle::new(contexts)
-        });
-        let unverified = BlockBuilder::new(txs)
-            .chain(0, state.view().latest_block().as_deref())
-            .with_execution_context(execution_context)
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, state_block, committed);
-        (state, hashes)
+        let mut chain = CertifiedTestChain::start(config).expect("original explorer genesis");
+        if routed {
+            chain.commit_at(1_710_000_001_000, Vec::new());
+            chain.commit_at(1_710_000_002_000, Vec::new());
+        }
+        let creation_times_ms = creation_times_ms.unwrap_or_else(|| (0..executables.len()).map(|index| 1_710_000_000_000 + index as u64).collect());
+        assert_eq!(creation_times_ms.len(), executables.len());
+        let mut hashes = Vec::new();
+        let txs = executables.into_iter().zip(creation_times_ms).zip(keys).map(|((executable, time), key)| {
+            let gas_limit = executable.requires_transaction_gas_limit().then(|| NonZeroU64::new(10_000).unwrap());
+            let mut builder = dm::TransactionBuilder::new(chain.network_id(), dm::AccountId::new(key.public_key().clone()), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit));
+            builder.set_creation_time(Duration::from_millis(time));
+            let signed = builder.with_executable(executable).sign(key.private_key());
+            hashes.push(signed.hash_as_entrypoint());
+            AcceptedTransaction::new_unchecked(Cow::Owned(signed))
+        }).collect();
+        crate::test_utils::commit_native_accepted_inputs(&mut chain, txs);
+        (chain.state().clone(), hashes)
     }
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
@@ -39580,76 +39474,23 @@ mod explorer_lookup_tests {
         );
     }
 
-    routing_test! { async transaction_query_and_explorer_hide_a_committed_mixed_leg_before_filter_and_count
-        let instruction: dm::InstructionBox =
-            dm::Log::new(dm::Level::INFO, "mixed".to_owned()).into();
-        let visible_dataspace = DataSpaceId::new(7);
-        let hidden_dataspace = DataSpaceId::new(8);
-        let (state, hashes) = build_state_with_executables_and_mixed_scope(
-            vec![dm::Executable::from(vec![instruction])],
-            Some((
-                LaneId::new(7),
-                visible_dataspace,
-                LaneId::new(8),
-                hidden_dataspace,
-            )),
-        );
-        let entrypoint_hash = hashes
-            .first()
-            .expect("mixed-scope test transaction hash")
-            .to_string();
-        let public_only = DataspaceReadVisibility::new(
-            BTreeSet::from([visible_dataspace]),
-            false,
-        );
-        let mut exact_query = crate::filter::QueryEnvelope::default();
-        exact_query.count_mode = Some("exact".to_owned());
-        exact_query.filter = Some(crate::filter::FilterExpr::Eq(
-            crate::filter::FieldPath("entrypoint_hash".to_owned()),
-            Value::from(entrypoint_hash),
-        ));
-
-        let hidden = handle_v1_transactions_query_with_visibility_policy(
-            state.clone(),
-            NoritoJson(exact_query.clone()),
-            MaybeTelemetry::for_tests(),
-            None,
-            public_only.clone(),
-        )
-        .await
-        .expect("public-only mixed-leg query")
-        .into_response();
-        let hidden_body = hidden.into_body().collect().await.expect("hidden body").to_bytes();
-        let hidden_json: Value = norito::json::from_slice(&hidden_body).expect("hidden JSON");
-        assert!(hidden_json["items"].as_array().is_some_and(Vec::is_empty));
-        assert_eq!(hidden_json["total"].as_u64(), Some(0));
-
-        let global = handle_v1_transactions_query_with_visibility_policy(
-            state.clone(),
-            NoritoJson(exact_query),
-            MaybeTelemetry::for_tests(),
-            None,
-            DataspaceReadVisibility::all_for_tests(),
-        )
-        .await
-        .expect("global mixed-leg query")
-        .into_response();
-        let global_body = global.into_body().collect().await.expect("global body").to_bytes();
-        let global_json: Value = norito::json::from_slice(&global_body).expect("global JSON");
-        assert_eq!(global_json["items"].as_array().map(Vec::len), Some(1));
-        assert_eq!(global_json["total"].as_u64(), Some(1));
-
-        let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
-        let block = state
-            .block_by_height(height)
-            .expect("mixed-scope block remains available");
-        assert_eq!(
-            crate::explorer::ExplorerBlockDto::from_block_with_visibility(&block, |index| {
-                public_only.allows_external_entrypoint(&block, index)
-            })
-            .transactions_total,
-            0,
-        );
+    routing_test! { sync native_history_rejects_mixed_execution_routes
+        use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole};
+        let (authority, key) = checked_explorer_lookup_account(0x20, "mixed route authority");
+        let world = World::with([], [dm::Account::new(authority.clone()).build(&authority)], []);
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1)).unwrap();
+        let transaction = dm::TransactionBuilder::new(chain.network_id(), authority, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            .with_instructions([dm::Log::new(dm::Level::INFO, "mixed".to_owned())]).sign(key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let mut proposal = chain.proposal(None, vec![transaction]);
+        proposal.set_execution_context(Some(BlockExecutionContextBundle::new(vec![ExternalExecutionContext::with_routing_plan(
+            entrypoint_hash, LaneId::new(7), DataSpaceId::new(7), Hash::new(b"mixed route"),
+            vec![ExternalExecutionRouteLeg::new(LaneId::new(7), DataSpaceId::new(7), ExternalExecutionRouteRole::Coordinator),
+                 ExternalExecutionRouteLeg::new(LaneId::new(8), DataSpaceId::new(8), ExternalExecutionRouteRole::Participant)],
+        )])));
+        assert!(chain.begin_proposal(proposal, Default::default()).is_err());
+        assert_eq!(chain.height(), 1, "unsupported mixed route never enters committed history");
     }
 
     routing_test! { sync explorer_stream_serializes_one_item_at_a_time
@@ -39743,9 +39584,11 @@ mod explorer_lookup_tests {
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
+        let source: iroha_data_model::block::SignedBlock = unverified.clone().into();
+        let (mut state_block, recording) = ValidBlock::start_component_execution(&source, &state)
+            .expect("original explorer component execution");
         let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut state_block)
+            .validate_and_record_transactions(&mut state_block, recording)
             .unpack(|_| {});
         drop(state_block);
         let committed = valid.commit_unchecked().unpack(|_| {});
@@ -40765,14 +40608,18 @@ mod query_endpoint_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        // Build a block and execute a VerifyProof ISI in it
-        let header = dm::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
-        // Capture latest block before opening a state block to avoid view deadlocks.
-        let latest_block = {
-            let view = state.view();
-            view.latest_block()
-        };
-        let mut block = state.block(header);
+        let leader = checked_query_endpoint_keypair(
+            0x92,
+            iroha_crypto::Algorithm::BlsNormal,
+            "derive proof roundtrip component signer",
+        );
+        let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let source: iroha_data_model::block::SignedBlock = unverified.clone().into();
+        let (mut block, recording) = iroha_core::block::ValidBlock::start_component_execution(&source, &state)
+            .expect("original proof component execution");
         let mut stx = block.transaction();
         use iroha_core::zk::test_utils::halo2_fixture_envelope;
         use iroha_data_model::proof;
@@ -40826,25 +40673,10 @@ mod query_endpoint_tests {
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
-        // Record a minimal transactions block for commit invariants, then commit state
-        let leader = checked_query_endpoint_keypair(
-            0x92,
-            iroha_crypto::Algorithm::BlsNormal,
-            "derive proof roundtrip block leader fixture key",
-        );
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_model_base::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, latest_block.as_deref())
-            .sign(leader.private_key())
+        let _valid = unverified
+            .validate_and_record_transactions(&mut block, recording)
             .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut block)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        let _ = block.commit();
+        block.commit().expect("publish component proof record");
         // Compute expected ProofId string (same as core hash_proof)
         let arr = iroha_core::zk::hash_proof(&proof);
         let pid = proof::ProofId {
@@ -43054,35 +42886,6 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     }
 }
 }
-fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
-    qc.signers_bitmap
-        .iter()
-        .map(|byte| byte.count_ones())
-        .sum::<u32>()
-}
-fn committed_lane_block_wire(
-    entry: &iroha_core::status::CommittedLaneBlockSnapshot,
-) -> SumeragiCommittedLaneBlock {
-    SumeragiCommittedLaneBlock {
-        lane_id: entry.lane_id,
-        dataspace_id: entry.dataspace_id,
-        lane_incarnation: entry.proposal.descriptor.lane_incarnation,
-        lane_block_height: entry.lane_block_height,
-        lane_block_view: entry.lane_block_view,
-        descriptor_hash: entry.descriptor_hash,
-        proposal_hash: entry.proposal_hash,
-        execution_status: entry.execution_status.as_str().to_owned(),
-        executable_payload_available: entry.executable_payload_available(),
-        subject_hash: entry.proposal.descriptor.subject_hash,
-        payload_ownership_hash: entry.proposal.descriptor.payload_ownership_hash,
-        rbc_instance_hash: entry.proposal.descriptor.rbc_instance_hash,
-        qc_mode_tag: entry.proposal.descriptor.qc_mode_tag.clone(),
-        validator_count: entry.proposal.descriptor.validator_count,
-        min_quorum: entry.proposal.descriptor.min_quorum,
-        prepare_qc_signer_count: lane_block_qc_signer_count(&entry.prepare_qc),
-        commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
-    }
-}
 /// GET /v1/sumeragi/status — the status of the node's global Sumeragi instance
 /// (`specs/sumeragi.md` §12.1); unavailable before the instance's core started.
 #[iroha_futures::telemetry_future]
@@ -43158,7 +42961,7 @@ fn sumeragi_npos_diagnostics(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
-    durable_queue: Option<std::sync::Arc<Queue>>,
+    _durable_queue: Option<std::sync::Arc<Queue>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -43173,24 +42976,6 @@ pub async fn handle_v1_sumeragi_diagnostics(
         .map(|params| sumeragi_npos_diagnostics(&params))
         .transpose()?;
     drop(world);
-    let native_amx_participant_applications = state
-        .native_amx_participant_applications_diagnostics()
-        .map_err(|error| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                "failed to derive Native AMX participant diagnostics: {error}",
-            )))
-        })?;
-    let durable_lane_diagnostics = state.durable_lane_diagnostics();
-    let autonomous_lane_executions = Option::as_ref(&durable_queue)
-        .map_or_else(
-            || state.autonomous_lane_execution_diagnostics(),
-            |queue| state.autonomous_lane_execution_diagnostics_with_queue(queue),
-        )
-        .map_err(|error| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                "failed to derive autonomous lane execution diagnostics: {error}",
-            )))
-        })?;
     let lane_commitments = snapshot
         .lane_commitments
         .iter()
@@ -43255,35 +43040,10 @@ pub async fn handle_v1_sumeragi_diagnostics(
         npos,
         lane_commitments,
         dataspace_commitments,
-        lane_settlement_commitments: snapshot.lane_settlement_commitments,
-        lane_relay_envelopes: snapshot.lane_relay_envelopes,
-        lane_payload_ownerships: durable_lane_diagnostics.lane_payload_ownerships,
-        committed_lane_blocks: durable_lane_diagnostics
-            .committed_lane_blocks
-            .iter()
-            .map(committed_lane_block_wire)
-            .collect(),
-        lane_block_sessions: durable_lane_diagnostics.lane_block_sessions,
         lane_governance_sealed_total: snapshot.lane_governance_sealed_total,
         lane_governance_sealed_aliases: snapshot.lane_governance_sealed_aliases,
         lane_governance,
-        native_amx_participant_applications,
-        autonomous_lane_executions,
     };
-    diagnostics
-        .validate_native_amx_participant_applications()
-        .map_err(|reason| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                reason.to_owned(),
-            ))
-        })?;
-    diagnostics
-        .validate_autonomous_lane_executions()
-        .map_err(|reason| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                reason.to_owned(),
-            ))
-        })?;
     Ok(crate::utils::respond_with_format(diagnostics, format))
 }
 /// SSE stream for `/v1/sumeragi/status/sse`: the instance's status every `poll_ms` (silent
@@ -43355,17 +43115,6 @@ pub fn event_to_json_value(ev: &iroha_data_model::events::EventBox) -> norito::j
             // include minimal header info
             m.insert("height".into(), Value::from(w.header.height().get()));
             Value::Object(m)
-        }
-        PipelineEventBox::Merge(m) => {
-            let mut map = Map::new();
-            map.insert("category".into(), Value::from("Pipeline"));
-            map.insert("event".into(), Value::from("MergeLedger"));
-            map.insert("epoch_id".into(), Value::from(m.entry.epoch_id));
-            map.insert(
-                "global_state_root".into(),
-                Value::from(m.entry.global_state_root.to_string()),
-            );
-            Value::Object(map)
         }
         PipelineEventBox::Witness(w) => {
             let mut map = Map::new();
@@ -44237,7 +43986,7 @@ mod sse_stream_tests {
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let sse = handle_v1_explorer_blocks_stream(
-            Arc::new(iroha_core::state::State::new(
+            Arc::new(iroha_core::state::State::new_for_testing(
                 iroha_core::state::World::new(), Kura::blank_kura_for_testing(),
                 iroha_core::query::store::LiveQueryStore::start_test(),
             )),
@@ -44510,7 +44259,7 @@ mod validation_fee_torii_ingress_tests {
         },
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::{Queue, TransactionGuard},
+        queue::Queue,
         smartcontracts::Execute,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
@@ -44905,9 +44654,11 @@ mod validation_fee_torii_ingress_tests {
             .chain(0, None)
             .sign(block_signer.private_key())
             .unpack(|_| {});
-        let mut state_block = state.block(new_block.header());
+        let source: iroha_data_model::block::SignedBlock = new_block.into();
+        let (mut state_block, recording) = ValidBlock::start_component_execution(&source, state)
+            .expect("original validation-fee component execution");
         let valid_block =
-            ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
+            ValidBlock::validate_unchecked(source, &mut state_block, recording).unpack(|_| {});
         let committed_block = valid_block.commit_unchecked().unpack(|_| {});
         let _events = state_block.apply_without_execution(&committed_block, Vec::new());
         state_block.commit().expect("commit initial block hash");
@@ -45598,13 +45349,13 @@ mod validation_fee_torii_ingress_tests {
         let body = norito::to_bytes(&payloads).expect("encode transaction batch payloads");
         let router = axum::Router::new()
             .route(
-                iroha_torii_shared::uri::TRANSACTIONS_BATCH,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
                 axum::routing::post(crate::handler_post_transactions_batch),
             )
             .with_state(app);
         let request = axum::http::Request::builder()
             .method(axum::http::Method::POST)
-            .uri(iroha_torii_shared::uri::TRANSACTIONS_BATCH)
+            .uri(iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path())
             .header(
                 axum::http::header::CONTENT_TYPE,
                 crate::utils::NORITO_MIME_TYPE,
@@ -45623,19 +45374,19 @@ mod validation_fee_torii_ingress_tests {
         height: u64,
     ) -> String {
         let max_txs_in_block = NonZeroUsize::new(1024).expect("nonzero");
-        let mut guards = Vec::new();
-        queue.get_transactions_for_block(&state.view(), max_txs_in_block, &mut guards);
-        assert_eq!(guards.len(), 1, "expected one queued transaction");
-        let accepted = guards
-            .iter()
-            .map(TransactionGuard::clone_accepted)
-            .next()
-            .expect("queued transaction");
+        let mut accepted = queue
+            .bounded_pending_snapshot_for_testing(&state.view(), max_txs_in_block)
+            .expect("healthy pending inputs");
+        assert_eq!(accepted.len(), 1, "expected one queued transaction");
+        let accepted = accepted.remove(0);
         let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
         let mut ivm_cache = IvmCache::new();
-        let (_, result) = block
-            .validate_transaction(accepted, &mut ivm_cache)
-            .expect("local execution completes");
+        let result = iroha_core::tx::execute_component_transaction_for_testing(
+            &mut block,
+            accepted,
+            &mut ivm_cache,
+            None,
+        );
         match result {
             Ok(_) => "ok".to_string(),
             Err(error) => format!("{error:?}"),
@@ -45823,7 +45574,8 @@ mod validation_fee_torii_ingress_tests {
         install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
-    routing_test! { async public_transaction_handler_requires_authoritative_queue_plan_transport
+    #[cfg(feature = "connect")]
+    routing_test! { async public_transaction_handler_requires_authenticated_route_authority
         let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
         let exact_fee_tx = transfer_builder(
             &app.state,
@@ -45837,18 +45589,15 @@ mod validation_fee_torii_ingress_tests {
         assert_eq!(
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "a correctly signed admission intent must reach the unavailable transport: {:?}",
+            "a correctly signed transaction must reach the unavailable route: {:?}",
             response.headers(),
         );
         assert_eq!(
             app.queue.active_len(),
             0,
-            "stateless admission must not enqueue before authenticated durable QueuePlan admission"
+            "stateless admission must not enqueue without authenticated route authority"
         );
-        #[cfg(feature = "connect")]
         let expected_reject_code = "route_unavailable";
-        #[cfg(not(feature = "connect"))]
-        let expected_reject_code = "queue_plan_synced_transport_unavailable";
         assert_eq!(
             response
                 .headers()
@@ -46235,14 +45984,17 @@ mod lane_admission_metrics_tests {
             state,
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await
         .expect("ingress succeeds");
         let metrics = telemetry.metrics().await;
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         assert!(
             histogram.get_sample_count() >= 1,
             "expected at least one latency observation"
@@ -46491,7 +46243,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("warmup transaction should be admitted");
@@ -46518,7 +46270,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("transaction should be admitted");
@@ -51874,12 +51626,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         .chain(0, latest_block.as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
-    let valid = unverified
-        .clone()
-        .validate_and_record_transactions(&mut sblock)
-        .unpack(|_| {});
-    let committed = valid.clone().commit_unchecked().unpack(|_| {});
-    crate::test_utils::finalize_committed_block(&state, sblock, committed);
+    sblock.commit_world_overlay_for_testing().expect("seed repo fixture state");
     RepoTestFixture {
         state,
         agreements,
@@ -62025,13 +61772,10 @@ mod explorer_asset_definition_econometrics_tests {
         assert!(!participants.contains_key(&bob));
     }
     routing_test! { async explorer_asset_definition_econometrics_aggregates_velocity_and_issuance
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
+        let mut native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1),
+        ).expect("native econometrics genesis");
+        let state = native_chain.state().clone();
         // Setup world state (domain/accounts/asset definition + initial balances) without relying
         // on transaction permissions/executor behavior.
         let leader0 = checked_econometrics_keypair(
@@ -62115,12 +61859,7 @@ mod explorer_asset_definition_econometrics_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
         stx0.apply();
-        let valid0 = unverified0
-            .clone()
-            .validate_and_record_transactions(&mut st_block0)
-            .unpack(|_| {});
-        let committed0 = valid0.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+        st_block0.commit_world_overlay_for_testing().expect("seed fixture state");
         let now_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time")
@@ -62210,16 +61949,7 @@ mod explorer_asset_definition_econometrics_tests {
             "derive econometrics transfer leader fixture key",
         );
         let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![tx_mint, tx_transfer, tx_batch, tx_burn])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut st_block = state.block(unverified.header());
-        let valid: ValidBlock = unverified
-            .validate_and_record_transactions(&mut st_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+        crate::test_utils::commit_native_accepted_inputs(&mut native_chain, vec![tx_mint, tx_transfer, tx_batch, tx_burn]);
         let resp = handle_v1_explorer_asset_definition_econometrics(
             state,
             DataspaceReadVisibility::all_for_tests(),
@@ -62459,12 +62189,7 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
         stx0.apply();
-        let valid0 = unverified0
-            .clone()
-            .validate_and_record_transactions(&mut st_block0)
-            .unpack(|_| {});
-        let committed0 = valid0.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+        st_block0.commit_world_overlay_for_testing().expect("seed fixture state");
         let resp = handle_v1_explorer_asset_definition_snapshot(
             state,
             DataspaceReadVisibility::all_for_tests(),
@@ -62636,12 +62361,7 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
         stx0.apply();
-        let valid0 = unverified0
-            .clone()
-            .validate_and_record_transactions(&mut st_block0)
-            .unpack(|_| {});
-        let committed0 = valid0.commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+        st_block0.commit_world_overlay_for_testing().expect("seed fixture state");
         let resp = handle_v1_explorer_asset_definition_snapshot(
             state,
             DataspaceReadVisibility::all_for_tests(),

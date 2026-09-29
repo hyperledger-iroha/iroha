@@ -3774,9 +3774,6 @@ public sealed partial class ToriiClientTests
             node => new ToriiIdentifierPolicySummary { InputEncryptionPublicParametersDecoded = node },
             dto => dto.InputEncryptionPublicParametersDecoded);
         AssertSnapshot(
-            node => new ToriiIdentifierPolicySummary { RamFheProfile = node },
-            dto => dto.RamFheProfile);
-        AssertSnapshot(
             node => new ToriiIdentifierResolveResponse { SignaturePayload = node },
             dto => dto.SignaturePayload);
         AssertSnapshot(

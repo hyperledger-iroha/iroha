@@ -552,7 +552,7 @@ fn payload_fixture() -> Value {
     with(
         header(
             "iroha.sccp.payload.v1",
-            "specs/sccp.md §0, §2, §3.1–§3.3 (revision 3)",
+            "specs/sccp.md §0, §2, §3.1–§3.3 (revision 4)",
         ),
         vec![
             ("taira_network_id", hex(&TAIRA)),
@@ -727,7 +727,7 @@ fn commitment_tree_fixture() -> Value {
     with(
         header(
             "iroha.sccp.commitment-tree.v1",
-            "specs/sccp.md §3.3, §3.4 (revision 3)",
+            "specs/sccp.md §3.3, §3.4 (revision 4)",
         ),
         vec![
             ("taira_network_id", hex(&TAIRA)),
@@ -863,7 +863,7 @@ fn control_fixture() -> Value {
     with(
         header(
             "iroha.sccp.control.v1",
-            "specs/sccp.md §3.4, §4.14.6, §5.1.6 (revision 3)",
+            "specs/sccp.md §3.4, §4.14.6, §5.1.6 (revision 4)",
         ),
         vec![
             ("taira_network_id", hex(&TAIRA)),
@@ -942,7 +942,7 @@ fn history_fixture() -> Value {
     with(
         header(
             "iroha.sccp.history.v1",
-            "specs/sccp.md §3.5, §5.1.3 (revision 3)",
+            "specs/sccp.md §3.5, §5.1.3 (revision 4)",
         ),
         vec![
             (
@@ -1132,7 +1132,7 @@ fn eip712_fixture() -> Value {
     with(
         header(
             "iroha.sccp.eip712.v1",
-            "specs/sccp.md §0, §3.6, §3.8 (revision 3)",
+            "specs/sccp.md §0, §3.6, §3.8 (revision 4)",
         ),
         vec![
             ("taira_network_id", hex(&TAIRA)),
@@ -1333,7 +1333,7 @@ fn roster_fixture() -> Value {
     with(
         header(
             "iroha.sccp.roster.v1",
-            "specs/sccp.md §3.7, §5.1.2, §5.1.5 (revision 3)",
+            "specs/sccp.md §3.7, §5.1.2, §5.1.5 (revision 4)",
         ),
         vec![
             ("taira_network_id", hex(&TAIRA)),
@@ -1791,7 +1791,7 @@ fn evm_calldata_fixture() -> Value {
     with(
         header(
             "iroha.sccp.evm-calldata.v1",
-            "specs/sccp.md §4.12.2, §4.16, §5.1.3–§5.1.8, §5.2.2 (revision 3)",
+            "specs/sccp.md §4.12.2, §4.16, §5.1.3–§5.1.8, §5.2.2 (revision 4)",
         ),
         vec![
             ("scenario", scenario_json),

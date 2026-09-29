@@ -3360,10 +3360,6 @@ mod tests {
         }
     }
     fn prepared(plan: &PlanV1) -> PreparedV1 {
-        prepared_with_admission(plan, TransactionAdmissionIntent::Ordinary)
-    }
-
-    fn prepared_with_admission(plan: &PlanV1, admission: TransactionAdmissionIntent) -> PreparedV1 {
         let instructions: Vec<InstructionBox> = vec![
             SetParameter::new(Parameter::Custom(
                 plan.catalog_transition
@@ -3552,19 +3548,6 @@ mod tests {
         );
         assert!(value.verify(&wrong, "catalog").is_err());
         assert!(value.verify(&plan, "bootstrap").is_err());
-    }
-    #[test]
-    fn retained_phase_requires_executable_current_admission() {
-        let plan = fixture_plan();
-        let current = prepared(&plan).verify(&plan, "catalog").unwrap();
-
-        let retired = prepared_with_admission(&plan, TransactionAdmissionIntent::QueuePlanSynced);
-        let error = retired.verify(&plan, "catalog").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("ordinary current-consensus admission")
-        );
     }
     #[test]
     fn namespace_plan_requires_two_bounded_paid_creates() {

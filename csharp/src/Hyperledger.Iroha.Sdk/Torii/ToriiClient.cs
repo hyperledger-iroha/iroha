@@ -17,7 +17,6 @@ using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Queries;
-using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Transactions;
 using Hyperledger.Iroha.Zk;
 

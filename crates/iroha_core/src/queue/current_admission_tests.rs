@@ -11,6 +11,41 @@ fn current_admission_queue_fixture() -> (State, TimeSource) {
 }
 
 #[test]
+fn exact_pending_retry_requires_live_healthy_original_input() {
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (clock, time) = TimeSource::new_mock(Duration::default());
+    let mut config = config_factory();
+    config.transaction_time_to_live = Duration::from_secs(1);
+    let queue = Queue::test(config, &time);
+    let transaction = accepted_tx_by_someone(&time);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    queue.push(transaction.clone(), state.view()).unwrap();
+    assert!(queue.contains_exact_pending_input(&transaction, &state));
+    let other = accepted_tx_by_someone(&time);
+    assert!(!queue.contains_exact_pending_input(&other, &state));
+    queue
+        .accepted_work_validation_fault
+        .store(true, Ordering::Release);
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    queue
+        .accepted_work_validation_fault
+        .store(false, Ordering::Release);
+    assert!(queue.contains_exact_pending_input(&transaction, &state));
+    clock.advance(Duration::from_secs(2));
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+    assert_eq!(
+        queue.remove_committed_hashes([transaction.hash_as_entrypoint()], None),
+        1
+    );
+    assert!(!queue.contains_exact_pending_input(&transaction, &state));
+}
+
+#[test]
 fn current_admission_preserves_original_input_across_direct_queue_boundaries() {
     let (mut state, time) = current_admission_queue_fixture();
     let transaction = accepted_tx_by_someone(&time);
@@ -68,28 +103,36 @@ fn current_admission_preserves_original_input_across_direct_queue_boundaries() {
 #[test]
 fn current_admission_rejects_actual_multiroute_before_queue_custody() {
     let (_, time) = TimeSource::new_mock(Duration::default());
-    let fixture = native_amx_participant_drift_fixture(&time);
+    let fixture = nexus_routing_fixture_with_nexus(test_nexus_for_routes(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (LaneId::new(1), DataSpaceId::new(7)),
+    ]));
+    let signed = TransactionBuilder::new(
+        *fixture.state.network_id_ref(), fixture.authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ).with_instructions([
+        Register::domain(Domain::new(DomainId::try_new("coordinator", "universal").unwrap())),
+        Register::domain(Domain::new(DomainId::try_new("participant", "test-dataspace-7").unwrap())),
+    ]).sign(fixture.authority_keypair.private_key());
+    let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
     let queue = Queue::test(config_factory(), &time);
-    let actual = queue
-        .route_plan_with_state(&fixture.tx, &fixture.state)
-        .unwrap();
-    assert_eq!(actual, fixture.current_plan);
+    let actual = queue.route_plan_with_state(&tx, &fixture.state).unwrap();
     assert!(!matches!(actual, RoutingPlan::Single(_)));
     for boundary in 0..3 {
         let failure = match boundary {
             0 => queue
-                .push(fixture.tx.clone(), fixture.state.view())
+                .push(tx.clone(), fixture.state.view())
                 .map(|_| ()),
             1 => queue
                 .push_with_lane_with_state_and_routing_plan(
-                    fixture.tx.clone(),
+                    tx.clone(),
                     &fixture.state,
                     actual.clone(),
                 )
                 .map(|_| ()),
             _ => queue
                 .push_batch_with_lane_with_state_and_routing_plans(
-                    vec![(fixture.tx.clone(), actual.clone())],
+                    vec![(tx.clone(), actual.clone())],
                     &fixture.state,
                 )
                 .map(|_| ()),
@@ -99,7 +142,7 @@ fn current_admission_rejects_actual_multiroute_before_queue_custody() {
             failure.err,
             Error::UnsupportedTransactionAdmission { .. }
         ));
-        assert_eq!(failure.tx.entrypoint(), fixture.tx.entrypoint());
+        assert_eq!(failure.tx.entrypoint(), tx.entrypoint());
         assert_eq!(queue.active_len(), 0);
         assert!(queue.txs.is_empty());
         assert!(queue.routing_plans.is_empty());
@@ -268,7 +311,7 @@ fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack(
         &key,
         [InstructionBox::from(Log::new(
             Level::INFO,
-            "advance committed frontier",
+            "advance committed frontier".into(),
         ))],
         20_002,
     );

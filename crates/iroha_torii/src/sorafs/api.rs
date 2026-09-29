@@ -34294,42 +34294,6 @@ mod advert_tests {
             .sign(signer.keypair.private_key())
     }
     #[test]
-    fn moderation_command_rejects_ordinary_admission_intent() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
-            "case-admission-1".to_owned(),
-            "round-1".to_owned(),
-            [0x51; 32],
-        )
-        .into();
-        let canonical = signed_moderation_transaction(&app, &auth.provider, instruction.clone());
-        validate_moderation_signed_transaction(
-            &app,
-            &canonical,
-            ModerationCommandRouteV1::AcceptAssignment,
-        )
-        .expect("QueuePlanSynced moderation transaction passes route validation");
-        let mut ordinary_builder = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        ordinary_builder.set_ttl(Duration::from_millis(
-            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
-        ));
-        let ordinary = ordinary_builder
-            .with_instructions([instruction])
-            .sign(auth.provider.keypair.private_key());
-
-        let response = validate_moderation_signed_transaction(
-            &app,
-            &ordinary,
-            ModerationCommandRouteV1::AcceptAssignment,
-        )
-        .expect_err("Ordinary moderation transaction must fail before ingress");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[test]
     fn moderation_command_contract_requires_exact_network_signature_route_and_one_instruction() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let assignment: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
@@ -34676,39 +34640,6 @@ mod advert_tests {
         )
         .expect_err("authority substitution must invalidate the repair envelope");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-    #[test]
-    fn repair_command_rejects_ordinary_admission_intent() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]);
-        let canonical = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction.clone()])
-        .sign(auth.provider.keypair.private_key());
-        validate_repair_signed_transaction(
-            app.state.network_id_ref(),
-            &canonical,
-            RepairCommandRouteV1::Report,
-        )
-        .expect("QueuePlanSynced repair transaction passes route validation");
-        let ordinary = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .sign(auth.provider.keypair.private_key());
-
-        let response = validate_repair_signed_transaction(
-            app.state.network_id_ref(),
-            &ordinary,
-            RepairCommandRouteV1::Report,
-        )
-        .expect_err("Ordinary repair transaction must fail before ingress");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn orderbook_submission_validation_preserves_http_error_classes() {
@@ -36626,10 +36557,6 @@ mod advert_tests {
             PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000,
             0,
         );
-        let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
-            height: 1,
-            block_hash: *header.hash().as_ref(),
-        };
         let app_inner = Arc::get_mut(&mut app).expect("unique proof-outcome app state");
         let core_state =
             Arc::get_mut(&mut app_inner.state).expect("unique proof-outcome core state");
@@ -36647,9 +36574,14 @@ mod advert_tests {
                 .expect("commit fixture PoTR outcome");
             transaction.apply();
             block
-                .commit_empty_block_for_testing()
-                .expect("commit fixture proof-outcome block");
+                .commit_world_overlay_for_testing()
+                .expect("seed directly verified proof-outcome query fixture");
         }
+        publish_seeded_read_genesis(&mut app, PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000);
+        let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
+            height: 1,
+            block_hash: *app.state.view().latest_block_hash().unwrap().as_ref(),
+        };
         (app, challenge, receipt, finalized_cursor)
     }
     async fn proof_stream_body(response: Response) -> (StatusCode, String) {
@@ -37575,10 +37507,26 @@ mod advert_tests {
         )
     }
 
-    fn push_finalized_block_hash(app: &mut SharedAppState, header: &BlockHeader) {
-        Arc::get_mut(&mut Arc::get_mut(app).expect("unique app state").state)
-            .expect("unique core state")
-            .push_block_hash_for_testing(HashOf::new(header));
+    fn publish_seeded_read_genesis(app: &mut SharedAppState, creation_time_ms: u64) {
+        let inner = Arc::get_mut(app).expect("unique initial read fixture app");
+        let state = Arc::get_mut(&mut inner.state).expect("unique initial read fixture state");
+        assert_eq!(
+            state.committed_height(),
+            0,
+            "query fixture must precede original genesis"
+        );
+        let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+            std::mem::take(&mut state.world),
+            creation_time_ms,
+        );
+        config.chain_id = state.chain_id_ref().clone();
+        config.nexus = Some(state.nexus_snapshot());
+        config.zk = Some(state.zk_snapshot());
+        config.governance = Some(state.governance_snapshot());
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("authenticate original query fixture genesis");
+        inner.state = chain.state().clone();
+        inner.kura = chain.kura().clone();
     }
 
     fn default_chunker_handle() -> ChunkerProfileHandle {
@@ -38587,7 +38535,7 @@ mod advert_tests {
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
         let mut app = Arc::new(inner);
-        push_finalized_block_hash(&mut app, &default_block_header());
+        publish_seeded_read_genesis(&mut app, 1);
 
         let response = api_test_route!(get_pin_registry; State(app); axum::extract::RawQuery(None); Some(ExtractAccept(axum::http::HeaderValue::from_static( crate::utils::NORITO_MIME_TYPE, ))));
         assert_eq!(response.status(), StatusCode::OK);
@@ -38606,7 +38554,7 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let app = mk_app_state_for_tests();
+        let mut app = mk_app_state_for_tests();
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
@@ -38660,8 +38608,9 @@ mod advert_tests {
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
         block
-            .commit_empty_block_for_testing()
-            .expect("commit pin manifest readback seed");
+            .commit_world_overlay_for_testing()
+            .expect("seed pin manifest readback before original genesis");
+        publish_seeded_read_genesis(&mut app, 1);
 
         let response = api_test_route!(get_pin_manifest; State(app.clone()); Path(hex::encode(manifest_digest.as_bytes())); axum::extract::RawQuery(None); None);
         assert_eq!(response.status(), StatusCode::OK);

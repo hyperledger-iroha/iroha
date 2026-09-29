@@ -105,8 +105,8 @@ pub enum TryReadError {
         /// Exact network id recorded in the snapshot payload.
         actual: NetworkId,
     },
-    /// Snapshot bootstrap authorization or typed trust root is invalid (`{0}`)
-    InvalidSnapshotBootstrap(String),
+    /// Snapshot boundary identity is invalid (`{0}`)
+    InvalidSnapshotBoundary(String),
     /// Snapshot state is incompatible with runtime ZK configuration: {0}
     ZkConfigInstall(#[source] ZkConfigInstallError),
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)

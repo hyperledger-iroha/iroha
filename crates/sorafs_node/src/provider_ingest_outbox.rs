@@ -1706,7 +1706,7 @@ impl ProviderIngestWriterLock {
         };
         let mut options = fs::OpenOptions::new();
         options.read(true).write(true).create(true);
-        crate::set_local_no_follow_flag(&mut options);
+        crate::fs_flags::set_no_follow_flag(&mut options);
         #[cfg(unix)]
         options.mode(0o600);
         let file = options

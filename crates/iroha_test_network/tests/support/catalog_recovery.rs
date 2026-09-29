@@ -344,14 +344,11 @@ async fn submit_on_route(
     builder.transaction_status_timeout = FUNCTIONAL_FINALITY_TIMEOUT;
     let client = builder.build()?;
     let account = client.account_client()?;
-    let mut payload = account.prepare_transaction(
-        AccountTransactionDraft::new(
-            instructions,
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary),
-    )?;
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;

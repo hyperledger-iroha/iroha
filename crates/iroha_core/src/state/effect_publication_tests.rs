@@ -191,7 +191,7 @@ fn every_effect_reader_and_writer_refusal_retains_original_prefix_and_wait() {
             index
         }};
     }
-    assert_eq!(effect_indexes!(check), 11);
+    assert_eq!(effect_indexes!(check), 9);
 }
 
 fn complete_scope(unwind: bool) {
@@ -203,37 +203,6 @@ fn complete_scope(unwind: bool) {
     let mut context = Context::from_waker(&waker);
     let mut cleanup = StateEffectLocks::new(&state);
     let fence = state.state_write_lock.lock();
-    let merge_probe = Probe::new(&state);
-    let merge_waker = Waker::from(Arc::clone(&merge_probe));
-    let mut merge_context = Context::from_waker(&merge_waker);
-    let mut merge_pending = None;
-    let mut merge_observation = None;
-    let merge_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cleanup.with_merge_admission(|_| {
-            let wait = state
-                .merge_admission
-                .try_write_or_wait()
-                .expect_err("actual short original reader");
-            merge_observation = Some(wait.clone());
-            let mut pending = Box::pin(wait.wait_for_release());
-            assert!(pending.as_mut().poll(&mut merge_context).is_pending());
-            merge_pending = Some(pending);
-            if unwind {
-                panic!("actual short validation read unwind");
-            }
-        });
-    }));
-    assert_eq!(merge_result.is_err(), unwind);
-    assert!(!merge_observation.unwrap().is_poisoned());
-    assert!(
-        merge_pending
-            .as_mut()
-            .unwrap()
-            .as_mut()
-            .poll(&mut merge_context)
-            .is_pending()
-    );
-    assert_eq!(merge_probe.calls.load(Ordering::SeqCst), 0);
     cleanup
         .try_prepare()
         .expect("all original physical indexes available");
@@ -264,15 +233,6 @@ fn complete_scope(unwind: bool) {
     drop(fence);
     drop(cleanup);
     probe.assert_originals_released();
-    merge_probe.assert_originals_released();
-    assert_eq!(
-        merge_pending
-            .as_mut()
-            .unwrap()
-            .as_mut()
-            .poll(&mut merge_context),
-        Poll::Ready(())
-    );
     assert_eq!(Pin::new(&mut pending).poll(&mut context), Poll::Ready(()));
     assert_eq!(state.state_view_generation(), generation);
     assert_eq!(contents(&state), before);

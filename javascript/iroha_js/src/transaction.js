@@ -52,7 +52,6 @@ import {
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
-  buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
   buildUpdatePlainConvictionInstruction,
@@ -64,7 +63,6 @@ import {
   buildFinalizeElectionInstruction,
   normalizeAccountId,
 } from "./instructionBuilders.js";
-import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { createRegisterAssetDefinitionInstructionBuilder } from "./assetDefinitionRegistration.js";
 
 function normalizeAuthority(authority) {
@@ -1188,51 +1186,6 @@ export function buildRegisterPinManifestTransaction(client, input, options = {})
     { ...transactionInput, instructions: [instruction] },
     options,
   );
-}
-
-/**
- * Build an `ApplySccpRouteGovernance` instruction from one closed atomic action.
- * @param {object} action
- * @returns {{ApplySccpRouteGovernance: {action: object}}}
- */
-export function buildApplySccpRouteGovernanceInstruction(action) {
-  return {
-    ApplySccpRouteGovernance: {
-      action: normalizeSccpRouteGovernanceAction(action),
-    },
-  };
-}
-
-/**
- * Build and sign a transaction containing one `ApplySccpRouteGovernance` instruction.
- */
-export function buildApplySccpRouteGovernanceTransaction(input) {
-  transactionNetworkIdBytes(input, "input");
-  const {
-    networkId,
-    authority,
-    feePayment,
-    action,
-    metadata = null,
-    creationTimeMs = null,
-    ttlMs = null,
-    nonce = null,
-    privateKey,
-    privateKeyAlgorithm,
-  } = input;
-  const instruction = buildApplySccpRouteGovernanceInstruction(action);
-  return buildTransaction.call(this, {
-    networkId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
 }
 
 /**
@@ -3115,48 +3068,6 @@ export function buildProposeDeployContractTransaction(input) {
 }
 
 /**
- * Build a transaction containing a `ProposeSccpRouteGovernance` instruction.
- */
-export function buildProposeSccpRouteGovernanceTransaction(input) {
-  transactionNetworkIdBytes(input, "input");
-  for (const field of ["proposal", "window", "mode", "anchor"]) {
-    if (Object.prototype.hasOwnProperty.call(input, field)) {
-      throw new TypeError(
-        `input.${field} is unsupported; provide the exact action field`,
-      );
-    }
-  }
-  const {
-    networkId,
-    authority,
-    feePayment,
-    action,
-    metadata = null,
-    creationTimeMs = null,
-    ttlMs = null,
-    nonce = null,
-    privateKey,
-    privateKeyAlgorithm,
-  } = input;
-  const instruction = buildProposeSccpRouteGovernanceInstruction({
-    networkId,
-    action,
-  });
-  return buildTransaction.call(this, {
-    networkId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
  * Build a transaction containing a `CastZkBallot` instruction.
  */
 export function buildCastZkBallotTransaction(input) {
@@ -3611,12 +3522,6 @@ export function _createTransactionApi(nativeRuntime) {
     buildRegisterPinManifestTransaction: bind(
       buildRegisterPinManifestTransaction,
     ),
-    buildApplySccpRouteGovernanceInstruction: bind(
-      buildApplySccpRouteGovernanceInstruction,
-    ),
-    buildApplySccpRouteGovernanceTransaction: bind(
-      buildApplySccpRouteGovernanceTransaction,
-    ),
     buildIvmProvedTransactionPayload: bind(buildIvmProvedTransactionPayload),
     signQuotedIvmProvedTransactionPayload: bind(
       signQuotedIvmProvedTransactionPayload,
@@ -3681,9 +3586,6 @@ export function _createTransactionApi(nativeRuntime) {
     ),
     buildProposeDeployContractTransaction: bind(
       buildProposeDeployContractTransaction,
-    ),
-    buildProposeSccpRouteGovernanceTransaction: bind(
-      buildProposeSccpRouteGovernanceTransaction,
     ),
     buildCastZkBallotTransaction: bind(buildCastZkBallotTransaction),
     buildCastPlainBallotTransaction: bind(buildCastPlainBallotTransaction),

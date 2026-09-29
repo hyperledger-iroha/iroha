@@ -6,12 +6,15 @@
 
 use super::*;
 use crate::kura::scaling_evidence::export::{
-    SuppliedHeightEvidence, VerifiedExport, export_from_kura,
+    NativeHeightEvidenceV1, SuppliedHeightEvidence, VerifiedExport, export_from_kura,
     launcher::journal::{self, JournalExpectations, JournalObservation, JournalVariant},
 };
 use iroha_config::base::toml::TomlSource;
 use iroha_config::parameters::actual;
-use iroha_core::kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits};
+use iroha_core::{
+    kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits},
+    state::WorldReadOnly as _,
+};
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,

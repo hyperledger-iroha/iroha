@@ -382,15 +382,8 @@ fn byte_sequence_destination_shares_framing_and_limits_without_allocations() {
 fn reserved_layout_bits_are_rejected_by_actual_header_admission() {
     let key = key(Algorithm::Ed25519);
     let frame = norito::to_bytes(&key).unwrap();
-    for bit in [
-        header_flags::PACKED_SEQ,
-        header_flags::PACKED_STRUCT,
-        header_flags::VARINT_OFFSETS,
-        header_flags::COMPACT_SEQ_LEN,
-        header_flags::FIELD_BITSET,
-        0x40,
-        0x80,
-    ] {
+    // Every header bit except COMPACT_LEN (0x02) is reserved in Norito v1.
+    for bit in [0x01, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] {
         let mut malformed = frame.clone();
         malformed[norito::core::Header::SIZE - 1] |= bit;
         let (result, calls) = observe(|| norito::core::Header::read(malformed.as_slice()));

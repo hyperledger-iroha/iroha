@@ -724,6 +724,7 @@ public struct ToriiGovernanceKagemushaHardwareProfileV1: Decodable, Sendable, Eq
   public let qualificationReportDigest: ToriiGovernanceKagemushaBytes32V1
   public let validFromMs: UInt64
   public let expiresAtMs: UInt64
+  public let appAttestationAuthorityPolicyDigest: ToriiGovernanceKagemushaBytes32V1
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
     case version = "version"
@@ -742,6 +743,7 @@ public struct ToriiGovernanceKagemushaHardwareProfileV1: Decodable, Sendable, Eq
     case qualificationReportDigest = "qualification_report_digest"
     case validFromMs = "valid_from_ms"
     case expiresAtMs = "expires_at_ms"
+    case appAttestationAuthorityPolicyDigest = "app_attestation_authority_policy_digest"
   }
 
   public init(from decoder: Decoder) throws {
@@ -788,6 +790,8 @@ public struct ToriiGovernanceKagemushaHardwareProfileV1: Decodable, Sendable, Eq
       throw kagemushaReleaseDecodeError(
         decoder, "valid_from_ms is outside exact V1 JSON integer range")
     }
+    appAttestationAuthorityPolicyDigest = try container.decode(
+      ToriiGovernanceKagemushaBytes32V1.self, forKey: .appAttestationAuthorityPolicyDigest)
     expiresAtMs = try container.decode(UInt64.self, forKey: .expiresAtMs)
     guard expiresAtMs <= 9_007_199_254_740_991 else {
       throw kagemushaReleaseDecodeError(
@@ -1330,9 +1334,75 @@ public struct ToriiGovernanceKagemushaReleaseAttestationV1: Decodable, Sendable,
   }
 }
 
+/// Exact asset and reserve scope of a signed testnet experiment.
+public struct ToriiGovernanceKagemushaTestnetExperimentScopeV1: Decodable, Sendable, Equatable {
+  public let assetIdentityDigest: ToriiGovernanceKagemushaBytes32V1
+  public let assetIncarnation: ToriiGovernanceKagemushaBytes32V1
+  public let assetScale: UInt32
+  public let liabilityPoolId: ToriiGovernanceKagemushaBytes32V1
+
+  private enum CodingKeys: String, CodingKey, CaseIterable {
+    case assetIdentityDigest = "asset_identity_digest"
+    case assetIncarnation = "asset_incarnation"
+    case assetScale = "asset_scale"
+    case liabilityPoolId = "liability_pool_id"
+  }
+
+  public init(from decoder: Decoder) throws {
+    try governanceRejectUnknownFields(
+      decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+      name: "GovernanceKagemushaTestnetExperimentScopeV1"
+    )
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    assetIdentityDigest = try container.decode(
+      ToriiGovernanceKagemushaBytes32V1.self, forKey: .assetIdentityDigest)
+    assetIncarnation = try container.decode(
+      ToriiGovernanceKagemushaBytes32V1.self, forKey: .assetIncarnation)
+    assetScale = try container.decode(UInt32.self, forKey: .assetScale)
+    guard assetScale <= 28 else {
+      throw kagemushaReleaseDecodeError(decoder, "asset_scale must be at most 28")
+    }
+    liabilityPoolId = try container.decode(
+      ToriiGovernanceKagemushaBytes32V1.self, forKey: .liabilityPoolId)
+  }
+}
+
+/// Signed production or explicitly scoped testnet purpose of a verifier release.
+public enum ToriiGovernanceKagemushaReleasePurposeV1: Decodable, Sendable, Equatable {
+  case production
+  case testnetExperiment(ToriiGovernanceKagemushaTestnetExperimentScopeV1)
+
+  private enum CodingKeys: String, CodingKey, CaseIterable {
+    case kind
+    case value
+  }
+
+  public init(from decoder: Decoder) throws {
+    try governanceRejectUnknownFields(
+      decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+      name: "GovernanceKagemushaReleasePurposeV1"
+    )
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    switch try container.decode(String.self, forKey: .kind) {
+    case "production":
+      guard try container.decodeNil(forKey: .value) else {
+        throw kagemushaReleaseDecodeError(decoder, "production purpose value must be null")
+      }
+      self = .production
+    case "testnet_experiment":
+      self = .testnetExperiment(try container.decode(
+        ToriiGovernanceKagemushaTestnetExperimentScopeV1.self, forKey: .value))
+    default:
+      throw kagemushaReleaseDecodeError(decoder, "unknown release purpose")
+    }
+  }
+}
+
 /// Exact ReleaseManifestV1 projection.
 public struct ToriiGovernanceKagemushaReleaseManifestV1: Decodable, Sendable, Equatable {
   public let version: UInt16
+  public let networkId: NetworkId
+  public let purpose: ToriiGovernanceKagemushaReleasePurposeV1
   public let releaseId: ToriiGovernanceKagemushaBytes32V1
   public let sourceTreeDigest: ToriiGovernanceKagemushaBytes32V1
   public let cargoLockDigest: ToriiGovernanceKagemushaBytes32V1
@@ -1348,6 +1418,8 @@ public struct ToriiGovernanceKagemushaReleaseManifestV1: Decodable, Sendable, Eq
 
   private enum CodingKeys: String, CodingKey, CaseIterable {
     case version = "version"
+    case networkId = "network_id"
+    case purpose
     case releaseId = "release_id"
     case sourceTreeDigest = "source_tree_digest"
     case cargoLockDigest = "cargo_lock_digest"
@@ -1372,6 +1444,8 @@ public struct ToriiGovernanceKagemushaReleaseManifestV1: Decodable, Sendable, Eq
     guard version == 1 else {
       throw kagemushaReleaseDecodeError(decoder, "version must be 1")
     }
+    networkId = try container.decode(NetworkId.self, forKey: .networkId)
+    purpose = try container.decode(ToriiGovernanceKagemushaReleasePurposeV1.self, forKey: .purpose)
     releaseId = try container.decode(ToriiGovernanceKagemushaBytes32V1.self, forKey: .releaseId)
     sourceTreeDigest = try container.decode(
       ToriiGovernanceKagemushaBytes32V1.self, forKey: .sourceTreeDigest)

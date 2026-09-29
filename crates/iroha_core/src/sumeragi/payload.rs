@@ -467,7 +467,7 @@ mod tests {
             account,
             FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, "direct rescue")]);
+        .with_instructions([Log::new(Level::INFO, "direct rescue".to_owned())]);
         builder.set_creation_time(Duration::from_millis(3000));
         let (_, clock) = TimeSource::new_mock(Duration::from_millis(3001));
         let accepted = AcceptedTransaction::accept_with_time_source(

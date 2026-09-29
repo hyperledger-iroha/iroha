@@ -13586,7 +13586,7 @@ async fn handler_health(
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Queue startup and consensus admission must be available. Beacon setup
+/// probe. Consensus admission must be available. Beacon setup
 /// is installed through that admission path and does not gate this probe.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
@@ -13596,18 +13596,10 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         )
             .into_response();
     }
-    if app.queue.lane_reservation_startup_reconciliation_pending() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Queue startup reconciliation is still pending",
-        )
-            .into_response();
-    }
-    if app.queue.transaction_selection_durability_faulted()
-        || app
-            .sumeragi
-            .as_ref()
-            .is_some_and(|sumeragi| !sumeragi.ready())
+    if app
+        .sumeragi
+        .as_ref()
+        .is_some_and(|sumeragi| !sumeragi.ready())
     {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -16059,9 +16051,9 @@ impl ToriiDataspaceReadContext {
             PipelineEventBox::Transaction(transaction) => {
                 Self::transaction_event_scope(kura, transaction)
             }
-            PipelineEventBox::Warning(_)
-            | PipelineEventBox::Merge(_)
-            | PipelineEventBox::Witness(_) => ScopedEventScope::GlobalReaderOnly,
+            PipelineEventBox::Warning(_) | PipelineEventBox::Witness(_) => {
+                ScopedEventScope::GlobalReaderOnly
+            }
         };
         ScopedEvent {
             event: EventBox::Pipeline(event),
@@ -24695,17 +24687,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         }
     };
     let mut last_retryable: Option<Response> = None;
-    let hedge_started = tokio::time::Instant::now();
-    for (index, peer_id) in candidates.peers.into_iter().enumerate() {
-        let launch_delay = if index == 0 {
-            Duration::ZERO
-        } else {
-            torii_proxy_hedge_delay(app.as_ref())
-                .saturating_mul(u32::try_from(index).unwrap_or(u32::MAX))
-        };
-        if launch_delay > Duration::ZERO {
-            tokio::time::sleep_until(hedge_started + launch_delay).await;
-        }
+    for peer_id in candidates.peers {
         let outcome =
             execute_torii_proxy_request_via_peer(app, peer_id.clone(), request.clone().into_arc())
                 .await;
@@ -30483,7 +30465,16 @@ fn prepare_fresh_transaction_ingress(
         .route_plan_with_state(&transaction, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
     require_current_transaction_route(&routing_plan)?;
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
+    if !app
+        .queue
+        .contains_exact_pending_input(&transaction, &app.state)
+    {
+        routing::reject_ingress_if_queue_capacity_saturated(
+            app.queue.as_ref(),
+            app.state.as_ref(),
+            1,
+        )?;
+    }
     Ok(PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
@@ -30503,6 +30494,22 @@ async fn submit_prepared_transaction_ingress(
     } = prepared;
 
     require_current_transaction_route(&routing_plan)?;
+    ordinary_transaction_ingress::authenticate(app, transaction.entrypoint(), &routing_plan)
+        .map_err(|message| Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)))?;
+    if app
+        .queue
+        .contains_exact_pending_input(&transaction, &app.state)
+    {
+        return Ok(transaction_submission_response(
+            app,
+            transaction.hash_as_entrypoint(),
+            signed_transaction_hash_for_entrypoint(transaction.entrypoint()),
+            routing_plan.coordinator_route(),
+            "local",
+            minimal_response,
+            format,
+        ));
+    }
     let reservation =
         reserve_verified_transaction_authority(&app.tx_rate_limiter, transaction.authority_opt())
             .await?;
@@ -33450,9 +33457,10 @@ fn fee_quote_routing_decision_from_parts(
     state: &CoreState,
     payload: &TransactionPayload,
 ) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
-    queue
-        .route_payload_with_state(payload, state)
-        .map_err(|_| FeeRejectionCode::InvalidProgramConfiguration)
+    match queue.route_payload_plan_with_state(payload, state) {
+        Ok(RoutingPlan::Single(route)) => Ok(route.route),
+        _ => Err(FeeRejectionCode::InvalidProgramConfiguration),
+    }
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment(
@@ -44553,8 +44561,6 @@ use iroha_crypto::SignatureOf;
 use iroha_data_model::account::AccountAddress;
 #[cfg(test)]
 use iroha_data_model::nexus::FeeSponsorProgram;
-#[cfg(test)]
-use iroha_torii_shared::uri;
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 impl Error {

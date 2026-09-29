@@ -6,6 +6,8 @@
 //! The sole credential path constructs and independently verifies the bound `X5S1` MAIN/compact-CA
 //! envelope. A native reference check, projection-only proof, or collection of unbound subproofs is
 //! never accepted as a credential proof.
+#[cfg(test)]
+use super::prover_observation::{PhaseTimerV1, PhaseV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{
@@ -87,8 +89,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // This identifies the sole compiled geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0xbb, 0xd1, 0xcc, 0x3f, 0xbe, 0xfd, 0x0f, 0x0a, 0xdb, 0xa9, 0x58, 0x31, 0x00, 0xa8, 0x21, 0x3d,
-    0x0c, 0x1e, 0xff, 0xc1, 0x09, 0xc1, 0x76, 0x91, 0x4e, 0xe1, 0x4c, 0x31, 0xdd, 0x4b, 0x2a, 0x67,
+    0x7c, 0xf3, 0x28, 0x6b, 0x45, 0x60, 0xbe, 0x90, 0xd2, 0x30, 0x5b, 0x33, 0xc9, 0xaa, 0xea, 0x30,
+    0xa3, 0x9e, 0x68, 0x41, 0xf4, 0x04, 0x5c, 0xf6, 0x8b, 0xca, 0x68, 0x89, 0x5d, 0x1b, 0x60, 0x63,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +364,8 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
 ) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
     // Every witness-dependent preflight deliberately precedes the first
     // entropy read.
+    #[cfg(test)]
+    let preparation_timer = PhaseTimerV1::start_v1(PhaseV1::Preparation);
     construct_zk_x509_compiled_profile_v1()?;
     let consensus_public =
         compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
@@ -380,10 +384,16 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         certificate_policy: authoritative_state.certificate_policy(),
         crl: &crl,
     };
+    #[cfg(test)]
+    preparation_timer.complete_v1();
+    #[cfg(test)]
+    let assembly_timer = PhaseTimerV1::start_v1(PhaseV1::Assembly);
     let assembly = build_zk_x509_main_trace_assembly_v1(statement, governance, prepared.witness())?;
     if assembly.relation_output != prepared.projection() {
         return Err(ZkX509EngineErrorV1::ProverProjectionMismatch);
     }
+    #[cfg(test)]
+    assembly_timer.complete_v1();
     let mut checked_rng = HealthCheckedTryCryptoRngV1::new(rng)?;
     let (main_phase, main_pre_aux) = commit_zk_x509_main_base_phase_v1_with_rng(
         statement,
@@ -391,12 +401,16 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         consensus_public.credential_binding,
         &mut checked_rng,
     )?;
+    #[cfg(test)]
+    let ca_timer = PhaseTimerV1::start_v1(PhaseV1::CompactCa);
     let ca_subproof = prove_zk_x509_ca_accumulator_stark_v1_with_rng(
         &assembly.ca_accumulator_trace,
         &assembly.sha_schedule,
         main_pre_aux,
         &mut checked_rng,
     )?;
+    #[cfg(test)]
+    ca_timer.complete_v1();
     let ca_base_root = ca_accumulator_base_root_from_proof_v1(&ca_subproof)?;
     let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
         main_pre_aux,
@@ -410,6 +424,8 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     let main_aggregate = main_phase
         .bind_credential_pre_aux_v1_with_rng(credential_binding, &mut checked_rng)?
         .finish_v1_with_rng(&mut checked_rng)?;
+    #[cfg(test)]
+    let envelope_timer = PhaseTimerV1::start_v1(PhaseV1::EnvelopeAndSelfCheck);
     let encoded = encode_zk_x509_credential_envelope_v1(
         consensus_public.credential_binding,
         &main_aggregate,
@@ -427,6 +443,8 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
         envelope.ca_subproof,
     )
     .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
+    #[cfg(test)]
+    envelope_timer.complete_v1();
     Ok(encoded)
 }
 fn compiled_profile_fields_v1<'a>(

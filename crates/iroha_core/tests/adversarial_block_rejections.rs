@@ -1,5 +1,7 @@
 //! Adversarial block validation regressions for forged/invalid transactions.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "common/native_validation.rs"]
+mod native_validation;
 use iroha_core::{
     block::{BlockBuilder, BlockValidationError, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -177,23 +179,32 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         crypto.as_ref(),
     )
     .expect("admission should pass for valid transfer");
-    let (_, forged_result) = state_block
-        .validate_transaction(forged_transfer, &mut ivm_cache)
-        .expect("local execution completes");
+    let forged_result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        forged_transfer,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         forged_result.is_err(),
         "transfer from missing asset should be rejected"
     );
-    let (_, burn_result) = state_block
-        .validate_transaction(missing_burn, &mut ivm_cache)
-        .expect("local execution completes");
+    let burn_result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        missing_burn,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         burn_result.is_err(),
         "burn on missing asset should be rejected"
     );
-    let (_, valid_result) = state_block
-        .validate_transaction(valid_transfer, &mut ivm_cache)
-        .expect("local execution completes");
+    let valid_result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut state_block,
+        valid_transfer,
+        &mut ivm_cache,
+        None,
+    );
     assert!(valid_result.is_ok(), "well-formed transfer should succeed");
     state_block
         .commit_world_overlay_for_testing()
@@ -212,12 +223,10 @@ fn block_history_tamper_rejected_without_mutation() {
         bob_asset_id,
         ..
     } = setup_world();
-    let network_id = *state.network_id_ref();
+    let mut chain = crate::block::tests::component_chain(state);
+    let network_id = chain.network_id();
+    let state = Arc::clone(chain.state());
     let peer_key = checked_random_adversarial_bls_keypair();
-    let time_source = TimeSource::new_system();
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
     // Commit ordinary work after genesis so rewinds have a stable checkpoint.
     let baseline_tx = TransactionBuilder::new(
         network_id,
@@ -226,26 +235,13 @@ fn block_history_tamper_rejected_without_mutation() {
     )
     .with_instructions([Mint::asset_quantity(5_u32, bob_asset_id.clone())])
     .sign(alice_kp.private_key());
-    let baseline_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(baseline_tx))];
-    let baseline_block = BlockBuilder::new_with_time_source(baseline_accepted, time_source.clone())
-        .chain(0, Some(&genesis))
-        .sign(peer_key.private_key())
-        .unpack(|_| {});
-    let signed_baseline: SignedBlock = baseline_block.clone().into();
-    let mut baseline_state_block = state.block(signed_baseline.header());
-    let baseline_valid =
-        ValidBlock::validate_unchecked(signed_baseline.clone(), &mut baseline_state_block)
-            .unpack(|_| {});
-    let committed_baseline = baseline_valid.commit_unchecked().unpack(|_| {});
-    let committed_baseline_signed: SignedBlock = committed_baseline.clone().into();
+    chain.commit(vec![baseline_tx]);
+    let baseline = chain.committed(chain.height());
     assert!(
-        committed_baseline.as_ref().output_error(0).is_none(),
-        "baseline transaction rejected during execution: {:?}",
-        committed_baseline.as_ref().output_error(0)
+        baseline.block().output_error(0).is_none(),
+        "{:?}",
+        baseline.block().output_error(0)
     );
-    state
-        .commit_executed_block_for_testing(baseline_state_block, committed_baseline)
-        .expect("commit baseline state");
     let height_after_baseline = state.view().height();
     assert_eq!(height_after_baseline, 2, "baseline block follows genesis");
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
@@ -258,15 +254,12 @@ fn block_history_tamper_rejected_without_mutation() {
     )
     .with_instructions([Mint::asset_quantity(25_u32, bob_asset_id.clone())])
     .sign(alice_kp.private_key());
-    let rewind_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(rewind_tx))];
-    let rewind_block = BlockBuilder::new_with_time_source(rewind_accepted, time_source.clone())
-        .chain(0, Some(&committed_baseline_signed))
-        .sign(peer_key.private_key())
-        .unpack(|_| {});
-    let signed_rewind: SignedBlock = rewind_block.into();
+    let signed_rewind = native_validation::proposal(&chain, vec![rewind_tx]);
     let mut tampered_header = signed_rewind.header();
     tampered_header.set_prev_block_hash(None);
     let mut tampered_builder = ModelBlockBuilder::new(tampered_header);
+    tampered_builder.set_execution_context(signed_rewind.execution_context().cloned());
+    tampered_builder.set_da_proof_policies(signed_rewind.da_proof_policies().cloned());
     for tx in signed_rewind.external_transactions().cloned() {
         tampered_builder.push_transaction(tx);
     }
@@ -288,28 +281,14 @@ fn block_history_tamper_rejected_without_mutation() {
         expected_prev, actual_prev,
         "prev hash tamper should be observable"
     );
-    let topology = iroha_core::sumeragi::network_topology::Topology::new(
-        std::iter::once(peer_key.clone())
-            .chain((0..3).map(|_| checked_random_adversarial_bls_keypair()))
-            .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone())),
-    );
-    let mut staged = state.block(signed_rewind.header());
-    let (_, reason) = ValidBlock::validate_sumeragi_v2_fixture(
-        signed_rewind,
-        &topology,
-        &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
-        &time_source,
-        &mut staged,
-    )
-    .unpack(|_| {})
-    .expect_err("static validation must reject the tampered previous hash");
+    let reason = native_validation::validate(&chain, signed_rewind)
+        .expect_err("native validation rejects foreign parent hash");
     assert!(
         matches!(reason.as_ref(), BlockValidationError::PrevBlockHashMismatch {
             expected, actual,
         } if *expected == expected_prev && *actual == actual_prev),
         "unexpected rejection: {reason}"
     );
-    drop(staged);
     // State stays on the canonical head.
     assert_eq!(state.view().height(), height_after_baseline);
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));

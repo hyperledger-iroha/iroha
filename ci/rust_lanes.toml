@@ -146,9 +146,9 @@ packages = ["integration_tests"]
 # it never replaces the shipping daemon. Qualified corridor bundles below keep
 # their own build and provenance protocols.
 [package_binaries]
-iroha_test_network = ["iroha3d", "iroha", "iroha3d_message_control"]
+iroha_test_network = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
 izanami = ["iroha3d", "iroha"]
-integration_tests = ["iroha3d", "iroha", "iroha3d_message_control"]
+integration_tests = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
 
 # Non-Cargo consumers participate in the same artifact-union calculation.
 # Package triggers use the expanded reverse-dependency closure. Unknown/shared

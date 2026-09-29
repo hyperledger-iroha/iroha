@@ -10,12 +10,11 @@
 //! wallet with an owner-only Ed25519 key file). They read the deployment's roster state, verify
 //! Taira's bundle or rotation chain locally and submit the destination call.
 //!
-//! `claim`, `lc-advance` and `lc-bootstrap` build Ethereum, BSC and TRON light-client evidence
-//! from the source chain's public RPC (for Ethereum also a beacon light-client API, for TRON
-//! the java-tron HTTP API).
+//! `claim`, `lc-advance` and `lc-bootstrap` build Ethereum, BSC, TRON and TON light-client
+//! evidence from the source chain's public RPC (for Ethereum also a beacon light-client API, for
+//! TRON the java-tron HTTP API, for TON ADNL liteservers).
 //!
-//! TODO(ws42): TON evidence in the CLI, control apply, deployment verify, governance show/drive
-//! and bridge-key status/rotate.
+//! TODO(ws42): control apply, deployment verify, governance show and bridge-key status/rotate.
 
 mod evm;
 mod governance;
@@ -53,19 +52,20 @@ pub enum Command {
     Roster(RosterArgs),
     /// Fetch the catch-up rotation chain from a generation.
     Rotations(RotationsArgs),
-    /// Mint an attested outbound message on its EVM or TRON destination.
+    /// Mint an attested outbound message on its EVM, TRON or TON destination.
     Finalize(FinalizeArgs),
-    /// Rotate an EVM or TRON destination's roster forward to Taira's current generation.
+    /// Rotate an EVM, TRON or TON destination's roster forward to Taira's current generation.
     RosterSync(RosterSyncArgs),
     /// SCCP proposals to the SORA Parliament.
     #[command(subcommand)]
     Governance(governance::Command),
-    /// Deploy an EVM or TRON destination pinned to a Taira generation and print its
+    /// Deploy an EVM, TRON or TON destination pinned to a Taira generation and print its
     /// `RegisterRoute`.
     Deploy(DeployArgs),
-    /// Prove an Ethereum, BSC or TRON burn (`transferToTaira`) on Taira and settle it.
+    /// Prove an Ethereum, BSC or TRON (`transferToTaira`) or TON (`sccp_burn_to_taira`) burn on
+    /// Taira and settle it.
     Claim(ClaimArgs),
-    /// Advance Taira's Ethereum, BSC or TRON light client to the latest finality.
+    /// Advance Taira's Ethereum, BSC, TRON or TON light client to the latest finality.
     LcAdvance(LcAdvanceArgs),
     /// Build the Parliament `InitializeLightClient` action of the latest finalized source block.
     LcBootstrap(LcBootstrapArgs),
@@ -77,8 +77,8 @@ pub struct ClaimArgs {
     /// Source network (`ethereum-mainnet`, `bsc-mainnet`, `tron-mainnet`, `ton-mainnet`).
     #[arg(long)]
     pub network: String,
-    /// Hash (TRON: id; TON: `<lt>:<hash>` of the minter transaction) of the burning
-    /// `transferToTaira` transaction.
+    /// Burn transaction: EVM `transferToTaira` tx hash, TRON tx id, or TON `<lt>:<hash>` of the
+    /// minter transaction that emitted `sccp_transfer_to_taira`.
     #[arg(long)]
     pub tx_hash: String,
     /// JSON-RPC endpoint (EVM), java-tron HTTP API endpoint (TRON) or liteserver list (TON) of
@@ -702,8 +702,8 @@ fn deploy_ton<C: RunContext>(context: &mut C, args: DeployArgs) -> Result<()> {
     context.print_data(&vec![action])
 }
 
-/// `iroha sccp deploy`: deploy a pinned EVM or TRON destination and print its `RegisterRoute`
-/// action.
+/// `iroha sccp deploy`: deploy a pinned EVM, TRON or TON destination and print its
+/// `RegisterRoute` action.
 fn deploy<C: RunContext>(context: &mut C, args: DeployArgs) -> Result<()> {
     use iroha::data_model::sccp::{
         deployment::{SccpDeploymentV1, SccpEvmDeploymentV1, SccpTronDeploymentV1},
@@ -810,15 +810,6 @@ fn ethereum_builder(
     ))
 }
 
-/// Fail unless this release builds light-client evidence for `network`.
-fn ensure_evidence_source(network: SccpNetworkV1) -> Result<()> {
-    if network.is_external() {
-        Ok(())
-    } else {
-        Err(eyre!("{} is not a source chain", network.profile_key()))
-    }
-}
-
 /// `iroha sccp claim` for TON: `--tx-hash <lt>:<hash hex>` names the minter transaction whose
 /// external message 0 is the `sccp_transfer_to_taira` event; the proof hangs from a masterchain
 /// block signed by the epoch of Taira's newest key block.
@@ -898,13 +889,12 @@ fn tron_claim(
     Ok((payload.route_revision, log.payload, proof))
 }
 
-/// `iroha sccp claim`: prove an EVM burn and submit `SubmitSccpInboundMessageV1`.
+/// `iroha sccp claim`: prove a source-chain burn and submit `SubmitSccpInboundMessageV1`.
 fn claim<C: RunContext>(context: &mut C, args: ClaimArgs) -> Result<()> {
     use iroha::data_model::isi::sccp::SubmitSccpInboundMessageV1;
     use iroha_sccp::v1::{evm_abi::TransferToTairaLogV1, payload::SccpTransferPayloadV1};
     use iroha_sccp_rpc::builders::{bsc::BscBuilder, ethereum::EthereumEventV1};
     let network = parse_network(&args.network)?;
-    ensure_evidence_source(network)?;
     if matches!(
         network,
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TonMainnet
@@ -957,13 +947,12 @@ fn claim<C: RunContext>(context: &mut C, args: ClaimArgs) -> Result<()> {
     })])
 }
 
-/// `iroha sccp lc-advance`: advance Taira's light client of an EVM chain to its latest
+/// `iroha sccp lc-advance`: advance Taira's light client of a source chain to its latest
 /// finality.
 fn lc_advance<C: RunContext>(context: &mut C, args: LcAdvanceArgs) -> Result<()> {
     use iroha::data_model::isi::sccp::AdvanceSccpLightClientV1;
     use iroha_sccp_rpc::builders::{bsc::BscBuilder, tron::TronBuilder};
     let network = parse_network(&args.network)?;
-    ensure_evidence_source(network)?;
     let light_client = blocking(context)?
         .sccp()
         .light_clients()?
@@ -1003,7 +992,6 @@ fn lc_bootstrap<C: RunContext>(context: &mut C, args: LcBootstrapArgs) -> Result
     };
     use iroha_sccp_rpc::builders::{bsc::BscBuilder, tron::TronBuilder};
     let network = parse_network(&args.network)?;
-    ensure_evidence_source(network)?;
     let bootstrap = match network {
         SccpNetworkV1::BscMainnet => {
             BscBuilder::new(evm::connect_chain(&args.rpc_url, network)?).bootstrap()

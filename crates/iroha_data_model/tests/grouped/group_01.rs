@@ -52,14 +52,9 @@ mod join_kaigi_commitment_roundtrip;
 mod join_kaigi_decode;
 #[path = "../kaigi_events_roundtrip.rs"]
 mod kaigi_events_roundtrip;
-#[path = "../lane_relay_roundtrip.rs"]
-mod lane_relay_roundtrip;
 #[path = "../mintable_json.rs"]
 mod mintable_json;
 #[path = "../model_derive_repro.rs"]
 mod model_derive_repro;
-#[path = "../nexus_lifecycle_fixture.rs"]
-mod nexus_lifecycle_fixture;
-
 #[path = "../native_evidence_codec.rs"]
 mod native_evidence_codec;

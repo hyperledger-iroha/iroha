@@ -4413,5 +4413,5 @@ fn remote_transport_error(
 mod tests {
     include!("tests/service_journal.rs");
     include!("tests/private_service.rs");
-    pub(super) mod wire_fixtures;
+    pub mod wire_fixtures;
 }

@@ -219,7 +219,7 @@ class SyntheticSampleBuilder:
             'each_leg_applied_exactly_once':True,'partial_visible_observations':0,'partial_spendable_observations':0}
         native={**{key:single[key] for key in ('version','protocol','request_id','invocation_nonce','commit','participants')},
             'request_sha256':self.attempt['request']['sha256'],'mandatory_signed_rs16_da_rbc':True,
-            'authenticated_message_control':True,'signed_rs16_da_observations':semantics.runner.minimum_signed_rs16_da_observations(single['participants']),
+            'authenticated_private_settlement_route_control':True,'signed_rs16_da_observations':semantics.runner.minimum_signed_rs16_da_observations(single['participants']),
             'process_inventory':inventory,'payload':payload}
         rust_ref=self.publish(protocol+'/rust-result.json',{**{key:native[key] for key in ('version','protocol','request_id',
             'invocation_nonce','commit','participants','request_sha256')},'elapsed_ms':100,
@@ -236,7 +236,7 @@ class SyntheticSampleBuilder:
             'network_counting_unit':'ipv4_packet_bytes_including_ip_tcp_headers','rss_observation':'sampled_aggregate_peak'}
         response={**self.identity,**self.aid,**environment,**provenance,'kind':'benchmark','passed':True,
             **{key:native[key] for key in ('mandatory_signed_rs16_da_rbc','signed_rs16_da_observations',
-                                          'authenticated_message_control','process_inventory')},'payload':{**payload,**measured}}
+                                          'authenticated_private_settlement_route_control','process_inventory')},'payload':{**payload,**measured}}
         response_ref=self.publish(self.output+'/response.json',response,'response',measurement=True)
         sample_ref=self.publish(self.output+'/benchmark-sample.json',sample,'sample',measurement=True)
         outcome_ref=self.publish(protocol+'/adapter-outcome.json',{**self.identity,**self.aid,

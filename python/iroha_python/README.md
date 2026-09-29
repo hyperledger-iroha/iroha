@@ -12,8 +12,7 @@ whose `iroha_native._crypto` extension owns all cryptographic identity admission
 Account constructors and exact I105 parsers require ABI 25 and preserve all eleven
 key algorithms and complete weighted multisig policies. `AccountId` is always
 domainless. Missing native validation fails explicitly, and canonical parsers
-reject surrounding whitespace. SCCP account principals require exact COMPACT_LEN
-AccountId bytes and a 65,535-byte maximum.
+reject surrounding whitespace.
 
 ## Quickstart
 
@@ -889,7 +888,7 @@ if status and status.enabled:
     for entry in status.per_ip_sessions:
         print(entry.ip, entry.sessions)
 
-# Native protocol-8 observation from the canonical Torii client model.
+# Native protocol-1 observation from the canonical Torii client model.
 snapshot = client.get_sumeragi_status_typed()
 print(snapshot.protocol_version, snapshot.height, snapshot.view, snapshot.stage)
 print(snapshot.committed_height, snapshot.applied_height, snapshot.halted)

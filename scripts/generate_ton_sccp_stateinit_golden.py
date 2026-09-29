@@ -180,7 +180,7 @@ def compute(project: Path = builder.PROJECT) -> Dict[str, Any]:
         )
     return {
         "schema": SCHEMA,
-        "spec": "specs/sccp.md §5.3.1 (revision 3)",
+        "spec": "specs/sccp.md §5.3.1 (revision 4)",
         "generator": "scripts/generate_ton_sccp_stateinit_golden.py",
         "toolchain": {"acton": builder.ACTON_VERSION, "tolk": builder.TOLK_VERSION},
         "code": code_records,

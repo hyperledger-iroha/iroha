@@ -16,8 +16,12 @@ impl<'de> DeserializePayload<'de> for BytePrefix {
 
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let mut offset = 0;
-        let value = decode_context_field_fixed_canonical::<u8>(ptr, &mut offset, 1)?;
+        // One unprefixed byte, canonically decoded so field and nesting budgets apply.
+        let (field, offset) = take_context_field(ptr, 0, 1)?;
+        let (value, used) = decode_field_canonical::<u8>(field)?;
+        if used != field.len() {
+            return Err(Error::LengthMismatch);
+        }
         if value == 0 {
             return Err(Error::NonCanonicalEncoding);
         }

@@ -1,4 +1,4 @@
-//! Shared checks for the immutable original SDK and dependency frame observations.
+//! Shared checks for the captured Rust SDK and executor-model frame observations.
 
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 
@@ -17,10 +17,10 @@ fn fixture() -> &'static Vec<Value> {
         let source = include_str!("frame_identity_observations.v1.json");
         assert_eq!(
             hex(&iroha_crypto::sha256(source)),
-            "389cf8f47123437d56bc608f5989936bb7fdb1000da104e404dddc3cc73d6631"
+            "4b9a2a72ee5ddeadd6aa3b571274b489c9bb69830e673af5cf7d33ea0d839d34"
         );
         let rows: Vec<Value> = norito::json::from_str(source).expect("original frame observations");
-        assert_eq!(rows.len(), 271);
+        assert_eq!(rows.len(), 70);
         rows
     })
 }

@@ -19,14 +19,19 @@ use crate::limits::GpuResourceLimits;
 
 /// Checked complete storage request established before allocating an aggregate.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BufferRequest {
+#[allow(
+    clippy::struct_field_names,
+    reason = "the `*_bytes` names deliberately mirror the public GpuResourceLimits, \
+              WorkRequest and ProcessUsage byte fields these values flow between"
+)]
+pub struct BufferRequest {
     pub(crate) host_bytes: usize,
     pub(crate) pinned_bytes: usize,
     pub(crate) device_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResourceRefusal {
+pub enum ResourceRefusal {
     InFlight,
     #[cfg(any(feature = "cuda", test))]
     Host,
@@ -37,7 +42,7 @@ pub(crate) enum ResourceRefusal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResourceUsage {
+pub struct ResourceUsage {
     pub(crate) reserved: BufferRequest,
     pub(crate) peak: BufferRequest,
     pub(crate) in_flight: usize,
@@ -46,7 +51,7 @@ pub(crate) struct ResourceUsage {
 
 /// One original process budget: reload mutates its limits, never its identity.
 #[derive(Debug)]
-pub(crate) struct ResourcePools {
+pub struct ResourcePools {
     pub(crate) host: AllocationBudget,
     pinned: AllocationBudget,
     pub(crate) device: AllocationBudget,
@@ -136,7 +141,7 @@ impl ResourcePools {
     }
 }
 
-pub(crate) struct InFlightPermit {
+pub struct InFlightPermit {
     pools: Arc<ResourcePools>,
 }
 
@@ -171,7 +176,7 @@ impl Drop for InFlightPermit {
 /// The reservation covers the whole checked aggregate, including temporary
 /// construction buffers, before any allocation or growth can begin.
 #[cfg(any(feature = "cuda", test))]
-pub(crate) struct ResourceReservation {
+pub struct ResourceReservation {
     pub(crate) host: AllocationReservation,
     pub(crate) pinned: AllocationReservation,
     pub(crate) device: AllocationReservation,
@@ -191,6 +196,11 @@ impl ResourceReservation {
     }
 
     #[cfg(test)]
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "`_in_flight` is held only for its Drop in production builds; this \
+                  test-only accessor is its sole reader"
+    )]
     pub(crate) fn owner(&self) -> &Arc<ResourcePools> {
         &self._in_flight.pools
     }
@@ -199,7 +209,7 @@ impl ResourceReservation {
 /// Physical failure state for exactly one context generation; not kernel policy.
 #[derive(Debug, Default)]
 #[cfg(any(feature = "cuda", test))]
-pub(crate) struct DeviceHealth {
+pub struct DeviceHealth {
     quarantined: AtomicBool,
     uncertain: AtomicBool,
 }

@@ -372,7 +372,6 @@ pub fn simd_backend() -> &'static str {
     }
 }
 /// Return true when the process-owned Metal backend passed startup qualification.
-#[allow(unused_variables)]
 pub fn metal_available() -> bool {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
@@ -421,10 +420,13 @@ struct MetalState {
     sha256: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     sha256_leaves: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     sha256_pairs: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    // Ordinary single-round and permutation work stays on the CPU; the startup
+    // self-test and required hardware qualification execute these kernels.
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     keccak: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-    // Direct single-round execution is retained for embedded-kernel qualification.
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     aesenc: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
     aesdec: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesenc_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesdec_batch: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
@@ -1287,20 +1289,21 @@ impl MetalState {
             sha256,
             sha256_leaves,
             sha256_pairs,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             aesenc,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             aesdec,
             aesenc_batch,
             aesdec_batch,
             aesenc_rounds,
             aesdec_rounds,
+            #[cfg(all(test, feature = "metal-hardware-tests"))]
             keccak,
             ed25519_signature,
             merkle_cost: Mutex::new(metal_cost::MetalMerkleCostCache::default()),
             batch_cost: std::array::from_fn(|_| {
                 Mutex::new(metal_cost::MetalBatchCostCache::default())
             }),
-            // Store fused pipelines in place of single-round ones for future extension if needed
-            // (keeping single-round as well)
         })
     }
 }
@@ -1737,9 +1740,11 @@ pub(crate) fn metal_merkle_root(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
 #[path = "vector/metal_signature.rs"]
 mod metal_signature;
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use metal_signature::metal_ed25519_verify_batch_with_receipt_into;
+pub(crate) use metal_signature::metal_ed25519_items_into;
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+pub(crate) use metal_signature::metal_ed25519_verify_batch_into;
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) use metal_signature::{metal_ed25519_items_into, metal_ed25519_verify_batch_into};
+use metal_signature::metal_ed25519_verify_batch_with_receipt_into;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
 fn metal_ed25519_run_kernel_for_tests(
     function_name: &str,
@@ -1991,10 +1996,14 @@ fn metal_ed25519_point_decompress_for_tests(
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
 // Ordinary single-round work uses CPU AES; this entrypoint executes the
 // embedded kernel during required hardware qualification.
-#[allow(dead_code)]
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
@@ -2023,7 +2032,12 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
     if !metal_runtime_allowed() {
         return None;
@@ -2052,7 +2066,12 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         })
     })
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(
+    target_os = "macos",
+    feature = "metal",
+    test,
+    feature = "metal-hardware-tests"
+))]
 pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
     if !metal_runtime_allowed() {
         return false;
@@ -2087,7 +2106,7 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
 mod metal_aes;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) use metal_aes::metal_aes_batch_in_place;
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub use metal_aes::{
     metal_aesdec_batch_into, metal_aesdec_rounds_batch_into, metal_aesenc_batch_into,
     metal_aesenc_rounds_batch_into,

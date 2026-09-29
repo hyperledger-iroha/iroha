@@ -1116,7 +1116,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
     #[tokio::test]
-    async fn unsupported_current_admission_precedes_monetary_reservation_signing_and_pending() {
+    async fn missing_monetary_asset_releases_reservations_without_pending_inputs() {
         use crate::utils::extractors::tests::{
             kagemusha_ingress_redemption_fixture, kagemusha_ingress_top_up_fixture,
         };
@@ -1164,12 +1164,6 @@ mod tests {
             ));
             app.kagemusha_commands = Some(runtime.clone());
         }
-        let journal = tempfile::tempdir().unwrap();
-        let path = journal.path().join("unsupported-monetary.norito");
-        app.queue
-            .install_plan_journal(&path, 1024 * 1024, true)
-            .unwrap();
-        let original = std::fs::read(&path).unwrap();
         let headers = |operation_id: [u8; 32]| {
             let mut headers = HeaderMap::new();
             headers.insert(
@@ -1178,62 +1172,35 @@ mod tests {
             );
             headers
         };
-        let top_up_binding = KagemushaOperationBinding {
-            operation_id: top_up.operation_id,
-            kind: KagemushaOperationKindV1::TopUp,
-            request_digest: top_up.canonical_digest().unwrap(),
-            top_up_transaction_hash: Some(signed.hash()),
-        };
-        let redemption_binding = KagemushaOperationBinding {
-            operation_id: redemption.operation_id,
-            kind: KagemushaOperationKindV1::Redemption,
-            request_digest: redemption.canonical_digest().unwrap(),
-            top_up_transaction_hash: None,
-        };
-        let mut retained_reservations = Vec::new();
-        for expected_registry_len in [0, 2] {
-            for result in [
-                handle_top_up(
-                    app.clone(),
-                    headers(top_up.operation_id),
-                    None,
-                    Bytes::from(bytes.clone()),
-                )
-                .await,
-                handle_redeem(
-                    app.clone(),
-                    headers(redemption.operation_id),
-                    None,
-                    redemption.clone(),
-                )
-                .await,
-            ] {
-                assert!(
-                    matches!(
-                        result,
-                        Err(Error::AppQueryValidation {
-                            code: "unsupported_transaction_admission",
-                            ..
-                        })
-                    ),
-                    "unsupported monetary intent must not become Pending, a signing error, or an accepted receipt"
-                );
-            }
-            assert_eq!(runtime.registry.lock().entries.len(), expected_registry_len);
+        for result in [
+            handle_top_up(
+                app.clone(),
+                headers(top_up.operation_id),
+                None,
+                Bytes::from(bytes.clone()),
+            )
+            .await,
+            handle_redeem(
+                app.clone(),
+                headers(redemption.operation_id),
+                None,
+                redemption.clone(),
+            )
+            .await,
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::AppQueryValidation {
+                        code: "kagemusha_asset_not_found",
+                        ..
+                    })
+                ),
+                "missing live asset must fail before enqueuing or signing a redemption"
+            );
+            assert!(runtime.registry.lock().entries.is_empty());
             assert_eq!(app.queue.active_len(), 0);
-            assert_eq!(std::fs::read(&path).unwrap(), original);
-            if expected_registry_len == 0 {
-                for binding in [top_up_binding, redemption_binding] {
-                    let SubmissionClaim::Reserved(reservation) = runtime.claim(binding).unwrap()
-                    else {
-                        panic!("fresh reservation")
-                    };
-                    retained_reservations.push(reservation);
-                }
-            }
         }
-        drop(retained_reservations);
-        assert!(runtime.registry.lock().entries.is_empty());
     }
 
     #[test]

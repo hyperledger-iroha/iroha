@@ -338,7 +338,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindDaPinIntentByManifest(_)
         | SingularQueryBox::FindDaPinIntentByAlias(_)
         | SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_)
-        | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindSettlementReceiptById(_)
@@ -6359,7 +6358,7 @@ impl Executor {
             validate_governed_ivm_proved_execution_policy(state_transaction, &meta)?;
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
-                &transaction,
+                transaction.payload(),
                 &summary,
             )
             .map_err(|error| {
@@ -6400,7 +6399,7 @@ impl Executor {
             proved_entrypoint_authorization = Some(authorization);
             crate::pipeline::overlay::enforce_manifest_is_pre_registered(
                 state_transaction,
-                &transaction,
+                transaction.payload(),
                 summary.code_hash,
             )
             .map_err(|error| {
@@ -6825,7 +6824,7 @@ impl Executor {
                     validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
-                    &transaction_for_fee,
+                    transaction_for_fee.payload(),
                     &summary,
                 )
                 .map_err(|error| {
@@ -8290,8 +8289,8 @@ include!("executor_initial_permission_authority.rs");
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
     INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&permission_name)
 }
-/// Parse the WAT-like template used in integration tests to embed a sequence
-/// of Norito-encoded ISIs into linear memory, then execute each instruction.
+/// Return the `Register<AssetDefinition>` carried by `instruction`, whether it is typed,
+/// wrapped in a [`RegisterBox`], or an encoded instruction of that concrete type.
 pub(crate) fn extract_register_asset_definition(
     instruction: &InstructionBox,
 ) -> Option<Register<AssetDefinition>> {

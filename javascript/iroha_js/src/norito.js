@@ -246,8 +246,6 @@ const SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID =
 const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
   "iroha.asset.transfer.control.set";
 
-const RECORD_SCCP_MESSAGE_WIRE_ID =
-  (TEXT_IROHA_INSTRUCTION_V1 + "bridge::RecordSccpMessage");
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
   (TEXT_IROHA_INSTRUCTION_V1 + "sorafs::IssueReplicationOrder");
 const COMPLETE_REPLICATION_ORDER_WIRE_ID =
@@ -463,8 +461,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     `${TEXT_IROHA_DATA_MODEL_ISI}asset_transfer_control::${TEXT_SET_ASSET_TRANSFER_BLACKLIST_2}`,
   [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}asset_transfer_control::SetAssetTransferControl`,
-  [RECORD_SCCP_MESSAGE_WIRE_ID]:
-    `${TEXT_IROHA_DATA_MODEL_ISI}bridge::RecordSccpMessage`,
   [ISSUE_REPLICATION_ORDER_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}sorafs::IssueReplicationOrder`,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]:
@@ -4426,7 +4422,7 @@ export function validateNoritoFrame(bytes, options = {}) {
 function decodeNoritoFrame(buffer, context, expectedSchemaHash) {
   if (buffer.length < NORITO_FRAME_HEADER_LENGTH) {
     // Preserve the established decoder diagnostic while the exported preflight
-    // helper reports the more specific SCCP-facing short-header error.
+    // helper reports the more specific short-header error.
     rejectError(`${context} reader overran payload while reading Norito header`);
   }
   return validateNoritoFrame(buffer, {

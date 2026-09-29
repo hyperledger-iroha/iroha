@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseSumeragiStatusJson, parseSumeragiStatusPayload } from "../src/sumeragiTyped.js";
 // Syntax fixture only: no generated native finality or execution-capture claim.
-const BASE = {"protocol_version": 8, "config_fingerprint": "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C", "beacon_horizon": null, "instance": "0000000000000000000000000000000000000000000000000000000000000000", "height": 1, "view": 0, "stage": 0, "leader": null, "proxy_tail": null, "high_qc_view": null, "level": 0, "start_level": 0, "t_retx_ms": 1, "committed_height": 0, "applied_height": 0, "awaiting": false, "signer": null, "unanchored": true, "abstaining": true, "halted": null, "footprint": {"votes": 0, "timeouts": 0, "blocks": 0, "exec_entries": 0, "wants": 0, "pending_apply": 0, "sync_entries": 0, "sync_bytes": 0, "peers": 0, "recent_headers": 0, "configs": 0, "cert_cache": 0, "evidence_keys": 0, "probe": 0}};
+const BASE = {"protocol_version": 1, "config_fingerprint": "hash:0101010101010101010101010101010101010101010101010101010101010101#B86C", "beacon_horizon": null, "instance": "0000000000000000000000000000000000000000000000000000000000000000", "height": 1, "view": 0, "stage": 0, "leader": null, "proxy_tail": null, "high_qc_view": null, "level": 0, "start_level": 0, "t_retx_ms": 1, "committed_height": 0, "applied_height": 0, "awaiting": false, "signer": null, "unanchored": true, "abstaining": true, "halted": null, "footprint": {"votes": 0, "timeouts": 0, "blocks": 0, "exec_entries": 0, "wants": 0, "pending_apply": 0, "sync_entries": 0, "sync_bytes": 0, "peers": 0, "recent_headers": 0, "configs": 0, "cert_cache": 0, "evidence_keys": 0, "probe": 0}};
 const copy=()=>structuredClone(BASE);
 const parse=(value)=>parseSumeragiStatusJson(JSON.stringify(value));
 
 test("native observer status is exact and immutable",()=>{
   const value=copy();const result=parse(value);value.footprint.votes=10;
-  assert.equal(result.protocol_version,8);assert.equal(result.leader,null);
+  assert.equal(result.protocol_version,1);assert.equal(result.leader,null);
   assert.equal(result.footprint.votes,0);assert.ok(Object.isFrozen(result));assert.ok(Object.isFrozen(result.footprint));
 });
 for (const field of Object.keys(BASE)) test(`native status requires ${field}`,()=>{
@@ -50,4 +50,8 @@ for (const field of ["leader", "proxy_tail", "signer"]) test(`native ${field} ad
  for (const key of [ed.toLowerCase(), bls.toLowerCase(), "ed0120" + "00".repeat(32), "ea0130C0" + "00".repeat(47), "ea0130" + "00".repeat(48), "bls_normal:" + bls, "ed810020" + ed.slice(6), ed.slice(0, -2)]) {
    value[field] = key; assert.throws(() => parse(value), key);
  }
+});
+
+for (const version of [0, 2, 4, 8]) test(`first release rejects protocol ${version}`, () => {
+  const value = copy(); value.protocol_version = version; assert.throws(() => parse(value));
 });

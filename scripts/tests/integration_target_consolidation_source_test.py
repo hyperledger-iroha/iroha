@@ -680,7 +680,7 @@ WAVE_THREE_TOP_LEVEL_RS = {
 }
 
 WAVE_THREE_MANIFEST_BASE_SHA256 = {
-    "crates/iroha": "a9251faa0432d815ec56cbe0abac7a1bcd5ee90b597c728e6d0d36144011cc3d",
+    "crates/iroha": "13e6e955d407cb4476de50a71db8f876bf818d565ccb1feee8e70fa6ec48f3bb",
     "crates/iroha_p2p": "dad3d6d19e110a7a2785acf87fb35d20c2d3b0b3a7e1a16f221ba7248ef90cb8",
     "crates/norito_derive": "d093eec7685436db5a148bb34282979f162d6b3b33c058f83372584a566f54aa",
     "crates/sorafs_chunker": "7d651022b88c1c27bb6236ba14cfed1a653fe4db6f417586d342a0b227acc63d",

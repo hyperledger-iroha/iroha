@@ -117,33 +117,36 @@ fn every_enabled_algorithm_verifies_and_rejects_without_cold_thread_allocations(
             .clone();
         // Move ready inputs into a fresh OS thread. Its ordinary TLS key and
         // positive-verdict caches have never been consulted or warmed.
-        std::thread::spawn(move || {
-            without_allocations(|| verify_signature_borrowed(&proof, &key, &message)).unwrap();
-            for (candidate, payload) in [(&wrong, &message[..]), (&key, &b"changed"[..])] {
+        std::thread::Builder::new()
+            .name(format!("signature-admission-{algorithm:?}"))
+            .spawn(move || {
+                without_allocations(|| verify_signature_borrowed(&proof, &key, &message)).unwrap();
+                for (candidate, payload) in [(&wrong, &message[..]), (&key, &b"changed"[..])] {
+                    let rejected = without_allocations(|| {
+                        verify_signature_borrowed(&proof, candidate, payload).unwrap_err()
+                    });
+                    assert_eq!(rejected.into_error(), Error::BadSignature);
+                }
+                for bytes in [vec![], vec![0; proof.payload().len()], vec![1; 1]] {
+                    let malformed = Signature::from_bytes(&bytes);
+                    let rejected = without_allocations(|| {
+                        verify_signature_borrowed(&malformed, &key, &message).unwrap_err()
+                    });
+                    assert_eq!(rejected.into_error(), Error::BadSignature);
+                }
+                // Error materialization outside the observation must preserve the
+                // pre-existing public admission adapter exactly.
+                let malformed = compact(algorithm, &[]);
+                let expected = crate::verify_signature_for_admission(&proof, &malformed, &message)
+                    .unwrap_err();
                 let rejected = without_allocations(|| {
-                    verify_signature_borrowed(&proof, candidate, payload).unwrap_err()
+                    verify_signature_borrowed(&proof, &malformed, &message).unwrap_err()
                 });
-                assert_eq!(rejected.into_error(), Error::BadSignature);
-            }
-            for bytes in [vec![], vec![0; proof.payload().len()], vec![1; 1]] {
-                let malformed = Signature::from_bytes(&bytes);
-                let rejected = without_allocations(|| {
-                    verify_signature_borrowed(&malformed, &key, &message).unwrap_err()
-                });
-                assert_eq!(rejected.into_error(), Error::BadSignature);
-            }
-            // Error materialization outside the observation must preserve the
-            // pre-existing public admission adapter exactly.
-            let malformed = compact(algorithm, &[]);
-            let expected =
-                crate::verify_signature_for_admission(&proof, &malformed, &message).unwrap_err();
-            let rejected = without_allocations(|| {
-                verify_signature_borrowed(&proof, &malformed, &message).unwrap_err()
-            });
-            assert_eq!(rejected.into_error(), expected);
-        })
-        .join()
-        .unwrap();
+                assert_eq!(rejected.into_error(), expected);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
 

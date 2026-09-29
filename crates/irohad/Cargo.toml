@@ -48,15 +48,8 @@ ivm-cuda = ["ivm/cuda"]
 # Explicit toolkit-coupled helper bundle; these helpers still require separate
 # nvcc/cudart qualification and are not part of driverless daemon defaults.
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
-# Test-network-only fault injection. This feature is never enabled by a
-# production/default build; `iroha_test_network` builds a separate daemon binary
-# in an isolated target directory when an adversarial network test requests it.
-# TODO(WP6): Sumeragi frame control (hold/drop/partition) replaces the deleted
-# v2 consensus message controller.
-test-network-message-control = [
-    "iroha_core/test-network-native-amx-fault-injection",
-    "iroha_torii/test-network-private-settlement-route-control",
-]
+# Non-shipping daemon controlling authenticated private-settlement HTTP requests.
+test-network-private-settlement-route-control = ["iroha_torii/test-network-private-settlement-route-control"]
 # Dedicated non-shipping daemon used only by the four-validator Parliament
 # integration corridor. It injects proof-valid beacon and TLE shares for this
 # daemon's exact roster seat and does not alter consensus verification.

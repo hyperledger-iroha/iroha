@@ -544,7 +544,7 @@ fn lane_alias_changes_preserve_instance_and_canonical_storage() {
         .expect_err("occupied replacement cannot be adopted or overwrite the old instance");
     assert!(
         matches!(error, Error::IO(ref source, _) if source.kind() == ErrorKind::InvalidInput
-        && source.to_string().contains("native geometry currently permits exact additions only")),
+        && source.to_string().contains("native geometry replacement requires authenticated close authority")),
         "replacement must be refused before physical effects: {error:?}"
     );
     assert_eq!(
@@ -709,7 +709,6 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        lane_history_retention: LANE_HISTORY_RETENTION,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
@@ -718,7 +717,6 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 

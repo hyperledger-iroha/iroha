@@ -1,451 +1,4 @@
 #[test]
-fn kura_init_keeps_blocks_when_commit_manifests_are_missing() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let blocks = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("kura init");
-        let blocks = store_dummy_block_arcs(&kura, 2);
-        kura.store_commit_manifest(CommitManifest::new(
-            1,
-            blocks[0].hash(),
-            None,
-            None,
-            Hash::new(b"checkpoint 1"),
-            None,
-        ))
-        .expect("store manifest 1");
-        kura.store_wsv_checkpoint(2, blocks[1].hash(), Hash::new(b"stale checkpoint 2"))
-            .expect("store stale checkpoint 2");
-        blocks
-    };
-    let (reopened, count) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("reopen kura");
-    assert_eq!(count.0, 2);
-    assert_eq!(reopened.blocks_count(), 2);
-    assert_eq!(
-        reopened.get_durable_block_hash(nonzero!(1_usize)),
-        Some(blocks[0].hash())
-    );
-    assert_eq!(
-        reopened.get_durable_block_hash(nonzero!(2_usize)),
-        Some(blocks[1].hash())
-    );
-    assert!(
-        reopened
-            .commit_manifest(1)
-            .expect("read retained manifest")
-            .is_some()
-    );
-    assert!(
-        reopened
-            .commit_manifest(2)
-            .expect("read missing manifest")
-            .is_none()
-    );
-    assert!(
-        reopened
-            .wsv_checkpoint(2)
-            .expect("read retained checkpoint")
-            .is_some()
-    );
-}
-#[test]
-fn commit_manifest_recovery_accepts_partial_post_commit_sidecar_windows() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let blocks = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("kura init");
-        let blocks = store_dummy_block_arcs(&kura, 3);
-        // Height 1 models a crash after the block append and before either WSV sidecar.
-        // Height 2 models a crash after checkpoint persistence and before manifest write.
-        kura.store_wsv_checkpoint(2, blocks[1].hash(), Hash::new(b"checkpoint 2"))
-            .expect("store checkpoint 2");
-        // Height 3 models checkpoint write failure followed by successful manifest write.
-        kura.store_commit_manifest(CommitManifest::new(
-            3,
-            blocks[2].hash(),
-            None,
-            None,
-            Hash::new(b"checkpoint 3"),
-            None,
-        ))
-        .expect("store manifest 3 without checkpoint");
-        blocks
-    };
-    let (reopened, count) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("reopen kura");
-    assert_eq!(count.0, 3);
-    assert_eq!(reopened.blocks_count(), 3);
-    for (index, block) in blocks.iter().enumerate() {
-        let height = NonZeroUsize::new(index + 1).expect("non-zero height");
-        assert_eq!(reopened.get_durable_block_hash(height), Some(block.hash()));
-    }
-    assert!(
-        reopened
-            .commit_manifest(1)
-            .expect("read missing manifest 1")
-            .is_none()
-    );
-    assert!(
-        reopened
-            .wsv_checkpoint(1)
-            .expect("read missing checkpoint 1")
-            .is_none()
-    );
-    assert!(
-        reopened
-            .wsv_checkpoint(2)
-            .expect("read checkpoint 2")
-            .is_some()
-    );
-    assert!(
-        reopened
-            .commit_manifest(2)
-            .expect("read missing manifest 2")
-            .is_none()
-    );
-    assert!(
-        reopened
-            .commit_manifest(3)
-            .expect("read manifest 3")
-            .is_some()
-    );
-    assert!(
-        reopened
-            .wsv_checkpoint(3)
-            .expect("read missing checkpoint 3")
-            .is_none()
-    );
-}
-#[test]
-fn replay_sidecar_reads_and_writes_enforce_the_same_hard_byte_limit() {
-    let kura = Kura::blank_kura_for_testing();
-    let path = kura.commit_manifest_path(1);
-    fs::create_dir_all(path.parent().expect("manifest parent")).expect("create manifest directory");
-    std::fs::File::create(&path)
-        .and_then(|file| {
-            file.set_len(
-                u64::try_from(MAX_COMMIT_MANIFEST_BYTES + 1).expect("sidecar byte limit fits u64"),
-            )
-        })
-        .expect("create sparse oversized manifest");
-    assert!(matches!(
-        Kura::decode_commit_manifest_at(&path),
-        Err(Error::IO(error, reported_path))
-            if reported_path == path && error.to_string().contains("hard byte limit")
-    ));
-    let write_error =
-        Kura::ensure_sidecar_encoding_within_limit(&path, "test replay sidecar", &[0_u8; 2], 1)
-            .expect_err("oversized encoded sidecar must reject before writing");
-    assert!(matches!(
-        write_error,
-        Error::IO(error, reported_path)
-            if reported_path == path && error.to_string().contains("1-byte hard limit")
-    ));
-}
-#[test]
-fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
-    let (kura, _) = blank_kura_with_blocks();
-    let blocks = store_dummy_block_arcs(&kura, 3);
-    let retained_hash = Hash::new(b"retained checkpoint");
-    let pruned_hash = Hash::new(b"pruned checkpoint");
-    kura.store_wsv_checkpoint(2, blocks[1].hash(), retained_hash)
-        .expect("store retained checkpoint");
-    kura.store_wsv_checkpoint(3, blocks[2].hash(), pruned_hash)
-        .expect("store pruned checkpoint");
-    kura.prune_to_height(2).expect("prune to height 2");
-    let retained = kura
-        .wsv_checkpoint(2)
-        .expect("read retained checkpoint")
-        .expect("retained checkpoint present");
-    assert_eq!(retained.state_hash(), retained_hash);
-    assert!(
-        kura.wsv_checkpoint(3)
-            .expect("read pruned checkpoint")
-            .is_none()
-    );
-}
-#[test]
-fn prune_to_height_removes_commit_manifests_above_new_tip() {
-    let (kura, _) = blank_kura_with_blocks();
-    let blocks = store_dummy_block_arcs(&kura, 3);
-    let retained_hash = Hash::new(b"retained manifest checkpoint");
-    let pruned_hash = Hash::new(b"pruned manifest checkpoint");
-    kura.store_commit_manifest(CommitManifest::new(
-        2,
-        blocks[1].hash(),
-        None,
-        None,
-        retained_hash,
-        None,
-    ))
-    .expect("store retained manifest");
-    kura.store_commit_manifest(CommitManifest::new(
-        3,
-        blocks[2].hash(),
-        None,
-        None,
-        pruned_hash,
-        None,
-    ))
-    .expect("store pruned manifest");
-    kura.prune_to_height(2).expect("prune to height 2");
-    let retained = kura
-        .commit_manifest(2)
-        .expect("read retained manifest")
-        .expect("retained manifest present");
-    assert_eq!(retained.wsv_checkpoint_hash, retained_hash);
-    assert!(
-        kura.commit_manifest(3)
-            .expect("read pruned manifest")
-            .is_none()
-    );
-}
-#[test]
-fn replace_top_block_rejects_checkpointed_top_without_mutation() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = NativeBlocks::new().next();
-    let original_hash = block.hash();
-    let original_state_hash = Hash::new(b"original checkpoint");
-    kura.store_block(Arc::clone(&block)).expect("store block");
-    kura.store_wsv_checkpoint(1, original_hash, original_state_hash)
-        .expect("store original checkpoint");
-    let checkpoint_path = kura.wsv_checkpoint_path(1);
-    let checkpoint_bytes = fs::read(&checkpoint_path).expect("read checkpoint bytes");
-    let durable_wire = {
-        let mut store = kura.block_store.lock();
-        read_block(&mut store, 0)
-            .expect("read durable original")
-            .encode_wire()
-            .expect("encode durable original")
-    };
-    kura.replace_top_block(Arc::clone(&block))
-        .expect("same-wire retry remains idempotent after checkpoint publication");
-    kura.pending_budget_bytes.store(41, Ordering::Release);
-    kura.pending_budget_bytes_valid
-        .store(true, Ordering::Release);
-    let replacement: SignedBlock =
-        ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-            header.set_height(nonzero!(1_u64));
-            header.set_prev_block_hash(None);
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into();
-    let replacement_hash = replacement.hash();
-    assert_ne!(original_hash, replacement_hash);
-    assert!(matches!(
-        kura.replace_top_block(replacement),
-        Err(Error::CommittedBlockReplacementForbidden { height: 1 })
-    ));
-    assert_eq!(
-        kura.get_durable_block_hash(nonzero!(1_usize)),
-        Some(original_hash)
-    );
-    assert_eq!(
-        kura.get_block(nonzero!(1_usize)).as_deref(),
-        Some(block.as_ref())
-    );
-    assert_eq!(
-        {
-            let mut store = kura.block_store.lock();
-            read_block(&mut store, 0)
-                .expect("reread durable original")
-                .encode_wire()
-                .expect("encode durable original after rejection")
-        },
-        durable_wire
-    );
-    assert_eq!(
-        fs::read(&checkpoint_path).expect("reread checkpoint"),
-        checkpoint_bytes
-    );
-    assert!(!kura.canonical_association_stage_path().exists());
-    assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    assert!(kura.pending_budget_bytes_valid.load(Ordering::Acquire));
-    assert_eq!(kura.pending_budget_bytes.load(Ordering::Acquire), 41);
-}
-#[test]
-fn replace_top_block_rejects_manifest_bound_top_without_mutation() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = NativeBlocks::new().next();
-    let original_hash = block.hash();
-    let original_state_hash = Hash::new(b"original manifest checkpoint");
-    kura.store_block(Arc::clone(&block)).expect("store block");
-    kura.store_wsv_checkpoint(1, original_hash, original_state_hash)
-        .expect("store original checkpoint");
-    let manifest = CommitManifest::new(1, original_hash, None, None, original_state_hash, None);
-    kura.store_commit_manifest(manifest.clone())
-        .expect("store original commit manifest");
-    let checkpoint = kura
-        .wsv_checkpoint(1)
-        .expect("read bound checkpoint")
-        .expect("bound checkpoint exists");
-    assert_eq!(
-        checkpoint.commit_manifest_hash,
-        Some(manifest.encoded_hash())
-    );
-    let checkpoint_path = kura.wsv_checkpoint_path(1);
-    let manifest_path = kura.commit_manifest_path(1);
-    let checkpoint_bytes = fs::read(&checkpoint_path).expect("read bound checkpoint bytes");
-    let manifest_bytes = fs::read(&manifest_path).expect("read manifest bytes");
-    let durable_wire = {
-        let mut store = kura.block_store.lock();
-        read_block(&mut store, 0)
-            .expect("read durable original")
-            .encode_wire()
-            .expect("encode durable original")
-    };
-    let replacement: SignedBlock =
-        ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-            header.set_height(nonzero!(1_u64));
-            header.set_prev_block_hash(None);
-            header.set_view_change_index(header.view_change_index().saturating_add(1));
-        })
-        .into();
-    let replacement_hash = replacement.hash();
-    assert_ne!(original_hash, replacement_hash);
-    assert!(matches!(
-        kura.replace_top_block(replacement),
-        Err(Error::CommittedBlockReplacementForbidden { height: 1 })
-    ));
-    assert_eq!(
-        kura.get_durable_block_hash(nonzero!(1_usize)),
-        Some(original_hash)
-    );
-    assert_eq!(
-        kura.get_block(nonzero!(1_usize)).as_deref(),
-        Some(block.as_ref())
-    );
-    assert_eq!(
-        {
-            let mut store = kura.block_store.lock();
-            read_block(&mut store, 0)
-                .expect("reread durable original")
-                .encode_wire()
-                .expect("encode durable original after rejection")
-        },
-        durable_wire
-    );
-    assert_eq!(
-        fs::read(&checkpoint_path).expect("reread checkpoint"),
-        checkpoint_bytes
-    );
-    assert_eq!(
-        fs::read(&manifest_path).expect("reread manifest"),
-        manifest_bytes
-    );
-    assert_eq!(
-        kura.commit_manifest(1)
-            .expect("reread manifest")
-            .expect("manifest remains"),
-        manifest
-    );
-    assert!(!kura.canonical_association_stage_path().exists());
-    assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
-}
-#[test]
-fn replace_top_block_replay_metadata_preflight_fails_closed_without_mutation() {
-    #[derive(Clone, Copy)]
-    enum ReplayMetadataCase {
-        ManifestOnly,
-        CorruptCheckpoint,
-        CorruptManifest,
-    }
-    for case in [
-        ReplayMetadataCase::ManifestOnly,
-        ReplayMetadataCase::CorruptCheckpoint,
-        ReplayMetadataCase::CorruptManifest,
-    ] {
-        let kura = Kura::blank_kura_for_testing();
-        let block = NativeBlocks::new().next();
-        let original_hash = block.hash();
-        kura.store_block(Arc::clone(&block)).expect("store block");
-        let protected_path = match case {
-            ReplayMetadataCase::ManifestOnly => {
-                let manifest = CommitManifest::new(
-                    1,
-                    original_hash,
-                    None,
-                    None,
-                    Hash::new(b"manifest-only checkpoint hash"),
-                    None,
-                );
-                kura.store_commit_manifest(manifest)
-                    .expect("store manifest without a WSV checkpoint");
-                assert!(
-                    !kura.wsv_checkpoint_path(1).exists(),
-                    "manifest-only publication must exercise the manifest preflight branch"
-                );
-                kura.commit_manifest_path(1)
-            }
-            ReplayMetadataCase::CorruptCheckpoint => {
-                let path = kura.wsv_checkpoint_path(1);
-                fs::create_dir_all(path.parent().expect("checkpoint parent"))
-                    .expect("create checkpoint directory");
-                fs::write(&path, b"malformed WSV checkpoint").expect("corrupt checkpoint");
-                path
-            }
-            ReplayMetadataCase::CorruptManifest => {
-                let path = kura.commit_manifest_path(1);
-                fs::create_dir_all(path.parent().expect("manifest parent"))
-                    .expect("create manifest directory");
-                fs::write(&path, b"malformed commit manifest").expect("corrupt manifest");
-                path
-            }
-        };
-        let protected_bytes = fs::read(&protected_path).expect("read protected sidecar");
-        kura.pending_budget_bytes.store(73, Ordering::Release);
-        kura.pending_budget_bytes_valid
-            .store(true, Ordering::Release);
-        let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(1_u64));
-                header.set_prev_block_hash(None);
-                header.set_view_change_index(header.view_change_index().saturating_add(1));
-            })
-            .into();
-        assert_ne!(replacement.hash(), original_hash);
-        let error = kura
-            .replace_top_block(replacement)
-            .expect_err("replay metadata must forbid top replacement");
-        match case {
-            ReplayMetadataCase::ManifestOnly => assert!(matches!(
-                error,
-                Error::CommittedBlockReplacementForbidden { height: 1 }
-            )),
-            ReplayMetadataCase::CorruptCheckpoint | ReplayMetadataCase::CorruptManifest => {
-                assert!(matches!(error, Error::NoritoFrame(_)))
-            }
-        }
-        assert_eq!(
-            kura.get_durable_block_hash(nonzero!(1_usize)),
-            Some(original_hash)
-        );
-        assert_eq!(
-            kura.get_block(nonzero!(1_usize)).as_deref(),
-            Some(block.as_ref())
-        );
-        assert_eq!(
-            fs::read(&protected_path).expect("reread protected sidecar"),
-            protected_bytes
-        );
-        assert!(!kura.canonical_association_stage_path().exists());
-        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
-        assert!(kura.pending_budget_bytes_valid.load(Ordering::Acquire));
-        assert_eq!(kura.pending_budget_bytes.load(Ordering::Acquire), 73);
-    }
-}
-#[test]
 fn prune_sidecars_remove_temps_and_fail_closed_on_non_file_suffix() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
@@ -467,8 +20,8 @@ fn prune_sidecars_remove_temps_and_fail_closed_on_non_file_suffix() {
     std::fs::create_dir(&directory_artifact).expect("create directory artifact");
     assert!(matches!(
         store.prune(2),
-        Err(Error::PruneIntentConflict(message))
-            if message.contains("not removable as a file")
+        Err(Error::IO(error, _))
+            if error.kind() == ErrorKind::InvalidData && error.to_string().contains("not removable as a file")
     ));
     std::fs::remove_dir(&directory_artifact).expect("remove blocking directory artifact");
     store.prune(2).expect("retry sidecar prune");
@@ -503,161 +56,25 @@ fn fast_init_does_not_create_a_missing_store_root() {
 }
 
 #[test]
-fn fast_init_skips_disabled_writer_capacity_validation() {
+fn fast_init_caps_recent_block_cache_without_changing_durable_history() {
     let temp_dir = TempDir::new().unwrap();
     let strict_config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (strict_kura, _) = open_configured_kura_with_pending_limits(
-        &strict_config,
-        &SumeragiV2RuntimeLimits::default(),
-    )
-    .expect("Strict initializes the store");
+    let catalog = LaneCatalog::default();
+    let (strict_kura, _) =
+        Kura::new_with_configured_lane_catalog(&strict_config, &lane_config, &catalog)
+            .expect("Strict initializes the store");
     establish_configured_lane_markers_for_test(&strict_kura, &lane_config);
     drop(strict_kura);
 
     let mut fast_config = strict_config;
     fast_config.init_mode = InitMode::Fast;
     fast_config.blocks_in_memory = NonZeroUsize::new(usize::MAX).unwrap();
-    fast_config.lane_history_retention = NonZeroUsize::new(usize::MAX).unwrap();
-    let mut unused_limits = SumeragiV2RuntimeLimits::default();
-    unused_limits.pending_certified_merge_entry_capacity =
-        NonZeroUsize::new(V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX.saturating_add(1)).unwrap();
-
     let (fast_kura, BlockCount(count)) =
-        open_configured_kura_with_pending_limits(&fast_config, &unused_limits)
-            .expect("Fast ignores limits owned exclusively by disabled writers");
+        Kura::new_with_configured_lane_catalog(&fast_config, &lane_config, &catalog)
+            .expect("Fast opens the exact original canonical store");
     assert_eq!(count, 0);
-    assert_eq!(fast_kura.replica_registry_key_capacity, NonZeroUsize::MIN);
-    assert_eq!(fast_kura.native_amx_evidence_prune_intent_max_bytes, 0);
     assert_eq!(fast_kura.blocks_in_memory, NonZeroUsize::new(256).unwrap());
-    assert_eq!(fast_kura.lane_history_retention, NonZeroUsize::MIN);
-    assert_eq!(
-        fast_kura.pending_control_sidecar_limits,
-        PendingControlSidecarLimits::default()
-    );
-}
-
-#[test]
-fn fast_init_defers_body_validation_without_rewriting_hashes() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_strict_kura_store(&temp_dir, 3);
-    let merge_path = Kura::canonical_storage_paths(temp_dir.path()).1;
-    std::fs::remove_file(&merge_path).expect("remove deferred merge log");
-    let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
-    let invalid_geometry = [0xA5; 1024];
-    std::fs::write(&geometry_path, invalid_geometry).expect("forge opaque geometry journal");
-    let deferred_geometry_artifacts = [
-        temp_dir.path().join("lane_geometry_journal.norito.tmp"),
-        temp_dir
-            .path()
-            .join("lane_geometry_journal.norito.restore.tmp"),
-        primary_blocks_dir(&temp_dir).join(".lane-incarnation.norito.tmp"),
-    ];
-    for path in &deferred_geometry_artifacts {
-        std::fs::write(path, b"Strict recovery required")
-            .expect("forge deferred geometry artifact");
-    }
-    let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
-    let forged =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
-    {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&hash_path)
-            .unwrap();
-        // Keep the marker-bound tip intact while corrupting an interior journal identity.
-        file.seek(SeekFrom::Start(SIZE_OF_BLOCK_HASH)).unwrap();
-        file.write_all(forged.as_ref()).unwrap();
-        file.flush().unwrap();
-    }
-    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.init_mode = InitMode::Fast;
-    let (kura, BlockCount(count)) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("fast init trusts the stable committed journal");
-    assert_eq!(count, 3);
-    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
-    assert!(matches!(
-        kura.disk_usage_bytes(),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "disk-usage inventory"
-        })
-    ));
-    assert!(matches!(
-        kura.merge_carrier_records(),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "merge-carrier index"
-        })
-    ));
-    assert!(matches!(
-        kura.merge_ledger_all_entries(),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "merge ledger"
-        })
-    ));
-    assert!(matches!(
-        kura.merge_ledger_latest_snapshot(1),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "merge ledger"
-        })
-    ));
-    assert!(
-        !merge_path.exists(),
-        "Fast startup must neither require nor recreate the deferred merge log"
-    );
-    assert_eq!(
-        std::fs::read(&geometry_path).expect("reread deferred geometry journal"),
-        invalid_geometry,
-        "Fast startup must not decode or repair lane geometry"
-    );
-    for path in deferred_geometry_artifacts {
-        assert_eq!(
-            std::fs::read(path).expect("reread deferred geometry artifact"),
-            b"Strict recovery required",
-            "Fast startup must ignore auxiliary geometry recovery artifacts",
-        );
-    }
-    assert!(matches!(
-        kura.latest_autonomous_lane_block_artifacts_snapshot(
-            test_network_id(b"fast-startup"),
-            1,
-            |_| Ok(0),
-        ),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "autonomous-lane latest-route pointers"
-        })
-    ));
-    assert!(
-        kura.latest_certified_frontier_storage_unknown
-            .load(Ordering::Acquire)
-    );
-    let replay_plan = crate::sumeragi::plan_v2_startup_replay(kura.as_ref())
-        .expect("Fast replay planning trusts historical journal metadata");
-    assert_eq!(replay_plan.durable_height(), 3);
-    assert_eq!(replay_plan.complete_prefix_height(), 3);
-    assert_eq!(replay_plan.pending_tip_height(), None);
-    assert!(replay_plan.validate_restored_state_height(0).is_err());
-    assert!(replay_plan.validate_restored_state_height(1).is_err());
-    assert!(replay_plan.validate_restored_state_height(2).is_err());
-    replay_plan
-        .validate_restored_state_height(3)
-        .expect("Fast requires a snapshot at the exact durable tip");
-    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
-    assert_eq!(kura.startup_replay_historical_payload_reads_for_test(), 0);
-    assert_eq!(kura.v2_finality_crypto_verifications_for_test(), 0);
-    {
-        let data = kura.block_data.lock();
-        assert!(matches!(
-            &*data,
-            BlockData::Deferred { len: 3, entries } if entries.is_empty()
-        ));
-    }
-    assert_eq!(kura.get_block_hash(nonzero!(2_usize)), Some(forged));
-    assert_eq!(kura.get_block_height_by_hash(forged), None);
-    assert!(kura.get_block(nonzero!(2_usize)).is_none());
-    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-    let mut store = new_block_store(&temp_dir);
-    assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
 }
 
 #[test]
@@ -713,111 +130,6 @@ fn hash_journal_reader_rejects_an_unmarked_entry() {
     ));
 }
 
-#[test]
-fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
-    let temp_dir = TempDir::new().unwrap();
-    populate_strict_kura_store(&temp_dir, 3);
-    let mut config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    config.init_mode = InitMode::Fast;
-    let (kura, BlockCount(count)) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("open count-only Fast Kura");
-    assert_eq!(count, 3);
-    assert_eq!(kura.blocks_count(), 3);
-
-    let oldest_hash = kura.get_block_hash(nonzero!(1_usize)).unwrap();
-    let oldest = kura
-        .get_block(nonzero!(1_usize))
-        .expect("load an old body on demand");
-    assert_eq!(oldest.hash(), oldest_hash);
-    assert_eq!(
-        kura.get_block_height_by_hash(oldest_hash),
-        None,
-        "an old read must not grow the bounded Fast reverse index"
-    );
-    assert!(matches!(
-        &*kura.block_data.lock(),
-        BlockData::Deferred { len: 3, entries } if entries.is_empty()
-    ));
-
-    let tip = kura
-        .get_block(nonzero!(3_usize))
-        .expect("load the retained-window tip on demand");
-    assert_eq!(
-        kura.get_block_height_by_hash(tip.hash()),
-        Some(nonzero!(3_usize))
-    );
-    assert!(matches!(
-        &*kura.block_data.lock(),
-        BlockData::Deferred { len: 3, entries } if entries.len() <= 2
-    ));
-    assert!(matches!(
-        kura.prune_to_height(2),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "canonical mutation"
-        })
-    ));
-    let benchmark_block = NativeBlocks::new().next();
-    assert!(matches!(
-        kura.persist_block_immediate_for_bench(&benchmark_block),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "canonical mutation"
-        })
-    ));
-    kura.append_pending_block_for_bench(benchmark_block);
-    assert_eq!(kura.blocks_count(), 3);
-    assert!(matches!(
-        kura.checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
-            &RuntimeLaneConfig::default(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            Hash::new(b"Fast must not checkpoint lane geometry"),
-            None,
-            3,
-            Some(tip.hash()),
-            Hash::new(b"Fast must not publish snapshot geometry"),
-            &BTreeMap::new(),
-        ),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "canonical mutation"
-        })
-    ));
-    assert!(matches!(
-        Kura::start(Arc::clone(&kura), ShutdownSignal::new()),
-        Err(Error::EmergencyFastAuxiliaryUnavailable {
-            subsystem: "canonical mutation"
-        })
-    ));
-    assert!(
-        kura.block_notify_rx.lock().is_some(),
-        "Fast rejection must not consume or start the writer"
-    );
-
-    let pipeline_sidecar = PipelineRecoverySidecar::new(
-        3,
-        tip.hash(),
-        PipelineDagSnapshot {
-            fingerprint: [0; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
-    kura.write_pipeline_metadata(&pipeline_sidecar);
-    let pipeline_dir = primary_blocks_dir(&temp_dir).join(PIPELINE_DIR_NAME);
-    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE).exists());
-    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE).exists());
-    assert_eq!(
-        kura.enqueue_pipeline_metadata(pipeline_sidecar),
-        PipelineSidecarEnqueueResult::RejectedEmergencyFast
-    );
-    assert_eq!(
-        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(3, tip.hash(), 8)),
-        FastpqProofEnqueueResult::RejectedEmergencyFast
-    );
-    assert!(kura.pipeline_sidecar_queue.lock().is_empty());
-    assert!(kura.fastpq_proof_queue.lock().is_empty());
-    assert_eq!(kura.flush_pipeline_sidecars(), 0);
-}
 #[test]
 fn fast_init_rejects_truncated_committed_body_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
@@ -925,12 +237,12 @@ fn fast_init_ignores_auxiliary_storage_recovery_without_mutation() {
             .with_extension("norito.tmp"),
         blocks_dir.join(DA_BLOCK_REWRITE_STAGE_FILE_NAME),
         blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME),
-        blocks_dir.join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME),
+        blocks_dir.join("canonical_association_stage.norito"),
     ];
     for path in &stage_paths {
         std::fs::write(path, staged_bytes).expect("forge pending storage stage");
     }
-    let retained_stage = blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME);
+    let retained_stage = blocks_dir.join("retained_block_rewrite_staging");
     std::fs::create_dir(&retained_stage).expect("create retained rewrite stage");
     std::fs::write(retained_stage.join("opaque"), staged_bytes)
         .expect("forge retained rewrite stage payload");
@@ -956,8 +268,8 @@ fn fast_init_ignores_prune_recovery_without_root_inventory() {
     populate_strict_kura_store(&temp_dir, 3);
     let intent_bytes = b"Strict recovery required";
     let intent_paths = [
-        temp_dir.path().join(PRUNE_INTENT_FILE_NAME),
-        temp_dir.path().join(PRUNE_INTENT_TEMP_FILE_NAME),
+        temp_dir.path().join("prune_intent.norito"),
+        temp_dir.path().join("prune_intent.norito.tmp"),
     ];
     for path in &intent_paths {
         std::fs::write(path, intent_bytes).expect("forge pending prune intent");
@@ -1112,17 +424,15 @@ fn commit_marker_boundary_is_canonical_and_ambient_independent() {
         norito::to_bytes(&marker).expect("encode alternate-layout commit marker")
     };
     assert_ne!(alternate, canonical);
-    std::fs::write(&marker_path, alternate).expect("replace marker with alternate layout");
+    std::fs::write(&marker_path, &alternate).expect("replace marker with alternate layout");
     assert!(
-        store
-            .read_commit_marker()
-            .expect("classify alternate-layout marker")
-            .is_none(),
-        "the durable marker reader must reject alternate layouts"
+        store.read_commit_marker().is_err(),
+        "alternate layouts are rejected"
     );
-    assert!(
-        !marker_path.exists(),
-        "recovery must remove a rejected main marker before reconstruction"
+    assert_eq!(
+        fs::read(&marker_path).unwrap(),
+        alternate,
+        "rejected main marker bytes remain intact"
     );
 }
 #[test]
@@ -1168,76 +478,100 @@ fn init_rejects_nonempty_tip_on_empty_commit_marker() {
     ));
 }
 #[test]
-fn finalized_prefix_preflight_rejects_commit_marker_tip_hash_mismatch() {
+fn corrupt_or_missing_commit_marker_never_reconstructs_occupied_history() {
+    for damage in [
+        "corrupt",
+        "missing",
+        "missing-and-missing-data",
+        "corrupt-and-short-data",
+    ] {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let mut blocks = NativeBlocks::new();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        let first = store.read_block_index(0).unwrap();
+        drop(store);
+        if damage.starts_with("missing") {
+            fs::remove_file(blocks_dir.join(COUNT_FILE_NAME)).unwrap();
+        } else {
+            fs::write(blocks_dir.join(COUNT_FILE_NAME), b"corrupt").unwrap();
+        }
+        if damage == "missing-and-missing-data" {
+            fs::remove_file(blocks_dir.join(DATA_FILE_NAME)).unwrap();
+        }
+        if damage == "corrupt-and-short-data" {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(blocks_dir.join(DATA_FILE_NAME))
+                .unwrap()
+                .set_len(first.start + first.length)
+                .unwrap();
+        }
+        let files = [
+            INDEX_FILE_NAME,
+            HASHES_FILE_NAME,
+            DATA_FILE_NAME,
+            COUNT_FILE_NAME,
+        ];
+        let before = files.map(|file| fs::read(blocks_dir.join(file)).ok());
+        let mut reopened = BlockStore::new(&blocks_dir);
+        assert!(
+            reopened.create_files_if_they_do_not_exist().is_err(),
+            "{damage}"
+        );
+        for (file, expected) in files.into_iter().zip(before) {
+            assert_eq!(
+                fs::read(blocks_dir.join(file)).ok(),
+                expected,
+                "startup changed {file} after {damage}"
+            );
+        }
+    }
+}
+#[test]
+fn unpublished_temp_never_rewinds_stable_commit_authority() {
     let temp_dir = TempDir::new().unwrap();
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut store = BlockStore::new(&blocks_dir);
     store.create_files_if_they_do_not_exist().unwrap();
     let mut blocks = NativeBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
-    let mut marker = store.read_commit_marker().unwrap().expect("marker");
-    marker.tip_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA8; 32])));
-    std::fs::write(
-        store.commit_marker_path(),
-        norito::to_bytes(&marker).expect("encode tampered marker"),
-    )
-    .expect("write tampered marker");
-    assert!(matches!(
-        store.preflight_v2_finalized_prefix(1),
-        Err(Error::FinalizedV2BlockMutation {
-            rewrite_from_height: 1,
-            finalized_height: 1,
-        })
-    ));
-}
-#[test]
-fn commit_marker_corruption_falls_back_to_index_count() {
-    let temp_dir = TempDir::new().unwrap();
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let mut store = BlockStore::new(&blocks_dir);
-    store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = NativeBlocks::new();
-    for _ in 0..2 {
-        store.append_block_to_chain(&blocks.next()).unwrap();
-    }
-    let marker_path = blocks_dir.join(COUNT_FILE_NAME);
-    std::fs::write(&marker_path, b"corrupt").unwrap();
+    store.append_block_to_chain(&blocks.next()).unwrap();
+    let stable = store.read_commit_marker().unwrap().unwrap();
+    let temporary = store.commit_marker_path().with_extension("norito.tmp");
+    let unpublished = norito::encode_canonical(&BlockStoreCommitMarker::new(0, None)).unwrap();
+    fs::write(&temporary, &unpublished).unwrap();
+    let files = [
+        INDEX_FILE_NAME,
+        HASHES_FILE_NAME,
+        DATA_FILE_NAME,
+        COUNT_FILE_NAME,
+    ];
+    let before = files.map(|file| fs::read(blocks_dir.join(file)).unwrap());
+    assert_eq!(store.read_commit_marker().unwrap(), Some(stable));
+    assert_eq!(
+        fs::read(&temporary).unwrap(),
+        unpublished,
+        "reading does not publish or abort a temp"
+    );
     drop(store);
     let mut reopened = BlockStore::new(&blocks_dir);
     reopened.create_files_if_they_do_not_exist().unwrap();
     assert_eq!(reopened.read_durable_index_count().unwrap(), 2);
-    let marker = reopened.read_commit_marker().unwrap().expect("marker");
-    assert_eq!(marker.count, 2);
-}
-#[test]
-fn commit_marker_corruption_falls_back_to_data_backed_count() {
-    let temp_dir = TempDir::new().unwrap();
-    let blocks_dir = primary_blocks_dir(&temp_dir);
-    let mut store = BlockStore::new(&blocks_dir);
-    store.create_files_if_they_do_not_exist().unwrap();
-    let mut blocks = NativeBlocks::new();
-    for _ in 0..2 {
-        store.append_block_to_chain(&blocks.next()).unwrap();
+    assert!(
+        !temporary.exists(),
+        "startup aborts the unpublished temp after validating stable custody"
+    );
+    for (file, expected) in files.into_iter().zip(before) {
+        assert_eq!(
+            fs::read(blocks_dir.join(file)).unwrap(),
+            expected,
+            "stable {file} changed"
+        );
     }
-    let first = store.read_block_index(0).unwrap();
-    let first_end = first.start + first.length;
-    drop(store);
-    let data_path = blocks_dir.join(DATA_FILE_NAME);
-    let data_file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&data_path)
-        .unwrap();
-    data_file.set_len(first_end).unwrap();
-    let marker_path = blocks_dir.join(COUNT_FILE_NAME);
-    std::fs::write(&marker_path, b"corrupt").unwrap();
-    let mut reopened = BlockStore::new(&blocks_dir);
-    reopened.create_files_if_they_do_not_exist().unwrap();
-    assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
-    assert_eq!(reopened.read_index_count().unwrap(), 1);
-    assert_eq!(reopened.read_hashes_count().unwrap(), 1);
-    let last = reopened.read_block_index(0).unwrap();
-    let data_len = reopened.data_file_len().unwrap();
-    assert_eq!(data_len, last.start + last.length);
 }
 #[test]
 fn index_misalignment_truncates_on_init() {
@@ -1446,14 +780,21 @@ fn deterministic_commit_marker_temp_recovers_or_rolls_back_exactly() {
         recovered.read_commit_marker().expect("recover marker temp"),
         Some(marker.clone()),
     );
+    assert!(
+        temporary_path.exists(),
+        "marker reads preserve unpublished bytes"
+    );
+    recovered.create_files_if_they_do_not_exist().unwrap();
     assert!(!temporary_path.exists());
     fs::write(&temporary_path, b"partial").expect("write partial marker temp");
     assert_eq!(
         recovered
             .read_commit_marker()
-            .expect("roll back partial marker temp"),
+            .expect("read stable marker beside a partial temp"),
         Some(marker),
     );
+    assert!(temporary_path.exists());
+    recovered.create_files_if_they_do_not_exist().unwrap();
     assert!(!temporary_path.exists());
 }
 #[test]
@@ -1465,7 +806,7 @@ fn commit_marker_rejects_oversized_deterministic_temp() {
     let temporary_path = store.commit_marker_path().with_extension("norito.tmp");
     fs::write(
         &temporary_path,
-        vec![0_u8; MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES + 1],
+        vec![0_u8; MAX_BLOCK_COMMIT_MARKER_BYTES + 1],
     )
     .expect("write oversized marker temp");
     assert!(
@@ -1532,534 +873,162 @@ fn writer_loop_records_periodic_fsync_failure_without_panic() {
 }
 
 #[test]
-fn local_full_wsv_observation_requires_complete_exact_manifest_and_finality_binding() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = NativeBlocks::new().next();
-    kura.store_block(Arc::clone(&block)).expect("store block");
-    let artifact = v2_finality_artifact_for_block(&block);
-    let blocks_dir = kura.active_blocks_dir.lock().clone();
-    let read = |artifact: &V2FinalityArtifact| {
-        Kura::local_wsv_checkpoint_hash_for_tests(&blocks_dir, artifact)
-    };
-    assert_eq!(read(&artifact).expect("absent sidecars"), None);
-    let state_hash = Hash::new(b"complete World including generic game assets and NFT reserves");
-    kura.store_wsv_checkpoint(1, block.hash(), state_hash)
-        .expect("store unbound checkpoint");
-    assert_eq!(read(&artifact).expect("pending manifest"), None);
-    let manifest = CommitManifest::new(1, block.hash(), None, None, state_hash, None)
-        .with_authenticated_v2_commit_authority(&artifact);
-    kura.store_commit_manifest(manifest.clone())
-        .expect("store complete manifest");
-    let checkpoint_path = kura.wsv_checkpoint_path(1);
-    let manifest_path = kura.commit_manifest_path(1);
-    let checkpoint_bytes = fs::read(&checkpoint_path).expect("checkpoint bytes");
-    let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
-    assert_eq!(
-        read(&artifact).expect("complete sidecars"),
-        Some(state_hash)
-    );
-    assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_bytes);
-    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_bytes);
-
-    let mut changed_artifact = artifact.clone();
-    changed_artifact
-        .commit_qc
-        .execution_commitment
-        .post_state_root = Hash::new(b"substitution");
-    assert!(read(&changed_artifact).is_err());
-    changed_artifact = artifact.clone();
-    changed_artifact.subject.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"other block"));
-    assert!(read(&changed_artifact).is_err());
-
-    let original = kura.wsv_checkpoint(1).unwrap().unwrap();
-    for changed in [
-        WsvCheckpoint {
-            height: 2,
-            ..original.clone()
-        },
-        WsvCheckpoint {
-            state_hash: Hash::new(b"different full World"),
-            ..original.clone()
-        },
-        WsvCheckpoint {
-            commit_manifest_hash: Some(Hash::new(b"different manifest")),
-            ..original.clone()
-        },
-    ] {
-        fs::write(&checkpoint_path, changed.encode()).unwrap();
-        assert!(read(&artifact).is_err());
+fn fast_init_defers_body_validation_without_rewriting_hashes() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_strict_kura_store(&temp_dir, 3);
+    let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
+    let invalid_geometry = [0xA5; 1024];
+    std::fs::write(&geometry_path, invalid_geometry).expect("forge opaque geometry journal");
+    let deferred_geometry_artifacts = [
+        temp_dir.path().join("lane_geometry_journal.norito.tmp"),
+        temp_dir
+            .path()
+            .join("lane_geometry_journal.norito.restore.tmp"),
+        primary_blocks_dir(&temp_dir).join(".lane-incarnation.norito.tmp"),
+    ];
+    for path in &deferred_geometry_artifacts {
+        std::fs::write(path, b"Strict recovery required")
+            .expect("forge deferred geometry artifact");
     }
-    fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
-    let changed_manifest = CommitManifest {
-        commit_authority_hash: None,
-        ..manifest
-    };
-    fs::write(&manifest_path, changed_manifest.encode()).unwrap();
-    assert!(read(&artifact).is_err());
-    fs::write(&manifest_path, &manifest_bytes).unwrap();
-    fs::remove_file(&manifest_path).unwrap();
-    assert!(
-        read(&artifact).is_err(),
-        "published manifest cannot disappear"
-    );
-    fs::write(&manifest_path, &manifest_bytes).unwrap();
-    fs::remove_file(&checkpoint_path).unwrap();
-    assert!(
-        read(&artifact).is_err(),
-        "complete manifest needs its checkpoint"
-    );
-    fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
-    assert_eq!(read(&artifact).unwrap(), Some(state_hash));
-}
-
-// Actual four-validator Kura durability controls. These fixture blocks test
-// storage receipt ownership; they do not claim execution or State authority.
-pub(crate) fn carrier_checkpoint_receipt_fixture() -> (
-    Arc<Kura>,
-    Arc<SignedBlock>,
-    V2FinalityArtifact,
-    KuraV2CommitReceipt,
-) {
-    let kura = Kura::blank_kura_for_testing();
-    let block = NativeBlocks::new().next();
-    kura.store_block(Arc::clone(&block))
-        .expect("store exact body");
-    let artifact = v2_finality_artifact_for_block(&block);
-    let receipt = kura
-        .store_v2_finality_artifact(&artifact)
-        .expect("durable exact three-of-four finality");
-    (kura, block, artifact, receipt)
-}
-
-#[test]
-fn carrier_checkpoint_receipt_binds_actual_writer_readback_and_exact_retry() {
-    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"exact captured State checkpoint");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .unwrap();
-    let path = kura.wsv_checkpoint_path(1);
-    let bytes = fs::read(&path).unwrap();
-    assert_eq!(
-        kura.wsv_checkpoint(1).unwrap().unwrap().state_hash(),
-        state_hash
-    );
-    assert_eq!(
-        kura.get_durable_block_hash(NonZeroUsize::new(1).unwrap()),
-        Some(block.hash())
-    );
-    let repeated = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&repeated, &artifact, state_hash)
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .expect("identical retry retains the original exact object receipt");
-    assert_eq!(fs::read(&path).unwrap(), bytes);
-    assert!(!path.with_extension("norito.tmp").exists());
-}
-
-#[test]
-fn carrier_checkpoint_receipt_rejects_other_kura_even_with_identical_durable_bytes() {
-    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let other = Kura::blank_kura_for_testing();
-    other.store_block(block).unwrap();
-    let other_finality = other.store_v2_finality_artifact(&artifact).unwrap();
-    let state_hash = Hash::new(b"same bytes distinct Kura owner");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let other_receipt = other
-        .persist_wsv_checkpoint_for_v2_commit(&other_finality, state_hash)
-        .unwrap();
-    assert!(
-        other
-            .reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-            .is_err()
-    );
-    assert!(
-        kura.reauthenticate_wsv_checkpoint_receipt(&other_receipt, &artifact, state_hash)
-            .is_err()
-    );
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .unwrap();
-    other
-        .reauthenticate_wsv_checkpoint_receipt(&other_receipt, &artifact, state_hash)
-        .unwrap();
-}
-
-#[test]
-fn carrier_checkpoint_receipt_rejects_height_and_artifact_substitution_before_writes() {
-    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"checkpoint receipt negative scope");
-    let directory = kura.wsv_checkpoint_dir();
-    assert!(!directory.exists());
-    for height in [0, 2, u64::MAX] {
-        // A mutation control on the private representation, not an authority
-        // constructor offered to production or a successful fixture path.
-        let mut wrong = finality.clone();
-        wrong.height = height;
-        assert!(
-            kura.persist_wsv_checkpoint_for_v2_commit(&wrong, state_hash)
-                .is_err()
-        );
-        assert!(!directory.exists());
-    }
-    let mut wrong = finality.clone();
-    wrong.artifact_hash = HashOf::from_untyped_unchecked(Hash::new(b"another exact artifact"));
-    assert!(
-        kura.persist_wsv_checkpoint_for_v2_commit(&wrong, state_hash)
-            .is_err()
-    );
-    assert!(!directory.exists());
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
-    let mut wrong_artifact = artifact.clone();
-    wrong_artifact.commit_qc.aggregate_signature[0] ^= 1;
-    assert!(
-        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &wrong_artifact, state_hash)
-            .is_err()
-    );
-    assert_eq!(fs::read(kura.wsv_checkpoint_path(1)).unwrap(), bytes);
-}
-
-#[test]
-fn carrier_checkpoint_receipt_preserves_immutable_state_and_manifest_binding() {
-    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"retained immutable checkpoint");
-    let _receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let manifest = CommitManifest::new(1, block.hash(), None, None, state_hash, None)
-        .with_authenticated_v2_commit_authority(&artifact);
-    kura.store_commit_manifest(manifest.clone()).unwrap();
-    let bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
-    assert!(
-        kura.persist_wsv_checkpoint_for_v2_commit(&finality, Hash::new(b"different State"))
-            .is_err()
-    );
-    assert_eq!(fs::read(kura.wsv_checkpoint_path(1)).unwrap(), bytes);
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .unwrap();
-    assert_eq!(
-        kura.commit_manifest_binding_state(&manifest).unwrap(),
-        CommitManifestBindingState::Bound
-    );
-}
-
-#[test]
-fn carrier_checkpoint_receipt_rejects_tampered_or_replaced_original_checkpoint() {
-    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"readback original object");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let path = kura.wsv_checkpoint_path(1);
-    let bytes = fs::read(&path).unwrap();
-    let retained_path = path.with_extension("original-object");
-    fs::rename(&path, &retained_path).unwrap();
-    fs::write(&path, &bytes).unwrap();
-    assert!(
-        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-            .is_err(),
-        "byte equality does not substitute the original durable namespace object"
-    );
-    fs::write(&path, b"corrupt checkpoint").unwrap();
-    let corrupt = fs::read(&path).unwrap();
-    assert!(
-        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-            .is_err()
-    );
-    assert_eq!(
-        fs::read(&path).unwrap(),
-        corrupt,
-        "malformed stable input is not overwritten"
-    );
-    assert_eq!(fs::read(&retained_path).unwrap(), bytes);
-}
-
-#[test]
-fn carrier_checkpoint_receipt_refuses_real_write_and_post_sync_readback_failures() {
-    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"checkpoint error custody");
-    kura.fail_next_wsv_checkpoint_write
-        .store(true, Ordering::Relaxed);
-    assert!(
-        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-            .is_err()
-    );
-    assert!(!kura.wsv_checkpoint_path(1).exists());
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .unwrap();
-    carrier_checkpoint::corrupt_next_checkpoint_readback_for_test();
-    assert!(
-        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-            .is_err()
-    );
-    assert!(
-        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-            .is_err()
-    );
-}
-
-#[test]
-fn carrier_checkpoint_receipt_reauthenticates_under_the_original_joint_lease() {
-    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"held original durability boundary");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let other = Kura::blank_kura_for_testing();
-    other.store_block(block).unwrap();
-    let other_finality = other.store_v2_finality_artifact(&artifact).unwrap();
-    let foreign = other
-        .persist_wsv_checkpoint_for_v2_commit(&other_finality, state_hash)
-        .unwrap();
-    let lease = kura.try_publication_lease().unwrap();
-    for lock in [
-        &kura.prune_lock,
-        &kura.canonical_chain_lock,
-        &kura.lane_geometry_lock,
-        &kura.sidecar_lock,
-    ] {
-        assert!(
-            lock.try_lock().is_none(),
-            "the actual storage fence is retained"
-        );
-    }
-    lease
-        .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
-        .expect("exact read never reacquires its held storage fences");
-    assert!(
-        lease
-            .reauthenticate_checkpoint(&foreign, &artifact, state_hash)
-            .is_err()
-    );
-    assert!(
-        lease
-            .reauthenticate_checkpoint(&receipt, &artifact, Hash::new(b"other State"))
-            .is_err()
-    );
-    let path = kura.wsv_checkpoint_path(1);
-    let bytes = fs::read(&path).unwrap();
-    fs::rename(&path, path.with_extension("retained-original")).unwrap();
-    fs::write(&path, bytes).unwrap();
-    assert!(
-        lease
-            .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
-            .is_err(),
-        "internal exclusion does not excuse checking external file substitution"
-    );
-    drop(lease);
-    assert!(kura.try_publication_lease().is_ok());
-}
-
-#[test]
-fn carrier_checkpoint_receipt_retries_failed_ancestor_sync_without_replacing_the_file() {
-    for target_index in [0, 1] {
-        let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
-        let state_hash = Hash::new(b"actual interrupted checkpoint durability");
-        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
-        assert!(
-            kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-                .is_err(),
-            "no receipt before every held ancestor durability barrier"
-        );
-        let path = kura.wsv_checkpoint_path(1);
-        let directory = kura.wsv_checkpoint_dir();
-        let before = kura
-            .read_regular_sidecar_snapshot(&path, &directory, MAX_WSV_CHECKPOINT_BYTES)
-            .unwrap()
-            .expect("actual stable file was promoted before the injected failure");
-        let receipt = kura
-            .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+    let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
+    let forged =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&hash_path)
             .unwrap();
-        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-            .unwrap();
-        let after = kura
-            .read_regular_sidecar_snapshot(&path, &directory, MAX_WSV_CHECKPOINT_BYTES)
-            .unwrap()
-            .unwrap();
-        assert_eq!(before.bytes, after.bytes);
-        assert!(
-            Kura::stable_sidecar_file_binding_unchanged(&before.metadata, &after.metadata),
-            "retry must synchronize the original exact file instead of replacing it"
-        );
+        // Keep the marker-bound tip intact while corrupting an interior journal identity.
+        file.seek(SeekFrom::Start(SIZE_OF_BLOCK_HASH)).unwrap();
+        file.write_all(forged.as_ref()).unwrap();
+        file.flush().unwrap();
     }
-}
-
-#[test]
-fn carrier_checkpoint_receipt_retains_original_ancestor_objects() {
-    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
-    let state_hash = Hash::new(b"original checkpoint ancestor ownership");
-    let receipt = kura
-        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
-        .unwrap();
-    let directory = kura.wsv_checkpoint_dir();
-    let displaced = directory.with_extension("retained-original");
-    let path = kura.wsv_checkpoint_path(1);
-    let bytes = fs::read(&path).unwrap();
-    fs::rename(&directory, &displaced).unwrap();
-    fs::create_dir(&directory).unwrap();
-    fs::write(&path, &bytes).unwrap();
-    let lease = kura.try_publication_lease().unwrap();
-    assert!(
-        lease
-            .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
-            .is_err(),
-        "identical bytes below a replacement ancestor cannot replace the held namespace"
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    config.init_mode = InitMode::Fast;
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("fast init trusts the stable committed journal");
+    assert_eq!(count, 3);
+    assert_eq!(kura.canonical_body_bytes_read_for_test(), 0);
+    assert!(matches!(
+        kura.disk_usage_bytes(),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "disk-usage inventory"
+        })
+    ));
+    assert_eq!(
+        std::fs::read(&geometry_path).expect("reread deferred geometry journal"),
+        invalid_geometry,
+        "Fast startup must not decode or repair lane geometry"
     );
-    drop(lease);
-    fs::remove_file(&path).unwrap();
-    fs::remove_dir(&directory).unwrap();
-    fs::rename(&displaced, &directory).unwrap();
-    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
-        .expect("the original live file and ancestor objects are retained");
-}
-
-#[test]
-fn v2_finality_retry_repeats_each_failed_directory_barrier_on_the_exact_file() {
-    // Each iteration starts with a real successful rename and a refused receipt.
-    // A second injected barrier failure proves that the existing-file path
-    // repeats synchronization rather than accepting presence as durability.
-    for target_index in 0..4 {
-        let kura = Kura::blank_kura_for_testing();
-        let block = NativeBlocks::new().next();
-        kura.store_block(Arc::clone(&block)).unwrap();
-        let artifact = v2_finality_artifact_for_block(&block);
-        let path = kura.v2_finality_artifact_path(artifact.height);
-        let directory = path.parent().unwrap();
-        kura.fail_next_atomic_write_after_rename_for_test(&path);
-        assert!(kura.store_v2_finality_artifact(&artifact).is_err());
-        let before = kura
-            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
-            .unwrap()
-            .expect("the real rename happened before its refused receipt");
+    for path in deferred_geometry_artifacts {
         assert_eq!(
-            kura.open_bound_progress_namespace(&path, &path)
-                .unwrap()
-                .directories
-                .len(),
-            4
+            std::fs::read(path).expect("reread deferred geometry artifact"),
+            b"Strict recovery required",
+            "Fast startup must ignore auxiliary geometry recovery artifacts",
         );
-        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
-        assert!(
-            kura.store_v2_finality_artifact(&artifact).is_err(),
-            "an existing finality file cannot bypass a failed ancestor sync"
-        );
-        let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
-        assert_v2_commit_receipt_matches_artifact(&receipt, &artifact);
-        let after = kura
-            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
-            .unwrap()
-            .unwrap();
-        assert_eq!(before.bytes, after.bytes);
-        assert!(Kura::stable_sidecar_file_binding_unchanged(
-            &before.metadata,
-            &after.metadata,
+    }
+    {
+        let data = kura.block_data.lock();
+        assert!(matches!(
+            &*data,
+            BlockData::Deferred { len: 3, entries } if entries.is_empty()
         ));
-        assert_eq!(
-            kura.v2_finality_artifact(artifact.height).unwrap(),
-            Some(artifact)
-        );
     }
+    assert_eq!(kura.get_block_hash(nonzero!(2_usize)), Some(forged));
+    assert_eq!(kura.get_block_height_by_hash(forged), None);
+    assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    let mut store = new_block_store(&temp_dir);
+    assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![forged]);
 }
 
 #[test]
-fn v2_finality_retry_resync_rejects_replaced_verified_file_and_changed_bytes() {
-    for replace_file in [false, true] {
-        let (kura, _, artifact, _) = carrier_checkpoint_receipt_fixture();
-        let path = kura.v2_finality_artifact_path(artifact.height);
-        let directory = path.parent().unwrap();
-        let verified = kura
-            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
-            .unwrap()
-            .unwrap();
-        if replace_file {
-            fs::rename(&path, path.with_extension("retained-original")).unwrap();
-            fs::write(&path, &verified.bytes).unwrap();
-        } else {
-            fs::write(&path, b"different finality bytes").unwrap();
-        }
-        let _prune = kura.prune_lock.lock();
-        let _canonical = kura.canonical_chain_lock.lock();
-        assert!(
-            kura.resync_verified_v2_finality_record(&path, directory, &verified)
-                .is_err(),
-            "synchronizing another file or modified content must not reuse the verified identity"
-        );
-    }
-}
+fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
+    let temp_dir = TempDir::new().unwrap();
+    populate_strict_kura_store(&temp_dir, 3);
+    let mut config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+    config.init_mode = InitMode::Fast;
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open count-only Fast Kura");
+    assert_eq!(count, 3);
+    assert_eq!(kura.blocks_count(), 3);
 
-#[test]
-fn commit_manifest_binds_checkpoint_only_after_every_directory_barrier() {
-    for target_index in 0..4 {
-        let kura = Kura::blank_kura_for_testing();
-        establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
-        let block = NativeBlocks::new().next();
-        kura.store_block(Arc::clone(&block)).unwrap();
-        let artifact = v2_finality_artifact_for_block(&block);
-        let checkpoint = Hash::new(b"original captured checkpoint");
-        kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)
-            .unwrap();
-        let manifest = CommitManifest::new(
-            artifact.height,
-            artifact.block_hash,
-            None,
-            None,
-            checkpoint,
-            None,
-        )
-        .with_authenticated_v2_commit_authority(&artifact);
-        assert!(!kura.commit_manifest_dir().exists());
-        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
-        assert!(kura.store_commit_manifest(manifest.clone()).is_err());
-        assert_eq!(
-            kura.commit_manifest(artifact.height).unwrap(),
-            Some(manifest.clone())
-        );
-        let path = kura.commit_manifest_path(artifact.height);
-        assert_eq!(
-            kura.open_bound_progress_namespace(&path, &path)
-                .unwrap()
-                .directories
-                .len(),
-            4
-        );
-        assert_eq!(
-            kura.commit_manifest_binding_state(&manifest).unwrap(),
-            CommitManifestBindingState::Unbound,
-            "a refused directory barrier must not publish the checkpoint digest",
-        );
-        assert!(
-            kura.v2_finality_artifact(artifact.height)
-                .unwrap()
-                .is_none()
-        );
-        let plan = crate::sumeragi::v2_recovery::plan_v2_startup_replay(&kura)
-            .expect("manifest-before-binding interruption remains a recoverable pending tip");
-        assert_eq!(plan.complete_prefix_height(), 0);
-        assert_eq!(plan.pending_tip_height(), Some(artifact.height));
-        drop(plan);
-        kura.finish_v2_startup_finality_verification();
-        kura.store_commit_manifest(manifest.clone()).unwrap();
-        assert!(kura.commit_manifest_has_wsv_binding(&manifest).unwrap());
-        assert_eq!(
-            kura.wsv_checkpoint(artifact.height)
-                .unwrap()
-                .unwrap()
-                .state_hash,
-            checkpoint
-        );
-    }
+    let oldest_hash = kura.get_block_hash(nonzero!(1_usize)).unwrap();
+    let oldest = kura
+        .get_block(nonzero!(1_usize))
+        .expect("load an old body on demand");
+    assert_eq!(oldest.hash(), oldest_hash);
+    assert_eq!(
+        kura.get_block_height_by_hash(oldest_hash),
+        None,
+        "an old read must not grow the bounded Fast reverse index"
+    );
+    assert!(matches!(
+        &*kura.block_data.lock(),
+        BlockData::Deferred { len: 3, entries } if entries.is_empty()
+    ));
+
+    let tip = kura
+        .get_block(nonzero!(3_usize))
+        .expect("load the retained-window tip on demand");
+    assert_eq!(
+        kura.get_block_height_by_hash(tip.hash()),
+        Some(nonzero!(3_usize))
+    );
+    assert!(matches!(
+        &*kura.block_data.lock(),
+        BlockData::Deferred { len: 3, entries } if entries.len() <= 2
+    ));
+    assert!(matches!(
+        kura.store_block(Arc::clone(&tip)),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    let benchmark_block = NativeBlocks::new().next();
+    assert!(matches!(
+        kura.persist_block_immediate_for_bench(&benchmark_block),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    kura.append_pending_block_for_bench(benchmark_block);
+    assert_eq!(kura.blocks_count(), 3);
+    assert!(matches!(
+        Kura::start(Arc::clone(&kura), ShutdownSignal::new()),
+        Err(Error::EmergencyFastAuxiliaryUnavailable {
+            subsystem: "canonical mutation"
+        })
+    ));
+    assert!(
+        kura.block_notify_rx.lock().is_some(),
+        "Fast rejection must not consume or start the writer"
+    );
+
+    let pipeline_sidecar = PipelineRecoverySidecar::new(
+        3,
+        tip.hash(),
+        PipelineDagSnapshot {
+            fingerprint: [0; 32],
+            key_count: 0,
+        },
+        Vec::new(),
+    );
+    kura.write_pipeline_metadata(&pipeline_sidecar);
+    let pipeline_dir = primary_blocks_dir(&temp_dir).join(PIPELINE_DIR_NAME);
+    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE).exists());
+    assert!(!pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE).exists());
+    assert_eq!(
+        kura.enqueue_pipeline_metadata(pipeline_sidecar),
+        PipelineSidecarEnqueueResult::RejectedEmergencyFast
+    );
+    assert_eq!(
+        kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(3, tip.hash(), 8)),
+        FastpqProofEnqueueResult::RejectedEmergencyFast
+    );
+    assert!(kura.pipeline_sidecar_queue.lock().is_empty());
+    assert!(kura.fastpq_proof_queue.lock().is_empty());
+    assert_eq!(kura.flush_pipeline_sidecars(), 0);
 }

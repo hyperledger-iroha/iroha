@@ -9,6 +9,8 @@ use norito::{
 
 const FIXTURE_NETWORK_PREFIX: u16 = 753;
 
+type DecodeFn = fn(&[u8], u16) -> CodecResult<String>;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -70,7 +72,7 @@ fn roundtrip(value: &Value) -> InstructionBox {
         decode_instruction_frame(&archive, FIXTURE_NETWORK_PREFIX).is_err(),
         "archive is not a public frame"
     );
-    let encodings: [(Vec<u8>, fn(&[u8], u16) -> CodecResult<String>); 2] = [
+    let encodings: [(Vec<u8>, DecodeFn); 2] = [
         (archive, decode_instruction_archive),
         (frame, decode_instruction_frame),
     ];

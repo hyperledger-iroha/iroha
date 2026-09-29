@@ -170,7 +170,7 @@ pub(crate) async fn enact(
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public TLE fixture")?;
-    let install_height = next_queue_plan_execution_height(
+    let install_height = next_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "threshold-key installation",
@@ -271,7 +271,7 @@ pub(crate) async fn enact(
     assert_eq!(expected_bodies, expected_body_roles);
     assert_eq!(initial.attempt().stage, GovernanceStageV1::Rules);
     let request_height =
-        next_queue_plan_execution_height(&client, 0, "canonical sortition registration").await?;
+        next_execution_height(&client, 0, "canonical sortition registration").await?;
     let sortition_pulse_height = request_height + 4;
     let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
     let mut election_ids = BTreeMap::new();
@@ -449,7 +449,7 @@ pub(crate) async fn enact(
     let roster_seal_height = common_invitation_close[0]
         .checked_add(1)
         .ok_or_else(|| eyre!("invitation close height overflow"))?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         &network,
         &client,
         roster_seal_height,
@@ -581,7 +581,7 @@ pub(crate) async fn enact(
     .await?;
     let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
     let registered_at_height =
-        next_queue_plan_execution_height(&client, 0, "timed-OVN ballot registration").await?;
+        next_execution_height(&client, 0, "timed-OVN ballot registration").await?;
     let registration_close_height = registered_at_height + REGISTRATION_PHASE_BLOCKS;
     let survivor_freeze_height = registration_close_height + SURVIVOR_PHASE_BLOCKS;
     let commitment_close_height = survivor_freeze_height + COMMITMENT_PHASE_BLOCKS;
@@ -677,7 +677,7 @@ pub(crate) async fn enact(
         "registration close before the frozen exact height",
     )
     .await?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         &network,
         &client,
         registration_close_height,
@@ -737,7 +737,7 @@ pub(crate) async fn enact(
         "survivor freeze before the frozen exact height",
     )
     .await?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         &network,
         &client,
         survivor_freeze_height,
@@ -820,7 +820,7 @@ pub(crate) async fn enact(
         "timed-OVN corpus freeze before the frozen exact height",
     )
     .await?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         &network,
         &client,
         commitment_close_height,

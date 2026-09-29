@@ -41,17 +41,23 @@ fn format_evidence_summary(idx: usize, item: &SumeragiEvidenceAuditRecord) -> St
         SumeragiEvidencePenaltyStatus::Applied { height } => ("applied", Some(height)),
         SumeragiEvidencePenaltyStatus::Cancelled { height } => ("cancelled", Some(height)),
     };
+    let offenders = item
+        .offenders
+        .iter()
+        .map(|offender| format!("{}:{}", offender.signer, offender.peer_id))
+        .collect::<Vec<_>>()
+        .join(",");
     let mut summary = format!(
-        "{ordinal}: kind={} class={} height={} view={} epoch={} signer={} context_id={} artifact_hash_1={} artifact_hash_2={} recorded_height={} recorded_view={} recorded_ms={} consensus_admitted_height={} penalty_status={penalty_status}",
+        "{ordinal}: kind={} class={} instance={} height={} epoch={} context_id={} authority_generation={} offenders=[{offenders}] safety_violation={} native_frame_hash={} recorded_height={} recorded_view={} recorded_ms={} consensus_admitted_height={} penalty_status={penalty_status}",
         item.kind,
         item.class,
+        item.instance,
         item.height,
-        item.view,
         item.epoch,
-        item.signer,
         item.context_id,
-        item.artifact_hash_1,
-        item.artifact_hash_2,
+        item.authority_generation,
+        item.safety_violation,
+        item.native_frame_hash,
         item.recorded_height,
         item.recorded_view,
         item.recorded_ms,
@@ -69,15 +75,27 @@ mod tests {
 
     fn record(penalty_status: SumeragiEvidencePenaltyStatus) -> SumeragiEvidenceAuditRecord {
         SumeragiEvidenceAuditRecord {
-            kind: iroha::client::SumeragiEvidenceKind::SumeragiV2Equivocation,
+            kind: iroha::client::SumeragiEvidenceKind::NativeSumeragiEvidence,
             class: iroha::client::SumeragiEvidenceClass::PhaseVote,
             height: 42,
-            view: 7,
             epoch: 1,
-            signer: 3,
             context_id: iroha::client::SumeragiEvidenceHash::from_bytes([0xAA; 32]),
-            artifact_hash_1: iroha::client::SumeragiEvidenceHash::from_bytes([0xBB; 32]),
-            artifact_hash_2: iroha::client::SumeragiEvidenceHash::from_bytes([0xCC; 32]),
+            instance: iroha::client::SumeragiEvidenceHash::from_bytes([0xBB; 32]),
+            authority_generation: iroha::client::SumeragiEvidenceHash::from_bytes([0xCC; 32]),
+            native_frame_hash: iroha::client::SumeragiEvidenceHash::from_bytes([0xDD; 32]),
+            offenders: vec![iroha::client::SumeragiEvidenceOffender {
+                signer: 3,
+                peer_id: iroha_model_base::peer::PeerId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![0x31; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .expect("evidence offender key")
+                    .public_key()
+                    .clone(),
+                ),
+            }],
+            safety_violation: false,
             recorded_height: 43,
             recorded_view: 8,
             recorded_ms: 1234,
@@ -89,11 +107,15 @@ mod tests {
     #[test]
     fn format_evidence_summary_includes_every_typed_field_and_pending_status() {
         let summary = format_evidence_summary(0, &record(SumeragiEvidencePenaltyStatus::Pending));
-        assert!(summary.contains("1: kind=SumeragiV2Equivocation"));
+        assert!(summary.contains("1: kind=NativeSumeragiEvidence"));
         assert!(summary.contains("height=42"));
-        assert!(summary.contains("view=7"));
+        assert!(summary.contains("recorded_view=8"));
         assert!(summary.contains("epoch=1"));
-        assert!(summary.contains("signer=3"));
+        assert!(summary.contains("offenders=[3:ea0130"));
+        assert!(summary.contains("instance="));
+        assert!(summary.contains("authority_generation="));
+        assert!(summary.contains("safety_violation=false"));
+        assert!(summary.contains("native_frame_hash="));
         assert!(summary.contains("class=phase_vote"));
         assert!(summary.contains("context_id="));
         assert!(summary.contains("consensus_admitted_height=43"));
@@ -109,7 +131,7 @@ mod tests {
             &record(SumeragiEvidencePenaltyStatus::Applied { height: 44 }),
         );
         assert!(
-            summary.starts_with("6: kind=SumeragiV2Equivocation"),
+            summary.starts_with("6: kind=NativeSumeragiEvidence"),
             "unexpected summary: {summary}"
         );
         assert!(summary.contains("penalty_status=applied"));

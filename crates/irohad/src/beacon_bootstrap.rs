@@ -27,8 +27,8 @@ use iroha_core::state::{
 };
 use iroha_core::sumeragi::native_journal::{NativeJournalCursor, authenticate_signed_genesis};
 use iroha_core::validator_committee_evidence::{
-    ValidatorCommitteeSelectionEvidenceV1, VerifiedValidatorCommitteeSelectionV1,
-    verify_validator_committee_selection_evidence_v1,
+    COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeSelectionEvidenceV1,
+    VerifiedValidatorCommitteeSelectionV1, verify_validator_committee_selection_evidence_v1,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{

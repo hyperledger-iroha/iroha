@@ -586,7 +586,6 @@ mod tests {
         test_chain::{CertifiedTestChain, Signers},
     };
     use iroha_crypto::{Hash, HashOf};
-    use iroha_sumeragi::crypto::verify_qc;
 
     #[test]
     fn native_mint_witness_requires_independent_tip_and_actual_pasta_equations() {
@@ -732,14 +731,13 @@ mod tests {
             )
             .unwrap();
         let verifier = NativePastaVerifier::new(chain.instance(), chain.network_id());
-        verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &crypto,
-            &verifier,
             &chain.instance(),
             &header.epoch,
             &config.committee,
-            qc,
         )
+        .verify_qc(&verifier, qc)
         .unwrap();
         let other = chain.commit_qc(
             10,
@@ -748,14 +746,13 @@ mod tests {
             true,
             Signers::LastThree,
         );
-        verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &crypto,
-            &verifier,
             &chain.instance(),
             &header.epoch,
             &config.committee,
-            &other,
         )
+        .verify_qc(&verifier, &other)
         .unwrap();
         assert_ne!(qc.signers, other.signers);
         assert_eq!(qc.attestation_witness, other.attestation_witness);
@@ -828,7 +825,7 @@ mod tests {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         let stranger = KeyPair::from_seed(vec![0xF1; 32], Algorithm::Ed25519);
-        let request = crate::queue::kagemusha_top_up_admission_tests::fixture_top_up_request(
+        let request = crate::queue::tests::kagemusha_top_up_admission_tests::fixture_top_up_request(
             AccountId::new(stranger.public_key().clone()),
             chain.network_id(),
         );
@@ -906,7 +903,8 @@ mod tests {
         let mut backing = ChargedBuffer::new(4, &budget).unwrap();
         backing.append(&[1, 2, 3, 4]).unwrap();
         let pointer = backing.as_slice().as_ptr();
-        let witness = ResultWitness::from_charged(backing, &budget).unwrap();
+        let witness = ResultWitness::from_charged(backing, &budget)
+            .unwrap_or_else(|(_, error)| panic!("admit original witness: {error:?}"));
         let receipt = LocalCommitAttestation {
             source,
             key: [7; 48],

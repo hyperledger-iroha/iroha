@@ -287,7 +287,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     let state = chain.state();
     crate::sumeragi::evidence::validate_persisted_records(&state.view())
         .expect("original authenticated history and lifecycle");
-    let original_tip = state.view().native_execution_tip();
+    let original_tip = *state.view().native_execution_tip.get();
     {
         let mut records = state.world.consensus_evidence.block();
         let mut record = records.get(&evidence_key).unwrap().clone();
@@ -301,10 +301,13 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         records.commit();
     }
     assert_eq!(
-        state.view().native_execution_tip(),
+        *state.view().native_execution_tip.get(),
         original_tip,
         "negative snapshot mutation must not replace original native history"
     );
+    let invalid_lifecycle = crate::sumeragi::evidence::validate_persisted_records(&state.view())
+        .expect_err("an overdue restored pending penalty must be rejected");
+    assert!(invalid_lifecycle.to_string().contains("restored penalty lifecycle is impossible"));
     let snapshot_bytes = exact_snapshot_payload_bytes(state);
     let key_pair = checked_random_snapshot_keypair();
     write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
@@ -332,15 +335,8 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
         Err(error) => error,
     };
-    let TryReadError::Serialization(error) = error else {
-        panic!("unexpected snapshot restore error: {error:?}");
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("restored penalty lifecycle is impossible"),
-        "normal restore must surface the persisted evidence lifecycle violation: {error}"
-    );
+    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired),
+        "a local export cannot bypass original replay even before lifecycle validation: {error:?}");
 }
 #[tokio::test]
 async fn generated_snapshot_passes_restart_validation_before_publication() {
@@ -1394,7 +1390,6 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     assert_eq!(world.sccp_bridge_keys().len(), 2);
     assert_eq!(world.sccp_rosters().len(), 2);
     assert_eq!(world.sccp_block_leaves().len(), 2);
-    assert_eq!(world.sccp_light_client_checkpoint_expiry().len(), 2);
     assert_eq!(*world.sccp_roster_current(), 2);
     assert!(world.sccp_parameters().is_some());
 }

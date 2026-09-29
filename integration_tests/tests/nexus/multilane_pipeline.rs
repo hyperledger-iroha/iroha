@@ -167,13 +167,14 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+
+        native_context_archive_max_bytes: defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+
         membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     };
     let (kura, block_count) =
@@ -207,13 +208,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             "expected blocks dir for lane {} at {}",
             entry.alias,
             blocks_dir.display()
-        );
-        let merge_log = identity.merge_log_path(temp.path());
-        assert!(
-            merge_log.is_file(),
-            "expected merge log for lane {} at {}",
-            entry.alias,
-            merge_log.display()
         );
     }
     let (core_account, core_keys) = gen_account_in("core");

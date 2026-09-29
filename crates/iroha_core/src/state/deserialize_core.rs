@@ -548,7 +548,6 @@ impl KuraSeed {
                 nexus,
                 chain_id,
                 network_id,
-                snapshot_v2_bootstrap_candidate: None,
                 nexus_runtime_restored_from_snapshot: false,
                 kura: self.kura,
                 query_handle: self.query_handle,
@@ -651,7 +650,7 @@ impl KuraSeed {
         replay_nexus: Option<iroha_config::parameters::actual::Nexus>,
         operation_index_refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     ) -> Result<Box<State>, StateRestoreError> {
-        const WITHOUT_BOOTSTRAP: &[&str] = &[
+        const CANONICAL_FIELDS: &[&str] = &[
             "chain_id",
             "network_id",
             "world",
@@ -686,48 +685,7 @@ impl KuraSeed {
             "commit_topology",
             "prev_commit_topology",
         ];
-        const WITH_BOOTSTRAP: &[&str] = &[
-            "chain_id",
-            "network_id",
-            "sumeragi_v2_bootstrap",
-            "world",
-            "nexus_runtime",
-            "native_execution_tip",
-            "block_hashes",
-            "transactions",
-            "public_lane_validators",
-            "public_lane_stake_shares",
-            "public_lane_rewards",
-            "public_lane_reward_claims",
-            "public_lane_reward_accruals",
-            "public_lane_reward_reserves",
-            "public_lane_stake_custody",
-            "public_lane_stake_reserves",
-            "space_directory_manifests",
-            "capacity_fee_ledger",
-            "capacity_disputes",
-            "provider_credit_ledger",
-            "sorafs_pricing",
-            "soradns_directory_records",
-            "soradns_directory_pending",
-            "soradns_directory_history",
-            "soradns_directory_prev_of",
-            "soradns_directory_revocations",
-            "soradns_release_signers",
-            "soradns_directory_latest",
-            "soradns_rotation_policy",
-            "soradns_last_publish_ms",
-            "soradns_history_len",
-            "sccp",
-            "commit_topology",
-            "prev_commit_topology",
-        ];
-        let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
-            WITH_BOOTSTRAP
-        } else {
-            WITHOUT_BOOTSTRAP
-        };
-        map.require_source_order(expected_order, "state")?;
+        map.require_source_order(CANONICAL_FIELDS, "state")?;
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
@@ -1107,8 +1065,6 @@ impl KuraSeed {
                 message,
             })?;
         }
-        let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
-            take_optional(&mut map, "sumeragi_v2_bootstrap")?;
         reject_unknown(&map, "state")?;
         crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
             |message| json::Error::InvalidField {
@@ -1149,7 +1105,6 @@ impl KuraSeed {
                 nexus: restored_nexus,
                 chain_id,
                 network_id,
-                snapshot_v2_bootstrap_candidate,
                 nexus_runtime_restored_from_snapshot,
                 kura: self.kura,
                 query_handle: self.query_handle,
@@ -1396,14 +1351,12 @@ fn nexus_from_snapshot_runtime(
     restore_snapshot_nexus_owner_policy(&mut nexus, runtime.owner_policy)?;
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
     nexus.lane_catalog = catalog;
-    iroha_data_model::merge::validate_merge_lane_authority_geometry(
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-    )
-    .map_err(|error| json::Error::InvalidField {
-        field: "nexus_runtime.owner_policy.dataspaces".to_owned(),
-        message: error.to_string(),
-    })?;
+    validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog).map_err(
+        |error| json::Error::InvalidField {
+            field: "nexus_runtime.owner_policy.dataspaces".to_owned(),
+            message: error.to_string(),
+        },
+    )?;
     validate_nexus_routing_policy(
         &nexus.routing_policy,
         &nexus.lane_catalog,

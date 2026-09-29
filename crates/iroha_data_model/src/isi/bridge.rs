@@ -41,9 +41,6 @@ fn bridge_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let proof = super::decode_aos_canonical_field::<crate::bridge::BridgeProof>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -59,9 +56,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let receipt = super::decode_aos_canonical_field::<crate::bridge::BridgeReceipt>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -132,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_bridge_proof_json_rejects_retired_replay_witness_field() {
+    fn submit_bridge_proof_json_rejects_unknown_instruction_fields() {
         let instruction = SubmitBridgeProof::new(proof());
         let canonical =
             norito::json::to_json(&instruction).expect("serialize bridge proof instruction JSON");
@@ -141,11 +135,11 @@ mod tests {
                 .expect("canonical bridge proof instruction JSON decodes"),
             instruction
         );
-        let retired = canonical.replacen('{', "{\"replay_witness\":null,", 1);
-        assert_ne!(retired, canonical);
+        let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
+        assert_ne!(hostile, canonical);
         assert!(
-            norito::json::from_json::<SubmitBridgeProof>(&retired).is_err(),
-            "the retired SCCP replay witness must not decode"
+            norito::json::from_json::<SubmitBridgeProof>(&hostile).is_err(),
+            "bridge proof instruction JSON must reject unknown fields"
         );
     }
 

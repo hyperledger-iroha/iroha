@@ -6,24 +6,24 @@ async fn current_admission_http(
 ) -> Response {
     use iroha_version::codec::EncodeVersioned as _;
     use tower::ServiceExt as _;
-    let body = if endpoint == uri::TRANSACTIONS_BATCH {
+    let body = if endpoint == route_catalog::pipeline::TRANSACTIONS_BATCH.path() {
         norito::to_bytes(&vec![transaction.encode_versioned()]).unwrap()
-    } else if endpoint == uri::TRANSACTION_ENTRYPOINT {
+    } else if endpoint == route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path() {
         TransactionEntrypoint::External(transaction.clone()).encode_versioned()
     } else {
         transaction.encode_versioned()
     };
     let router = axum::Router::new()
         .route(
-            uri::TRANSACTION,
+            route_catalog::pipeline::TRANSACTION.path(),
             axum::routing::post(super::handler_post_transaction),
         )
         .route(
-            uri::TRANSACTION_ENTRYPOINT,
+            route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
             axum::routing::post(super::handler_post_transaction_entrypoint),
         )
         .route(
-            uri::TRANSACTIONS_BATCH,
+            route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
             axum::routing::post(super::handler_post_transactions_batch),
         )
         .with_state(app);
@@ -81,9 +81,9 @@ async fn assert_unsupported_current_admission(response: Response) {
 async fn current_http_admission_retains_exact_canonical_input_in_local_custody() {
     use iroha_version::codec::EncodeVersioned as _;
     for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+        route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
     ] {
         let (app, key, _, _) = lifecycle_ordinary_fixture(true);
         let transaction = lifecycle_ordinary_transaction(
@@ -149,9 +149,9 @@ async fn current_http_admission_rejects_actual_multiroute_before_local_custody()
     );
     let before = lifecycle_pending_wire(&app);
     for endpoint in [
-        uri::TRANSACTION,
-        uri::TRANSACTION_ENTRYPOINT,
-        uri::TRANSACTIONS_BATCH,
+        route_catalog::pipeline::TRANSACTION.path(),
+        route_catalog::pipeline::TRANSACTION_ENTRYPOINT.path(),
+        route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
     ] {
         assert_unsupported_current_admission(
             current_admission_http(app.clone(), &transaction, endpoint).await,

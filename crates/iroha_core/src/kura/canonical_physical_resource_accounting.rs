@@ -217,7 +217,6 @@ impl Kura {
             HASHES_FILE_NAME,
             DATA_FILE_NAME,
             COUNT_FILE_NAME,
-            VERIFIED_SNAPSHOT_TAIL_FILE_NAME,
             EVICTION_COMPACTION_STAGE_FILE_NAME,
             EVICTION_COMPACTION_DATA_FILE_NAME,
             EVICTION_COMPACTION_INDEX_FILE_NAME,
@@ -225,13 +224,7 @@ impl Kura {
         ]
         .into_iter()
         .map(|name| store.path_to_blockchain.join(name))
-        .chain([
-            store.commit_marker_path().with_extension("norito.tmp"),
-            store
-                .path_to_blockchain
-                .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME)
-                .with_extension("norito.tmp"),
-        ])
+        .chain([store.commit_marker_path().with_extension("norito.tmp")])
         .collect()
     }
 

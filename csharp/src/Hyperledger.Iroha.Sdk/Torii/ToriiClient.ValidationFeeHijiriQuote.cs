@@ -633,6 +633,48 @@ public sealed partial class ToriiClient
         return body;
     }
 
+    private static long? CanonicalContentLength(HttpContent content, string context)
+    {
+        // `HttpHeaders.TryGetValues` may parse and normalize a raw value (for
+        // example `01` or surrounding whitespace) before returning it. Inspect
+        // the non-validated view so an intermediary cannot smuggle a
+        // noncanonical framing value past the exact body bound.
+        if (!content.Headers.NonValidated.TryGetValues("Content-Length", out var values))
+        {
+            return null;
+        }
+
+        var rawValues = values.ToArray();
+        if (rawValues.Length != 1)
+        {
+            throw new InvalidDataException(
+                $"{context} response has an ambiguous Content-Length header.");
+        }
+
+        var raw = rawValues[0];
+        if (raw.Length == 0
+            || (raw.Length > 1 && raw[0] == '0')
+            || raw.Any(static value => value is < '0' or > '9')
+            || !long.TryParse(
+                raw,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed)
+            || parsed.ToString(System.Globalization.CultureInfo.InvariantCulture) != raw)
+        {
+            throw new InvalidDataException(
+                $"{context} response has a noncanonical Content-Length header.");
+        }
+
+        if (content.Headers.ContentLength is { } typed && typed != parsed)
+        {
+            throw new InvalidDataException(
+                $"{context} response has an inconsistent Content-Length header.");
+        }
+
+        return parsed;
+    }
+
     private static void RequirePrivateNoStoreHijiriQuoteResponse(
         HttpResponseMessage response)
     {

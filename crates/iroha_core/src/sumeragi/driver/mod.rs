@@ -898,6 +898,11 @@ impl Drop for LoopGuard {
     fn drop(&mut self) {
         if std::thread::panicking() {
             stop(&self.shared, &*self.observer, Worker::Loop);
+        } else {
+            let orderly = self.shared.stopped.lock().is_none();
+            if orderly {
+                contained("observer", || self.observer.finished());
+            }
         }
         self.shared.alive.store(false, Ordering::Release);
         // No partially admitted owner can outlive a stopped instance via a retained handle.

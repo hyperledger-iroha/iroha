@@ -327,8 +327,6 @@ fn execute_fixture_genesis(
         store_dir: iroha_config::base::WithOrigin::inline(PathBuf::new()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:

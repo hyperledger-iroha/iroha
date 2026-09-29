@@ -422,9 +422,6 @@ describe("SCCP v1 constants and ABI (§3.6, §3.9, §5.2.2)", () => {
     );
     const selectors = functions.map((fragment) => fragment.selector);
     assert.equal(new Set(selectors).size, selectors.length, "selectors are collision-free");
-    for (const retired of ["0xbc120437", "0x41e5c0cb"]) {
-      assert.equal(iface.getFunction(retired), null, `revision 2 selector ${retired} must not exist`);
-    }
     assert.deepEqual(tron.abi, h.loadArtifacts().abi, "the TRON build exposes the identical ABI");
   });
 

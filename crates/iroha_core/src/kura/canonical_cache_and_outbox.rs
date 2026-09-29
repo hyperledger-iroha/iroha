@@ -538,27 +538,4 @@ impl FsyncTelemetry {
 #[derive(Debug)]
 struct ChainValidation {
     hashes: Vec<HashOf<BlockHeader>>,
-    hard_fork_hash_only_block_count: usize,
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ProvisionalSnapshotBootstrap {
-    hash_only_prefix_height: usize,
-    bootstrap_lineage_hash: Option<Hash>,
-    hash_journal_digest: Option<Hash>,
-}
-#[derive(Clone, Debug)]
-enum SnapshotBootstrapRuntimeState {
-    Authenticated,
-    Pending(ProvisionalSnapshotBootstrap),
-}
-impl SnapshotBootstrapRuntimeState {
-    fn pending_metadata(&self) -> Option<&ProvisionalSnapshotBootstrap> {
-        let Self::Pending(metadata) = self else {
-            return None;
-        };
-        Some(metadata)
-    }
-    fn is_authenticated(&self) -> bool {
-        matches!(self, Self::Authenticated)
-    }
 }

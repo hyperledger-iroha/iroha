@@ -43,14 +43,17 @@ impl Core {
         self.out.push(Action::DriveApplicationControl { context });
     }
 
+    /// Both directions require the exact applied source and a current signing member.
+    fn control_is_current(&self, message: &ApplicationControl) -> bool {
+        self.application_control_context() == Some(message.context)
+            && !message.bytes.is_empty()
+            && self.signer().is_some()
+    }
+
     /// A peer identity is necessary but insufficient: the application verifies the partial's
     /// session, index and signature independently, against its own applied State.
     pub(super) fn on_application_control(&mut self, from: &PublicKey, message: ApplicationControl) {
-        if self.application_control_context() != Some(message.context)
-            || !self.cfg.committee.contains(from)
-            || message.bytes.is_empty()
-            || self.signer().is_none()
-        {
+        if !self.control_is_current(&message) || !self.cfg.committee.contains(from) {
             return;
         }
         if self
@@ -69,10 +72,7 @@ impl Core {
 
     /// A completion from a prior source cannot broadcast into a new height or authority.
     pub(super) fn on_application_control_built(&mut self, message: ApplicationControl) {
-        if self.application_control_context() != Some(message.context)
-            || message.bytes.is_empty()
-            || self.signer().is_none()
-        {
+        if !self.control_is_current(&message) {
             return;
         }
         self.broadcast(

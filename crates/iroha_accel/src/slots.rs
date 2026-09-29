@@ -8,7 +8,7 @@ use std::sync::{
 
 /// One original finite cardinality owner; live permits survive a limit decrease.
 #[derive(Debug)]
-pub(crate) struct Slots {
+pub struct Slots {
     limit: RwLock<usize>,
     used: AtomicUsize,
     peak: AtomicUsize,
@@ -50,7 +50,7 @@ impl Slots {
 }
 
 /// Move-only permission retained until the actual native owner is reclaimed.
-pub(crate) struct Slot {
+pub struct Slot {
     owner: Arc<Slots>,
 }
 impl Drop for Slot {

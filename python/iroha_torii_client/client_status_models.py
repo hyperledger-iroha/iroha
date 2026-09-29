@@ -168,11 +168,13 @@ class ConnectAdmissionManifest:
     extra: Dict[str, Any]
 
 
-SUMERAGI_EVIDENCE_KIND = "SumeragiV2Equivocation"
-SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES = {
+SUMERAGI_EVIDENCE_KIND = "NativeSumeragiEvidence"
+SUMERAGI_EVIDENCE_CLASSES = {
     "proposal",
     "phase_vote",
     "timeout_vote",
+    "invalid_proposal",
+    "conflicting_certificates",
 }
 
 
@@ -215,27 +217,32 @@ SumeragiEvidencePenaltyStatus = Union[
 
 
 @dataclass(frozen=True)
-class SumeragiV2EquivocationEvidenceRecord:
-    """Exact first-release evidence projection returned by Torii."""
+class SumeragiEvidenceOffender:
+    """Original signer index and peer resolved from authenticated historical state."""
 
-    kind: Literal["SumeragiV2Equivocation"]
-    class_: Literal["proposal", "phase_vote", "timeout_vote"]
-    height: int
-    view: int
-    epoch: int
     signer: int
+    peer_id: str
+
+
+@dataclass(frozen=True)
+class SumeragiEvidenceRecord:
+    """Exact native evidence audit projection returned by `/v1/sumeragi/evidence`."""
+
+    kind: Literal["NativeSumeragiEvidence"]
+    class_: Literal["proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates"]
+    instance: str
+    height: int
+    epoch: int
     context_id: str
-    artifact_hash_1: str
-    artifact_hash_2: str
+    authority_generation: str
+    offenders: Tuple[SumeragiEvidenceOffender, ...]
+    safety_violation: bool
+    native_frame_hash: str
     recorded_height: int
     recorded_view: int
     recorded_ms: int
     consensus_admitted_height: int
     penalty_status: SumeragiEvidencePenaltyStatus
-
-
-SumeragiEvidenceRecord = SumeragiV2EquivocationEvidenceRecord
-
 
 @dataclass(frozen=True)
 class SumeragiEvidenceListPage:

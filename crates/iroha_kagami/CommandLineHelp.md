@@ -1213,7 +1213,7 @@ Print contents of a certain length of the blocks
 
 Verify a locally anchored retained prefix and export its exact finality proof
 
-**Usage:** `kagami advanced kura finality [OPTIONS] --height <HEIGHT> <PATH_TO_BLOCK_STORE>`
+**Usage:** `kagami advanced kura finality [OPTIONS] --chain-id <CHAIN_ID> --height <HEIGHT> <PATH_TO_BLOCK_STORE>`
 
 ###### **Arguments:**
 
@@ -1221,6 +1221,7 @@ Verify a locally anchored retained prefix and export its exact finality proof
 
 ###### **Options:**
 
+* `--chain-id <CHAIN_ID>` — Exact chain label used to derive the native consensus instance
 * `-H`, `--height <HEIGHT>` — Verify all heights from genesis through this height (1..=4096)
 * `-o`, `--output <OUTPUT>` — Write the public JSON outside the inspected store (default: stdout)
 

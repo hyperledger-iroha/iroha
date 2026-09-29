@@ -10,6 +10,34 @@
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
 
+#![cfg_attr(
+    not(feature = "dev-tools"),
+    doc = r#"
+Transparent batch-replay fixtures are excluded from the normal library API.
+Canonical quantity artifacts use [`offline_compact`]; AXT batches may use
+[`prove_axt_bound_batch`]. The retired normal replay surface is unavailable:
+
+```compile_fail
+use fastpq_prover::Prover;
+```
+
+```compile_fail
+use fastpq_prover::Proof;
+```
+
+```compile_fail
+use fastpq_prover::verify;
+```
+
+```compile_fail
+use fastpq_prover::verify_with_limits;
+```
+
+```compile_fail
+use fastpq_prover::preflight_native_v1_gpu_backend;
+```
+"#
+)]
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
@@ -49,6 +77,7 @@ mod gpu;
 #[cfg(not(feature = "fastpq-gpu"))]
 #[path = "gpu_stub.rs"]
 mod gpu;
+mod gpu_memory;
 #[cfg(feature = "fastpq-gpu")]
 mod gpu_secret;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -71,7 +100,7 @@ pub use axt_binding::{
     DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
     axt_proof_blob_from_bound_batch, axt_proof_envelope_from_bound_batch, batch_manifest_sha256,
     bind_axt_batch, bind_axt_batch_with_committed_amount, bind_axt_batch_with_proof_metadata,
-    canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload,
+    canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload, prove_axt_bound_batch,
     set_axt_remote_spend_claims, set_axt_source_transfer_occurrences, transition_batch_from_model,
     transition_batch_to_model, validate_axt_transfer_claim_binding, verify_axt_bound_batch,
     verify_axt_proof_blob, verify_axt_proof_envelope,
@@ -80,9 +109,11 @@ pub use axt_binding::{
 };
 /// Canonical masked quantity-artifact production and bounded verification.
 pub use backend::offline_compact;
+#[cfg(any(test, feature = "dev-tools"))]
+pub use backend::preflight_native_v1_gpu_backend;
 pub use backend::{
     ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
-    preflight_native_v1_gpu_backend, set_execution_mode_observer,
+    set_execution_mode_observer,
 };
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]
@@ -139,7 +170,9 @@ pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes};
 #[cfg(feature = "fastpq-gpu")]
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
-pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
+pub use proof::VerifyLimits;
+#[cfg(any(test, feature = "dev-tools"))]
+pub use proof::{Proof, Prover, verify, verify_with_limits};
 #[cfg(any(test, feature = "dev-tools"))]
 pub use proof::{verify_raw_statement, verify_raw_statement_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};

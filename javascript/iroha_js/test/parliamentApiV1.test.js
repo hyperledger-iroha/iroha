@@ -621,7 +621,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
   const mutations = [
     (proposal) => { proposal.payload.future = null; },
     (proposal) => { proposal.payload.manifest.future = null; },
-    (proposal) => { proposal.payload.anchor.future = null; },
+    (proposal) => { proposal.payload.proposal.future = null; },
     (proposal) => { proposal.payload.policy.future = null; },
     (proposal) => { proposal.payload.payout_binding.recipients[0].future = null; },
     (proposal) => { proposal.payload.value.target.name = "governed-package"; },
@@ -1397,20 +1397,16 @@ function parliamentProposalFixtures() {
     {
       kind: "SccpRouteGovernance",
       payload: {
-        anchor: {
+        proposal: {
           network_id: NETWORK_ID,
-          action: {
-            action: "Remove",
-            route: {
-              lane_id: {
-                source: { network: "bsc_mainnet", profile: null },
-                target: { network: "sora_taira", profile: null },
-              },
-              route_id: "taira_bsc_xor",
-              asset_key: "xor",
-              revision: 1,
-            },
-          },
+          base_revisions: [{
+            subject: { subject: "route", key: { network: "bsc_mainnet", profile: null } },
+            revision: 1,
+          }],
+          actions: [{
+            action: "remove_staged",
+            payload: { network: { network: "bsc_mainnet", profile: null }, revision: 1 },
+          }],
         },
       },
     },

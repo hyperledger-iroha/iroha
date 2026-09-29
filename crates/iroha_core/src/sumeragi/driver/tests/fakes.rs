@@ -572,6 +572,8 @@ impl Drop for WorkPump {
 /// An observer that records the driver's own reports.
 #[derive(Default)]
 pub struct RecordingObserver {
+    /// Explicit orderly completions of the event loop.
+    pub finished: Mutex<usize>,
     /// Threads whose end stopped the instance.
     pub stopped: Mutex<Vec<Worker>>,
     /// Configurations that outgrew the transport.
@@ -579,6 +581,10 @@ pub struct RecordingObserver {
 }
 
 impl Observer for RecordingObserver {
+    fn finished(&self) {
+        *self.finished.lock() += 1;
+    }
+
     fn stopped(&self, worker: Worker) {
         self.stopped.lock().push(worker);
     }

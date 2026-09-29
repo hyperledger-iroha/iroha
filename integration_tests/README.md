@@ -21,12 +21,49 @@ This crate hosts cross-component tests for Iroha.
   Run the dynamic-access serialization gate with
   `IROHA_TEST_REQUIRE_NETWORK=1 cargo test -p integration_tests --test core_api contracts::dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers -- --exact --nocapture`.
   The Kotodama/IVM V1 release gate is
-  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test core_api contracts::contract_v1_executes_and_survives_four_peer_da_rbc_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test core_api contracts::contract_v1_executes_and_survives_four_peer_native_finality_restart -- --exact --nocapture --test-threads=1`.
   It authenticates the signed NPoS/mandatory-DA genesis contract, requires
-  cross-peer RBC evidence for the deployment, decodes the canonical `int`
+  the independently genesis-anchored native finality chain and exact deployment
+  inclusion on every peer, decodes the canonical `int`
   result and persisted state on all four peers, then repeats both reads through
   a cold-restarted validator.
   The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
+- Generic ZK record/event scenarios use genuine canonical full-unshield keys and
+  native wallet proofs over synthetic local trees. Generic proof verification does
+  not authorize ledger execution or value movement.
+  The focused filters are `proofs::submit_proof_and_query_record` in
+  `queries_and_proofs`, `events::proof::proof_event_scenarios` in
+  `events_and_triggers`, and `queries::proof::proof_query_scenarios` in
+  `queries_and_proofs`. The mixed-backend query scenario requires `--features zk-stark`
+  and a daemon built with `zk-stark`; its negative STARK fixture corrupts an actual
+  current-profile Binding proof while retaining valid framing and key material.
+  All three networks have exactly four validators and retain production proof limits
+  and verification deadlines. Require `IROHA_TEST_REQUIRE_NETWORK=1` and
+  `IROHA_TEST_SERIALIZE_NETWORKS=1`; prebuild the same-candidate `iroha3d` and `iroha`,
+  set their absolute `TEST_NETWORK_BIN_IROHAD` / `TEST_NETWORK_BIN_IROHA` paths, and
+  set `IROHA_TEST_SKIP_BUILD=1`. Retain source, lockfile and artifact hashes; explicit
+  binary paths alone do not attest candidate identity.
+- The explicit full-capacity wallet regression is
+  `cargo test --locked -p integration_tests --test queries_and_proofs proofs::full_tree_wallet::four_validator_full_tree_wallet_proof_records_reject_corruption_and_relabelling -- --exact --ignored --nocapture --test-threads=1`
+  with the same mandatory-network and same-candidate artifact environment. It builds
+  all 65,536 nonzero leaves, proves one actual note through the public
+  `ConfidentialProver` API with one membership path, and requires the exact Verified
+  record on all four validators. Native proof corruption and relabelling to a distinct
+  canonical confidential-transfer key must produce Rejected records on every validator.
+  The synthetic root is only a local proof statement: this test submits `VerifyProof`,
+  authenticates no ledger asset root, and moves no confidential value. Native proving
+  and network execution are expensive, so the scenario is explicitly ignored by default.
+- The proof-backed execution rejection gate is
+  `cargo test --locked -p integration_tests --test core_api contracts::ivm_proved::four_validator_ivm_proved_rejects_unqualified_execution -- --exact --ignored --nocapture --test-threads=1`
+  with the same mandatory-network and same-candidate artifact environment. It
+  deploys a real Kotodama counter and requires an ordinary authenticated call to
+  increment it on all four validators. Each peer must reject IvmProved with the
+  exact unavailable-execution-relation reason for a genuine unrelated proof,
+  corrupted bytes, a retired circuit label, and a caller-supplied overlay. A
+  separately Applied barrier and unchanged counter distinguish rejection from
+  transport failure or a stalled network. This does not qualify proof-backed
+  IVM execution: the complete native execution relation and State-owned anchor
+  remain unfinished, and no derive or commitment-binding producer is restored.
 - Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Norito FEC parity, missing-chunk recovery and corruption tests run in the ordinary `nexus_and_streaming` harness using its local GF(256) helpers; no optional external Reed–Solomon dependency is needed.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.

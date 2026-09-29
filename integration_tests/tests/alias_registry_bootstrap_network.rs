@@ -14,17 +14,15 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs,
-    mem::size_of,
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::future::try_join_all;
-#[path = "kura_storage_support.rs"]
-mod kura_storage_support;
 
 use integration_tests::sandbox;
 use iroha::{blocking::Client, sns::SnsNamespacePath};
@@ -37,13 +35,15 @@ use iroha_config::{
     },
 };
 use iroha_core::{
-    kura::{BlockIndex, BlockStore, CertifiedLaneBlockArtifact, Kura},
-    lane_consensus::{
-        validate_lane_block_proposal, validate_lane_block_qc, validate_lane_block_qc_aggregate,
-    },
+    kura::{BlockIndex, BlockStore, Kura},
     state::derive_committee_key_id,
+    sumeragi::{
+        certified_chain::CertifiedPrefix,
+        crypto::BlsCrypto,
+        lanes::{self, AnchorView, LaneBatch, LaneChainView, evidence::verify_lane_entry},
+    },
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     Level,
     alias_setup::{
@@ -52,15 +52,7 @@ use iroha_data_model::{
         AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
     },
     asset::AssetDefinitionId,
-    block::{
-        SignedBlock,
-        consensus::{
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, CertPhase,
-            LaneBlockDescriptorV1, LaneBlockQcV1, SumeragiLanePayloadOwnership,
-        },
-        consensus_v2::{ConsensusMode, finality::V2FinalityArtifact},
-        decode_framed_signed_block,
-    },
+    block::{SignedBlock, decode_framed_signed_block},
     isi::{
         Grant,
         alias_setup::EnsureAlias,
@@ -73,21 +65,31 @@ use iroha_data_model::{
         PublicLaneMonetaryScopeV1, PublicLanePreparationOperationV1,
         PublicLanePreparationRequestV1, PublicLanePrepareRegistrationV1, PublicLanePreparedPlanV1,
     },
-    parameter::{Parameters, system::SumeragiNposParameters},
+    parameter::{
+        Parameters,
+        system::{ConsensusMode, SumeragiNposParameters, SumeragiParameters},
+    },
     prelude::*,
     sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
+    sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLanePolicy,
+        SumeragiLaneRecord, SumeragiLaneRoute, SumeragiLaneState,
+    },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::peer::CanManagePeers;
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
+use iroha_sumeragi::message::SyncEntry;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary,
     genesis_participant_committee_key_instructions, init_instruction_registry,
     resolve_release_prebuilt_binary, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
+use norito::codec::DecodeAll;
 use sha2::{Digest as _, Sha256};
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
@@ -112,9 +114,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
 const MAX_RETAINED_HEIGHT: u64 = 128;
 const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
-const SIDECAR_INDEX_ENTRY_BYTES: usize = 16;
-const SIDECAR_INDEX_HEADER_BYTES: usize = SIDECAR_INDEX_ENTRY_BYTES * 2;
-const SIDECAR_INDEX_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 const MAX_RELEASE_IDENTITY_BYTES: u64 = 32 * 1024;
 const MAX_RELEASE_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -923,10 +922,6 @@ fn required_prebuilt_binaries() -> Result<()> {
     );
     for (name, kind) in [
         ("TEST_NETWORK_BIN_IROHAD", ReleasePrebuiltBinary::Irohad),
-        (
-            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL",
-            ReleasePrebuiltBinary::IrohadMessageControl,
-        ),
         ("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha),
         ("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami),
     ] {
@@ -1217,103 +1212,86 @@ async fn wait_for_snapshot(
     }
 }
 
-fn assert_bpng_ownership(
-    ownership: &SumeragiLanePayloadOwnership,
-    incarnation: Hash,
+fn assert_bpng_record(
+    record: &SumeragiLaneRecord,
+    incarnation: [u8; 32],
     expected_validators: &[PeerId],
-    transaction: &SignedTransaction,
 ) -> Result<()> {
-    ownership
-        .validate_replay_material()
-        .map_err(|error| eyre!("invalid BPNG lane ownership replay material: {error}"))?;
-    let transaction_hash = Hash::from(transaction.hash());
     ensure!(
-        ownership.lane_id == BPNG_FIXTURE_LANE
-            && ownership.dataspace_id == DataSpaceId::new(BPNG_ID)
-            && ownership.lane_incarnation == incarnation,
-        "BPNG payload ownership route/incarnation mismatch"
+        record.lane == BPNG_FIXTURE_LANE
+            && record.dataspace == DataSpaceId::new(BPNG_ID)
+            && record.incarnation == incarnation
+            && record.closing.is_none(),
+        "native BPNG route/incarnation changed"
     );
     ensure!(
-        ownership.accepted_transaction_hashes.as_slice() == std::slice::from_ref(&transaction_hash),
-        "BPNG ownership must retain the exact ordered singleton signed-transaction hash vector"
-    );
-    ensure!(
-        ownership.lane_block_descriptor_validator_set == expected_validators
-            && ownership.lane_block_descriptor_validator_count
-                == u32::try_from(expected_validators.len())?
-            && ownership.lane_block_descriptor_min_quorum == BPNG_MIN_QUORUM,
-        "BPNG ownership must bind the exact four-validator, three-signature committee"
+        record
+            .committee
+            .iter()
+            .map(|member| member.peer.clone())
+            .collect::<Vec<_>>()
+            == expected_validators
+            && record.committee.len() == VALIDATOR_COUNT,
+        "native BPNG committee differs from the four signed validators"
     );
     Ok(())
 }
 
 async fn wait_for_bpng_frontier(
     clients: &[Client],
-    incarnation: Hash,
+    incarnation: [u8; 32],
     expected_validators: &[PeerId],
     transaction: &SignedTransaction,
-) -> Result<SumeragiLanePayloadOwnership> {
+) -> Result<SumeragiLaneRecord> {
     let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
-    let transaction_hash = Hash::from(transaction.hash());
     loop {
         let mut observations = Vec::new();
         for client in clients {
             let client = client.clone();
-            let observed = timeout(READ_TIMEOUT, async {
-                let diagnostics = client.client().get_sumeragi_diagnostics().await?;
-                let ownerships = diagnostics
-                    .lane_payload_ownerships
-                    .iter()
-                    .filter(|ownership| {
-                        ownership.lane_id == BPNG_FIXTURE_LANE
-                            && ownership.dataspace_id == DataSpaceId::new(BPNG_ID)
-                    })
-                    .collect::<Vec<_>>();
+            let transaction = transaction.clone();
+            let observed = read(move || {
+                let statuses = client.client().get_sumeragi_lanes()?;
+                let status = statuses
+                    .into_iter()
+                    .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
+                    .ok_or_else(|| eyre!("native BPNG lane is absent"))?;
                 ensure!(
-                    ownerships.len() == 1
-                        && ownerships[0].accepted_transaction_hashes.as_slice()
-                            == std::slice::from_ref(&transaction_hash),
-                    "BPNG ownership frontier must be one exact ordered singleton"
+                    status
+                        .instance
+                        .as_ref()
+                        .is_some_and(|instance| instance.halted.is_none()),
+                    "native BPNG instance is unavailable or halted"
                 );
-                let ownership = (*ownerships[0]).clone();
-                let descriptor_hash = ownership
-                    .lane_block_descriptor_hash
-                    .ok_or_else(|| eyre!("BPNG ownership omitted descriptor hash"))?;
+                let mut blocks = client.client().query(FindBlocks::new()).execute_all()?;
+                blocks.sort_by_key(|block| block.header().height().get());
+                let history = RetainedHistory {
+                    blocks: blocks
+                        .iter()
+                        .map(SignedBlock::encode_wire)
+                        .collect::<Result<_, _>>()?,
+                };
+                let (_, expected) = bpng_transaction_ownership(
+                    &history,
+                    &transaction,
+                    incarnation,
+                    &status
+                        .record
+                        .committee
+                        .iter()
+                        .map(|member| member.peer.clone())
+                        .collect::<Vec<_>>(),
+                )?;
                 ensure!(
-                    diagnostics.committed_lane_blocks.iter().any(|block| {
-                        block.lane_id == ownership.lane_id
-                            && block.dataspace_id == ownership.dataspace_id
-                            && block.lane_incarnation == ownership.lane_incarnation
-                            && block.lane_block_height == ownership.lane_block_height
-                            && block.lane_block_view == ownership.lane_block_view
-                            && block.descriptor_hash == descriptor_hash
-                            && block.subject_hash == ownership.subject_hash
-                            && block.payload_ownership_hash == ownership.payload_ownership_hash
-                            && block.rbc_instance_hash == ownership.rbc_instance_hash
-                            && block.validator_count == u32::try_from(VALIDATOR_COUNT).unwrap()
-                            && block.min_quorum == BPNG_MIN_QUORUM
-                            && block.prepare_qc_signer_count == BPNG_MIN_QUORUM
-                            && block.commit_qc_signer_count == BPNG_MIN_QUORUM
-                            && block.executable_payload_available
-                            && block.execution_status
-                                == COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-                    }),
-                    "BPNG ownership has no matching applied certified-lane status"
+                    status.record == expected,
+                    "live native frontier differs from the transaction's exact global merge"
                 );
-                Ok::<_, eyre::Report>(ownership)
+                Ok(status.record)
             })
-            .await
-            .wrap_err("bounded fixture read timed out")
-            .and_then(|result| result.wrap_err("fixture read task failed"));
+            .await;
             match observed {
-                Ok(ownership) => {
-                    assert_bpng_ownership(
-                        &ownership,
-                        incarnation,
-                        expected_validators,
-                        transaction,
-                    )?;
-                    observations.push(ownership);
+                Ok(record) => {
+                    assert_bpng_record(&record, incarnation, expected_validators)?;
+                    observations.push(record);
                 }
                 Err(_) => break,
             }
@@ -1324,11 +1302,11 @@ async fn wait_for_bpng_frontier(
             return observations
                 .into_iter()
                 .next()
-                .ok_or_else(|| eyre!("four-peer network has no BPNG ownership"));
+                .ok_or_else(|| eyre!("no native lane observations"));
         }
         ensure!(
             Instant::now() < deadline,
-            "BPNG ownership/certified-lane frontier did not converge on all four peers"
+            "native BPNG frontier did not converge on all four peers"
         );
         sleep(POLL_INTERVAL).await;
     }
@@ -1363,7 +1341,6 @@ async fn assert_bpng_metadata(
 #[derive(Debug, PartialEq, Eq)]
 struct RetainedHistory {
     blocks: Vec<Vec<u8>>,
-    sidecars: BTreeMap<PathBuf, Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1375,408 +1352,315 @@ struct StoppedEvidence {
 #[derive(Debug, PartialEq, Eq)]
 struct CertifiedBpngLaneEvidence {
     artifacts: Vec<Vec<u8>>,
-    data: Vec<u8>,
-    data_sha256: String,
-    index: Vec<u8>,
-    index_sha256: String,
 }
-
 impl CertifiedBpngLaneEvidence {
     fn absent() -> Self {
         Self {
             artifacts: Vec::new(),
-            data: Vec::new(),
-            data_sha256: sha256_hex(&[]),
-            index: Vec::new(),
-            index_sha256: sha256_hex(&[]),
         }
     }
-
-    fn new(artifacts: Vec<Vec<u8>>, data: Vec<u8>, index: Vec<u8>) -> Self {
-        Self {
-            artifacts,
-            data_sha256: sha256_hex(&data),
-            data,
-            index_sha256: sha256_hex(&index),
-            index,
-        }
-    }
-
     fn assert_exact_prefix_of(&self, successor: &Self) -> Result<()> {
         ensure!(
-            sha256_hex(&self.data) == self.data_sha256
-                && sha256_hex(&self.index) == self.index_sha256
-                && sha256_hex(&successor.data) == successor.data_sha256
-                && sha256_hex(&successor.index) == successor.index_sha256,
-            "retained BPNG sidecar evidence digest does not match its exact bytes"
-        );
-        ensure!(
-            successor.artifacts.starts_with(&self.artifacts)
-                && successor.data.starts_with(&self.data)
-                && successor.index.starts_with(&self.index)
-                && sha256_hex(&successor.data[..self.data.len()]) == self.data_sha256
-                && sha256_hex(&successor.index[..self.index.len()]) == self.index_sha256,
-            "strict replay changed the raw certified BPNG data/index byte prefix or its SHA-256"
+            successor.artifacts.starts_with(&self.artifacts),
+            "strict replay changed the exact retained native lane frame prefix"
         );
         Ok(())
     }
 }
 
-fn ownership_matches_descriptor(
-    ownership: &SumeragiLanePayloadOwnership,
-    descriptor: &LaneBlockDescriptorV1,
-) -> bool {
-    ownership.lane_id == descriptor.lane_id
-        && ownership.dataspace_id == descriptor.dataspace_id
-        && ownership.lane_incarnation == descriptor.lane_incarnation
-        && ownership.proposal_height == descriptor.proposal_height
-        && ownership.lane_block_height == descriptor.lane_block_height
-        && ownership.lane_block_view == descriptor.lane_block_view
-        && ownership.subject_hash == descriptor.subject_hash
-        && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
-        && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
-        && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
-        && ownership.previous_lane_block_descriptor_hash
-            == descriptor.previous_lane_block_descriptor_hash
-        && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
-        && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
-        && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
-        && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
-        && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
-        && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
-        && ownership.qc_mode_tag == descriptor.qc_mode_tag
-}
-
-fn bitmap_signer_count(bitmap: &[u8]) -> u32 {
-    bitmap.iter().map(|byte| byte.count_ones()).sum()
-}
-
-fn bpng_certified_sidecar_paths(
-    store_root: &Path,
-    network_id: NetworkId,
-    expected_incarnation: Option<Hash>,
-) -> Result<Option<(PathBuf, PathBuf)>> {
-    let Some(blocks) = kura_storage_support::lane_instance_blocks_dir(
-        store_root,
-        network_id,
-        BPNG_FIXTURE_LANE,
-        DataSpaceId::new(BPNG_ID),
-        expected_incarnation,
-        None,
-    )?
-    else {
-        return Ok(None);
-    };
-    let directory = blocks.join("lane_artifacts");
-    Ok(Some((
-        directory.join("certified_blocks.norito"),
-        directory.join("certified_blocks.index"),
-    )))
-}
-
-fn read_optional_evidence_file(path: &Path) -> Result<Option<Vec<u8>>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    ensure!(
-        metadata.is_file() && metadata.len() <= MAX_EVIDENCE_BYTES,
-        "retained BPNG evidence must be a bounded regular file: {}",
-        path.display()
-    );
-    let bytes = fs::read(path)?;
-    ensure!(
-        u64::try_from(bytes.len())? == metadata.len(),
-        "retained BPNG evidence changed while being read: {}",
-        path.display()
-    );
-    Ok(Some(bytes))
-}
-
-fn sidecar_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let end = offset
-        .checked_add(size_of::<u64>())
-        .ok_or_else(|| eyre!("sidecar index offset overflow"))?;
-    Ok(u64::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or_else(|| eyre!("truncated retained BPNG sidecar index"))?
-            .try_into()?,
-    ))
-}
-
-fn lane_qc_signer_keys(qc: &LaneBlockQcV1) -> Result<BTreeSet<PublicKey>> {
-    validate_lane_block_qc(qc)?;
-    let mut signers = BTreeSet::new();
-    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
-        for bit in 0..8 {
-            if byte & (1_u8 << bit) == 0 {
-                continue;
-            }
-            let signer_index = byte_index
-                .checked_mul(8)
-                .and_then(|base| base.checked_add(bit))
-                .ok_or_else(|| eyre!("lane QC signer index overflow"))?;
-            signers.insert(
-                qc.validator_set
-                    .get(signer_index)
-                    .ok_or_else(|| eyre!("lane QC signer bitmap exceeds validator set"))?
-                    .public_key()
-                    .clone(),
-            );
+// Certificates are verified independently above. Different exact quorum subsets can certify
+// identical executed bytes, so cross-peer equality compares their authenticated statements.
+fn same_authenticated_prefix(left: &StoppedEvidence, right: &StoppedEvidence) -> Result<bool> {
+    if left.retained.blocks.len() != right.retained.blocks.len()
+        || left.certified_bpng_lane.artifacts.len() != right.certified_bpng_lane.artifacts.len()
+    {
+        return Ok(false);
+    }
+    for (left, right) in left.retained.blocks.iter().zip(&right.retained.blocks) {
+        let left = decode_framed_signed_block(left)?
+            .with_commit_certificate(None)
+            .encode_wire()?;
+        let right = decode_framed_signed_block(right)?
+            .with_commit_certificate(None)
+            .encode_wire()?;
+        if left != right {
+            return Ok(false);
         }
     }
-    Ok(signers)
+    for (left, right) in left
+        .certified_bpng_lane
+        .artifacts
+        .iter()
+        .zip(&right.certified_bpng_lane.artifacts)
+    {
+        let left = SyncEntry::decode_all(&mut left.as_slice())?;
+        let right = SyncEntry::decode_all(&mut right.as_slice())?;
+        if left.block != right.block || left.commit_qc.result != right.commit_qc.result {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
-fn validate_certified_bpng_artifact(artifact: &CertifiedLaneBlockArtifact) -> Result<()> {
-    artifact.encode_framed()?;
-    validate_lane_block_proposal(&artifact.proposal)?;
-    validate_lane_block_qc(&artifact.prepare_qc)?;
-    validate_lane_block_qc(&artifact.commit_qc)?;
-    let descriptor = &artifact.proposal.descriptor;
-    ensure!(
-        artifact.prepare_qc.body == artifact.proposal.vote_body(CertPhase::Prepare)
-            && artifact.commit_qc.body == artifact.proposal.vote_body(CertPhase::Commit),
-        "retained BPNG QCs do not certify their exact proposal"
-    );
-    for qc in [&artifact.prepare_qc, &artifact.commit_qc] {
+fn assert_same_authenticated_prefix(peers: &[StoppedEvidence]) -> Result<()> {
+    for pair in peers.windows(2) {
         ensure!(
-            qc.validator_set_hash_version == descriptor.validator_set_hash_version
-                && qc.validator_set_hash == descriptor.validator_set_hash
-                && qc.validator_set == descriptor.validator_set,
-            "retained BPNG QC committee does not match its descriptor"
+            same_authenticated_prefix(&pair[0], &pair[1])?,
+            "validators retained different certified execution statements"
         );
     }
-    let mut expected_pops = lane_qc_signer_keys(&artifact.prepare_qc)?;
-    expected_pops.extend(lane_qc_signer_keys(&artifact.commit_qc)?);
-    ensure!(
-        artifact
-            .signer_pops
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            == expected_pops,
-        "retained BPNG artifact PoPs do not exactly cover its QC signers"
-    );
-    validate_lane_block_qc_aggregate(&artifact.prepare_qc, &artifact.signer_pops)?;
-    validate_lane_block_qc_aggregate(&artifact.commit_qc, &artifact.signer_pops)?;
     Ok(())
 }
 
-// Emergency-Fast Kura deliberately withholds dynamic-lane readers. Retain the
-// stopped raw indexed sidecar pair and its SHA-256s without mutating it, then
-// run the same public proposal/QC/aggregate validators used by the shipping
-// Kura reader.
+// Independently replay this fixture's one signed fixed-lane policy and certified merge ranges.
+// The resulting complete state is checked against each global execution result's native proof.
+fn native_lane_states(history: &RetainedHistory) -> Result<Vec<SumeragiLaneState>> {
+    let mut state = SumeragiLaneState::default();
+    let genesis = decode_framed_signed_block(
+        history
+            .blocks
+            .first()
+            .ok_or_else(|| eyre!("missing genesis"))?,
+    )?;
+    let network = NetworkId::from_genesis_hash(genesis.hash());
+    let mut states = Vec::new();
+    for wire in &history.blocks {
+        let block = decode_framed_signed_block(wire)?;
+        let height = block.header().height().get();
+        if let Some(section) = block.lane_merge() {
+            for merge in &section.merges {
+                let record = state
+                    .lane_mut(merge.lane)
+                    .ok_or_else(|| eyre!("merge before signed lane policy"))?;
+                ensure!(
+                    merge.incarnation == record.incarnation
+                        && merge.from == record.merged.height + 1
+                        && merge.to >= merge.from,
+                    "native merge skipped or changed a lane incarnation"
+                );
+                record.merged = SumeragiLaneFrontier {
+                    height: merge.to,
+                    block_hash: merge.tip_hash,
+                    result: merge.tip_result,
+                };
+                record.merged_at = height;
+                record.rescued = 0;
+            }
+        }
+        for tx in block.external_transactions() {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                let Some(set) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                let Parameter::Custom(custom) = set.inner() else {
+                    continue;
+                };
+                let Some(policy) = SumeragiLanePolicy::from_custom_parameter(custom) else {
+                    continue;
+                };
+                let policy = policy.map_err(|error| eyre!(error))?;
+                ensure!(
+                    state.lanes.is_empty() && policy.fixed.len() == 1 && policy.autoscale.is_none(),
+                    "fixture requires one first signed fixed-lane policy"
+                );
+                let fixed = &policy.fixed[0];
+                let mut record = SumeragiLaneRecord {
+                    lane: fixed.lane,
+                    dataspace: fixed.dataspace,
+                    incarnation: lanes::step::incarnation(
+                        &network,
+                        fixed.lane,
+                        fixed.dataspace,
+                        height,
+                        state.incarnations,
+                    ),
+                    params: policy.lane_params,
+                    committee: fixed.committee.clone(),
+                    created_at: height,
+                    active_from: height + 2,
+                    closing: None,
+                    anchor_freshness: policy.anchor_freshness,
+                    merged: SumeragiLaneFrontier::default(),
+                    merged_at: height + 2,
+                    rescued: 0,
+                };
+                record.merged.block_hash = lanes::lane_genesis_hash(&network, &record).0;
+                record.merged.result = lanes::lane_genesis_result(&record).0;
+                state.incarnations += 1;
+                state.upsert(record);
+            }
+        }
+        states.push(state.clone());
+    }
+    Ok(states)
+}
+
+impl AnchorView for RetainedHistory {
+    fn applied_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        let index = usize::try_from(height).ok()?.checked_sub(1)?;
+        Some(
+            decode_framed_signed_block(self.blocks.get(index)?)
+                .ok()?
+                .hash(),
+        )
+    }
+    fn creation_time_ms(&self, height: u64) -> Option<u64> {
+        let index = usize::try_from(height).ok()?.checked_sub(1)?;
+        u64::try_from(
+            decode_framed_signed_block(self.blocks.get(index)?)
+                .ok()?
+                .header()
+                .creation_time()
+                .as_millis(),
+        )
+        .ok()
+    }
+}
+
 fn inspect_certified_bpng_lane_evidence(
     store_root: &Path,
     network_id: NetworkId,
+    chain_id: &ChainId,
     retained: &RetainedHistory,
-    expected_incarnation: Option<Hash>,
+    expected_incarnation: Option<[u8; 32]>,
     expected_validators: &[PeerId],
     original_voters: &BTreeMap<PeerId, Vec<u8>>,
 ) -> Result<CertifiedBpngLaneEvidence> {
-    let Some((data_path, index_path)) =
-        bpng_certified_sidecar_paths(store_root, network_id, expected_incarnation)?
+    let states = native_lane_states(retained)?;
+    let Some(record) = states
+        .last()
+        .and_then(|state| state.lane(BPNG_FIXTURE_LANE))
     else {
         ensure!(
             expected_incarnation.is_none(),
-            "expected BPNG lane instance is absent"
+            "signed native BPNG lane is absent"
         );
         return Ok(CertifiedBpngLaneEvidence::absent());
     };
-    let before = (
-        read_optional_evidence_file(&data_path)?,
-        read_optional_evidence_file(&index_path)?,
-    );
-    let (Some(data), Some(index)) = (&before.0, &before.1) else {
+    let incarnation =
+        expected_incarnation.ok_or_else(|| eyre!("native lane exists before signed policy"))?;
+    assert_bpng_record(record, incarnation, expected_validators)?;
+    for member in &record.committee {
         ensure!(
-            before.0.is_none() && before.1.is_none() && expected_incarnation.is_none(),
-            "retained BPNG certified sidecar pair is incomplete or unexpectedly absent"
+            original_voters.get(&member.peer) == Some(&member.pop),
+            "native lane credentials differ from signed genesis"
         );
-        return Ok(CertifiedBpngLaneEvidence::absent());
+    }
+    let crypto = BlsCrypto::new();
+    let instance = lanes::lane_instance(&crypto, &network_id, chain_id.as_str(), record);
+    let directory = store_root.join("lanes").join(hex::encode(instance.0));
+    let mut predecessor = SumeragiLaneFrontier {
+        height: 0,
+        block_hash: lanes::lane_genesis_hash(&network_id, record).0,
+        result: lanes::lane_genesis_result(record).0,
     };
-    let incarnation = expected_incarnation
-        .ok_or_else(|| eyre!("BPNG certified lane blocks exist before the signed lifecycle"))?;
+    let mut history = LaneChainView::default();
+    let mut artifacts = Vec::new();
+    let mut total = 0_u64;
     ensure!(
-        !data.is_empty()
-            && index.len() >= SIDECAR_INDEX_HEADER_BYTES
-            && (index.len() - SIDECAR_INDEX_HEADER_BYTES) % SIDECAR_INDEX_ENTRY_BYTES == 0,
-        "retained BPNG certified sidecar pair is empty, truncated or misaligned"
+        record.merged.height <= MAX_RETAINED_HEIGHT,
+        "native lane history exceeds fixture bound"
     );
-    ensure!(
-        sidecar_u64(index, 0)? == u64::MAX && sidecar_u64(index, size_of::<u64>())? == u64::MAX,
-        "retained BPNG certified index omitted its V1 marker"
-    );
-    let base_height = sidecar_u64(index, SIDECAR_INDEX_ENTRY_BYTES)?;
-    ensure!(
-        base_height == 1
-            && sidecar_u64(index, SIDECAR_INDEX_ENTRY_BYTES + size_of::<u64>())?
-                == base_height ^ SIDECAR_INDEX_CHECK_MASK,
-        "retained BPNG certified index must begin at exact lane height one"
-    );
-    let entry_count = (index.len() - SIDECAR_INDEX_HEADER_BYTES) / SIDECAR_INDEX_ENTRY_BYTES;
-    ensure!(
-        entry_count > 0 && u64::try_from(entry_count)? <= MAX_RETAINED_HEIGHT,
-        "retained BPNG certified index exceeds the fixture bound"
-    );
-    let mut previous_height = 0_u64;
-    let mut previous_descriptor = None;
-    let mut encoded = Vec::with_capacity(entry_count);
-    let mut indexed_end = 0_u64;
-    for slot in 0..entry_count {
-        let position = SIDECAR_INDEX_HEADER_BYTES
-            .checked_add(
-                slot.checked_mul(SIDECAR_INDEX_ENTRY_BYTES)
-                    .ok_or_else(|| eyre!("retained BPNG sidecar slot overflow"))?,
-            )
-            .ok_or_else(|| eyre!("retained BPNG sidecar position overflow"))?;
-        let offset = sidecar_u64(index, position)?;
-        let len = sidecar_u64(index, position + size_of::<u64>())?;
+    for height in 1..=record.merged.height {
+        let path = directory.join(format!("{height:020}.frame"));
+        let metadata = fs::symlink_metadata(&path)?;
         ensure!(
-            len > 0 && offset == indexed_end,
-            "retained BPNG sidecar index must cover non-empty data contiguously from offset zero"
+            metadata.is_file() && metadata.len() <= MAX_EVIDENCE_BYTES,
+            "native lane frame is not a bounded regular file"
         );
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| eyre!("retained BPNG sidecar range overflow"))?;
+        total = total
+            .checked_add(metadata.len())
+            .ok_or_else(|| eyre!("native lane evidence size overflow"))?;
         ensure!(
-            len <= MAX_EVIDENCE_BYTES && end <= u64::try_from(data.len())?,
-            "retained BPNG sidecar slot points outside its bounded data file"
+            total <= MAX_EVIDENCE_BYTES,
+            "native lane evidence exceeds fixture budget"
         );
-        let start = usize::try_from(offset)?;
-        let end_usize = usize::try_from(end)?;
-        let bytes = data
-            .get(start..end_usize)
-            .ok_or_else(|| eyre!("retained BPNG sidecar payload range is invalid"))?
-            .to_vec();
-        let artifact = norito::decode_canonical::<CertifiedLaneBlockArtifact>(&bytes)?;
-        validate_certified_bpng_artifact(&artifact)?;
+        let bytes = fs::read(&path)?;
+        let entry = SyncEntry::decode_all(&mut bytes.as_slice())?;
         ensure!(
-            artifact.encode_framed()? == bytes,
-            "retained BPNG certified artifact is not canonical"
+            entry.encode() == bytes
+                && entry.commit_qc.signers.count_ones() == BPNG_MIN_QUORUM as usize,
+            "native lane frame is noncanonical or lacks exact three-of-four quorum"
         );
-        let descriptor = &artifact.proposal.descriptor;
-        let indexed_height = base_height
-            .checked_add(u64::try_from(slot)?)
-            .ok_or_else(|| eyre!("retained BPNG certified height overflow"))?;
+        let result = verify_lane_entry(
+            record,
+            &network_id,
+            chain_id.as_str(),
+            retained,
+            &history,
+            &predecessor,
+            &entry,
+        )?;
+        let batch = LaneBatch::from_payload(&entry.block.payload)?;
         ensure!(
-            descriptor.lane_id == BPNG_FIXTURE_LANE
-                && descriptor.dataspace_id == DataSpaceId::new(BPNG_ID)
-                && descriptor.lane_incarnation == incarnation
-                && descriptor.lane_block_height == indexed_height,
-            "certified BPNG lane block route/incarnation mismatch"
+            batch.transactions.len() == 1,
+            "BPNG fixture must certify exactly its one original transaction"
         );
-        ensure!(
-            descriptor.lane_block_height == previous_height.saturating_add(1)
-                && descriptor.previous_lane_block_height == previous_height
-                && descriptor.previous_lane_block_descriptor_hash == previous_descriptor,
-            "certified BPNG lane ownership chain is not contiguous"
-        );
-        ensure!(
-            descriptor.validator_set == expected_validators
-                && descriptor.validator_count == u32::try_from(expected_validators.len())?
-                && descriptor.min_quorum == BPNG_MIN_QUORUM,
-            "certified BPNG descriptor must bind exactly four validators and quorum three"
-        );
-        ensure!(
-            artifact.prepare_qc.validator_set == expected_validators
-                && artifact.commit_qc.validator_set == expected_validators
-                && artifact.prepare_qc.body.validator_count
-                    == u32::try_from(expected_validators.len())?
-                && artifact.commit_qc.body.validator_count
-                    == u32::try_from(expected_validators.len())?
-                && artifact.prepare_qc.body.min_quorum == BPNG_MIN_QUORUM
-                && artifact.commit_qc.body.min_quorum == BPNG_MIN_QUORUM
-                && bitmap_signer_count(&artifact.prepare_qc.signers_bitmap) == BPNG_MIN_QUORUM
-                && bitmap_signer_count(&artifact.commit_qc.signers_bitmap) == BPNG_MIN_QUORUM,
-            "retained BPNG lane QCs are not exact three-of-four certificates"
-        );
-        ensure!(
-            artifact.prepare_qc.payload_availability_qc.is_none()
-                && artifact.commit_qc.payload_availability_qc.is_none(),
-            "globally carried BPNG lane block unexpectedly uses autonomous availability proof"
-        );
-        for (public_key, pop) in &artifact.signer_pops {
-            ensure!(
-                original_voters.get(&PeerId::new(public_key.clone())) == Some(pop),
-                "retained BPNG lane QC PoP was not signed into original genesis"
-            );
-        }
-        let hint = artifact
-            .proposal
-            .payload_block_hint
-            .as_ref()
-            .ok_or_else(|| eyre!("certified BPNG lane block omitted global carrier hint"))?;
-        ensure!(
-            hint.proposal_height == descriptor.proposal_height,
-            "BPNG certified artifact carrier height mismatch"
-        );
-        let carrier_index = usize::try_from(hint.proposal_height.saturating_sub(1))?;
-        let carrier_wire = retained
+        let carrier = retained
             .blocks
-            .get(carrier_index)
-            .ok_or_else(|| eyre!("BPNG certified artifact points outside retained Kura"))?;
-        let carrier = decode_framed_signed_block(carrier_wire)?;
-        ensure!(
-            carrier.hash() == hint.proposal_block_hash,
-            "BPNG certified artifact points to a different retained carrier"
-        );
-        let ownership = carrier
-            .execution_context()
-            .and_then(|context| {
-                context
-                    .lane_payload_ownerships
-                    .iter()
-                    .find(|ownership| ownership_matches_descriptor(ownership, descriptor))
+            .iter()
+            .map(|wire| decode_framed_signed_block(wire))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .find(|block| {
+                block.lane_merge().is_some_and(|section| {
+                    section.merges.iter().any(|merge| {
+                        merge.lane == record.lane
+                            && merge.incarnation == record.incarnation
+                            && merge.from == height
+                            && merge.to == height
+                    })
+                })
             })
-            .ok_or_else(|| eyre!("retained Kura carrier omitted certified BPNG ownership"))?;
-        ownership.validate_replay_material().map_err(|error| {
-            eyre!("invalid retained Kura BPNG ownership replay material: {error}")
-        })?;
-        previous_height = descriptor.lane_block_height;
-        previous_descriptor = Some(descriptor.descriptor_hash);
-        indexed_end = end;
-        encoded.push(bytes);
+            .ok_or_else(|| eyre!("native certified lane frame has no exact global merge"))?;
+        let section = carrier.lane_merge().expect("matched lane merge");
+        let merge = section
+            .merges
+            .iter()
+            .find(|merge| merge.lane == record.lane)
+            .expect("matched lane");
+        ensure!(
+            merge.tip_hash == entry.commit_qc.block_hash.0
+                && merge.tip_result == entry.commit_qc.result.0
+                && section.merged_count == 1,
+            "global native merge does not bind its exact certified frame"
+        );
+        let signed = &batch.transactions[0];
+        let (_, execution_record) =
+            bpng_transaction_ownership(retained, signed, incarnation, expected_validators)?;
+        ensure!(
+            execution_record.merged.height == height,
+            "native lane transaction executed under another frame"
+        );
+        history.previous_anchor = result.anchor_height;
+        for hash in result.tx_hashes {
+            history.recent.insert(hash, result.anchor_height);
+        }
+        predecessor = SumeragiLaneFrontier {
+            height,
+            block_hash: entry.commit_qc.block_hash.0,
+            result: entry.commit_qc.result.0,
+        };
+        ensure!(
+            fs::read(&path)? == bytes,
+            "native lane frame changed during read-only inspection"
+        );
+        artifacts.push(bytes);
     }
     ensure!(
-        encoded.len() == entry_count
-            && indexed_end == u64::try_from(data.len())?
-            && !data.is_empty(),
-        "retained BPNG certified data lacks exact contiguous indexed coverage"
+        predecessor == record.merged,
+        "native lane retained tip differs from global certified frontier"
     );
-    ensure!(
-        (
-            read_optional_evidence_file(&data_path)?,
-            read_optional_evidence_file(&index_path)?,
-        ) == before,
-        "retained BPNG certified sidecar pair changed during read-only inspection"
-    );
-    Ok(CertifiedBpngLaneEvidence::new(
-        encoded,
-        data.clone(),
-        index.clone(),
-    ))
+    Ok(CertifiedBpngLaneEvidence { artifacts })
 }
 
-fn inspection_fingerprint(
-    blocks_dir: &Path,
-    indexed_count: u64,
-) -> Result<BTreeMap<PathBuf, (u64, Hash)>> {
-    let mut paths = ["blocks.data", "blocks.index", "blocks.hashes"]
+fn inspection_fingerprint(blocks_dir: &Path) -> Result<BTreeMap<PathBuf, (u64, Hash)>> {
+    let paths = ["blocks.data", "blocks.index", "blocks.hashes"]
         .map(PathBuf::from)
         .to_vec();
-    for height in 1..=indexed_count {
-        for directory in [
-            "wsv_checkpoints",
-            "commit_manifests",
-            "v2_finality",
-            "retained_blocks",
-        ] {
-            paths.push(PathBuf::from(directory).join(format!("{height:020}.norito")));
-        }
-    }
     let mut fingerprint = BTreeMap::new();
     let mut total = 0_u64;
     for relative in paths {
@@ -1814,7 +1698,6 @@ fn read_retained_prefix(blocks_dir: &Path, prefix: u64) -> Result<RetainedHistor
     );
     let mut store = BlockStore::open_read_only(blocks_dir)?;
     let mut blocks = Vec::new();
-    let mut sidecars = BTreeMap::new();
     let mut total = 0_u64;
     for height in 1..=prefix {
         let mut index = [BlockIndex::default()];
@@ -1836,74 +1719,82 @@ fn read_retained_prefix(blocks_dir: &Path, prefix: u64) -> Result<RetainedHistor
             "stored block height mismatch"
         );
         blocks.push(wire);
-        for directory in [
-            "wsv_checkpoints",
-            "commit_manifests",
-            "v2_finality",
-            "retained_blocks",
-        ] {
-            let relative = PathBuf::from(directory).join(format!("{height:020}.norito"));
-            let path = blocks_dir.join(&relative);
-            let metadata = fs::symlink_metadata(&path)
-                .wrap_err_with(|| format!("missing required retained evidence: {relative:?}"))?;
-            ensure!(
-                metadata.is_file() && metadata.len() > 0,
-                "retained sidecar must be a nonempty regular file"
-            );
-            total = total
-                .checked_add(metadata.len())
-                .ok_or_else(|| eyre!("evidence size overflow"))?;
-            ensure!(
-                total <= MAX_EVIDENCE_BYTES,
-                "retained evidence exceeds fixture budget"
-            );
-            sidecars.insert(relative, fs::read(path)?);
-        }
     }
-    Ok(RetainedHistory { blocks, sidecars })
+    Ok(RetainedHistory { blocks })
 }
 
-fn assert_finality(
-    artifact: &V2FinalityArtifact,
-    block: &SignedBlock,
-    wire: &[u8],
-    network_id: NetworkId,
+fn authenticate_retained_history(
+    retained: &RetainedHistory,
+    genesis: &GenesisBlock,
+    chain_id: &ChainId,
     original_voters: &BTreeMap<PeerId, Vec<u8>>,
 ) -> Result<()> {
-    artifact.validate_for_header(&block.header())?;
-    let context = &artifact.height_context;
     ensure!(
-        context.network_id == network_id && context.mode == ConsensusMode::Npos,
-        "finality network/mode changed"
+        retained.blocks.len() >= 2,
+        "genesis execution needs its real certified successor"
     );
+    let network = NetworkId::from_genesis_hash(genesis.0.hash());
+    let stored_genesis = decode_framed_signed_block(&retained.blocks[0])?;
     ensure!(
-        context.roster.len() == 4 && artifact.validator_set_pops.len() == 4,
-        "finality must retain four original voters"
+        stored_genesis
+            .canonical_resultless_proposal()
+            .encode_wire()?
+            == genesis.0.canonical_resultless_proposal().encode_wire()?,
+        "original signed genesis changed"
     );
-    ensure!(
-        context.quorum.total_power == 4
-            && context.quorum.min_signers == 3
-            && artifact.commit_qc.signers.len() == 3,
-        "expected genuine three-of-four CommitQC"
-    );
-    for (voter, pop) in context.roster.iter().zip(&artifact.validator_set_pops) {
+    let states = native_lane_states(retained)?;
+    let mut verifier = CertifiedPrefix::new(chain_id, network, Arc::new(stored_genesis))?;
+    for (index, wire) in retained.blocks.iter().enumerate().skip(1) {
+        let block = decode_framed_signed_block(wire)?;
+        let (certified, anchored_genesis) = verifier.push(Arc::new(block.clone()))?.into_parts();
+        let committed = certified.committed();
+        let context = &committed.commitment().schedule.current;
         ensure!(
-            voter.power == 1 && original_voters.get(&voter.validator) == Some(pop),
-            "finality voter/PoP differs from signed genesis"
+            context.network_id == network
+                && context.mode == ConsensusMode::Npos
+                && context.committee.len() == VALIDATOR_COUNT,
+            "native finality network/mode/committee changed"
         );
+        for member in &context.committee {
+            ensure!(
+                original_voters.get(&member.validator) == Some(&member.proof_of_possession),
+                "native finality voter/PoP differs from signed genesis"
+            );
+        }
+        ensure!(
+            certified
+                .commit_qc()
+                .is_some_and(|qc| qc.signers.count_ones() == BPNG_MIN_QUORUM as usize),
+            "native CommitQC must carry exactly three of four equal votes"
+        );
+        let executed_wire = block.with_commit_certificate(None).encode_wire()?;
+        let execution = &committed.commitment().execution;
+        ensure!(
+            execution.executed_block_wire_len == u64::try_from(executed_wire.len())?
+                && execution.executed_block_wire_hash == Hash::new(&executed_wire),
+            "native result does not bind exact executed bytes"
+        );
+        ensure!(
+            committed
+                .commitment()
+                .native_lanes
+                .matches_state(network, committed.height(), &states[index])
+                .map_err(|error| eyre!(error))?,
+            "signed native lane policy/merge replay differs from its authenticated result"
+        );
+        if let Some(anchor) = anchored_genesis {
+            ensure!(
+                index == 1
+                    && anchor
+                        .committed()
+                        .commitment()
+                        .native_lanes
+                        .matches_state(network, 1, &states[0])
+                        .map_err(|error| eyre!(error))?,
+                "successor does not authenticate original genesis lane state"
+            );
+        }
     }
-    ensure!(
-        artifact.subject.payload_hash == block.canonical_proposal_wire_hash()?,
-        "certified proposal wire mismatch"
-    );
-    let execution = &artifact.commit_qc.execution_commitment;
-    ensure!(
-        execution.executed_block_wire_len == u64::try_from(wire.len())?
-            && execution.executed_block_wire_hash == Hash::new(wire),
-        "CommitQC does not authenticate exact executed block bytes"
-    );
-    // The public Kura getter has already cryptographically verified the BLS
-    // aggregate and PoPs. Never replace it with a self-asserted synthetic QC.
     Ok(())
 }
 
@@ -1911,21 +1802,22 @@ fn inspect_stopped_peer(
     peer: &NetworkPeer,
     prefix: Option<u64>,
     genesis: &GenesisBlock,
+    chain_id: &ChainId,
     original_voters: &BTreeMap<PeerId, Vec<u8>>,
-    expected_bpng_incarnation: Option<Hash>,
+    expected_bpng_incarnation: Option<[u8; 32]>,
     expected_bpng_validators: &[PeerId],
 ) -> Result<StoppedEvidence> {
     let catalog = LaneCatalog::default();
     let lanes = ActualLaneConfig::from_catalog(&catalog);
-    let (blocks_dir, _) = Kura::canonical_storage_paths(&peer.kura_store_dir());
+    let blocks_dir = Kura::canonical_storage_path(&peer.kura_store_dir());
     let indexed_count = BlockStore::open_read_only(&blocks_dir)?.read_index_count()?;
     ensure!(
         (1..=MAX_RETAINED_HEIGHT).contains(&indexed_count),
         "missing/oversized stopped Kura history"
     );
     // Physical journal length may contain an unpublished suffix. Preserve it
-    // without treating it as committed or demanding absent suffix sidecars.
-    let fingerprint = inspection_fingerprint(&blocks_dir, indexed_count)?;
+    // without treating it as committed.
+    let fingerprint = inspection_fingerprint(&blocks_dir)?;
     // Inspection ONLY. Fast opens existing journals without repair or writes;
     // its existing store-root lock is O_RDWR/create(false), never initialized.
     // The actual daemon always replays in Strict with snapshots disabled.
@@ -1937,14 +1829,14 @@ fn inspect_stopped_peer(
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+
+        native_context_archive_max_bytes: defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lanes, &catalog)?;
     let durable_count = u64::try_from(kura.exact_durable_blocks_count()?)?;
@@ -1958,39 +1850,11 @@ fn inspect_stopped_peer(
         "restart lost retained carrier heights"
     );
     let retained = read_retained_prefix(&blocks_dir, prefix)?;
-    for (index, wire) in retained.blocks.iter().enumerate() {
-        let height = u64::try_from(index)? + 1;
-        let block = decode_framed_signed_block(wire)?;
-        let artifact = kura
-            .v2_finality_artifact(height)?
-            .ok_or_else(|| eyre!("missing genuine CommitQC at height {height}"))?;
-        assert_finality(
-            &artifact,
-            &block,
-            wire,
-            NetworkId::from_genesis_hash(genesis.0.hash()),
-            original_voters,
-        )?;
-        if height == 1 {
-            ensure!(
-                block.hash() == genesis.0.hash() && block.execution_context().is_none(),
-                "original genesis identity/context changed"
-            );
-            ensure!(
-                block.canonical_resultless_proposal().encode_wire()?
-                    == genesis.0.canonical_resultless_proposal().encode_wire()?,
-                "canonical signed genesis proposal changed"
-            );
-            iroha_core::sumeragi::validate_signed_genesis_v2_authority(
-                genesis,
-                &artifact.height_context,
-                &artifact.validator_set_pops,
-            )?;
-        }
-    }
+    authenticate_retained_history(&retained, genesis, chain_id, original_voters)?;
     let certified_bpng_lane = inspect_certified_bpng_lane_evidence(
         &peer.kura_store_dir(),
         NetworkId::from_genesis_hash(genesis.0.hash()),
+        chain_id,
         &retained,
         expected_bpng_incarnation,
         expected_bpng_validators,
@@ -1998,7 +1862,7 @@ fn inspect_stopped_peer(
     )?;
     drop(kura); // Release every inspector handle before Strict daemon startup.
     ensure!(
-        inspection_fingerprint(&blocks_dir, indexed_count)? == fingerprint
+        inspection_fingerprint(&blocks_dir)? == fingerprint
             && read_retained_prefix(&blocks_dir, prefix)? == retained,
         "inspection changed retained or unpublished journal/sidecar bytes"
     );
@@ -2055,69 +1919,65 @@ fn execution_height(history: &RetainedHistory, transaction: &SignedTransaction) 
 fn bpng_transaction_ownership(
     history: &RetainedHistory,
     transaction: &SignedTransaction,
-    incarnation: Hash,
+    incarnation: [u8; 32],
     expected_validators: &[PeerId],
-) -> Result<(u64, SumeragiLanePayloadOwnership)> {
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transaction_hash = Hash::from(transaction.hash());
+) -> Result<(u64, SumeragiLaneRecord)> {
+    let expected = TransactionEntrypoint::External(transaction.clone());
+    let states = native_lane_states(history)?;
     let mut found = None;
-    for wire in &history.blocks {
+    for (height_index, wire) in history.blocks.iter().enumerate() {
         let block = decode_framed_signed_block(wire)?;
-        let matches = block
-            .network_entrypoints()
-            .enumerate()
-            .filter(|(_, entrypoint)| *entrypoint == &expected_entrypoint)
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            continue;
+        for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
+            if entrypoint != &expected {
+                continue;
+            }
+            ensure!(
+                found.is_none()
+                    && block
+                        .network_output_at(u32::try_from(input_index)?)
+                        .is_some_and(|(_, output)| output.result.0.is_ok()),
+                "BPNG transaction must execute successfully exactly once"
+            );
+            let context = block
+                .execution_context()
+                .ok_or_else(|| eyre!("BPNG execution context missing"))?;
+            let routes = context
+                .external
+                .iter()
+                .filter(|route| route.entrypoint_hash == transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>();
+            ensure!(
+                routes.len() == 1
+                    && routes[0].lane_id == BPNG_FIXTURE_LANE
+                    && routes[0].dataspace_id == DataSpaceId::new(BPNG_ID)
+                    && routes[0].routing_plan_legs.len() == 1
+                    && routes[0].routing_plan_legs[0].lane_id == BPNG_FIXTURE_LANE
+                    && routes[0].routing_plan_legs[0].dataspace_id == DataSpaceId::new(BPNG_ID),
+                "BPNG transaction lost its exact singleton route"
+            );
+            let section = block
+                .lane_merge()
+                .ok_or_else(|| eyre!("BPNG transaction was not carried by a native lane merge"))?;
+            ensure!(
+                section.merges.len() == 1
+                    && section.merged_count == 1
+                    && section.merges[0].lane == BPNG_FIXTURE_LANE
+                    && section.merges[0].from == section.merges[0].to
+                    && input_index + 1 == block.network_entrypoints().count(),
+                "BPNG transaction must be the exact singleton suffix of one certified native lane block"
+            );
+            let record = states[height_index]
+                .lane(BPNG_FIXTURE_LANE)
+                .ok_or_else(|| eyre!("native lane state missing"))?;
+            assert_bpng_record(record, incarnation, expected_validators)?;
+            ensure!(
+                record.merged_at == block.header().height().get(),
+                "native merged frontier points at another global carrier"
+            );
+            found = Some((record.merged_at, record.clone()));
         }
-        ensure!(
-            matches.len() == 1
-                && block
-                    .network_output_at(u32::try_from(matches[0].0)?)
-                    .is_some_and(|(_, output)| output.result.0.is_ok())
-                && found.is_none(),
-            "BPNG transaction must have one successful retained execution"
-        );
-        let context = block
-            .execution_context()
-            .ok_or_else(|| eyre!("BPNG carrier omitted execution context"))?;
-        let routes = context
-            .external
-            .iter()
-            .filter(|route| route.entrypoint_hash == transaction.hash_as_entrypoint())
-            .collect::<Vec<_>>();
-        ensure!(
-            routes.len() == 1
-                && routes[0].lane_id == BPNG_FIXTURE_LANE
-                && routes[0].dataspace_id == DataSpaceId::new(BPNG_ID)
-                && routes[0].routing_plan_legs.len() == 1
-                && routes[0].routing_plan_legs[0].lane_id == BPNG_FIXTURE_LANE
-                && routes[0].routing_plan_legs[0].dataspace_id == DataSpaceId::new(BPNG_ID),
-            "BPNG transaction did not retain its exact single-lane route"
-        );
-        let ownerships = context
-            .lane_payload_ownerships
-            .iter()
-            .filter(|ownership| {
-                ownership.lane_id == BPNG_FIXTURE_LANE
-                    && ownership.dataspace_id == DataSpaceId::new(BPNG_ID)
-            })
-            .collect::<Vec<_>>();
-        ensure!(
-            ownerships.len() == 1
-                && ownerships[0].accepted_transaction_hashes.as_slice()
-                    == std::slice::from_ref(&transaction_hash),
-            "BPNG carrier omitted, duplicated or widened exact singleton transaction ownership"
-        );
-        assert_bpng_ownership(ownerships[0], incarnation, expected_validators, transaction)?;
-        ensure!(
-            ownerships[0].proposal_height == block.header().height().get(),
-            "BPNG ownership points to a different global carrier height"
-        );
-        found = Some((block.header().height().get(), ownerships[0].clone()));
     }
-    found.ok_or_else(|| eyre!("BPNG signed transaction missing from retained Kura ownership"))
+    found.ok_or_else(|| eyre!("BPNG signed transaction missing from native retained history"))
 }
 
 async fn stop_all(peers: &[NetworkPeer]) -> Result<()> {
@@ -2368,16 +2228,14 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 peer,
                 Some(initial_prefix),
                 &genesis,
+                &network.chain_id(),
                 &original_voters,
                 None,
                 &expected_validator_peers,
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    ensure!(
-        initial_evidence.windows(2).all(|pair| pair[0] == pair[1]),
-        "four validators did not retain the same original canonical prefix"
-    );
+    assert_same_authenticated_prefix(&initial_evidence)?;
     for evidence in &initial_evidence {
         let history = &evidence.retained;
         ensure!(
@@ -2463,12 +2321,13 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         );
         sleep(POLL_INTERVAL).await;
     };
-    let bpng_incarnation = lifecycle_status.1;
+    let physical_bpng_incarnation = lifecycle_status.1;
     for client in &clients {
         let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
-                && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
+                && assert_bpng_lifecycle_status(&status, &original_lifecycle)?
+                    == physical_bpng_incarnation,
             "signed fixture-only BPNG lifecycle did not converge exactly"
         );
     }
@@ -2602,7 +2461,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         height(authority).await? < valid_until_height,
         "exact registration consent expired before submission"
     );
-    // Admit the independently signed accounts together so real QueuePlan carriers
+    // Admit the independently signed accounts together so real certified global blocks
     // can execute all four registrations before the one consented election freezes.
     let self_registrations = try_join_all(
         self_registrations
@@ -2678,6 +2537,78 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     transactions.push(submit(&validator_clients[0], activation_sweep).await?);
     wait_for_exact_bpng_validators(&clients, &expected_validator_bindings, &stake).await?;
 
+    // Physical catalog ownership and native lane consensus are distinct signed state.
+    // Install the one native lane only after its four funded validators are active.
+    let native_policy = SumeragiLanePolicy {
+        anchor_freshness: MAX_RETAINED_HEIGHT,
+        max_merge_blocks: 16,
+        stall_window: MAX_RETAINED_HEIGHT * 2,
+        lane_params: SumeragiParameters::default(),
+        fixed: vec![SumeragiFixedLane {
+            lane: BPNG_FIXTURE_LANE,
+            dataspace: DataSpaceId::new(BPNG_ID),
+            committee: expected_validator_peers
+                .iter()
+                .map(|peer| SumeragiLaneMember {
+                    peer: peer.clone(),
+                    pop: original_voters
+                        .get(peer)
+                        .expect("signed original voter")
+                        .clone(),
+                })
+                .collect(),
+        }],
+        routes: vec![SumeragiLaneRoute {
+            lane: BPNG_FIXTURE_LANE,
+            account: Some(BOB_ID.to_string()),
+            instruction: None,
+        }],
+        autoscale: None,
+    };
+    transactions.push(
+        submit(
+            authority,
+            transaction(
+                authority,
+                SetParameter::new(Parameter::Custom(native_policy.into_custom_parameter())),
+            ),
+        )
+        .await?,
+    );
+    let native_lane_deadline = Instant::now() + CONVERGENCE_TIMEOUT;
+    let native_record = loop {
+        let reader = authority.clone();
+        let statuses = read(move || reader.client().get_sumeragi_lanes()).await?;
+        if let Some(status) = statuses
+            .into_iter()
+            .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
+        {
+            break status.record;
+        }
+        ensure!(
+            Instant::now() < native_lane_deadline,
+            "signed native lane policy did not apply"
+        );
+        sleep(POLL_INTERVAL).await;
+    };
+    let bpng_incarnation = native_record.incarnation;
+    while height(authority).await? < native_record.active_from {
+        ensure!(
+            Instant::now() < native_lane_deadline,
+            "native lane activation did not advance"
+        );
+        transactions.push(
+            submit(
+                authority,
+                transaction(
+                    authority,
+                    Log::new(Level::INFO, "activate native BPNG lane".to_owned()),
+                ),
+            )
+            .await?,
+        );
+    }
+
     let predecessor_key: Name = "retained_bpng_predecessor".parse()?;
     let predecessor_value = Json::new("committed-before-strict-restart");
     let predecessor = submit(
@@ -2721,6 +2652,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 peer,
                 Some(pre_restart_prefix),
                 &genesis,
+                &network.chain_id(),
                 &original_voters,
                 Some(bpng_incarnation),
                 &expected_validator_peers,
@@ -2734,13 +2666,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             evidence
                 .retained
                 .blocks
-                .starts_with(&initial.retained.blocks)
-                && initial
-                    .retained
-                    .sidecars
-                    .iter()
-                    .all(|(path, bytes)| { evidence.retained.sidecars.get(path) == Some(bytes) }),
-            "first strict replay changed an original carrier or sidecar on peer {peer_index}"
+                .starts_with(&initial.retained.blocks),
+            "first strict replay changed an original certified carrier on peer {peer_index}"
         );
         let (_, ownership) = bpng_transaction_ownership(
             &evidence.retained,
@@ -2753,12 +2680,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             "live and stopped-Kura BPNG predecessor ownership differ"
         );
     }
-    ensure!(
-        pre_restart_evidence
-            .windows(2)
-            .all(|pair| pair[0] == pair[1]),
-        "four validators did not retain identical BPNG carriers and QCs"
-    );
+    assert_same_authenticated_prefix(&pre_restart_evidence)?;
 
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
@@ -2779,7 +2701,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         let status = lane_lifecycle_status(client).await?;
         ensure!(
             status == lifecycle_status.0
-                && assert_bpng_lifecycle_status(&status, &original_lifecycle)? == bpng_incarnation,
+                && assert_bpng_lifecycle_status(&status, &original_lifecycle)?
+                    == physical_bpng_incarnation,
             "strict restart did not replay exact signed BPNG lifecycle/incarnation"
         );
         ensure!(
@@ -2823,13 +2746,9 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     )
     .await?;
     ensure!(
-        successor_frontier.lane_incarnation == predecessor_frontier.lane_incarnation
-            && successor_frontier.lane_block_height
-                == predecessor_frontier.lane_block_height.saturating_add(1)
-            && successor_frontier.previous_lane_block_height
-                == predecessor_frontier.lane_block_height
-            && successor_frontier.previous_lane_block_descriptor_hash
-                == predecessor_frontier.lane_block_descriptor_hash,
+        successor_frontier.incarnation == predecessor_frontier.incarnation
+            && successor_frontier.merged.height
+                == predecessor_frontier.merged.height.saturating_add(1),
         "post-restart BPNG successor did not extend the retained predecessor/incarnation"
     );
     transactions.push(successor.clone());
@@ -2860,6 +2779,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 peer,
                 Some(after_restart_prefix),
                 &genesis,
+                &network.chain_id(),
                 &original_voters,
                 Some(bpng_incarnation),
                 &expected_validator_peers,
@@ -2872,13 +2792,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .zip(0..)
     {
         ensure!(
-            after.retained.blocks.starts_with(&before.retained.blocks)
-                && before
-                    .retained
-                    .sidecars
-                    .iter()
-                    .all(|(path, bytes)| { after.retained.sidecars.get(path) == Some(bytes) }),
-            "second strict replay changed retained carriers, sidecars or BPNG QCs on peer {peer_index}"
+            after.retained.blocks.starts_with(&before.retained.blocks),
+            "second strict replay changed retained certified carriers on peer {peer_index}"
         );
         before
             .certified_bpng_lane
@@ -2907,12 +2822,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             "stopped Kura does not retain the exact BPNG predecessor/successor chain"
         );
     }
-    ensure!(
-        after_restart_evidence
-            .windows(2)
-            .all(|pair| pair[0] == pair[1]),
-        "post-restart BPNG carriers/QCs differ across validators"
-    );
+    assert_same_authenticated_prefix(&after_restart_evidence)?;
     Ok(())
 }
 

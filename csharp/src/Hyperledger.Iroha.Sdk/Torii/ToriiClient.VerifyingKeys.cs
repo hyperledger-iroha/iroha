@@ -12,7 +12,6 @@ using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
-using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Transactions;
 using Hyperledger.Iroha.Zk;
 
@@ -442,7 +441,7 @@ public sealed partial class ToriiClient
                 expectedNetworkId,
                 $"{context}.domain");
 
-            var decodedAuthority = SccpSubmitValidation.RequireCanonicalAuthority(authority);
+            var decodedAuthority = ToriiSubmitValidation.RequireCanonicalAuthority(authority);
             var expectedAuthority = AccountAddress
                 .Parse(authorityAccountId, AccountAddress.DefaultChainDiscriminant)
                 .ControllerBytes();
@@ -461,9 +460,9 @@ public sealed partial class ToriiClient
                 sizeof(uint),
                 required: false,
                 context: $"{context}.nonce");
-            SccpSubmitValidation.RequireCanonicalTransactionFeePayment(feePayment);
-            SccpSubmitValidation.RequireQueuePlanSyncedAdmissionIntent(admissionIntent);
-            SccpSubmitValidation.RequireEmptyTransactionMetadata(metadata);
+            ToriiSubmitValidation.RequireCanonicalTransactionFeePayment(feePayment);
+            ToriiSubmitValidation.RequireQueuePlanSyncedAdmissionIntent(admissionIntent);
+            ToriiSubmitValidation.RequireEmptyTransactionMetadata(metadata);
             RequireAbsentVerifyingKeyDraftOption(attachments, $"{context}.attachments");
             RequireRequestedVerifyingKeyInstruction(
                 executable,

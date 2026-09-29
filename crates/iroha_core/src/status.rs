@@ -16,9 +16,8 @@ use iroha_crypto::{
     privacy::{CommitmentScheme, LanePrivacyCommitment},
 };
 use iroha_data_model::{
-    block::{BlockHeader, consensus::LaneBlockCommitment},
+    block::BlockHeader,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
-    nexus::{LaneRelayEnvelope, LaneRelayError},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
@@ -49,8 +48,6 @@ static PIPELINE_EXECUTION: OnceLock<Mutex<PipelineExecutionSnapshot>> = OnceLock
 static DATASPACE_ACTIVITY: OnceLock<Mutex<Vec<DataspaceActivitySnapshot>>> = OnceLock::new();
 static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock::new();
 static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
-static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = OnceLock::new();
-static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 #[derive(Debug, Default)]
@@ -162,9 +159,6 @@ static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_BYTES: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
-const LANE_RELAY_ENVELOPES_CAP: usize = 64;
-pub(crate) const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
-pub(crate) const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NexusFeePayer {
@@ -1149,42 +1143,6 @@ pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'stat
     );
     (total, last_reason)
 }
-/// Worker-loop queue identifiers used by the remaining async adapter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkerQueueKind {
-    /// Vote-related messages.
-    Votes,
-    /// Block payload messages.
-    BlockPayload,
-    /// Fallback block/control messages.
-    Blocks,
-    /// Consensus control-flow messages.
-    Consensus,
-    /// Lane relay envelopes.
-    LaneRelay,
-    /// Background post requests.
-    Background,
-}
-static WORKER_QUEUE_DEPTHS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
-static WORKER_QUEUE_DROPS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
-const fn worker_queue_index(kind: WorkerQueueKind) -> usize {
-    match kind {
-        WorkerQueueKind::Votes => 0,
-        WorkerQueueKind::BlockPayload => 1,
-        WorkerQueueKind::Blocks => 2,
-        WorkerQueueKind::Consensus => 3,
-        WorkerQueueKind::LaneRelay => 4,
-        WorkerQueueKind::Background => 5,
-    }
-}
-/// Record an enqueue for the given adapter queue.
-pub fn record_worker_queue_enqueue(kind: WorkerQueueKind) {
-    WORKER_QUEUE_DEPTHS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
-}
-/// Record a dropped enqueue for the given adapter queue.
-pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
-    WORKER_QUEUE_DROPS[worker_queue_index(kind)].fetch_add(1, Ordering::Relaxed);
-}
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// Count a duplicate transaction skipped by gossip.
 pub fn inc_gossip_duplicate_known_skipped() {
@@ -1205,90 +1163,6 @@ fn lane_commitments_slot() -> &'static Mutex<Vec<LaneCommitmentSnapshot>> {
 fn dataspace_commitments_slot() -> &'static Mutex<Vec<DataspaceCommitmentSnapshot>> {
     DATASPACE_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
 }
-fn lane_settlement_commitments_slot() -> &'static Mutex<Vec<LaneBlockCommitment>> {
-    LANE_SETTLEMENT_COMMITMENTS.get_or_init(|| Mutex::new(Vec::new()))
-}
-fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
-    LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
-}
-type LaneRelayKey = (
-    iroha_model_base::topology::LaneId,
-    iroha_model_base::topology::DataSpaceId,
-    Hash,
-    u64,
-);
-fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
-    (
-        envelope.lane_id,
-        envelope.dataspace_id,
-        envelope.lane_incarnation,
-        envelope.block_height,
-    )
-}
-fn record_relay_error(err: &LaneRelayError) {
-    if let Some(metrics) = metrics::global() {
-        metrics
-            .lane_relay_invalid_total
-            .with_label_values(&[err.as_label()])
-            .inc();
-    }
-}
-fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
-    match envelope.verify().and_then(|()| {
-        if envelope.fastpq_proof.is_some() {
-            envelope.validate_fastpq_proof_metadata()
-        } else {
-            Ok(())
-        }
-    }) {
-        Ok(()) => {}
-        Err(err) => {
-            record_relay_error(&err);
-            iroha_logger::warn!(
-                lane_id = %envelope.lane_id,
-                dataspace_id = %envelope.dataspace_id,
-                block_height = envelope.block_height,
-                error_kind = err.as_label(),
-                error = %err,
-                "dropping lane relay envelope with failed structural verification"
-            );
-            return;
-        }
-    }
-    let key = lane_relay_key(&envelope);
-    if let Some(existing) = storage
-        .iter()
-        .position(|candidate| lane_relay_key(candidate) == key)
-    {
-        if !storage[existing].same_finality_effect(&envelope) {
-            let err = LaneRelayError::ConflictingRelay {
-                lane: envelope.lane_id,
-                height: envelope.block_height,
-            };
-            record_relay_error(&err);
-            iroha_logger::warn!(
-                lane_id = %envelope.lane_id,
-                dataspace_id = %envelope.dataspace_id,
-                block_height = envelope.block_height,
-                error_kind = err.as_label(),
-                "dropping conflicting lane relay envelope for finalized coordinates"
-            );
-            return;
-        }
-        if storage[existing].has_merge_admission_material()
-            && !envelope.has_merge_admission_material()
-        {
-            return;
-        }
-        storage[existing] = envelope;
-    } else {
-        storage.push(envelope);
-        if storage.len() > LANE_RELAY_ENVELOPES_CAP {
-            let drain = storage.len() - LANE_RELAY_ENVELOPES_CAP;
-            storage.drain(0..drain);
-        }
-    }
-}
 #[cfg(any(test, feature = "iroha-core-tests"))]
 /// Replace the aggregated lane/dataspace commitment snapshots used by Nexus diagnostics.
 pub fn set_lane_commitments(
@@ -1308,30 +1182,6 @@ pub fn set_lane_commitments(
         *guard = dataspace_entries;
     }
 }
-/// Replace the aggregated lane settlement commitments used by Nexus diagnostics.
-pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
-    let mut guard = lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    );
-    *guard = entries;
-}
-#[cfg(test)]
-/// Replace the stored lane relay envelopes captured during block sealing.
-pub fn set_lane_relay_envelopes(entries: Vec<LaneRelayEnvelope>) {
-    let mut guard =
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
-    guard.clear();
-    for envelope in entries {
-        upsert_lane_relay_envelope(&mut guard, envelope);
-    }
-}
-/// Append a single validated lane relay envelope to the cached snapshot.
-pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
-    let mut guard =
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot");
-    upsert_lane_relay_envelope(&mut guard, envelope);
-}
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
@@ -1349,20 +1199,13 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
         "dataspace commitments snapshot",
     )
     .retain(|entry| !lane_matches(entry.lane_id));
-    lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    )
-    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
-    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
-        .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
 #[cfg(test)]
 pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
     format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
         lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
         lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
@@ -1370,11 +1213,6 @@ pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
             dataspace_commitments_slot(),
             "dataspace commitments snapshot"
         ),
-        lock_operator_status_slot(
-            lane_settlement_commitments_slot(),
-            "lane settlement commitments snapshot"
-        ),
-        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
         lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
         lock_operator_status_slot(nexus_staking_slot(), "nexus staking status")
             .lanes
@@ -1391,17 +1229,6 @@ fn dataspace_commitments_snapshot() -> Vec<DataspaceCommitmentSnapshot> {
         "dataspace commitments snapshot",
     )
     .clone()
-}
-fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
-    lock_operator_status_slot(
-        lane_settlement_commitments_slot(),
-        "lane settlement commitments snapshot",
-    )
-    .clone()
-}
-/// Return the cached lane relay envelopes used by Nexus diagnostics.
-pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
-    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
 }
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))
@@ -1506,10 +1333,6 @@ pub struct StatusSnapshot {
     pub lane_commitments: Vec<LaneCommitmentSnapshot>,
     /// Dataspace-local commitments retained for Nexus diagnostics.
     pub dataspace_commitments: Vec<DataspaceCommitmentSnapshot>,
-    /// Lane-local settlement commitments.
-    pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
-    /// Certified lane relay envelopes.
-    pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
     /// Count of governance-sealed lanes.
     pub lane_governance_sealed_total: u32,
     /// Aliases of governance-sealed lanes.
@@ -1540,8 +1363,6 @@ pub fn snapshot() -> StatusSnapshot {
         .clone(),
         lane_commitments: lane_commitments_snapshot(),
         dataspace_commitments: dataspace_commitments_snapshot(),
-        lane_settlement_commitments: lane_settlement_commitments_snapshot(),
-        lane_relay_envelopes: lane_relay_envelopes_snapshot(),
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance,

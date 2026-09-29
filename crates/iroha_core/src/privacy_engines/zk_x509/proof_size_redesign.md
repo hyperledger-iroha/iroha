@@ -1,18 +1,18 @@
 # zk-X509 complete-relation proof geometry
 
-The selected first-release codec totals **9,204,362 bytes**, within the unchanged
+The selected first-release codec totals **9,420,938 bytes**, within the unchanged
 9,437,184-byte cap. Activation remains unavailable pending complete native KAT,
 adversarial, independent soundness/privacy, and resource qualification. Geometry
-is not release evidence. All 49 registrations, 5,623 MAIN trace columns, 136
+is not release evidence. All 49 registrations, 5,811 MAIN trace columns, 136
 queries, hiding coefficients, FRI folds, degree bounds and hash widths remain.
 
 | Exact codec bound | Bytes |
 | --- | ---: |
-| MAIN aggregate including DEEP | 7,692,192 |
+| MAIN aggregate including DEEP | 7,908,768 |
 | CA aggregate including DEEP | 1,498,816 |
 | Claim and outer framing | 13,354 |
-| Complete X5S1 | 9,204,362 |
-| Remaining cap headroom | 232,822 |
+| Complete X5S1 | 9,420,938 |
+| Remaining cap headroom | 16,246 |
 
 `stark/proof_size_redesign_tests.rs` derives these sizes from the actual layouts
 and codec. `scripts/check_zk_x509_proof_geometry.py` independently counts roots,
@@ -54,9 +54,9 @@ The wire, transcript, leaf hashing and frontier accounting share one immutable
 layout; proof bytes cannot select a fallback. The joined leaf marker `u16::MAX`
 cannot alias an individual group index. Base and auxiliary roles remain distinct.
 
-Retaining every native coefficient would require 16,226,947,392 payload bytes,
+Retaining every native coefficient would require 17,018,207,808 payload bytes,
 already above the unchanged 12 GiB ceiling. The MAIN owner instead retains
-81,690,944 bytes of original mask coefficients and reconstructs columns from its
+84,422,208 bytes of original mask coefficients and reconstructs columns from its
 closed phase owners. Commitment passes retain at most eight clearing coefficient
 and LDE columns and one wiping digest state per common-domain row. The quotient
 stage evaluates one registration in interleaved stripes of at most 524,288 rows;
@@ -87,9 +87,21 @@ of at most eight columns in row order, parallelizing independent 1,024-row hash-
 chunks with one clearing 64-byte buffer per active chunk. It preserves the exact
 framed bytes, and failures poison the builder before it can publish a root. This does not claim erasure of every transient
 compiler-generated scalar or stack copy.
-The conservative early reservation currently leaves about 600 MB for the borrowed
-assembly. A complete maximum-profile assembly has not yet been admitted or measured;
-the allocation plan does not assert that every supported maximum witness fits.
+The conservative early reservation leaves 596,974,144 bytes for the borrowed
+assembly. The corrected RFC source alone retains 421,806,624 bytes for the maximum
+structural fixture; a fresh complete assembly measurement is still required.
+Earlier measurements of the smaller RFC layout do not qualify this layout.
+
+Public fixed polynomials use one owned matrix across quotient stripes. A later
+stripe performs an inverse FFT, scales coefficient `k` by the ratio of the new
+and old shifts to power `k`, and applies the forward FFT in place. Fixed
+polynomials have degree below their native domain, which fits every stripe;
+masked witness polynomials still use the original folded evaluation. This saves
+427,819,008 fixed-matrix bytes at the RFC registration. The ledger charges one
+native-column allocation overlap when padding a smaller fixed domain and counts
+6,535 additional public recovery IFFTs (32,549,109,760 butterflies). These real
+operations are included in diagnostic receipts; memory reuse is not a latency
+qualification.
 
 Binary FRI authenticates each ordered `(low, high)` pair in one 64-byte leaf,
 including the terminal tree. Every query still discloses both values and uses
@@ -104,6 +116,20 @@ fixed selectors, within the unchanged global cap seven. The conservative SHA
 quotient degree 2,632,330 fits six chunks of 589,824 coefficients. Binding-sink
 optional selection has degree three, correcting its previous degree-two ledger.
 Both corrections are reflected in descriptors and profile digests.
+
+The RFC temporal relation now has 285 base, 280 auxiliary and 102 fixed columns,
+with 1,681 residues of degree at most four. Its 72 fixed time slots form a complete
+census of authenticated DER time-node identities, including optional certificate
+and revoked-entry slots. Fifteen byte positions bind each decimal date, its actual
+DER time tag, terminal `Z` and UTC padding. Seven calendar phases enforce bounded
+Gregorian quotients, exact leap-year arithmetic and timestamp conversion. The
+73 two-phase comparisons bind private calendar operands and verifier-owned public
+window values; 38-bit slack and byte carry constraints prevent field-wrap
+inequalities. Four affine logarithmic-derivative lanes use `1 + dot(challenge,
+tuple)` and constrain singular inverses and singular counts explicitly. These
+changes rotate the profile and require fresh complete proof/KAT and independent
+soundness qualification; isolated native-column and degree tests do not replace it.
+
 
 Tests cover full base/Fp4 polynomial lifting, all 49 typed registrations, each
 terminal family, fixed schedules against independent IFFT/Horner evaluation,
@@ -123,7 +149,7 @@ The ignored release-only `maximum_profile_assembly_payload_and_source_admission_
 constructs the complete deterministic maximum structural fixture, records actual
 assembly capacities and construction time, and checks unchanged source admission.
 `maximum_profile_streaming_hash_cost_diagnostic` measures the actual joined row
-hashing with all 5,623 columns and 128 public rows, comparing one-column and
+hashing with all 5,811 columns and 128 public rows, comparing one-column and
 eight-column batches with one worker. It does not measure parallel throughput. Its linear timing
 estimate excludes source replay, FFTs, quotient/DEEP/FRI and CA work, and differs in
 cache residency from a full proof. `maximum_profile_replay_fft_cost_diagnostic`

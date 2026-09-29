@@ -156,57 +156,25 @@ fn canonical_physical_rewrite_preobserves_multiple_chunks_and_keeps_fence_busy()
 }
 
 #[test]
-fn canonical_physical_recovery_preserves_both_exact_marker_and_carrier_pin_choices() {
+fn canonical_physical_recovery_preserves_both_exact_marker_choices() {
     for new_marker in [false, true] {
-        for correct_pin in [false, true] {
-            let (_directory, kura, blocks) = canonical_physical_fixture(2);
-            canonical_physical_seed_da_suffix(&kura, &blocks);
-            let replacement = canonical_physical_block_at(&blocks, 2);
-            canonical_physical_leave_rewrite(&kura, &replacement, new_marker);
-            initialize_physical_fixture(&kura);
-            let _write = kura.block_store_write_lock.lock();
-            let mut store = kura.block_store.lock();
-            let selected = if new_marker {
-                replacement.hash()
-            } else {
-                blocks[1].hash()
-            };
-            let opposite = if new_marker {
-                blocks[1].hash()
-            } else {
-                replacement.hash()
-            };
-            let pins = BTreeMap::from([(2, if correct_pin { selected } else { opposite })]);
-            let marker_before = store.read_commit_marker().unwrap();
-            let stage_before = fs::read(store.da_block_rewrite_stage_path()).unwrap();
-            let resources = kura.begin_canonical_physical_mutation(
-                &mut store,
-                CanonicalPhysicalOperation::Recovery,
-            );
-            let result = store.recover_canonical_storage_stages_with_carrier_pins(&pins);
-            if correct_pin {
-                result.unwrap();
-                resources.finish_resources_before_disk_rescan();
-                assert!(!store.da_block_rewrite_stage_path().exists());
-                assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![selected]);
-                drop(store);
-                assert_physical_fixture(&kura);
-            } else {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("pinned canonical replica terminal carrier")
-                );
-                drop(resources);
-                assert_eq!(store.read_commit_marker().unwrap(), marker_before);
-                assert_eq!(
-                    fs::read(store.da_block_rewrite_stage_path()).unwrap(),
-                    stage_before
-                );
-                assert_physical_unavailable(&kura);
-            }
-        }
+        let (_directory, kura, blocks) = canonical_physical_fixture(2);
+        canonical_physical_seed_da_suffix(&kura, &blocks);
+        let replacement = canonical_physical_block_at(&blocks, 2);
+        canonical_physical_leave_rewrite(&kura, &replacement, new_marker);
+        initialize_physical_fixture(&kura);
+        let _write = kura.block_store_write_lock.lock();
+        let mut store = kura.block_store.lock();
+        let selected = if new_marker { replacement.hash() } else { blocks[1].hash() };
+        let resources = kura.begin_canonical_physical_mutation(
+            &mut store, CanonicalPhysicalOperation::Recovery,
+        );
+        store.recover_canonical_storage_stages().unwrap();
+        resources.finish_resources_before_disk_rescan();
+        assert!(!store.da_block_rewrite_stage_path().exists());
+        assert_eq!(store.read_block_hashes(1, 1).unwrap(), vec![selected]);
+        drop(store);
+        assert_physical_fixture(&kura);
     }
 }
 
@@ -339,120 +307,10 @@ fn canonical_physical_prune_counts_actual_da_suffix_and_failed_prefix_recovers()
 }
 
 #[test]
-fn canonical_physical_cache_authenticates_signed_wire_and_counts_exact_retry() {
-    let (_directory, kura, blocks) = canonical_physical_fixture(4);
-    let (_, length) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    kura.evict_block_bodies(length).unwrap();
-    kura.block_store.lock().remove_da_block_file(2).unwrap();
-    let before = initialize_physical_fixture(&kura);
-    let wrong = canonical_physical_block_at(&blocks, 2);
-    assert!(kura.cache_block_body(&wrong).is_err());
-    assert_eq!(assert_physical_fixture(&kura), before);
-    kura.cache_block_body(&blocks[1]).unwrap();
-    let after = assert_physical_fixture(&kura);
-    assert_eq!(
-        after[ResourceFamily::StorageBytes as usize].storage_bytes
-            - before[ResourceFamily::StorageBytes as usize].storage_bytes,
-        length
-    );
-    kura.cache_block_body(&blocks[1]).unwrap();
-    assert_eq!(assert_physical_fixture(&kura), after);
-    assert_eq!(
-        kura.get_block(nonzero!(2_usize)).unwrap().hash(),
-        blocks[1].hash()
-    );
-}
-
-#[test]
-fn canonical_physical_eviction_zero_after_authority_expiry_keeps_published_copy_bytes() {
-    let (_directory, kura, _blocks) = canonical_physical_fixture(4);
-    let (_, length) = advertise_required_replicas(&kura, nonzero!(2_usize));
-    let before = initialize_physical_fixture(&kura);
-    kura.pause_next_eviction_before_stage_publication_for_tests();
-    let worker_kura = Arc::clone(&kura);
-    let worker = thread::spawn(move || worker_kura.evict_block_bodies(length));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !kura.eviction_paused_before_stage_publication_for_tests() {
-        assert!(!worker.is_finished());
-        assert!(Instant::now() < deadline);
-        thread::yield_now();
-    }
-    assert_physical_unavailable(&kura);
-    let expired = Instant::now()
-        .checked_sub(kura.replica_advert_ttl() + Duration::from_secs(1))
-        .unwrap();
-    kura.replica_registry.lock().retain(|_, adverts| {
-        for advert in adverts.values_mut() {
-            advert.observed_at = expired;
-        }
-        true
-    });
-    kura.resume_eviction_before_stage_publication_for_tests();
-    assert_eq!(worker.join().unwrap().unwrap(), 0);
-    let store = kura.block_store.lock();
-    assert!(store.da_block_path(2).is_file());
-    assert!(!store.eviction_compaction_stage_path().exists());
-    drop(store);
-    assert!(kura.retained_block_record_path(2).is_file());
-    let after = assert_physical_fixture(&kura);
-    assert!(
-        after[ResourceFamily::StorageBytes as usize].storage_bytes
-            > before[ResourceFamily::StorageBytes as usize].storage_bytes
-    );
-    assert!(!kura.disk_usage_total_initialized.load(Ordering::Acquire));
-}
-
-#[test]
-fn canonical_physical_periodic_forced_and_empty_eviction_flush_publish_pending_marker() {
-    for mode in 0..3 {
-        let (_directory, kura, blocks) = canonical_physical_fixture(1);
-        let next = canonical_physical_block_at(&blocks, 2);
-        {
-            let mut store = kura.block_store.lock();
-            store.fsync.mode = FsyncMode::Batched;
-            store.fsync.interval = Duration::from_secs(3600);
-            store.append_block_to_chain(&next).unwrap();
-            assert_eq!(store.read_durable_index_count().unwrap(), 1);
-            if mode == 0 {
-                store.fsync.pending_since = Some(
-                    Instant::now()
-                        .checked_sub(Duration::from_secs(3601))
-                        .unwrap(),
-                );
-            }
-        }
-        // The direct append retains the real pending-marker boundary. Mirror
-        // that exact signed block into the accepted fixture image, as the existing
-        // batched-fsync eviction fixture does; the normal Kura call forces fsync.
-        kura.block_data
-            .lock()
-            .push((next.hash(), Some(Arc::clone(&next))));
-        assert_eq!(kura.block_data.lock().len(), 2);
-        initialize_physical_fixture(&kura);
-        if mode == 2 {
-            // Genesis and the retained newest body leave no eviction candidates;
-            // the initial flush must still publish the real pending marker.
-            assert_eq!(kura.evict_block_bodies(1).unwrap(), 0);
-        } else {
-            let _write = kura.block_store_write_lock.lock();
-            kura.flush_pending_fsync_with_resources(&mut kura.block_store.lock(), mode == 1)
-                .unwrap();
-        }
-        assert_eq!(
-            kura.block_store.lock().read_durable_index_count().unwrap(),
-            2
-        );
-        assert_physical_fixture(&kura);
-        assert!(!kura.disk_usage_total_initialized.load(Ordering::Acquire));
-    }
-}
-
-#[test]
 fn immutable_instance_disk_scan_counts_current_and_retained_files_once() {
     let directory = TempDir::new().unwrap();
     let root = directory.path();
     let blocks = root.join("blocks");
-    let merge = root.join("merge_ledger");
     let first = LaneStorageIdentity {
         network_id: test_network_id(b"immutable-accounting"),
         lane_id: LaneId::new(1),
@@ -465,28 +323,25 @@ fn immutable_instance_disk_scan_counts_current_and_retained_files_once() {
         activation_height: 4,
         ..first
     };
-    let canonical = Kura::canonical_storage_paths(root);
+    let canonical = Kura::canonical_storage_path(root);
     let paths = [
-        (canonical.0.join(DATA_FILE_NAME), 11),
+        (canonical.join(DATA_FILE_NAME), 11),
         (first.blocks_dir(root).join(".lane-incarnation.norito"), 17),
         (
             first
                 .blocks_dir(root)
-                .join(LANE_ARTIFACTS_DIR_NAME)
+                .join(PIPELINE_DIR_NAME)
                 .join("accounting.norito.tmp"),
             19,
         ),
         (
             first
                 .blocks_dir(root)
-                .join(RETAINED_BLOCKS_DIR_NAME)
+                .join(DA_BLOCKS_DIR_NAME)
                 .join("accounting.norito"),
             23,
         ),
         (second.blocks_dir(root).join(".lane-incarnation.norito"), 29),
-        (canonical.1, 31),
-        (first.merge_log_path(root), 37),
-        (second.merge_log_path(root), 41),
     ];
     for (path, length) in &paths {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -494,80 +349,40 @@ fn immutable_instance_disk_scan_counts_current_and_retained_files_once() {
     }
     // Accounting must include both identities without an active LaneId map;
     // bytes stay charged until their actual collection, including temporaries.
-    assert_eq!(
-        Kura::blocks_root_usage_bytes(&blocks, u64::MAX).unwrap(),
-        (76, 99)
-    );
-    assert_eq!(Kura::blocks_root_bytes(&blocks, u64::MAX).unwrap(), 76);
-    assert_eq!(Kura::merge_root_bytes(&merge).unwrap(), 109);
+    assert_eq!(Kura::blocks_root_usage_bytes(&blocks).unwrap(), (76, 99));
+    assert_eq!(Kura::blocks_root_bytes(&blocks).unwrap(), 76);
     fs::remove_file(&paths[2].0).unwrap();
-    assert_eq!(
-        Kura::blocks_root_usage_bytes(&blocks, u64::MAX).unwrap(),
-        (57, 80)
-    );
+    assert_eq!(Kura::blocks_root_usage_bytes(&blocks).unwrap(), (57, 80));
 }
 
 #[test]
 fn immutable_instance_disk_scan_rejects_unknown_nested_entries() {
-    for merge in [false, true] {
-        let directory = TempDir::new().unwrap();
-        let root = directory
-            .path()
-            .join(if merge { "merge_ledger" } else { "blocks" });
-        let unknown = root.join("instances").join("unowned");
-        fs::create_dir_all(unknown.parent().unwrap()).unwrap();
-        if merge {
-            fs::write(&unknown, [0_u8; 1]).unwrap();
-            assert!(Kura::merge_root_bytes(&root).is_err());
-        } else {
-            fs::create_dir(&unknown).unwrap();
-            assert!(Kura::blocks_root_usage_bytes(&root, u64::MAX).is_err());
-        }
-    }
+    let directory = TempDir::new().unwrap();
+    let root = directory.path().join("blocks");
+    let unknown = root.join("instances").join("unowned");
+    fs::create_dir_all(&unknown).unwrap();
+    assert!(Kura::blocks_root_usage_bytes(&root).is_err());
 }
 
 #[cfg(unix)]
 #[test]
 fn immutable_instance_disk_scan_rejects_symlinks_and_hardlinks() {
     use std::os::unix::fs::symlink;
-
-    for merge in [false, true] {
-        for hardlink in [false, true] {
-            let directory = TempDir::new().unwrap();
-            let root = directory
-                .path()
-                .join(if merge { "merge_ledger" } else { "blocks" });
-            let key = "a".repeat(64);
-            let instance =
-                root.join("instances")
-                    .join(if merge { format!("{key}.log") } else { key });
-            fs::create_dir_all(instance.parent().unwrap()).unwrap();
-            let outside = directory.path().join("outside");
-            if merge || hardlink {
-                fs::write(&outside, [0_u8; 7]).unwrap();
-            } else {
-                fs::create_dir(&outside).unwrap();
-            }
-            if hardlink {
-                let target = if merge {
-                    instance
-                } else {
-                    fs::create_dir(&instance).unwrap();
-                    instance.join(".lane-incarnation.norito")
-                };
-                fs::hard_link(&outside, target).unwrap();
-            } else {
-                symlink(&outside, instance).unwrap();
-            }
-            if merge {
-                assert!(Kura::merge_root_bytes(&root).is_err());
-            } else {
-                assert!(Kura::blocks_root_usage_bytes(&root, u64::MAX).is_err());
-            }
-            assert_eq!(
-                fs::symlink_metadata(outside).unwrap().is_dir(),
-                !merge && !hardlink
-            );
+    for hardlink in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("blocks");
+        let instance = root.join("instances").join("a".repeat(64));
+        fs::create_dir_all(instance.parent().unwrap()).unwrap();
+        let outside = directory.path().join("outside");
+        if hardlink {
+            fs::write(&outside, [0_u8; 7]).unwrap();
+            fs::create_dir(&instance).unwrap();
+            fs::hard_link(&outside, instance.join(".lane-incarnation.norito")).unwrap();
+        } else {
+            fs::create_dir(&outside).unwrap();
+            symlink(&outside, instance).unwrap();
         }
+        assert!(Kura::blocks_root_usage_bytes(&root).is_err());
+        assert_eq!(fs::symlink_metadata(outside).unwrap().is_dir(), !hardlink);
     }
 }

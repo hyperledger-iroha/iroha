@@ -2060,7 +2060,7 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-Sumeragi status is the native protocol-8 observation. With an exact-network
+Sumeragi status is the native protocol-1 observation. With an exact-network
 operator signing context, the Node and browser clients expose the same closed
 21-field schema through `getSumeragiStatusTyped()`:
 

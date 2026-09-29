@@ -32,7 +32,7 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     // Seed the test-only World before signed genesis execution. This exercises
     // retained readback without substituting for private ballot or tally proof
     // admission.
-    let state = CoreState::new_for_testing(
+    let mut state = CoreState::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
@@ -51,9 +51,13 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     let genesis_signer =
         iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("deterministic fixture genesis signer");
-    let signed_genesis = state
-        .seed_signed_genesis_for_testing(&genesis_signer)
-        .expect("publish signed fixture genesis");
+    let mut config =
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(std::mem::take(&mut state.world), 1);
+    config.genesis_key = genesis_signer;
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original election query genesis");
+    let state = chain.state().clone();
+    let signed_genesis = chain.genesis();
     let view = state.view();
     let height = u64::try_from(view.height()).expect("fixture height fits u64");
     assert_eq!(height, 1);
@@ -69,7 +73,7 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
         signed_genesis.hash()
     );
     drop(view);
-    (Arc::new(state), height, hash)
+    (state, height, hash)
 }
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let kura = Kura::blank_kura_for_testing();

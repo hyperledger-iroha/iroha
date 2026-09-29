@@ -8881,7 +8881,6 @@ mod tests {
                 UploadSmartContractCodeChunk,
             },
         },
-        merge::{LaneDrainIntentV1, LaneDrainStateV1},
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
@@ -9027,27 +9026,16 @@ mod tests {
                 universal
             );
             for height in [1, 2, 3] {
-                assert_eq!(
-                    super::super::reconcile_execution_routing_plan(
-                        &transaction,
-                        &universal,
-                        &view,
-                        0,
-                        height
-                    )
-                    .unwrap(),
-                    universal,
-                );
-                assert!(matches!(
-                    super::super::reconcile_execution_routing_plan(
-                        &transaction,
-                        &foreign,
-                        &view,
-                        0,
-                        height
-                    ),
-                    Err(super::super::ExecutionRoutingReconciliationError::TopologyMismatch)
-                ));
+                let block_route = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    view.nexus(),
+                    &transaction,
+                    view.world(),
+                    0,
+                    height,
+                )
+                .unwrap();
+                assert_eq!(block_route, universal);
+                assert_ne!(block_route, foreign);
             }
         }
     }
@@ -9943,43 +9931,6 @@ mod tests {
             .account_scope_directory
             .insert(account_id.clone(), scope_entry);
     }
-    fn attach_valid_drain_state(lane: &mut LaneConfig, close_global_height: u64) {
-        let keypair = KeyPair::try_from_seed(
-            b"queue-router-drain-validator".to_vec(),
-            Algorithm::BlsNormal,
-        )
-        .expect("derive queue-router drain validator");
-        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
-        let state = LaneDrainStateV1 {
-            version: 1,
-            intent: LaneDrainIntentV1 {
-                version: 1,
-                network_id: super::super::queue_test_network_id(),
-                lane_id: lane.id,
-                dataspace_id: lane.dataspace_id,
-                lane_incarnation: Hash::new(b"queue-router-drain-incarnation"),
-                close_global_height,
-                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    lane.id,
-                    lane.dataspace_id,
-                    Hash::new(b"queue-router-drain-incarnation"),
-                    0,
-                    None,
-                ),
-                validator_set_hash_version:
-                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set,
-                validator_count: 1,
-                min_quorum: 1,
-            },
-            commitment: None,
-        };
-        lane.metadata.insert(
-            AUTOSCALE_META_DRAIN_STATE.to_owned(),
-            hex::encode(norito::to_bytes(&state).expect("encode valid drain state")),
-        );
-    }
     include!("router_initial_routing_tests.rs");
     #[test]
     fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
@@ -10271,56 +10222,40 @@ mod tests {
         }
     }
     #[test]
-    fn default_route_sharding_excludes_lane_closing_at_committed_tip() {
+    fn default_route_sharding_rejects_retired_drain_metadata() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = default_routing_policy();
         let mut elastic = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7);
-        attach_valid_drain_state(&mut elastic, 7);
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_DRAIN_STATE.to_owned(), "{}".to_owned());
         let lane_catalog = lane_catalog_from_configs(vec![default_lane_config(), elastic]);
-        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let router = ConfigLaneRouter::new(
+            default_routing_policy(),
+            DataSpaceCatalog::default(),
+            lane_catalog,
+        );
         let state = blank_state();
         install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
-
-        let tx = (0..512)
-            .find_map(|idx| {
-                let tx = sample_transaction(
+        for index in 0..256 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
                     &alice_id,
-                    alice_keypair.private_key(),
-                    vec![role_registration_instruction(
-                        &alice_id,
-                        &format!("closingelasticroute{idx}"),
-                    )],
-                );
-                let view = state.view();
-                let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                    view.nexus(),
-                    &tx,
-                    view.world(),
-                    state_view_ledger_time_ms(&view),
-                    7,
-                )
-                .expect("the closing lane remains active through its exact close height");
-                (plan.coordinator_route().lane_id == LaneId::new(1)).then_some(tx)
-            })
-            .expect("fixture must find a transaction hashed onto the closing lane at height 7");
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-
-        assert_eq!(
-            router
+                    &format!("retireddrain{index}"),
+                )],
+            );
+            let plan = router
                 .try_route_plan_with_view(&tx, &state.view())
-                .expect("queue routing must fall back to the base lane"),
-            expected,
-            "a lane closing at the committed tip cannot accept work for the next proposal"
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("single-route queue routing must use the same fallback"),
-            expected.coordinator_route()
-        );
+                .expect("base lane remains routable");
+            assert_eq!(
+                plan,
+                RoutingPlan::single(RoutingDecision::default()),
+                "retired metadata cannot authorize an elastic lane"
+            );
+        }
     }
     #[test]
     fn nexus_world_routing_at_block_height_excludes_future_created_elastic_lane() {

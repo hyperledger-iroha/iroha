@@ -505,12 +505,12 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         let request = try ToriiAccountOnboardingPlanRequest(
             alias: "alice@universal",
             accountId: canonicalOwnerLiteral(
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: TairaTestnetProfile.i105Discriminant
             )
         )
         let receipt = try onboardingPlanReceipt(
             request: request,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            chainDiscriminant: TairaTestnetProfile.i105Discriminant
         )
         let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
 
@@ -912,7 +912,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
     func testAccountOnboardingProofRequiredUsesOneAtomicStatePost() async throws {
         let accountId = try canonicalOwnerLiteral()
         let alternateAccountId = try AccountAddress.parseEncoded(accountId)
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let intent = try ToriiAccountOnboardingPlanRequest(
             alias: "alice@universal",
             accountId: accountId

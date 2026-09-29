@@ -23,6 +23,10 @@ use crate::{
 use rayon::prelude::*;
 
 /// Local exact payload and conservative structural work limits.
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive maximum, named like the crate's other `*Limits` policies"
+)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CoefficientLimits {
     pub(super) max_payload_bytes: usize,
@@ -287,6 +291,11 @@ impl CoefficientStripe<'_> {
     pub(super) fn stripe_index(&self) -> usize {
         self.stripe
     }
+    /// Rows resident in one stripe: the plan's degree, not its whole-layer `rows`.
+    #[allow(
+        clippy::misnamed_getters,
+        reason = "a stripe holds `plan.degree` rows; `plan.rows` counts the whole layer"
+    )]
     pub(super) fn rows(&self) -> usize {
         self.plan.degree
     }

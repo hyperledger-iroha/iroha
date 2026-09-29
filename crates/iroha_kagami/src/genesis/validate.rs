@@ -55,7 +55,7 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
-    super::require_v2_wire_protocol_only(manifest)?;
+    super::require_native_wire_protocol(manifest)?;
     super::ensure_kagemusha_mint_finality_schedule_matches_consensus(manifest)?;
     let topology = manifest
         .transactions()

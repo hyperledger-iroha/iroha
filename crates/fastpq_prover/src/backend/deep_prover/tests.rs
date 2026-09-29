@@ -7,6 +7,13 @@ use crate::{
 };
 use rand::{SeedableRng, TryRngCore, rngs::StdRng};
 
+#[path = "diagnostic_artifact.rs"]
+mod diagnostic_artifact;
+
+const COMPLETE_CONTEXT: &[u8] = b"native producer diagnostic";
+const COMPLETE_BYTES: usize = 482_978;
+const COMPLETE_HASH: &str = "7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507";
+
 fn limits() -> ConstructionLimits {
     ConstructionLimits {
         digest_execution: DigestExecutionV1::Cpu,
@@ -72,7 +79,7 @@ fn required_device_failure_precedes_source_reading_and_entropy() {
     .unwrap();
     let mut rng = NoEntropy(0);
     assert!(matches!(
-        plan.build(&[], &mut rng),
+        plan.build_from_borrowed_for_test(&[], &mut rng),
         Err(Error::NativeDigestExecution { .. })
     ));
     assert_eq!(rng.0, 0);
@@ -122,7 +129,7 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
     }
     let mut rng = NoEntropy(0);
     // A valid plan cannot turn an absent source into entropy consumption or a tree.
-    assert!(plan.build(&[], &mut rng).is_err());
+    assert!(plan.build_from_borrowed_for_test(&[], &mut rng).is_err());
     assert_eq!(rng.0, 0);
     assert!(
         ProducerPlan::new(
@@ -134,6 +141,25 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
         )
         .is_err()
     );
+}
+
+#[test]
+fn retained_device_pool_remains_charged_during_the_larger_cpu_quotient_phase() {
+    let pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
+    assert_eq!(
+        active_phase_payload(2 * pool, pool + 8, pool + 16).unwrap(),
+        3 * pool
+    );
+    // A larger digest stage includes this allowance already; do not add it twice.
+    assert_eq!(
+        active_phase_payload(8, 3 * pool, 2 * pool).unwrap(),
+        3 * pool
+    );
+    assert_eq!(
+        active_phase_payload(8, 2 * pool, 3 * pool).unwrap(),
+        3 * pool
+    );
+    assert!(active_phase_payload(usize::MAX, 0, 0).is_err());
 }
 
 #[test]
@@ -188,7 +214,7 @@ fn canonical_output_writer_is_byte_exact_and_refuses_short_cap_before_output() {
 }
 
 #[test]
-#[ignore = "explicit full 8M-row DEEP producer: over 69M typed hashes; run with measured resource budget"]
+#[ignore = "explicit full 8M-row DEEP producer with retained public artifact; measure separately"]
 fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
     complete_masked_producer(DigestExecutionV1::Cpu);
 }
@@ -203,13 +229,13 @@ fn complete_required_metal_masked_deep_producer_roundtrip_and_statement_rejectio
     ));
 }
 
-fn complete_masked_producer(execution: DigestExecutionV1) {
-    use crate::gadgets::{
-        compact_smt_air::PhysicalSmtWitness, compact_trace_columns::smt_row_cells,
-    };
-    // Required-device failure must precede the diagnostic's private witness too.
-    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
-    let siblings: [_; 32] = core::array::from_fn(|level| digest((level + 17) as u8));
+fn complete_siblings() -> [[u32; 8]; 32] {
+    core::array::from_fn(|level| digest((level + 17) as u8))
+}
+
+// Independent public fixture facts are derived before reading any artifact.
+fn complete_statement() -> PublicStatement {
+    let siblings = complete_siblings();
     let path = 0xa59c_71e3;
     let first = digest(1);
     let second = digest(2);
@@ -226,7 +252,7 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         }
         root = limbs(iroha_crypto::Hash::new(message).as_ref());
     }
-    let statement = PublicStatement {
+    PublicStatement {
         updates: [
             PublicUpdate {
                 old_leaf: first,
@@ -241,8 +267,16 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         ],
         old_root: root,
         new_root: root,
-    };
-    let air = CompactTransferAir::new(&statement, Some(b"native producer diagnostic")).unwrap();
+    }
+}
+
+fn complete_masked_producer(execution: DigestExecutionV1) {
+    use crate::gadgets::compact_smt_air::PhysicalSmtWitness;
+    // Required-device failure must precede the diagnostic's private witness too.
+    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
+    let statement = complete_statement();
+    let siblings = complete_siblings();
+    let air = CompactTransferAir::new(&statement, Some(COMPLETE_CONTEXT)).unwrap();
     let defaults = crate::backend::offline_compact::ProvingLimits::default();
     let plan = ProducerPlan::new(
         &air,
@@ -260,56 +294,66 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         plan.payload_bytes, plan.work_units, plan.hash_calls
     );
     let witness = PhysicalSmtWitness::from_inputs(&statement, &[siblings, siblings]).unwrap();
-    let mut columns: Vec<_> = (0..342)
-        .map(|_| zeroize::Zeroizing::new(Vec::with_capacity(TRACE_ROWS)))
-        .collect();
-    for row in witness.rows() {
-        for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-            column.push(value);
-        }
-    }
+    let columns = OwnedTraceSource::from_rows(witness.rows()).unwrap();
     drop(witness);
     let mut rng = StdRng::from_seed([83; 32]);
-    let borrowed = columns
-        .iter()
-        .map(|column| column.as_slice())
-        .collect::<Vec<_>>();
+    let charges = (plan.payload_bytes, plan.work_units, plan.hash_calls);
     let started = std::time::Instant::now();
-    let proof = plan.build(&borrowed, &mut rng).unwrap();
+    let proof = plan.build(columns, &mut rng).unwrap();
+    let elapsed = started.elapsed().as_secs_f64();
     eprintln!(
         "complete fixed-SMT DEEP proof: bytes={}; build_and_self_check_seconds={:.3}; proof_hash={}",
         proof.len(),
-        started.elapsed().as_secs_f64(),
+        elapsed,
         iroha_crypto::Hash::new(&proof),
     );
+    // Retain only public outputs before later resource/golden/verifier assertions.
+    use crate::backend::compact_protocol::FixedAir as _;
+    let receipt = diagnostic_artifact::retain(
+        &proof,
+        air.statement_bytes(),
+        COMPLETE_CONTEXT,
+        elapsed,
+        charges,
+    )
+    .unwrap();
+    assert_complete_proof_controls(&statement, &air, &proof);
+    diagnostic_artifact::mark_controls_passed(&receipt).unwrap();
+}
+
+fn assert_complete_proof_controls(
+    statement: &PublicStatement,
+    air: &CompactTransferAir,
+    proof: &[u8],
+) {
     assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
     assert_eq!(
         proof.len(),
-        482_978,
+        COMPLETE_BYTES,
         "pre-cache complete seeded proof byte length"
     );
     assert_eq!(
-        iroha_crypto::Hash::new(&proof).to_string(),
-        "7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507",
+        iroha_crypto::Hash::new(proof).to_string(),
+        COMPLETE_HASH,
         "pre-cache complete seeded proof bytes"
     );
     assert_eq!(
-        deep_engine::verify(&air, &proof, deep_proof::PROOF_BYTE_TARGET)
+        deep_engine::verify(air, proof, deep_proof::PROOF_BYTE_TARGET)
             .unwrap()
             .air_evaluations,
         1
     );
-    assert!(deep_engine::verify(&air, &proof, proof.len() - 1).is_err());
+    assert!(deep_engine::verify(air, proof, proof.len() - 1).is_err());
     let other = CompactTransferAir::new(
-        &statement,
+        statement,
         Some(b"different authoritative statement context"),
     )
     .unwrap();
-    assert!(deep_engine::verify(&other, &proof, deep_proof::PROOF_BYTE_TARGET).is_err());
-    let mut altered = proof;
+    assert!(deep_engine::verify(&other, proof, deep_proof::PROOF_BYTE_TARGET).is_err());
+    let mut altered = proof.to_vec();
     let last = altered.len() - 1;
     altered[last] ^= 1;
-    assert!(deep_engine::verify(&air, &altered, deep_proof::PROOF_BYTE_TARGET).is_err());
+    assert!(deep_engine::verify(air, &altered, deep_proof::PROOF_BYTE_TARGET).is_err());
 }
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -519,6 +563,75 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
     }
 }
 
+/// Default policies admit one exact plan whose every budget is also a lower bound.
+fn check_default_policy_plan(relation: &impl DeepRelation) {
+    use crate::backend::{
+        compact_protocol::FixedAir,
+        offline_compact::{ProvingLimits, VerificationLimits},
+    };
+    let proving = ProvingLimits::default();
+    let verification = VerificationLimits::default();
+    let limits = ConstructionLimits {
+        digest_execution: proving.digest_execution,
+        max_payload_bytes: proving.max_segment_charge_bytes,
+        max_work_units: proving.max_segment_work_units,
+        max_hash_calls: proving.max_segment_work_units,
+        max_proof_bytes: verification.bundle.segment.max_proof_bytes,
+    };
+    let plan = ProducerPlan::new(relation, limits).unwrap();
+    assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
+    // Preserve the existing resource boundary. Admission must cover the
+    // actual replay and additional quotient/commitment work within it.
+    assert_eq!(
+        proving.max_segment_work_units,
+        usize::try_from(1_u64 << 42).unwrap()
+    );
+    assert!(plan.work_units > plan.replay.work_units);
+    assert!(plan.work_units <= proving.max_segment_work_units);
+    assert!(plan.hash_calls <= proving.max_segment_work_units);
+    assert_eq!(
+        plan.binding
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap(),
+        Context::for_relation(relation)
+            .unwrap()
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap()
+    );
+    assert_ne!(
+        relation.schema().identity,
+        relation.deep_relation().schema().identity
+    );
+    assert_ne!(
+        plan.binding
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap(),
+        Context::for_relation(relation.deep_relation())
+            .unwrap()
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap()
+    );
+    for limited in [
+        ConstructionLimits {
+            max_payload_bytes: plan.payload_bytes - 1,
+            ..limits
+        },
+        ConstructionLimits {
+            max_work_units: plan.work_units - 1,
+            ..limits
+        },
+        ConstructionLimits {
+            max_hash_calls: plan.hash_calls - 1,
+            ..limits
+        },
+    ] {
+        assert!(ProducerPlan::new(relation, limited).is_err());
+    }
+    let mut rng = NoEntropy(0);
+    assert!(plan.build_from_borrowed_for_test(&[], &mut rng).is_err());
+    assert_eq!(rng.0, 0);
+}
+
 #[test]
 fn default_policies_preflight_quantity_relations_without_private_columns_or_entropy() {
     use crate::{
@@ -526,80 +639,14 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
         backend::{
             compact_axt_batch::AxtTransferBatch,
             compact_axt_context::tests::Fixture,
-            compact_protocol::FixedAir,
             compact_public_api::AxtVerificationContext,
             compact_public_batch::{BatchContextLimits, PublicTransferBatch},
             deep_relation::tests as relation_fixture,
-            offline_compact::{ProvingLimits, VerificationLimits},
         },
         gadgets::public_transfer_statement::{
             PublicTransferLimits, prepare_quantity_public_transfers,
         },
     };
-
-    fn check(relation: &impl DeepRelation) {
-        let proving = ProvingLimits::default();
-        let verification = VerificationLimits::default();
-        let limits = ConstructionLimits {
-            digest_execution: proving.digest_execution,
-            max_payload_bytes: proving.max_segment_charge_bytes,
-            max_work_units: proving.max_segment_work_units,
-            max_hash_calls: proving.max_segment_work_units,
-            max_proof_bytes: verification.bundle.segment.max_proof_bytes,
-        };
-        let plan = ProducerPlan::new(relation, limits).unwrap();
-        assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
-        // Preserve the existing resource boundary. Admission must cover the
-        // actual replay and additional quotient/commitment work within it.
-        assert_eq!(
-            proving.max_segment_work_units,
-            usize::try_from(1_u64 << 42).unwrap()
-        );
-        assert!(plan.work_units > plan.replay.work_units);
-        assert!(plan.work_units <= proving.max_segment_work_units);
-        assert!(plan.hash_calls <= proving.max_segment_work_units);
-        assert_eq!(
-            plan.binding
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap(),
-            Context::for_relation(relation)
-                .unwrap()
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap()
-        );
-        assert_ne!(
-            relation.schema().identity,
-            relation.deep_relation().schema().identity
-        );
-        assert_ne!(
-            plan.binding
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap(),
-            Context::for_relation(relation.deep_relation())
-                .unwrap()
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap()
-        );
-        for limited in [
-            ConstructionLimits {
-                max_payload_bytes: plan.payload_bytes - 1,
-                ..limits
-            },
-            ConstructionLimits {
-                max_work_units: plan.work_units - 1,
-                ..limits
-            },
-            ConstructionLimits {
-                max_hash_calls: plan.hash_calls - 1,
-                ..limits
-            },
-        ] {
-            assert!(ProducerPlan::new(relation, limited).is_err());
-        }
-        let mut rng = NoEntropy(0);
-        assert!(plan.build(&[], &mut rng).is_err());
-        assert_eq!(rng.0, 0);
-    }
 
     // This fixture constructs only public transfer facts. It never materializes
     // touched-tree paths, a physical witness, coefficient matrices or an LDE.
@@ -629,7 +676,7 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
             )
             .unwrap();
             for index in 0..batch.segment_count() {
-                check(&batch.segment(index).unwrap());
+                check_default_policy_plan(&batch.segment(index).unwrap());
             }
         } else {
             let batch = AxtTransferBatch::new(
@@ -646,7 +693,7 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
             )
             .unwrap();
             for index in 0..batch.segment_count() {
-                check(&batch.segment(index).unwrap());
+                check_default_policy_plan(&batch.segment(index).unwrap());
             }
         }
     }

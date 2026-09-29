@@ -894,7 +894,8 @@ fn decode_authenticated_network_plan(
         relay_tls_spki_sha256,
         relay_certificate_sha256,
         directory_snapshot_digest,
-    ].contains(&[0_u8; 32])
+    ]
+    .contains(&[0_u8; 32])
     {
         return Err(ControllerError::State(
             "network-worker fixed plan contains an all-zero trust digest".to_owned(),
@@ -8330,7 +8331,8 @@ fn validate_state_for_persistence_at(state: &State, now_ms: u64) -> Result<(), C
     validate_state_invariants(state)?;
     if state.active
         && state
-            .ticket_expires_at_ms.is_none_or(|expires_at_ms| expires_at_ms <= now_ms)
+            .ticket_expires_at_ms
+            .is_none_or(|expires_at_ms| expires_at_ms <= now_ms)
     {
         return Err(ControllerError::State(
             "active state must retain an unexpired authenticated ticket deadline".to_owned(),

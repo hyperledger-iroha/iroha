@@ -265,14 +265,10 @@ fn index_resource_tree_usage(
             if let Some((family, format, temporary)) = index_resource_kind(&path) {
                 result[family as usize] = result[family as usize]
                     .checked_add(index_resource_file_usage(&path, format, temporary)?)?;
-            } else if path.parent().and_then(Path::file_name)
-                == Some(std::ffi::OsStr::new(MERGE_CARRIERS_DIR))
-                || path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        name.contains(".index") || name.starts_with("blocks.hashes")
-                    })
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(".index") || name.starts_with("blocks.hashes"))
             {
                 // New/obsolete formats require an explicit owner, never silent omission.
                 return Err(Missing::OwnerMismatch);
@@ -320,7 +316,7 @@ impl Kura {
         Ok(snapshot)
     }
 
-    /// Read only immutable/atomic completeness flags and a nonblocking bootstrap state.
+    /// Read only immutable and atomic completeness flags.
     #[cfg(any(test, feature = "telemetry"))]
     fn resource_inventory_observation_allowed(
         &self,
@@ -335,13 +331,6 @@ impl Kura {
             return Err(Unavailable::Busy);
         }
         if self.auxiliary_history_deferred {
-            return Err(Unavailable::Unregistered);
-        }
-        let bootstrap = self
-            .provisional_snapshot_bootstrap
-            .try_lock()
-            .ok_or(Unavailable::Busy)?;
-        if !bootstrap.is_authenticated() {
             return Err(Unavailable::Unregistered);
         }
         Ok(())

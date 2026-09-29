@@ -116,27 +116,9 @@ the pinned bundler; lazy-chunk and growth limits remain unchanged.
   1,283 passes and 37 failures out of 1,320 tests, with no skips. The corrected
   frame/schema tests pass against that binding; three activation cases await the
   new native converter rebuild. Full unit/package replay remains pending.
-- The Go vendor inventory was regenerated twice through its canonical owner,
-  byte-identically, after removing the foreign target file and build tags.
-  Native CPU/endian and terminal checks pass on macOS arm64. All four message
-  and four epoch R1CS identities were actually remeasured under the new source
-  closure. The epochs take 381–395 seconds each and peak at 88–90.1 GiB RSS,
-  with zero swaps. All eight current identities are published from their actual
-  receipts; ceremony, proof, Linux-builder and deployment gates remain open.
-- Bridge tooling uses distinct official native Ethereum and TRON 0.7.6
-  compilers. The old embedded-Wasm compiler and mislabeled TRON alias are
-  removed. Native compiler/artifact checks, complete EVM contract and replay
-  smokes, 112 Python tests, five EDR tests, 18 TVM receipt tests and both required
-  npm audits pass. A real-parser regression covers the TVM phase's current CLI.
-  Compiler execution was macOS x86-64 via Rosetta; Linux execution and real TRE
-  deployment remain unverified. The prior compiler evidence is explicitly
-  retired, and no production limits were relaxed.
 
 Native Rust evidence, commands, harness hashes and retained failures/corrections
-are in `target/ivm-only-validation/`. Epoch receipts and authenticated publication
-are in `target/agent-work/sccp-epochs-final-20260913/`. The pinned Linux builder
-cannot run here because no supported container runtime is installed; native
-macOS execution is separately recorded.
+are in `target/ivm-only-validation/`.
 
 The complete base/Fp4 FASTPQ evaluator and its bounded public polynomials pass
 44 native tests, including all 11 new field-point regressions. Two existing full

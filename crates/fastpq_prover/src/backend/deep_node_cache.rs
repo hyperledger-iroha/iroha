@@ -31,7 +31,7 @@ pub(super) struct NodeCachePlan {
 }
 impl NodeCachePlan {
     pub(super) fn new(oracle: Oracle) -> Result<Self> {
-        let (_, _, leaves, _) = oracle.shape().map_err(binding_error)?;
+        let (_, _, leaves, _) = oracle.shape().map_err(|error| binding_error(&error))?;
         if oracle == Oracle::Terminal {
             return Err(invalid("terminal values are retained without a node cache"));
         }
@@ -86,7 +86,7 @@ impl NodeCachePlan {
 /// Additional opening scratch, conservatively summed with the previous phase
 /// plan. Includes both verifier frontiers and all public plan/index allocations.
 pub(super) fn opening_payload_bytes(oracle: Oracle) -> Result<usize> {
-    let (_, _, _, leaf_bytes) = oracle.shape().map_err(binding_error)?;
+    let (_, _, _, leaf_bytes) = oracle.shape().map_err(|error| binding_error(&error))?;
     add(
         mul(MAX_LEAVES + QUERY_COUNT, leaf_bytes)?,
         add(
@@ -216,7 +216,7 @@ impl CompletedNodes {
         if !self.binding.same_attempt(binding)
             || self.plan.oracle != oracle
             || self.root != root
-            || oracle.shape().map_err(binding_error)?.2 != self.plan.leaves
+            || oracle.shape().map_err(|error| binding_error(&error))?.2 != self.plan.leaves
         {
             return Err(invalid("internal-node cache differs from committed oracle"));
         }
@@ -270,7 +270,7 @@ impl CommittedNodes<'_> {
             return Err(invalid("cache selected-leaf budget exceeded"));
         }
         let oracle = self.nodes.plan.oracle;
-        let leaf_bytes = oracle.shape().map_err(binding_error)?.3;
+        let leaf_bytes = oracle.shape().map_err(|error| binding_error(&error))?.3;
         let mut payloads = ClearingPayload::zeroed(mul(selected.len(), leaf_bytes)?)?;
         regenerate(&selected, &mut payloads)?;
         let mut hashes = SecretPolynomial::zeroed(selected.len())?;
@@ -309,8 +309,8 @@ impl CommittedNodes<'_> {
             &siblings,
             |level, index, left, right| {
                 self.binding
-                    .hash_parent(oracle, level as u32, index as u32, left, right)
-                    .map_err(binding_error)
+                    .hash_parent_at(oracle, level, index, left, right)
+                    .map_err(|error| binding_error(&error))
             },
         )?;
         let mut values = ClearingPayload::zeroed(mul(queries.len(), leaf_bytes)?)?;
@@ -345,7 +345,7 @@ impl CachedOpening {
 fn digest(words: [u64; 6]) -> Digest {
     Digest::new(words).expect("cache stores canonical digest outputs")
 }
-fn binding_error(error: super::deep_binding::BindingError) -> Error {
+fn binding_error(error: &super::deep_binding::BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP node cache: {error}"),
     }

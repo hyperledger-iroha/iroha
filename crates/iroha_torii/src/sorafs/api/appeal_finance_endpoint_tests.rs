@@ -581,7 +581,7 @@ fn appeal_finance_asset_readiness_requires_exact_ledger_scale() {
     assert!(!mismatch_readiness.ready);
     assert_eq!(mismatch_readiness.status, "asset_scale_mismatch");
     assert_eq!(mismatch_readiness.observed_scale, Some(8));
-    let (ready, _temp_dir) =
+    let (ready, _temp_dir, _native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &policy.asset_definition_id);
     let ready_readiness =
         appeal_finance_asset_readiness(&ready, &ready.sorafs_appeal_finance_policy);
@@ -635,10 +635,10 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir) =
+    let (mut app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
     configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
-    seed_empty_appeal_finance_finalized_block(&app);
+    seed_appeal_finance_finalized_anchor(&native_chain);
     let asset_definition_id = request.asset_definition_id.clone();
     let destination_account = request.destination_account.clone();
     let release_authority_account = request
@@ -894,9 +894,9 @@ async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let body = appeal_finance_deposit_confirm_body(appeal_finance_deposit_confirm_request(
         &request,
         expected.escrow_id.as_hash().to_string(),
@@ -925,9 +925,9 @@ async fn appeal_finance_deposit_settle_endpoint_returns_plan_without_signing_pay
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -974,9 +974,9 @@ async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "overturn");
@@ -1004,10 +1004,10 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir) =
+    let (mut app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
     configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -1055,9 +1055,9 @@ fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
         Some(&auth.provider.account),
     );
     let expected = appeal_finance_deposit_expectation(request).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let record = || {
         app.state
             .world_view()
@@ -1092,7 +1092,7 @@ fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
         .expect("initial settlement step is pending");
     assert_eq!(first_action, "drawdown_non_refund");
     drawdown_appeal_finance_asset_lock(
-        &app,
+        &mut native_chain,
         &expected,
         &auth.provider.account,
         iroha_primitives::numeric::Quantity::from_str("210.0").expect("drawdown amount quantity"),
@@ -1103,7 +1103,7 @@ fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
         .expect("refund settlement step is pending");
     assert_eq!(follow_up_action, "cancel_refund");
     assert_ne!(first_reconciliation_digest, follow_up_reconciliation_digest);
-    cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
+    cancel_appeal_finance_asset_lock(&mut native_chain, &expected, &auth.provider.account, 3);
     assert!(next_step().expect("settled submission state").is_none());
 }
 #[tokio::test]
@@ -1116,12 +1116,13 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, temp_dir) = sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
-        &auth,
-        &expected.asset_definition_id,
-    );
+    let (mut app, temp_dir, mut native_chain) =
+        sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
+            &auth,
+            &expected.asset_definition_id,
+        );
     configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, temp_dir.path());
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -1172,9 +1173,9 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submi
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -1205,7 +1206,7 @@ async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_p
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir) =
+    let (mut app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
     configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
     Arc::get_mut(&mut app)
@@ -1214,7 +1215,7 @@ async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_p
         .as_mut()
         .expect("configured submitter")
         .runtime_signers = None;
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -1234,9 +1235,9 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_forwarder_sub
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
@@ -1273,11 +1274,11 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (app, _temp_dir) =
+    let (app, _temp_dir, mut native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
-    seed_appeal_finance_asset_lock(&app, &expected);
+    seed_appeal_finance_asset_lock(&mut native_chain, &expected);
     drawdown_appeal_finance_asset_lock(
-        &app,
+        &mut native_chain,
         &expected,
         &auth.provider.account,
         iroha_primitives::numeric::Quantity::from_str("210.0").expect("drawdown amount quantity"),
@@ -1297,7 +1298,7 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     assert_eq!(value.json_bool(&["reconciled"]), Some(false));
     assert_eq!(value.json_str(&["observed_remaining_amount"]), Some("210"));
     let in_progress_digest = assert_appeal_finance_reconciliation_digest_hex(&value).to_owned();
-    cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
+    cancel_appeal_finance_asset_lock(&mut native_chain, &expected, &auth.provider.account, 3);
     let response = post_appeal_finance_deposit_reconcile(
         app,
         &auth.provider,

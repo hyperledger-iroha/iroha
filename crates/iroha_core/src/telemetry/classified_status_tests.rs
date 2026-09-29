@@ -37,25 +37,37 @@ fn replace_tip(sut: &SystemUnderTest, hash: HashOf<BlockHeader>) {
 
 #[tokio::test(start_paused = true)]
 async fn queued_status_captures_the_publication_after_its_admission_barrier() {
-    let sut = SystemUnderTest::new();
+    let sut = SystemUnderTest::new_native();
     let resume = pause_actor(&sut).await;
     let pre_await_height = sut.state.committed_height();
     let response = request(&sut);
     let block = sut.commit_block(sut.create_block());
-    let external = u64::try_from(block.as_ref().external_transactions().len()).unwrap();
+    let external = u64::try_from(
+        block.block().external_transactions().len()
+            + sut
+                .native_chain
+                .lock()
+                .expect("native chain mutex")
+                .as_ref()
+                .unwrap()
+                .genesis()
+                .external_transactions()
+                .len(),
+    )
+    .unwrap();
     resume.send(()).unwrap();
     let (status, height) = response.await.unwrap().unwrap().into_parts();
-    assert_eq!(pre_await_height, 0);
-    assert_eq!(height, 1);
+    assert_eq!(pre_await_height, 2);
+    assert_eq!(height, 2);
     assert_eq!(status.blocks, height);
-    assert_eq!(status.blocks_non_empty, 1);
+    assert_eq!(status.blocks_non_empty, 2);
     assert_eq!(status.txs_approved + status.txs_rejected, external);
     assert!(status.nexus.is_some());
 }
 
 #[tokio::test(start_paused = true)]
 async fn owned_status_bytes_remain_immutable_after_later_classification() {
-    let sut = SystemUnderTest::new();
+    let sut = SystemUnderTest::new_native();
     sut.commit_block(sut.create_block());
     let (first, first_height) = sut
         .telemetry
@@ -72,8 +84,8 @@ async fn owned_status_bytes_remain_immutable_after_later_classification() {
         .await
         .unwrap()
         .into_parts();
-    assert_eq!((first_height, second_height), (1, 2));
-    assert_eq!((first.blocks, second.blocks), (1, 2));
+    assert_eq!((first_height, second_height), (2, 3));
+    assert_eq!((first.blocks, second.blocks), (2, 3));
     assert_eq!(norito::to_bytes(&first).unwrap(), original);
 }
 
@@ -101,9 +113,9 @@ async fn missing_applied_kura_block_cannot_publish_any_classified_counter() {
 
 #[tokio::test(start_paused = true)]
 async fn substituted_kura_sequence_retires_staged_counters_and_retries_exactly_once() {
-    let sut = SystemUnderTest::new();
+    let sut = SystemUnderTest::new_native();
     let block = sut.commit_block(sut.create_block());
-    let actual = block.as_ref().header().hash();
+    let actual = block.block().header().hash();
     let other = HashOf::from_untyped_unchecked(Hash::new(b"substituted status journal"));
     replace_tip(&sut, other);
     let result = sut.telemetry.status_snapshot(&BuildStatus::default()).await;
@@ -125,8 +137,8 @@ async fn substituted_kura_sequence_retires_staged_counters_and_retries_exactly_o
         .await
         .unwrap()
         .into_parts();
-    assert_eq!(height, 1);
-    assert_eq!(status.blocks_non_empty, 1);
+    assert_eq!(height, 2);
+    assert_eq!(status.blocks_non_empty, 2);
     let total = sut
         .telemetry
         .metrics
@@ -150,13 +162,13 @@ async fn substituted_kura_sequence_retires_staged_counters_and_retries_exactly_o
         sut.telemetry.status_snapshot(&BuildStatus::default()).await,
         Err(StatusSnapshotError::CheckpointChanged)
     ));
-    assert_eq!(sut.telemetry.metrics.block_height.get(), 1);
+    assert_eq!(sut.telemetry.metrics.block_height.get(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn expired_active_status_finishes_its_finite_target_and_keeps_chunk_progress() {
-    let sut = SystemUnderTest::new();
-    for _ in 0..65 {
+    let sut = SystemUnderTest::new_native();
+    for _ in 0..64 {
         sut.mock_time_handle.advance(Duration::from_millis(1));
         sut.commit_block(sut.create_block());
     }
@@ -176,7 +188,7 @@ async fn expired_active_status_finishes_its_finite_target_and_keeps_chunk_progre
     // A later publication must not extend this active request's fixed target.
     sut.mock_time_handle.advance(Duration::from_millis(1));
     let extra = sut.commit_block(sut.create_block());
-    let extra_count = u64::try_from(extra.as_ref().external_transactions().len()).unwrap();
+    let extra_count = u64::try_from(extra.block().external_transactions().len()).unwrap();
     assert_eq!(sut.state.telemetry_status_target().unwrap().height, 66);
     tokio::time::advance(METRICS_SYNC_TIMEOUT).await;
     resume.send(()).unwrap();
@@ -223,7 +235,7 @@ async fn expired_active_status_finishes_its_finite_target_and_keeps_chunk_progre
 
 #[tokio::test(start_paused = true)]
 async fn dropping_http_waiter_does_not_drop_active_actor_work() {
-    let sut = SystemUnderTest::new();
+    let sut = SystemUnderTest::new_native();
     sut.commit_block(sut.create_block());
     let (entered, ready) = oneshot::channel();
     let (resume, wait) = oneshot::channel();
@@ -236,7 +248,7 @@ async fn dropping_http_waiter_does_not_drop_active_actor_work() {
         .await
         .unwrap_or_else(|_| panic!("live actor"));
     let response = request(&sut);
-    assert_eq!(ready.await.unwrap(), 1);
+    assert_eq!(ready.await.unwrap(), 2);
     drop(response);
     let (entered, mut next) = oneshot::channel();
     let (release_next, wait_next) = oneshot::channel();
@@ -254,7 +266,7 @@ async fn dropping_http_waiter_does_not_drop_active_actor_work() {
     ));
     resume.send(()).unwrap();
     next.await.unwrap();
-    assert_eq!(sut.telemetry.metrics.block_height.get(), 1);
+    assert_eq!(sut.telemetry.metrics.block_height.get(), 2);
     release_next.send(()).unwrap();
     assert_eq!(
         sut.telemetry
@@ -263,7 +275,7 @@ async fn dropping_http_waiter_does_not_drop_active_actor_work() {
             .unwrap()
             .into_parts()
             .1,
-        1
+        2
     );
 }
 

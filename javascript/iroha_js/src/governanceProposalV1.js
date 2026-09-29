@@ -13,7 +13,6 @@ import {
   normalizeAssetDefinitionId,
 } from "./normalizers.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
-import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { strictDecodeBase64 } from "./toriiClientEncoding.js";
 
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
@@ -187,16 +186,33 @@ function normalizeRuntimeUpgrade(value, context) {
   };
 }
 
+const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
+
 function normalizeSccpRoute(value, context) {
-  const record = exactRecord(value, ["anchor"], context);
-  const anchorContext = `${context}.anchor`;
-  const anchor = exactRecord(record.anchor, ["network_id", "action"], anchorContext);
-  const networkId = nonEmptyString(anchor.network_id, `${anchorContext}.network_id`);
+  const record = exactRecord(value, ["proposal"], context);
+  const proposalContext = `${context}.proposal`;
+  const proposal = exactRecord(
+    record.proposal,
+    ["network_id", "base_revisions", "actions"],
+    proposalContext,
+  );
+  const networkId = nonEmptyString(proposal.network_id, `${proposalContext}.network_id`);
   NetworkId.parse(networkId);
+  const baseRevisions = array(proposal.base_revisions, `${proposalContext}.base_revisions`);
+  const actions = array(proposal.actions, `${proposalContext}.actions`);
+  if (actions.length === 0 || actions.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+    throw new TypeError(
+      `${proposalContext}.actions must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} actions`,
+    );
+  }
+  // TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
+  // entry statically (specs/sccp.md §4.14.3) once the SDK carries typed SCCP
+  // governance codecs; Torii and the node remain authoritative for them today.
   return {
-    anchor: {
+    proposal: {
       network_id: networkId,
-      action: normalizeSccpRouteGovernanceAction(anchor.action),
+      base_revisions: baseRevisions,
+      actions,
     },
   };
 }

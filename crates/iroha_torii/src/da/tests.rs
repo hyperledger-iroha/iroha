@@ -1436,16 +1436,6 @@ fn signed_pin_intent_for_manifest(
     build_da_pin_intent(request, scope_authorization)
 }
 
-fn active_da_admission_incarnation(app: &crate::SharedAppState, lane_id: LaneId) -> Hash {
-    let view = app.state.view();
-    let proposal_height = u64::try_from(view.height())
-        .expect("test state height fits u64")
-        .checked_add(1)
-        .expect("test proposal height advances");
-    view.lane_incarnation_at_height(lane_id, proposal_height)
-        .expect("test lane has an active incarnation")
-}
-
 fn seed_da_admission_parameter(app: &crate::SharedAppState, parameter: CustomParameter) {
     let next_height = u64::try_from(app.state.view().height())
         .expect("test state height fits u64")
@@ -1531,7 +1521,14 @@ async fn da_ingest_admission_fails_closed_for_malformed_governed_policy() {
 async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
     let app = crate::mk_app_state_for_tests();
     let lane_id = LaneId::SINGLE;
-    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let incarnation = app
+        .state
+        .view()
+        .lane_incarnation_at_height(
+            lane_id,
+            u64::try_from(app.state.committed_height()).unwrap() + 1,
+        )
+        .expect("active canonical DA incarnation");
     let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
     seed_da_admission_parameter(&app, policy.into_custom_parameter());
 
@@ -1546,33 +1543,17 @@ async fn da_ingest_admission_rejects_wrong_producer_and_epoch() {
 }
 
 #[tokio::test]
-async fn da_ingest_admission_rejects_wrong_lane_incarnation() {
-    let app = crate::mk_app_state_for_tests();
-    let lane_id = LaneId::SINGLE;
-    let active_incarnation = active_da_admission_incarnation(&app, lane_id);
-    let mut wrong_incarnation = Hash::prehashed([0xE1; Hash::LENGTH]);
-    if wrong_incarnation == active_incarnation {
-        wrong_incarnation = Hash::prehashed([0xE2; Hash::LENGTH]);
-    }
-    let policy = da_admission_policy(
-        lane_id,
-        wrong_incarnation,
-        vec![ALICE_ID.clone()],
-        5,
-        Some(4),
-    );
-    seed_da_admission_parameter(&app, policy.into_custom_parameter());
-
-    let error = admission_snapshot_for_request(&app, &ALICE_ID, lane_id, 5)
-        .expect_err("policy for a retired lane incarnation must be rejected");
-    assert_eq!(error.0, StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
 async fn da_ingest_admission_accepts_current_and_grace_epochs_for_exact_scope() {
     let app = crate::mk_app_state_for_tests();
     let lane_id = LaneId::SINGLE;
-    let incarnation = active_da_admission_incarnation(&app, lane_id);
+    let incarnation = app
+        .state
+        .view()
+        .lane_incarnation_at_height(
+            lane_id,
+            u64::try_from(app.state.committed_height()).unwrap() + 1,
+        )
+        .expect("active canonical DA incarnation");
     let policy = da_admission_policy(lane_id, incarnation, vec![ALICE_ID.clone()], 5, Some(4));
     seed_da_admission_parameter(&app, policy.into_custom_parameter());
 

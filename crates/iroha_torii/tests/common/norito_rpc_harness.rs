@@ -24,7 +24,6 @@ use iroha_data_model::{
 };
 use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
-use iroha_torii_shared::uri;
 use iroha_version::codec::EncodeVersioned;
 use std::{
     num::NonZeroU64,
@@ -132,7 +131,9 @@ impl NoritoRpcHarness {
         set_content_type: bool,
         extra_headers: &[(&str, &str)],
     ) -> axum::response::Response {
-        let mut builder = Request::builder().method("POST").uri(uri::TRANSACTION);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path());
         if set_content_type {
             builder = builder.header(CONTENT_TYPE, NORITO_MIME);
         }

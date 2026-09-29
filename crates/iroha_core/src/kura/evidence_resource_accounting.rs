@@ -108,7 +108,6 @@ fn evidence_resource_kind(
     }
     let fixed = match stable {
         COUNT_FILE_NAME => Some(MAX_BLOCK_COMMIT_MARKER_BYTES as u64),
-        VERIFIED_SNAPSHOT_TAIL_FILE_NAME => Some(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES as u64),
         DA_BLOCK_REWRITE_STAGE_FILE_NAME => Some(MAX_DA_BLOCK_REWRITE_STAGE_BYTES),
         EVICTION_COMPACTION_STAGE_FILE_NAME => Some(MAX_EVICTION_COMPACTION_STAGE_BYTES),
         _ => None,
@@ -120,10 +119,6 @@ fn evidence_resource_kind(
         return singleton(maximum, temporary);
     }
     for (prefix, maximum) in [
-        (
-            ".verified-snapshot-tail-",
-            MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES as u64,
-        ),
         (".kura-eviction-stage-", MAX_EVICTION_COMPACTION_STAGE_BYTES),
         (".kura-da-rewrite-", MAX_DA_BLOCK_REWRITE_STAGE_BYTES),
     ] {
@@ -147,7 +142,6 @@ fn evidence_resource_kind(
     }
     if [
         COUNT_FILE_NAME,
-        VERIFIED_SNAPSHOT_TAIL_FILE_NAME,
         DA_BLOCK_REWRITE_STAGE_FILE_NAME,
         EVICTION_COMPACTION_STAGE_FILE_NAME,
         "canonical_association_stage.norito",

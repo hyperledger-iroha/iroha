@@ -20,7 +20,7 @@ import check_sorafs_reference_sdk_release_evidence as checker
 from release_manifest_signing_test import (
     TEST_FINGERPRINT, TEST_MANIFEST, TEST_PUBLIC_KEY, TEST_SIGNATURE, _native_verifier,
 )
-from sccp_release_common import verify_ed25519
+from release_evidence_crypto import verify_ed25519
 
 
 def _digest(payload: bytes) -> str:

@@ -11,11 +11,9 @@ JSON value and complete root, `Vec` and `Option` Norito frames: 75 values and
 
 The fixture SHA-256 is
 `eb120ac68e8a96bd0739424347fb6e6045e312a02edcc46e996cbe48b60c56a1`.
-The retired SCCP `ReplayDelta` and `SccpRegistryChanged` events were removed
-from the `BridgeEventSet` and `ConfigurationEventSet` full-set cases
-(`specs/sccp.md` §10); every other value and frame is the original capture,
-whose SHA-256 was
-`547236d002ee130e046bab37bb735b280c5c09f08797afa219716ecb9cde137e`.
+The `BridgeEventSet` and `ConfigurationEventSet` full-set cases were re-derived
+on 2026-09-28 for the current event sets; every other value and frame is the
+original capture.
 The nominal names and both directional schema hashes also match the controlled
 model capture described in [the schema identity specification](../../../../specs/norito_schema_identity.md),
 whose report SHA-256 is

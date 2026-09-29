@@ -17295,7 +17295,7 @@ fn record_isi_access(
                 .insert(format!("axt:dataspace:{}:proof", dsid.as_u64()));
         }
         ir::Instr::StageAnchoredSpend { .. } => {
-            return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
         }
         ir::Instr::AxtCommit => {}
         ir::Instr::SoracloudHostCall {

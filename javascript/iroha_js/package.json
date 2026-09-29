@@ -102,10 +102,6 @@
       "import": "./dist/canonicalRequest.js",
       "types": "./canonical-request.d.ts"
     },
-    "./sccp": {
-      "import": "./dist/sccp.js",
-      "types": "./sccp.d.ts"
-    },
     "./sorafs": {
       "import": "./dist/public/sorafs.js",
       "types": "./sorafs.d.ts"
@@ -204,9 +200,6 @@
       "canonical-request": [
         "./canonical-request.d.ts"
       ],
-      "sccp": [
-        "./sccp.d.ts"
-      ],
       "sorafs": [
         "./sorafs.d.ts"
       ],
@@ -289,7 +282,6 @@
     "torii.d.ts",
     "torii-browser.d.ts",
     "norito.d.ts",
-    "sccp.d.ts",
     "sorafs.d.ts",
     "crypto.d.ts",
     "index.d.ts",

@@ -370,7 +370,7 @@ fn preparation_report_exposes_exact_review_inputs_without_runtime_secrets() {
     let root = tempfile::tempdir().unwrap();
     let journal = Journal::create(&root.path().join("operation")).unwrap();
     let report = report(&journal, &operation, "Prepared", None).unwrap();
-    let documents = vec![report.data.clone()];
+    let documents = [report.data.clone()];
     assert_eq!(documents.len(), 1);
     assert_eq!(documents[0]["status"].as_str(), Some("Prepared"));
     assert!(documents[0]["issuer"].as_str().is_some());

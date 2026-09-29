@@ -277,15 +277,6 @@ fn export_with_finish_hook(
             wire == input.carrier,
             "disk carrier differs from independently retained native wire"
         );
-        let block = norito::with_decode_limits_scope(decode_limits(wire.len()), || {
-            decode_versioned_signed_block(&wire)
-        })?;
-        ensure!(
-            block
-                .execution_context()
-                .is_none_or(|context| context.merge_entry.is_none()),
-            "retired merge Network source is not Native evidence"
-        );
         heights.push(HeightProofV1 {
             height: input.height,
             carrier: wire,

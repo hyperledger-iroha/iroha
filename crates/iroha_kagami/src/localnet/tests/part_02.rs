@@ -1,31 +1,3 @@
-#[test]
-fn localnet_body_ingress_budget_enforces_protocol_roster_limit() {
-    for validator_count in [4, MAX_VALIDATORS_PER_HEIGHT] {
-        assert_eq!(
-            localnet_sumeragi_body_bytes(validator_count)
-                .expect("every legal endpoint roster must remain representable"),
-            (validator_count + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-                * LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
-            "body ingress bytes must scale once per isolated authenticated source"
-        );
-    }
-    let geometry_error = localnet_sumeragi_body_bytes(5)
-        .expect_err("a non-3f+1 roster must fail before capacity arithmetic");
-    assert!(
-        geometry_error
-            .chain()
-            .any(|cause| cause.to_string().contains("exact Sumeragi v2 3f+1")),
-        "unexpected error: {geometry_error:?}"
-    );
-    let error = localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT + 1)
-        .expect_err("an oversized roster must fail before capacity arithmetic");
-    assert!(
-        error.chain().any(|cause| cause
-            .to_string()
-            .contains("exceeds the Sumeragi v2 protocol maximum")),
-        "unexpected error: {error:?}"
-    );
-}
 include!("../profile_policy_tests.rs");
 #[test]
 #[allow(clippy::too_many_lines)]

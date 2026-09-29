@@ -1503,13 +1503,13 @@ mod tests {
         let planner = Planner::new(&params);
         let trace_log = params.trace_log_size.min(3);
         let trace_len = 1usize << trace_log;
-        let columns: Vec<Vec<u64>> = (0..4)
+        let columns: Vec<Vec<u64>> = (0..4_u64)
             .map(|column| {
                 (0..trace_len)
                     .map(|index| {
                         (index as u64)
-                            .wrapping_mul(17 + column as u64 * 2)
-                            .wrapping_add(11 + column as u64)
+                            .wrapping_mul(17 + column * 2)
+                            .wrapping_add(11 + column)
                             % FIELD_MODULUS
                     })
                     .collect()
@@ -1518,8 +1518,8 @@ mod tests {
 
         let mut expected_fft = columns.clone();
         planner.fft_columns(&mut expected_fft);
-        let mut expected_ifft = columns.clone();
-        planner.ifft_columns(&mut expected_ifft);
+        let mut expected_inverse = columns.clone();
+        planner.ifft_columns(&mut expected_inverse);
         let expected_lde = planner.lde_columns(&columns);
 
         let lane = backend::acquire_gpu_lane();
@@ -1532,9 +1532,9 @@ mod tests {
                 trace_log,
                 backend::GpuBackend::OpenCl,
             );
-            let mut actual_ifft = columns.clone();
+            let mut actual_inverse = columns.clone();
             planner.split_ifft_gpu_cpu(
-                &mut actual_ifft,
+                &mut actual_inverse,
                 trace_len,
                 trace_log,
                 backend::GpuBackend::OpenCl,
@@ -1547,7 +1547,7 @@ mod tests {
                 backend::GpuBackend::OpenCl,
             );
             sender
-                .send((actual_fft, actual_ifft, actual_lde))
+                .send((actual_fft, actual_inverse, actual_lde))
                 .expect("busy-lane result receiver should remain available");
         });
 
@@ -1556,10 +1556,10 @@ mod tests {
         worker
             .join()
             .expect("busy-lane split worker should not panic");
-        let (actual_fft, actual_ifft, actual_lde) =
+        let (actual_fft, actual_inverse, actual_lde) =
             observed.expect("split paths must complete while the GPU lane remains held");
         assert_eq!(actual_fft, expected_fft);
-        assert_eq!(actual_ifft, expected_ifft);
+        assert_eq!(actual_inverse, expected_inverse);
         assert_eq!(actual_lde, expected_lde);
     }
     #[test]

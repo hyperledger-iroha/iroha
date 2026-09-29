@@ -87,7 +87,7 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     store_block_and_mark_state_height(&mut state, &kura, block);
     let extra_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
     let hashes = vec![canonical_hash, extra_hash];
-    let error = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, false, None)
+    let error = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura)
         .expect_err("ordinary signed snapshots cannot invent a hash-only suffix");
     assert!(matches!(error, TryReadError::MismatchedHeight { .. }));
     assert_eq!(kura.blocks_count(), 1);
@@ -129,14 +129,9 @@ async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix()
     let attacker_suffix =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32]));
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
-    let error = reconcile_snapshot_hash_height_with_kura(
-        &[forged_prefix, attacker_suffix],
-        1,
-        &kura,
-        false,
-        None,
-    )
-    .expect_err("a divergent retained prefix must reject before suffix extension");
+    let error =
+        reconcile_snapshot_hash_height_with_kura(&[forged_prefix, attacker_suffix], 1, &kura)
+            .expect_err("a divergent retained prefix must reject before suffix extension");
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
         assert_eq!(
             passes.get(),
@@ -163,28 +158,15 @@ async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix()
 async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let tmp_root = tempdir().unwrap();
     let snapshot_store_dir = tmp_root.path().join("snapshot");
-    let source_kura_store_dir = tmp_root.path().join("source-kura");
     let tail_loss_kura_store_dir = tmp_root.path().join("tail-loss-kura");
     let lane_config = LaneConfig::default();
-    let source_kura_config =
-        kura_config_for_snapshot_test(&source_kura_store_dir, nonzero!(1_usize));
     let tail_loss_kura_config =
         kura_config_for_snapshot_test(&tail_loss_kura_store_dir, nonzero!(1_usize));
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&source_kura_config, &lane_config)
-            .expect("source Kura init");
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let block1 = chain.kura().get_block(nonzero!(1_usize)).unwrap();
     let key_pair = checked_random_snapshot_keypair();
-    let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
-    let block2 =
-        signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-    store_complete_snapshot_commit_evidence_for_blocks(
-        &state,
-        &kura,
-        &[Arc::clone(&block1), block2],
-    );
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("snapshot write");
     let pointer_before =
@@ -221,13 +203,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        TryReadError::MismatchedHeight {
-            snapshot_height: 2,
-            kura_height: 1
-        }
-    ));
+    assert!(matches!(error, TryReadError::NativeExecutionReplayRequired));
     assert_eq!(tail_loss_kura.blocks_count(), 1);
     assert_eq!(tail_loss_kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(
@@ -521,23 +497,12 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
             .expect("emergency Fast Kura reopen");
     snapshot_hashes[0] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; 32]));
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; 32]));
-    reconcile_snapshot_hash_height_with_kura(
-        &snapshot_hashes,
-        block_count,
-        &fast_kura,
-        false,
-        None,
-    )
-    .expect("Fast mode deliberately validates only the signed snapshot tip boundary");
+    reconcile_snapshot_hash_height_with_kura(&snapshot_hashes, block_count, &fast_kura)
+        .expect("Fast mode deliberately validates only the signed snapshot tip boundary");
 
-    let stale_error = reconcile_snapshot_hash_height_with_kura(
-        &snapshot_hashes[..2],
-        block_count,
-        &fast_kura,
-        false,
-        None,
-    )
-    .expect_err("Fast mode requires the snapshot at the exact current durable height");
+    let stale_error =
+        reconcile_snapshot_hash_height_with_kura(&snapshot_hashes[..2], block_count, &fast_kura)
+            .expect_err("Fast mode requires the snapshot at the exact current durable height");
     assert!(matches!(
         stale_error,
         TryReadError::MismatchedHeight {
@@ -547,14 +512,8 @@ async fn emergency_fast_snapshot_reconcile_checks_only_the_terminal_boundary() {
     ));
 
     snapshot_hashes[2] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x63; 32]));
-    let error = reconcile_snapshot_hash_height_with_kura(
-        &snapshot_hashes,
-        block_count,
-        &fast_kura,
-        false,
-        None,
-    )
-    .expect_err("Fast mode must still bind the signed snapshot to the durable tip");
+    let error = reconcile_snapshot_hash_height_with_kura(&snapshot_hashes, block_count, &fast_kura)
+        .expect_err("Fast mode must still bind the signed snapshot to the durable tip");
     assert!(matches!(
         error,
         TryReadError::MismatchedHash { height: 3, .. }
@@ -1711,108 +1670,42 @@ async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
     ));
 }
 #[tokio::test]
-async fn can_read_multiple_blocks() {
-    let tmp_root = tempdir().unwrap();
-    let store_dir = tmp_root.path().join("snapshot");
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let key_pair = checked_random_snapshot_keypair();
-    let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
-    let block2 =
-        signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-    store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[block1, block2]);
-    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-    let state = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(state.view().height()),
-        TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        &state.chain_id,
-        &state.network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::default(),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .unwrap();
-    assert_eq!(state.view().height(), 2);
-}
-#[tokio::test]
-async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
-    let tmp_root = tempdir().unwrap();
-    let store_dir = tmp_root.path().join("snapshot");
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let key_pair = checked_random_snapshot_keypair();
-    let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
-    let block2 =
-        signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-    let canonical_tip = block2.hash();
-    store_complete_snapshot_commit_evidence_for_blocks(
-        &state,
-        &kura,
-        &[Arc::clone(&block1), block2],
-    );
-    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-    let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-    // Once the complete commit tuple authorizes a snapshot, the terminal block is final and
-    // cannot be replaced by a same-height soft-fork candidate.
-    let replacement = signed_block_after_transaction(
-        accepted_log_transaction("soft-fork replacement"),
-        Some(block1.as_ref()),
-    );
-    let replacement_hash = replacement.hash();
-    assert_ne!(replacement_hash, canonical_tip);
-    let error = kura
-        .replace_top_block(replacement)
-        .expect_err("checkpointed snapshot tip must reject replacement");
+async fn native_snapshot_cannot_initialize_consensus_without_original_replay() {
+    let root = tempdir().unwrap();
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let kura = chain.kura();
+    let key = checked_random_snapshot_keypair();
+    let original_tip = state.latest_block_hash_fast();
+    let original_bytes = exact_snapshot_payload_bytes(state);
+    try_write_snapshot(state, root.path(), &key, TEST_CHUNK_SIZE).unwrap();
+    let pointer = std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
+    let budget = snapshot_read_budget_for_testing();
+    let initializer_calls = std::cell::Cell::new(0);
+    let result =
+        strict_snapshot_read_for_custody_test(root.path(), state, kura, &key, &budget, &|_| {
+            initializer_calls.set(initializer_calls.get() + 1);
+            Ok(())
+        });
     assert!(matches!(
-        error,
-        crate::kura::Error::CommittedBlockReplacementForbidden { height: 2 }
+        result,
+        Err(TryReadError::NativeExecutionReplayRequired)
     ));
     assert_eq!(
-        kura.block_hash_at_height(nonzero!(2_usize)),
-        Some(canonical_tip)
+        initializer_calls.get(),
+        0,
+        "replay fence precedes typed State initialization"
     );
-    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 2);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(state.committed_height(), 3);
+    assert_eq!(state.latest_block_hash_fast(), original_tip);
+    assert_eq!(kura.exact_durable_blocks_count().unwrap(), 3);
+    assert_eq!(kura.block_hash_at_height(nonzero!(3_usize)), original_tip);
+    assert_eq!(exact_snapshot_payload_bytes(state), original_bytes);
     assert_eq!(
-        std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
-        pointer_before,
-        "rejected block replacement must not change the selected snapshot generation"
+        std::fs::read(root.path().join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
+        pointer
     );
-    let restored = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(state.view().height()),
-        TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        &state.chain_id,
-        &state.network_id,
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .unwrap();
-    assert_eq!(restored.view().height(), 2);
-    assert_eq!(restored.latest_block_hash_fast(), Some(canonical_tip));
 }

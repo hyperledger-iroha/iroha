@@ -17,7 +17,17 @@ import org.hyperledger.iroha.sdk.core.model.requireCanonicalV1ContractAddress
 internal object ParliamentProposalValidatorV1 {
     private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val FIRST_RELEASE_MAX_EXACT_JSON_U64 = BigInteger("9007199254740991")
-    private val ROUTE_TEXT = Regex("[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
+    private const val SCCP_GOVERNANCE_MAX_ENTRIES = 16
+    private val SCCP_EXTERNAL_NETWORKS = setOf(
+        "ethereum_mainnet", "bsc_mainnet", "ton_mainnet", "tron_mainnet",
+    )
+    private val SCCP_GOVERNANCE_ACTIONS = setOf(
+        "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
+        "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
+        "set_destination_paused", "initialize_light_client", "install_trusted_checkpoint",
+        "freeze_light_client", "set_parameters", "clear_bridge_key_fault",
+    )
+    private val BLS_VALIDATOR_ID = Regex("ea0130[0-9A-F]{96}")
     private val KEBAB = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")
     private val ALPHANUMERIC_PRERELEASE = Regex("(?=.*[A-Za-z-])[A-Za-z0-9-]+")
 
@@ -124,14 +134,66 @@ internal object ParliamentProposalValidatorV1 {
         }
     }
 
+    /**
+     * Checks the closed `SccpGovernanceProposalV1` envelope (specs/sccp.md §4.14.3): subjects,
+     * revisions and action tags. Action payloads must be objects; Torii performs the
+     * state-independent payload checks against the live network and core the state-dependent ones.
+     */
     private fun sccpRoute(value: Map<String, Any?>) {
-        exact(value, setOf("anchor"), "SccpRouteGovernance")
-        val anchor = objectValue(value["anchor"], "SccpRouteGovernance.anchor")
-        exact(anchor, setOf("network_id", "action"), "SccpRouteGovernance.anchor")
-        NetworkId.parse(text(anchor["network_id"], "anchor.network_id"))
-        SccpJsonParser.validateRouteGovernanceAction(
-            objectValue(anchor["action"], "anchor.action"),
+        exact(value, setOf("proposal"), "SccpRouteGovernance")
+        val proposal = objectValue(value["proposal"], "SccpRouteGovernance.proposal")
+        exact(
+            proposal,
+            setOf("network_id", "base_revisions", "actions"),
+            "SccpRouteGovernance.proposal",
         )
+        NetworkId.parse(text(proposal["network_id"], "proposal.network_id"))
+        val baseRevisions = list(proposal["base_revisions"], "proposal.base_revisions")
+        require(baseRevisions.size in 1..SCCP_GOVERNANCE_MAX_ENTRIES) {
+            "proposal.base_revisions must hold 1 to $SCCP_GOVERNANCE_MAX_ENTRIES entries"
+        }
+        baseRevisions.forEachIndexed { index, item ->
+            val label = "proposal.base_revisions[$index]"
+            val entry = objectValue(item, label)
+            exact(entry, setOf("subject", "revision"), label)
+            sccpGovernanceSubject(objectValue(entry["subject"], "$label.subject"), "$label.subject")
+            uint(entry["revision"], "$label.revision")
+        }
+        val actions = list(proposal["actions"], "proposal.actions")
+        require(actions.size in 1..SCCP_GOVERNANCE_MAX_ENTRIES) {
+            "proposal.actions must hold 1 to $SCCP_GOVERNANCE_MAX_ENTRIES entries"
+        }
+        actions.forEachIndexed { index, item ->
+            val label = "proposal.actions[$index]"
+            val action = objectValue(item, label)
+            exact(action, setOf("action", "payload"), label)
+            require(text(action["action"], "$label.action") in SCCP_GOVERNANCE_ACTIONS) {
+                "$label.action is unknown"
+            }
+            objectValue(action["payload"], "$label.payload")
+        }
+    }
+
+    private fun sccpGovernanceSubject(value: Map<String, Any?>, label: String) {
+        exact(value, setOf("subject", "key"), label)
+        when (text(value["subject"], "$label.subject")) {
+            "route", "route_control", "light_client" ->
+                sccpExternalNetwork(objectValue(value["key"], "$label.key"), "$label.key")
+            "parameters" -> require(value["key"] == null) { "$label.key must be null" }
+            "bridge_key_fault" ->
+                require(BLS_VALIDATOR_ID.matches(string(value["key"], "$label.key"))) {
+                    "$label.key must be a canonical BLS validator id"
+                }
+            else -> throw IllegalArgumentException("$label.subject is unknown")
+        }
+    }
+
+    private fun sccpExternalNetwork(value: Map<String, Any?>, label: String) {
+        exact(value, setOf("network", "profile"), label)
+        require(text(value["network"], "$label.network") in SCCP_EXTERNAL_NETWORKS) {
+            "$label.network is unknown"
+        }
+        require(value["profile"] == null) { "$label.profile must be null" }
     }
 
     private fun validationFeePolicyProposal(value: Map<String, Any?>) {

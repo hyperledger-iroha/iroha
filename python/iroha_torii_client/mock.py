@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import hashlib
 import json
 import re
 import signal
@@ -16,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 __all__ = ["ToriiMockServer", "main"]
@@ -142,14 +141,6 @@ class _MockState:
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
         self.gov_unlock_stats: Dict[str, Any] = {}
-        self.sccp_registry: Dict[str, Any] = {}
-        self.sccp_recent_messages: Dict[str, Any] = {}
-        self.sccp_message_bundles: Dict[str, Dict[str, Any]] = {}
-        self.sccp_message_bundle_norito: Dict[str, bytes] = {}
-        self.sccp_proof_requests: Dict[str, Dict[str, Any]] = {}
-        self.sccp_proof_request_norito: Dict[str, bytes] = {}
-        self.sccp_bridge_proof_response: Dict[str, Any] = {}
-        self.sccp_bridge_message_response: Dict[str, Any] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -223,30 +214,6 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_leader)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
-        if method == "GET" and path == "/v1/sccp/capabilities":
-            return _json_response(HTTPStatus.OK, self.sccp_capabilities)
-        if method == "GET" and path == "/v1/sccp/registry":
-            return _json_response(HTTPStatus.OK, self.sccp_registry)
-        if method == "GET" and path.startswith("/v1/sccp/proofs/message/"):
-            return self._sccp_typed_get(
-                path.removeprefix("/v1/sccp/proofs/message/"),
-                headers,
-                json_values=self.sccp_message_bundles,
-                norito_values=self.sccp_message_bundle_norito,
-            )
-        if method == "GET" and path.startswith("/v1/sccp/proof-requests/"):
-            return self._sccp_typed_get(
-                path.removeprefix("/v1/sccp/proof-requests/"),
-                headers,
-                json_values=self.sccp_proof_requests,
-                norito_values=self.sccp_proof_request_norito,
-            )
-        if method == "GET" and path == "/v1/sccp/messages/recent":
-            return self._sccp_recent_get(params)
-        if method == "POST" and path == "/v1/bridge/proofs/submit":
-            return self._sccp_bridge_submit(body, endpoint="proof")
-        if method == "POST" and path == "/v1/bridge/messages":
-            return self._sccp_bridge_submit(body, endpoint="message")
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
@@ -255,8 +222,6 @@ class _MockState:
             return self._sumeragi_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
-        if method == "POST" and path == "/__mock__/sccp/config":
-            return self._sccp_config(body)
         if method == "POST" and path == "/__mock__/reset":
             self.reset()
             return _Response(HTTPStatus.OK, body=b"{}", headers={"Content-Type": "application/json"})
@@ -334,245 +299,7 @@ class _MockState:
                 "data_model_version": _CURRENT_DATA_MODEL_VERSION,
                 "signed_transaction_schema_hash_hex": "7ab5ff9c572efb316deac478f19209c5",
             }
-            self.sccp_capabilities = {
-                "version": 1,
-                "registry_revision": "0x" + "11" * 32,
-                "registry_path": "/v1/sccp/registry",
-                "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
-                "proof_request_path": "/v1/sccp/proof-requests/{message_id}",
-                "recent_messages_path": "/v1/sccp/messages/recent",
-                "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
-                "registry_limits": {
-                    "max_governed_lanes": 16,
-                    "max_live_governed_routes": 64,
-                    "max_live_routes_per_lane": 8,
-                    "max_retained_routes_per_lane": 64,
-                    "max_retained_native_trust_anchors_per_lane": 4_096,
-                },
-                "resource_limits": {
-                    "max_outbound_messages_per_block": 512,
-                    "max_outbound_message_payload_bytes": 4_096,
-                    "max_pending_outbound_messages": 65_536,
-                    "max_pending_outbound_payload_bytes": 256 * 1024 * 1024,
-                    "max_proofs_per_transaction": 1,
-                    "max_proofs_per_block": 4,
-                    "max_proof_bytes_per_proof": 8 * 1024 * 1024,
-                    "max_proof_bytes_per_transaction": 8 * 1024 * 1024,
-                    "max_proof_bytes_per_block": 32 * 1024 * 1024,
-                    "max_native_headers_per_transaction": 1_004,
-                    "max_native_headers_per_block": 4_016,
-                    "max_ethereum_light_client_updates_per_transaction": 128,
-                    "max_ethereum_light_client_updates_per_block": 512,
-                    "max_native_header_bytes_per_transaction": 8 * 1024 * 1024,
-                    "max_native_header_bytes_per_block": 32 * 1024 * 1024,
-                    "max_secp256k1_recoveries_per_transaction": 1_005,
-                    "max_secp256k1_recoveries_per_block": 4_020,
-                    "max_bls_aggregate_checks_per_transaction": 1_004,
-                    "max_bls_aggregate_checks_per_block": 4_016,
-                    "max_bls_signer_contributions_per_transaction": 131_713,
-                    "max_bls_signer_contributions_per_block": 526_852,
-                    "max_ed25519_signature_checks_per_transaction": 65_536,
-                    "max_ed25519_signature_checks_per_block": 262_144,
-                    "max_ed25519_validator_key_checks_per_transaction": 198_656,
-                    "max_ed25519_validator_key_checks_per_block": 794_624,
-                    "max_bn254_pairing_checks_per_transaction": 1,
-                    "max_bn254_pairing_checks_per_block": 4,
-                    "max_bls12_381_pairing_checks_per_transaction": 1,
-                    "max_bls12_381_pairing_checks_per_block": 4,
-                },
-                "proof_submit_path": "/v1/bridge/proofs/submit",
-                "native_message_submit_path": "/v1/bridge/messages",
-            }
-            self.sccp_registry = {"version": 1, "lanes": []}
-            self.sccp_recent_messages = {"items": []}
-            self.sccp_message_bundles.clear()
-            self.sccp_message_bundle_norito.clear()
-            self.sccp_proof_requests.clear()
-            self.sccp_proof_request_norito.clear()
-            transaction = b"\x01\x02\x03"
-            signing_message = bytearray(hashlib.blake2b(transaction, digest_size=32).digest())
-            signing_message[-1] |= 1
-            prepared = {
-                "submitted": False,
-                "payload_kind": "transfer",
-                "message_id_hex": "22" * 32,
-                "backend": "bridge/sccp/native/bsc-parlia-v1",
-                "counterparty_domain": 2,
-                "counterparty_chain": "bsc-mainnet",
-                "route_configuration_hash_hex": "33" * 32,
-                "range_start_height": 1,
-                "range_end_height": 1,
-                "creation_time_ms": 1,
-                "tx_hash_hex": None,
-                "transaction_payload_b64": base64.b64encode(transaction).decode("ascii"),
-                "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
-            }
-            self.sccp_bridge_proof_response = dict(prepared)
-            self.sccp_bridge_message_response = dict(prepared)
             self._seed_sumeragi()
-
-
-    def _sccp_config(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid sccp config: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("sccp config must be an object")
-
-        capabilities = payload.get("capabilities")
-        if capabilities is not None:
-            if not isinstance(capabilities, dict):
-                raise ValueError("capabilities must be an object")
-            self.sccp_capabilities = dict(capabilities)
-
-        for field_name, attribute in (
-            ("registry", "sccp_registry"),
-            ("recent_messages", "sccp_recent_messages"),
-            ("bridge_proof_response", "sccp_bridge_proof_response"),
-            ("bridge_message_response", "sccp_bridge_message_response"),
-        ):
-            value = payload.get(field_name)
-            if value is not None:
-                if not isinstance(value, dict):
-                    raise ValueError(f"{field_name} must be an object")
-                setattr(self, attribute, dict(value))
-
-        for field_name, attribute in (
-            ("message_bundles", "sccp_message_bundles"),
-            ("proof_requests", "sccp_proof_requests"),
-        ):
-            value = payload.get(field_name)
-            if value is not None:
-                if not isinstance(value, dict) or not all(
-                    isinstance(key, str) and isinstance(entry, dict)
-                    for key, entry in value.items()
-                ):
-                    raise ValueError(f"{field_name} must map message ids to objects")
-                setattr(self, attribute, {key: dict(entry) for key, entry in value.items()})
-
-        for field_name, attribute in (
-            ("message_bundle_norito_b64", "sccp_message_bundle_norito"),
-            ("proof_request_norito_b64", "sccp_proof_request_norito"),
-        ):
-            value = payload.get(field_name)
-            if value is not None:
-                if not isinstance(value, dict) or not all(
-                    isinstance(key, str) and isinstance(entry, str)
-                    for key, entry in value.items()
-                ):
-                    raise ValueError(
-                        f"{field_name} must map message ids to base64 strings"
-                    )
-                try:
-                    decoded = {
-                        key: base64.b64decode(entry, validate=True) for key, entry in value.items()
-                    }
-                except ValueError as err:
-                    raise ValueError(f"{field} contains invalid base64") from err
-                setattr(self, attribute, decoded)
-
-        return _json_response(HTTPStatus.OK, {"ok": True})
-
-    def _sccp_recent_get(self, params: Mapping[str, List[str]]) -> _Response:
-        payload = dict(self.sccp_recent_messages)
-        items = payload.get("items", [])
-        if not isinstance(items, list):
-            raise ValueError("configured SCCP recent messages must contain an items array")
-        limit = _parse_int(params.get("limit"))
-        from_height = _parse_int(params.get("from"))
-        if from_height is not None:
-            if not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF:
-                raise ValueError("SCCP recent-message from must be a positive u64")
-            items = [
-                item
-                for item in items
-                if isinstance(item, dict)
-                and isinstance(item.get("height"), int)
-                and item["height"] <= from_height
-            ]
-        if limit is not None:
-            if not 1 <= limit <= 50:
-                raise ValueError("SCCP recent-message limit must be in 1..50")
-            items = items[:limit]
-        payload["items"] = items
-        return _json_response(HTTPStatus.OK, payload)
-
-    @staticmethod
-    def _sccp_typed_get(
-        message_id: str,
-        headers: Mapping[str, str],
-        *,
-        json_values: Mapping[str, Dict[str, Any]],
-        norito_values: Mapping[str, bytes],
-    ) -> _Response:
-        if re.fullmatch(r"[0-9a-f]{64}", message_id) is None or set(message_id) == {"0"}:
-            raise ValueError("SCCP message id must be canonical lowercase nonzero hex")
-        accept = headers.get("Accept", "application/json")
-        if accept == "application/x-norito":
-            try:
-                body = norito_values[message_id]
-            except KeyError:
-                raise KeyError(message_id) from None
-            return _Response(
-                HTTPStatus.OK, body=body, headers={"Content-Type": "application/x-norito"}
-            )
-        if accept != "application/json":
-            raise ValueError("unsupported SCCP Accept header")
-        try:
-            value = json_values[message_id]
-        except KeyError:
-            raise KeyError(message_id) from None
-        return _json_response(HTTPStatus.OK, value)
-
-    def _sccp_bridge_submit(self, body: bytes, *, endpoint: str) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as err:
-            raise ValueError(f"invalid SCCP bridge submit JSON: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("SCCP bridge submit payload must be an object")
-        common = {
-            "authority",
-            "fee_payment",
-            "signature_b64",
-            "transaction_payload_b64",
-            "creation_time_ms",
-        }
-        if endpoint == "proof":
-            allowed = common | {"destination_proof_b64"}
-            required = "destination_proof_b64"
-            configured = self.sccp_bridge_proof_response
-        else:
-            allowed = common | {"native_proof_b64", "replay_witness_b64"}
-            required = "native_proof_b64 and replay_witness_b64"
-            configured = self.sccp_bridge_message_response
-        unknown = next((field for field in payload if field not in allowed), None)
-        if unknown is not None:
-            raise ValueError(f"unknown or retired bridge submit field `{unknown}`")
-        missing_artifact = (
-            "destination_proof_b64" not in payload
-            if endpoint == "proof"
-            else "native_proof_b64" not in payload or "replay_witness_b64" not in payload
-        )
-        if "authority" not in payload or "fee_payment" not in payload or missing_artifact:
-            raise ValueError(f"authority, fee_payment, and {required} are required")
-        from .client import ToriiClient
-
-        ToriiClient._normalize_fee_payment_intent(
-            payload["fee_payment"], context="SCCP bridge submit fee_payment"
-        )
-        signed = "signature_b64" in payload
-        if signed != ("transaction_payload_b64" in payload):
-            raise ValueError(
-                "signature_b64 and transaction_payload_b64 must be omitted or provided together"
-            )
-        if signed and "creation_time_ms" not in payload:
-            raise ValueError("creation_time_ms is required for signed SCCP submission")
-        response = dict(configured)
-        if "creation_time_ms" in payload:
-            response["creation_time_ms"] = payload["creation_time_ms"]
-        return _json_response(HTTPStatus.OK, response)
 
     # ------------------------------------------------------------------
     # Governance endpoints
@@ -1401,7 +1128,7 @@ class _MockState:
 
     def _seed_sumeragi(self) -> None:
         # Observation fixture only; this is not generated finality authority.
-        self.sumeragi_status = {'protocol_version': 8, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 10, 'view': 2, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 9, 'applied_height': 9, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
+        self.sumeragi_status = {'protocol_version': 1, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 10, 'view': 2, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 9, 'applied_height': 9, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
         self.sumeragi_leader = {
             "leader_index": 3,
             "prf": {
@@ -1442,18 +1169,6 @@ class _MockState:
                 setattr(self, attribute, value)
 
         return _json_response(HTTPStatus.OK, {"ok": True})
-
-
-def _parse_int(values: Optional[Iterable[str]]) -> Optional[int]:
-    if not values:
-        return None
-    value = next(iter(values))
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
 
 
 def _json_response(status: int, payload: object) -> _Response:

@@ -20,13 +20,6 @@ npos_min_self_bond = 1
 
 [static]
 
-[static.sumeragi.block]
-max_payload_bytes = 16777216
-proposal_queue_scan_multiplier = 4
-
-[static.sumeragi.queues]
-body_source_bytes = 35651584
-
 [static.sumeragi.keys]
 allowed_algorithms = ["bls_normal"]
 
@@ -41,8 +34,6 @@ allowed_curve_ids = []
 [derive]
 authenticated_non_validator_sources = 2
 max_external_committee_peers = 0
-queue_commands = 1024
-queue_bodies = 1024
 
 [policy]
 telemetry_profile = "extended"

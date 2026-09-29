@@ -241,8 +241,6 @@ impl Cluster {
                         attest: false,
                     },
                 ),
-                Action::DriveApplicationControl { .. }
-                | Action::ReceiveApplicationControl { .. } => {}
                 Action::BuildPayload {
                     req, height, view, ..
                 } => {
@@ -372,6 +370,8 @@ impl Cluster {
                 Action::ReportEvidence(_) => self.nodes[i].evidence += 1,
                 Action::Halt(reason) => self.nodes[i].halted = Some(reason),
                 Action::DiscardExecution { .. }
+                | Action::DriveApplicationControl { .. }
+                | Action::ReceiveApplicationControl { .. }
                 | Action::PayloadRejected { .. }
                 | Action::LocalFault(_) => {}
             }

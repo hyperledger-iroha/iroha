@@ -58,13 +58,13 @@ fn masked_128_stripes_match_full_materialization_horner_and_next_rotation() {
     let plan = replay.plan();
     let columns = explicit_columns(&replay);
     for (column, coefficients) in columns.iter().enumerate() {
-        for row in 0..plan.rows {
+        for (row, &expected) in source[column].iter().enumerate().take(plan.rows) {
             assert_eq!(
                 horner(
                     coefficients,
                     field_pow(plan.trace_domain.generator, row as u64)
                 ),
-                source[column][row],
+                expected,
                 "mask vanishes on every source row"
             );
         }
@@ -194,7 +194,9 @@ struct CountingRng {
 impl TryRngCore for CountingRng {
     type Error = &'static str;
     fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
-        self.try_next_u64().map(|value| value as u32)
+        // A 32-bit draw keeps the low half of the 64-bit draw.
+        self.try_next_u64()
+            .map(|value| u32::try_from(value & u64::from(u32::MAX)).expect("masked to 32 bits"))
     }
     fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
         self.calls += 1;

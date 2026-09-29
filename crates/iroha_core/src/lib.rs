@@ -68,7 +68,6 @@ pub mod alias_setup;
 pub mod beacon;
 /// Block types and helpers.
 pub mod block;
-/// Block synchronization protocol and messages.
 /// Lane compliance policy evaluation.
 pub mod compliance;
 /// Consensus-neutral key predicates shared by validation paths.
@@ -106,14 +105,8 @@ pub mod kagemusha_v1_crypto;
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
 pub mod kura;
-/// Lane-local block vote validation and QC aggregation helpers.
-/// Merge-ledger reduction helpers.
-pub mod merge;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
 pub mod musubi_search;
-/// Native AMX participant attestation control plane.
-#[cfg(any(test, feature = "test-network-native-amx-fault-injection"))]
-pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
 /// Oracle host helpers (admission/aggregation plumbing).
@@ -705,8 +698,7 @@ mod tests {
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
             ToriiFanoutRouteScopeV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
             ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
-            ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadProxyRequestV1,
-            ToriiRouteHintV1, ToriiRoutingPlanHintV1,
+            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -1228,8 +1220,6 @@ mod tests {
             request: ToriiProxyRequestKindV1::SubmitTransaction {
                 transaction: TransactionEntrypoint::External(transaction),
                 expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
-                admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-                admission_binding: None,
             },
         }));
         let encoded = ncore::to_bytes(&message).expect("encode 10 MiB proxy submission");
@@ -1312,11 +1302,10 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                let (_, wire, certificate) = gossip.txs[0]
+                let (_, wire) = gossip.txs[0]
                     .clone()
                     .into_entrypoint_with_payload()
                     .expect("recover cached entrypoint frame");
-                assert!(certificate.is_none());
                 assert_eq!(wire.as_slice(), payload.as_slice());
                 assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
@@ -1376,11 +1365,10 @@ mod tests {
                 NetworkMessage::TransactionGossiper(gossip) => {
                     assert_eq!(gossip.txs.len(), 1);
                     assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                    let (_, wire, certificate) = gossip.txs[0]
+                    let (_, wire) = gossip.txs[0]
                         .clone()
                         .into_entrypoint_with_payload()
                         .expect("recover context-free cached entrypoint frame");
-                    assert!(certificate.is_none());
                     assert_eq!(wire.as_slice(), canonical_payload.as_slice());
                     assert!(wire.starts_with(&ncore::MAGIC));
                     assert_eq!(gossip.routes.len(), 1);

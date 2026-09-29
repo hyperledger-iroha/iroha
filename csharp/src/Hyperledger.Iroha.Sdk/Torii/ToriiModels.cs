@@ -5386,7 +5386,6 @@ public sealed record class ToriiExplorerAccountQrSnapshot
 public sealed record class ToriiIdentifierPolicySummary
 {
     private JsonNode? inputEncryptionPublicParametersDecoded;
-    private JsonNode? ramFheProfile;
 
     [JsonPropertyName("policy_id")]
     public string PolicyId { get; init; } = string.Empty;
@@ -5420,11 +5419,7 @@ public sealed record class ToriiIdentifierPolicySummary
     }
 
     [JsonPropertyName("ram_fhe_profile")]
-    public JsonNode? RamFheProfile
-    {
-        get => ToriiJsonSnapshots.Copy(ramFheProfile);
-        init => ramFheProfile = ToriiJsonSnapshots.Copy(value);
-    }
+    public ToriiRamFheProfile? RamFheProfile { get; init; }
 
     [JsonPropertyName("note")]
     public string? Note { get; init; }

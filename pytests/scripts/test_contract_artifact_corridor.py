@@ -5,11 +5,6 @@ compiles `contracts/evm/sccp/SccpTairaXor.sol` with the cancun legacy-pipeline
 settings, and locks each runtime template with its named immutable references.
 These tests use synthetic compilers and outputs; the real-compiler round trip
 runs only when both pinned compilers are already in the corridor cache.
-
-Every still-applicable assertion of the retired 0.7.6 corridor suite
-(`scripts/tests/contract_artifact_corridor_test.py`) is ported here. The TRE
-runner and `contract_tvm_smoke.mjs` assertions of that suite belong to the
-java-tron qualification workstream (ws53) and are not repeated here.
 """
 
 from __future__ import annotations
@@ -729,8 +724,6 @@ def test_node_native_adapter_rejects_unadmitted_compilers(tmp_path: Path, case: 
     compiler = tmp_path / "solc"
     compiler.write_bytes(b"untrusted native compiler")
     environment = dict(os.environ)
-    # The retired environment override must not be honoured as a compiler source.
-    environment["SCCP_NATIVE_SOLC_PATH"] = str(compiler)
     options = {"pythonBin": sys.executable}
     if case == "relative":
         options["compilerPath"] = "relative-solc"
@@ -1109,84 +1102,25 @@ def test_builds_in_separate_roots_are_byte_identical_and_complete(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
-# TVM runtime-input snapshot
+# Stable manifest reads
 # ---------------------------------------------------------------------------
 
 
-def snapshot_inputs(tmp_path: Path) -> tuple:
-    tmp_path.chmod(0o700)
+def published_manifest(tmp_path: Path) -> Path:
     manifest = tmp_path / "manifest.json"
     manifest.write_bytes(b'{"generation":"original"}\n')
-    vectors = tmp_path / "vectors.json"
-    vectors.write_bytes(b'{"version":1,"vectors":[]}\n')
-    return manifest, vectors
+    return manifest
 
 
-def test_runtime_input_snapshot_is_private_read_only_and_exact(tmp_path: Path) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
-    snapshot_dir = tmp_path / "snapshot"
-    manifest_copy, vector_copy = corridor.snapshot_runtime_inputs(manifest, vectors, snapshot_dir)
-    try:
-        assert manifest_copy == snapshot_dir / corridor.MANIFEST_NAME
-        assert vector_copy == snapshot_dir / corridor.NATIVE_VECTORS_NAME
-        assert manifest_copy.read_bytes() == manifest.read_bytes()
-        assert vector_copy.read_bytes() == vectors.read_bytes()
-        assert sorted(entry.name for entry in snapshot_dir.iterdir()) == sorted(
-            [corridor.MANIFEST_NAME, corridor.NATIVE_VECTORS_NAME]
-        )
-        assert stat.S_IMODE(snapshot_dir.stat().st_mode) == 0o500
-        assert stat.S_IMODE(manifest_copy.stat().st_mode) == 0o400
-        assert stat.S_IMODE(vector_copy.stat().st_mode) == 0o400
-        manifest.write_bytes(b'{"generation":"later"}\n')
-        assert manifest_copy.read_bytes() == b'{"generation":"original"}\n', "the snapshot is a copy"
-    finally:
-        snapshot_dir.chmod(0o700)
-
-
-def test_runtime_input_snapshot_rejects_existing_output_and_untrusted_parents(tmp_path: Path) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
-    existing = tmp_path / "existing"
-    existing.mkdir(mode=0o700)
-    with pytest.raises(corridor.CorridorError, match="must not already exist"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, existing)
-    dangling = tmp_path / "dangling"
-    dangling.symlink_to(tmp_path / "nowhere")
-    with pytest.raises(corridor.CorridorError, match="must not already exist"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, dangling)
-    private = tmp_path / "private"
-    private.mkdir(mode=0o700)
-    linked_parent = tmp_path / "linked-parent"
-    linked_parent.symlink_to(private, target_is_directory=True)
-    with pytest.raises(corridor.CorridorError, match="owned private directory"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, linked_parent / "snapshot")
-    with pytest.raises(corridor.CorridorError, match="parent is unavailable"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "missing" / "snapshot")
-    public = tmp_path / "public"
-    public.mkdir()
-    for mode in (0o755, 0o750, 0o701):
-        public.chmod(mode)
-        with pytest.raises(corridor.CorridorError, match="owned private directory"):
-            corridor.snapshot_runtime_inputs(manifest, vectors, public / "snapshot")
-    assert not (private / "snapshot").exists() and not (public / "snapshot").exists()
-
-
-def test_runtime_input_snapshot_rejects_symlinked_or_malformed_inputs(tmp_path: Path) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
-    manifest_link = tmp_path / "manifest-link.json"
-    manifest_link.symlink_to(manifest)
-    with pytest.raises(corridor.CorridorError, match="direct regular file"):
-        corridor.snapshot_runtime_inputs(manifest_link, vectors, tmp_path / "snapshot-link")
-    vectors.write_bytes(b"[]\n")
+def test_manifest_read_rejects_a_non_object_document(tmp_path: Path) -> None:
+    manifest = published_manifest(tmp_path)
+    manifest.write_bytes(b"[]\n")
     with pytest.raises(corridor.CorridorError, match="JSON object"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "snapshot-array")
-    vectors.write_bytes(b"")
-    with pytest.raises(corridor.CorridorError, match="bounded size"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "snapshot-empty")
-    assert not any(path.name.startswith("snapshot") for path in tmp_path.iterdir())
+        corridor.load_manifest(manifest)
 
 
-def test_runtime_input_snapshot_rejects_source_path_replacement_during_read(tmp_path: Path, monkeypatch) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
+def test_manifest_read_rejects_source_path_replacement_during_read(tmp_path: Path, monkeypatch) -> None:
+    manifest = published_manifest(tmp_path)
     replacement = b'{"generation":"replaced"}\n'
     replacement_path = tmp_path / "replacement.json"
     replacement_path.write_bytes(replacement)
@@ -1203,13 +1137,12 @@ def test_runtime_input_snapshot_rejects_source_path_replacement_during_read(tmp_
 
     monkeypatch.setattr(corridor.os, "read", replacing_read)
     with pytest.raises(corridor.CorridorError, match="changed while it was being read"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "snapshot")
+        corridor.load_manifest(manifest)
     assert replaced and manifest.read_bytes() == replacement
-    assert not (tmp_path / "snapshot").exists()
 
 
-def test_runtime_input_snapshot_rejects_in_place_mutation_during_read(tmp_path: Path, monkeypatch) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
+def test_manifest_read_rejects_in_place_mutation_during_read(tmp_path: Path, monkeypatch) -> None:
+    manifest = published_manifest(tmp_path)
     real_read = corridor.os.read
     mutated = False
 
@@ -1223,49 +1156,13 @@ def test_runtime_input_snapshot_rejects_in_place_mutation_during_read(tmp_path: 
 
     monkeypatch.setattr(corridor.os, "read", mutating_read)
     with pytest.raises(corridor.CorridorError, match="changed while it was being read"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "snapshot")
+        corridor.load_manifest(manifest)
     assert mutated
-    assert not (tmp_path / "snapshot").exists()
-
-
-def test_runtime_input_snapshot_removes_a_partial_publication(tmp_path: Path, monkeypatch) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
-    real_write = corridor._write_private_file
-    written: List[Path] = []
-
-    def failing_write(destination: Path, payload: bytes, mode: int) -> None:
-        written.append(destination)
-        if len(written) == 2:
-            raise OSError("disk full")
-        real_write(destination, payload, mode)
-
-    monkeypatch.setattr(corridor, "_write_private_file", failing_write)
-    with pytest.raises(OSError, match="disk full"):
-        corridor.snapshot_runtime_inputs(manifest, vectors, tmp_path / "snapshot")
-    assert len(written) == 2
-    assert not (tmp_path / "snapshot").exists()
-
-
-def test_snapshot_cli_publishes_both_inputs(tmp_path: Path, capsys) -> None:
-    manifest, vectors = snapshot_inputs(tmp_path)
-    output = tmp_path / "snapshot"
-    arguments = ["snapshot", "--manifest", str(manifest), "--native-vectors", str(vectors), "--output-dir", str(output)]
-    try:
-        assert corridor.main(arguments) == 0
-        printed = capsys.readouterr().out
-        assert str(output / corridor.MANIFEST_NAME) in printed
-        assert str(output / corridor.NATIVE_VECTORS_NAME) in printed
-        assert corridor.main(arguments) == 1
-        assert "must not already exist" in capsys.readouterr().err
-    finally:
-        output.chmod(0o700)
 
 
 def test_cli_reports_failures_without_traceback(tmp_path: Path, capsys) -> None:
     assert corridor.main(["verify", "--manifest", str(tmp_path / "missing.json")]) == 1
     assert "SCCP contract artifact corridor failed" in capsys.readouterr().err
-    with pytest.raises(SystemExit):
-        corridor.main(["verify", "--check-source-inputs"])
 
 
 def test_committed_artifact_lock_covers_the_single_v1_contract() -> None:
@@ -1333,25 +1230,16 @@ def test_real_cli_lock_build_verify_and_materialize_round_trip(tmp_path: Path, c
 
 
 # ---------------------------------------------------------------------------
-# Locked Node tooling and the EVM smoke script
+# Locked EVM runtime and the EVM smoke script
 # ---------------------------------------------------------------------------
 
 
 def assert_registry_locked(package_lock: Mapping[str, object]) -> None:
     packages = package_lock["packages"]
-    assert all("ganache" not in name.casefold() for name in packages)
     for name, value in packages.items():
         if name and "resolved" in value and not value.get("link"):
             assert value["resolved"].startswith("https://registry.npmjs.org/"), name
             assert value.get("integrity", "").startswith("sha512-"), name
-
-
-def test_tvm_tooling_is_integrity_locked() -> None:
-    tooling = ROOT / "scripts" / "contract_tooling"
-    package = json.loads((tooling / "package.json").read_text(encoding="utf-8"))
-    assert package["dependencies"] == {"@noble/hashes": "1.3.2", "tronweb": "6.4.0"}
-    assert package["overrides"] == {"ws": "8.21.0"}
-    assert_registry_locked(json.loads((tooling / "package-lock.json").read_text(encoding="utf-8")))
 
 
 def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
@@ -1389,12 +1277,7 @@ def test_evm_smoke_script_uses_the_authenticated_corridor_and_audited_runtime() 
         "digest mismatch before execution",
         "SCCP_CONTRACT_ARTIFACT_MANIFEST",
         "contracts/evm/sccp/test/sccp_taira_xor.test.js",
-        "contracts/tron/sccp",
     ):
         assert required in smoke, required
-    assert "ganache" not in smoke.casefold()
-    # Retired 0.7.6 corridor surface: no environment-selected compiler, no opt-in source check.
-    for retired in ("SCCP_NATIVE_SOLC_PATH", "--check-source-inputs", "0.7.6"):
-        assert retired not in smoke, retired
     completed = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "sccp_evm_contract_smoke.sh")], check=False)
     assert completed.returncode == 0

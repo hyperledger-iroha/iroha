@@ -113,6 +113,7 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
+iroha_sumeragi = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_core = { workspace = true, default-features = false, features = ["app_api", "runtime"] }
@@ -122,7 +123,6 @@ iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["http"] }
 iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
-iroha_sccp = { path = "../iroha_sccp" }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }
 sorafs_node = { path = "../sorafs_node" }
@@ -201,8 +201,6 @@ ivm = { path = "../ivm" }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
-iroha_sumeragi = { workspace = true }
-iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 iroha_test_samples = { path = "../iroha_test_samples" }
 rand_core_06 = { workspace = true }
 rcgen = "0.14.5"

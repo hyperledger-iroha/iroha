@@ -37,6 +37,10 @@ const FACTS_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:source|";
 const STATEMENT_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:statement|";
 
 /// Explicit complete-entry public preparation limits; no private path work is included.
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive maximum, named like the crate's other `*Limits` policies"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionEffectLimits {
     /// Maximum original typed effects in one logical execution entry.
@@ -414,175 +418,17 @@ fn prepare_facts(
     limits: ExecutionEffectLimits,
 ) -> Result<(Vec<FastpqStateTransition>, PreparedExecutionEffects)> {
     preflight(effects, None, limits)?;
-    require_marked(&public_inputs.old_root)?;
-    require_marked(&public_inputs.new_root)?;
-    if effects.context.source.height == 0 {
-        return Err(invariant("execution effect source height is zero"));
-    }
-    if let FastpqSourceRouteV1::Lane(lane) = effects.context.entry.route {
-        require_marked(lane.lane_incarnation.as_ref())?;
-    }
-    if effects.effects.is_empty() && public_inputs.old_root != public_inputs.new_root {
-        return Err(invariant(
-            "empty execution effect statement changes its root",
-        ));
-    }
-    let mut scales = BTreeMap::<FastpqExecutionAssetV1, u32>::new();
-    for effect in &effects.effects {
-        let (asset, values) = quantities(&effect.kind);
-        asset
-            .incarnation
-            .validate()
-            .map_err(|_| invariant("execution effect asset incarnation is invalid"))?;
-        let scale = scales.entry(asset.clone()).or_default();
-        for value in values {
-            *scale = (*scale).max(value.scale());
-        }
-    }
-    let mut normalized = Vec::with_capacity(effects.effects.len() * 2);
-    let mut last = HashMap::<Vec<u8>, FastpqQuantityUnits>::new();
-    for (index, effect) in effects.effects.iter().enumerate() {
-        if effect.ordinal != checked_u32(index)? {
-            return Err(invariant("execution effect ordinals are not contiguous"));
-        }
-        let (asset, values) = quantities(&effect.kind);
-        let scale = scales[asset];
-        let [
-            amount,
-            first_before,
-            first_after,
-            second_before,
-            second_after,
-        ] = values.map(|q| {
-            FastpqQuantityUnits::from_quantity(q, scale)
-                .ok_or_else(|| invariant("execution effect normalization failed"))
-        });
-        let (amount, first_before, first_after, second_before, second_after) = (
-            amount?,
-            first_before?,
-            first_after?,
-            second_before?,
-            second_after?,
-        );
-        let (keys, operation) = match &effect.kind {
-            FastpqExecutionEffectKindV1::Transfer(t) => {
-                if t.source.asset != t.destination.asset {
-                    return Err(invariant(
-                        "execution effect transfer crosses asset incarnations",
-                    ));
-                }
-                if first_before.checked_sub(&amount) != Some(first_after)
-                    || second_before.checked_add(&amount) != Some(second_after)
-                {
-                    return Err(invariant("execution effect transfer arithmetic mismatch"));
-                }
-                (
-                    [
-                        FastpqExecutionQuantityKeyV1::Balance(t.source.clone()),
-                        FastpqExecutionQuantityKeyV1::Balance(t.destination.clone()),
-                    ],
-                    FastpqOperationKind::Transfer,
-                )
-            }
-            FastpqExecutionEffectKindV1::Mint(t) | FastpqExecutionEffectKindV1::Burn(t) => {
-                let mint = matches!(&effect.kind, FastpqExecutionEffectKindV1::Mint(_));
-                if mint && t.amount.is_zero() {
-                    return Err(invariant("execution effect mint amount is zero"));
-                }
-                let arithmetic = if mint {
-                    first_before.checked_add(&amount) == Some(first_after)
-                        && second_before.checked_add(&amount) == Some(second_after)
-                } else {
-                    first_before.checked_sub(&amount) == Some(first_after)
-                        && second_before.checked_sub(&amount) == Some(second_after)
-                };
-                if !arithmetic
-                    || second_before.checked_cmp(&first_before) == Some(std::cmp::Ordering::Less)
-                    || second_after.checked_cmp(&first_after) == Some(std::cmp::Ordering::Less)
-                {
-                    return Err(invariant(
-                        "execution effect balance/supply arithmetic mismatch",
-                    ));
-                }
-                (
-                    [
-                        FastpqExecutionQuantityKeyV1::Balance(t.balance.clone()),
-                        FastpqExecutionQuantityKeyV1::Supply(t.balance.asset.clone()),
-                    ],
-                    if mint {
-                        FastpqOperationKind::Mint
-                    } else {
-                        FastpqOperationKind::Burn
-                    },
-                )
-            }
-        };
-        for (leg, (key, before, after)) in keys
-            .into_iter()
-            .zip([(first_before, first_after), (second_before, second_after)])
-            .map(|(key, (before, after))| (key, before, after))
-            .enumerate()
-        {
-            let key = execution_quantity_key_v1(&key)?;
-            if last.get(&key).is_some_and(|previous| *previous != before) {
-                return Err(invariant(
-                    "execution effect repeated-key quantities do not chain",
-                ));
-            }
-            if !last.contains_key(&key) {
-                check_limit(
-                    "max_execution_effect_keys",
-                    last.len() + 1,
-                    limits.max_unique_keys,
-                )?;
-            }
-            last.insert(key.clone(), after);
-            normalized.push(NormalizedRow {
-                transition: FastpqStateTransition {
-                    key,
-                    pre_value: encode_quantity_units_v1(&before)?,
-                    post_value: encode_quantity_units_v1(&after)?,
-                    operation,
-                },
-                ordinal: effect.ordinal,
-                leg,
-                scale,
-                before,
-                after,
-                amount,
-            });
-        }
-    }
+    check_context(effects, &public_inputs)?;
+    let scales = asset_scales(effects)?;
+    let (mut normalized, unique_keys) = normalize_effects(effects, &scales, limits)?;
     // Stable sorting retains original same-key/same-operation occurrence order.
     // Ports record chronology explicitly even when operation sorting moves mint/burn rows.
     normalized.sort_by(|a, b| {
         (&a.transition.key, operation_rank(a.transition.operation))
             .cmp(&(&b.transition.key, operation_rank(b.transition.operation)))
     });
-    let mut keys: Vec<PublicKeyAllocation> = Vec::with_capacity(last.len());
-    for row in &normalized {
-        if keys.last().is_none_or(|key| key.key != row.transition.key) {
-            keys.push(PublicKeyAllocation {
-                key: row.transition.key.clone(),
-                key_hash: [0; 32],
-                path: 0,
-            });
-        }
-    }
+    let (keys, allocation_steps) = allocate_keys(&normalized, unique_keys, limits)?;
     let unique_count = keys.len();
-    let mut occupied = BTreeMap::new();
-    let mut allocation_steps = 0;
-    for key in &mut keys {
-        key.key_hash = Hash::new_from_chunks(&[KEY_DOMAIN, &key.key]).into();
-        let base = u32::from_le_bytes(key.key_hash[..4].try_into().expect("four key-hash bytes"));
-        key.path = allocate_path(
-            &mut occupied,
-            base,
-            unique_count,
-            &mut allocation_steps,
-            limits.max_allocation_steps,
-        )?;
-    }
     let mut rows = Vec::with_capacity(normalized.len());
     let mut transitions = Vec::with_capacity(normalized.len());
     let mut pairs = vec![[usize::MAX; 2]; effects.effects.len()];
@@ -633,6 +479,223 @@ fn prepare_facts(
             },
         },
     ))
+}
+
+/// Check marked roots, source height, lane incarnation and empty-entry root equality.
+fn check_context(
+    effects: &FastpqExecutionEffectsV1,
+    public_inputs: &FastpqPublicInputs,
+) -> Result<()> {
+    require_marked(&public_inputs.old_root)?;
+    require_marked(&public_inputs.new_root)?;
+    if effects.context.source.height == 0 {
+        return Err(invariant("execution effect source height is zero"));
+    }
+    if let FastpqSourceRouteV1::Lane(lane) = effects.context.entry.route {
+        require_marked(lane.lane_incarnation.as_ref())?;
+    }
+    if effects.effects.is_empty() && public_inputs.old_root != public_inputs.new_root {
+        return Err(invariant(
+            "empty execution effect statement changes its root",
+        ));
+    }
+    Ok(())
+}
+
+/// Common scale per asset incarnation: the maximum over every original quantity.
+fn asset_scales(
+    effects: &FastpqExecutionEffectsV1,
+) -> Result<BTreeMap<FastpqExecutionAssetV1, u32>> {
+    let mut scales = BTreeMap::<FastpqExecutionAssetV1, u32>::new();
+    for effect in &effects.effects {
+        let (asset, values) = quantities(&effect.kind);
+        asset
+            .incarnation
+            .validate()
+            .map_err(|_| invariant("execution effect asset incarnation is invalid"))?;
+        let scale = scales.entry(asset.clone()).or_default();
+        for value in values {
+            *scale = (*scale).max(value.scale());
+        }
+    }
+    Ok(scales)
+}
+
+/// Normalize every effect into its two chained participant rows, in original order.
+///
+/// Also returns the number of distinct complete quantity keys.
+fn normalize_effects(
+    effects: &FastpqExecutionEffectsV1,
+    scales: &BTreeMap<FastpqExecutionAssetV1, u32>,
+    limits: ExecutionEffectLimits,
+) -> Result<(Vec<NormalizedRow>, usize)> {
+    let mut normalized = Vec::with_capacity(effects.effects.len() * 2);
+    let mut last = HashMap::<Vec<u8>, FastpqQuantityUnits>::new();
+    for (index, effect) in effects.effects.iter().enumerate() {
+        if effect.ordinal != checked_u32(index)? {
+            return Err(invariant("execution effect ordinals are not contiguous"));
+        }
+        let (asset, values) = quantities(&effect.kind);
+        let scale = scales[asset];
+        let [
+            amount,
+            first_before,
+            first_after,
+            second_before,
+            second_after,
+        ] = values.map(|q| {
+            FastpqQuantityUnits::from_quantity(q, scale)
+                .ok_or_else(|| invariant("execution effect normalization failed"))
+        });
+        let (amount, first_before, first_after, second_before, second_after) = (
+            amount?,
+            first_before?,
+            first_after?,
+            second_before?,
+            second_after?,
+        );
+        let (keys, operation) = effect_ports(
+            &effect.kind,
+            amount,
+            &[first_before, first_after, second_before, second_after],
+        )?;
+        for (leg, (key, before, after)) in keys
+            .into_iter()
+            .zip([(first_before, first_after), (second_before, second_after)])
+            .map(|(key, (before, after))| (key, before, after))
+            .enumerate()
+        {
+            let key = execution_quantity_key_v1(&key)?;
+            if last.get(&key).is_some_and(|previous| *previous != before) {
+                return Err(invariant(
+                    "execution effect repeated-key quantities do not chain",
+                ));
+            }
+            if !last.contains_key(&key) {
+                check_limit(
+                    "max_execution_effect_keys",
+                    last.len() + 1,
+                    limits.max_unique_keys,
+                )?;
+            }
+            last.insert(key.clone(), after);
+            normalized.push(NormalizedRow {
+                transition: FastpqStateTransition {
+                    key,
+                    pre_value: encode_quantity_units_v1(&before)?,
+                    post_value: encode_quantity_units_v1(&after)?,
+                    operation,
+                },
+                ordinal: effect.ordinal,
+                leg,
+                scale,
+                before,
+                after,
+                amount,
+            });
+        }
+    }
+    Ok((normalized, last.len()))
+}
+
+/// Check one effect's typed arithmetic and return its two port keys and operation.
+///
+/// Transfers use source/destination balance ports; mint and burn use balance and
+/// supply ports, where supply never falls below the balance.
+fn effect_ports(
+    kind: &FastpqExecutionEffectKindV1,
+    amount: FastpqQuantityUnits,
+    port_values: &[FastpqQuantityUnits; 4],
+) -> Result<([FastpqExecutionQuantityKeyV1; 2], FastpqOperationKind)> {
+    let [first_before, first_after, second_before, second_after] = *port_values;
+    match kind {
+        FastpqExecutionEffectKindV1::Transfer(t) => {
+            if t.source.asset != t.destination.asset {
+                return Err(invariant(
+                    "execution effect transfer crosses asset incarnations",
+                ));
+            }
+            if first_before.checked_sub(&amount) != Some(first_after)
+                || second_before.checked_add(&amount) != Some(second_after)
+            {
+                return Err(invariant("execution effect transfer arithmetic mismatch"));
+            }
+            Ok((
+                [
+                    FastpqExecutionQuantityKeyV1::Balance(t.source.clone()),
+                    FastpqExecutionQuantityKeyV1::Balance(t.destination.clone()),
+                ],
+                FastpqOperationKind::Transfer,
+            ))
+        }
+        FastpqExecutionEffectKindV1::Mint(t) | FastpqExecutionEffectKindV1::Burn(t) => {
+            let mint = matches!(kind, FastpqExecutionEffectKindV1::Mint(_));
+            if mint && t.amount.is_zero() {
+                return Err(invariant("execution effect mint amount is zero"));
+            }
+            let arithmetic = if mint {
+                first_before.checked_add(&amount) == Some(first_after)
+                    && second_before.checked_add(&amount) == Some(second_after)
+            } else {
+                first_before.checked_sub(&amount) == Some(first_after)
+                    && second_before.checked_sub(&amount) == Some(second_after)
+            };
+            if !arithmetic
+                || second_before.checked_cmp(&first_before) == Some(std::cmp::Ordering::Less)
+                || second_after.checked_cmp(&first_after) == Some(std::cmp::Ordering::Less)
+            {
+                return Err(invariant(
+                    "execution effect balance/supply arithmetic mismatch",
+                ));
+            }
+            Ok((
+                [
+                    FastpqExecutionQuantityKeyV1::Balance(t.balance.clone()),
+                    FastpqExecutionQuantityKeyV1::Supply(t.balance.asset.clone()),
+                ],
+                if mint {
+                    FastpqOperationKind::Mint
+                } else {
+                    FastpqOperationKind::Burn
+                },
+            ))
+        }
+    }
+}
+
+/// Hash and allocate one collision-resolved path per distinct sorted key.
+///
+/// Returns the allocations in key order and the occupied-interval lookups used.
+fn allocate_keys(
+    normalized: &[NormalizedRow],
+    unique_keys: usize,
+    limits: ExecutionEffectLimits,
+) -> Result<(Vec<PublicKeyAllocation>, usize)> {
+    let mut keys: Vec<PublicKeyAllocation> = Vec::with_capacity(unique_keys);
+    for row in normalized {
+        if keys.last().is_none_or(|key| key.key != row.transition.key) {
+            keys.push(PublicKeyAllocation {
+                key: row.transition.key.clone(),
+                key_hash: [0; 32],
+                path: 0,
+            });
+        }
+    }
+    let unique_count = keys.len();
+    let mut occupied = BTreeMap::new();
+    let mut allocation_steps = 0;
+    for key in &mut keys {
+        key.key_hash = Hash::new_from_chunks(&[KEY_DOMAIN, &key.key]).into();
+        let base = u32::from_le_bytes(key.key_hash[..4].try_into().expect("four key-hash bytes"));
+        key.path = allocate_path(
+            &mut occupied,
+            base,
+            unique_count,
+            &mut allocation_steps,
+            limits.max_allocation_steps,
+        )?;
+    }
+    Ok((keys, allocation_steps))
 }
 
 #[cfg(test)]

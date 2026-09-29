@@ -1,8 +1,9 @@
 //! Bind a retained deployment to canonical immutable artifacts and native instructions.
 use super::*;
 use iroha::data_model::transaction::Executable;
+use std::cmp::Ordering;
 
-pub(super) struct DeploymentReadContext {
+pub struct DeploymentReadContext {
     network_id: NetworkId,
     chain_id: String,
     chain_discriminant: u16,
@@ -17,7 +18,7 @@ impl From<&Config> for DeploymentReadContext {
     }
 }
 
-pub(super) fn validate_plan(record: &PlanRecord, config: &Config) -> DeploymentResult<()> {
+pub fn validate_plan(record: &PlanRecord, config: &Config) -> DeploymentResult<()> {
     if record.preflight.authority != config.account
         || record.preflight.authority.try_signatory() != Some(config.key_pair.public_key())
     {
@@ -29,7 +30,7 @@ pub(super) fn validate_plan(record: &PlanRecord, config: &Config) -> DeploymentR
     validate_read_plan(record, &DeploymentReadContext::from(config))
 }
 
-pub(super) fn validate_read_plan(
+pub fn validate_read_plan(
     record: &PlanRecord,
     reader: &DeploymentReadContext,
 ) -> DeploymentResult<()> {
@@ -106,98 +107,14 @@ fn validate_contents(record: &PlanRecord, reader: &DeploymentReadContext) -> Res
     }
     let metadata = deployment_transaction_metadata(&context.contract_address, &[])?;
     for (index, step) in record.transactions.iter().enumerate() {
-        // Bounds precede Norito decoding; one transaction contains at most one 64 KiB chunk.
-        if step.norito_hex.len() > 2 * 1024 * 1024 {
-            return Err(eyre!(
-                "retained native transaction exceeds the fixed byte bound"
-            ));
-        }
-        let signed = decode_transaction(step)?;
-        let quote = &context.fee_quotes[index];
-        if signed.authority() != &context.authority
-            || signed.network_id() != Some(&context.network_id)
-            || signed.metadata() != &metadata
-            || signed.payload().fee_payment != quote.intent
-            || !record
-                .requested_fee
-                .has_same_payer_and_gas_bound(&quote.intent)
-            || step.hash != context.transaction_hashes[index]
-        {
-            return Err(eyre!(
-                "retained transaction differs from the exact authority, network, attribution, fee, or hash binding"
-            ));
-        }
-        quote
-            .validate_for_draft(signed.payload())
-            .map_err(|error| eyre!(error))?;
-        let Executable::Instructions(actual) = signed.instructions() else {
+        let transaction = decode_bound_step(record, &metadata, index, step)?;
+        let Executable::Instructions(actual) = transaction.instructions() else {
             return Err(eyre!("deployment plan must contain native instructions"));
         };
-        let (name, expected): (String, Vec<InstructionBox>) = if index < chunks {
-            let final_chunk = index + 1 == chunks;
-            let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-                code_hash: context.code_hash,
-                total_size: artifact.len() as u64,
-                chunk_index: index as u32,
-                chunk_count: chunks as u32,
-                chunk: artifact[index * SMART_CONTRACT_CODE_CHUNK_BYTES
-                    ..((index + 1) * SMART_CONTRACT_CODE_CHUNK_BYTES).min(artifact.len())]
-                    .to_vec(),
-            })];
-            if final_chunk {
-                instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-                    code_hash: context.code_hash,
-                    total_size: artifact.len() as u64,
-                    chunk_count: chunks as u32,
-                }));
-            }
-            (
-                if final_chunk {
-                    "register_bytes_finalize".to_owned()
-                } else {
-                    format!("register_bytes_chunk_{:04}_of_{chunks:04}", index + 1)
-                },
-                instructions,
-            )
-        } else if index == chunks {
-            if actual.len() != 1 {
-                return Err(eyre!(
-                    "manifest stage must contain exactly one registration"
-                ));
-            }
-            let registration = actual[0]
-                .as_any()
-                .downcast_ref::<RegisterSmartContractCode>()
-                .ok_or_else(|| eyre!("manifest stage is not native registration"))?;
-            let mut manifest = registration.manifest.clone();
-            let provenance = manifest
-                .provenance
-                .take()
-                .ok_or_else(|| eyre!("retained manifest has no signed provenance"))?;
-            if manifest != verified.manifest || provenance.signer != *signer {
-                return Err(eyre!(
-                    "retained manifest or signer differs from the verified artifact and retained authority"
-                ));
-            }
-            provenance
-                .signature
-                .verify(&provenance.signer, &manifest.signature_payload_bytes())?;
-            (
-                "register_manifest".to_owned(),
-                vec![InstructionBox::from(registration.clone())],
-            )
-        } else {
-            (
-                "commit_deployment".to_owned(),
-                vec![InstructionBox::from(CommitContractDeployment {
-                    expected_deploy_nonce: context.deploy_nonce,
-                    contract_address: context.contract_address.clone(),
-                    code_hash: context.code_hash,
-                    contract_alias: context.contract_alias.clone(),
-                    lease_expiry_ms: None,
-                    expected_previous_contract_address: context.previous_contract_address.clone(),
-                })],
-            )
+        let (name, expected) = match index.cmp(&chunks) {
+            Ordering::Less => upload_stage(context, &artifact, index, chunks)?,
+            Ordering::Equal => manifest_stage(actual, &verified, signer)?,
+            Ordering::Greater => commit_stage(context),
         };
         if step.name != name || actual.as_ref() != expected.as_slice() {
             return Err(eyre!(
@@ -206,4 +123,124 @@ fn validate_contents(record: &PlanRecord, reader: &DeploymentReadContext) -> Res
         }
     }
     Ok(())
+}
+
+/// Decode retained step `index` and check its authority, network, attribution, fee, and hash.
+fn decode_bound_step(
+    record: &PlanRecord,
+    metadata: &Metadata,
+    index: usize,
+    step: &TransactionRecord,
+) -> Result<SignedTransaction> {
+    let context = &record.preflight;
+    // Bounds precede Norito decoding; one transaction contains at most one 64 KiB chunk.
+    if step.norito_hex.len() > 2 * 1024 * 1024 {
+        return Err(eyre!(
+            "retained native transaction exceeds the fixed byte bound"
+        ));
+    }
+    let signed = decode_transaction(step)?;
+    let quote = &context.fee_quotes[index];
+    if signed.authority() != &context.authority
+        || signed.network_id() != Some(&context.network_id)
+        || signed.metadata() != metadata
+        || signed.payload().fee_payment != quote.intent
+        || !record
+            .requested_fee
+            .has_same_payer_and_gas_bound(&quote.intent)
+        || step.hash != context.transaction_hashes[index]
+    {
+        return Err(eyre!(
+            "retained transaction differs from the exact authority, network, attribution, fee, or hash binding"
+        ));
+    }
+    quote
+        .validate_for_draft(signed.payload())
+        .map_err(|error| eyre!(error))?;
+    Ok(signed)
+}
+
+/// Expected stage name and instructions for upload chunk `index` of `chunks`.
+fn upload_stage(
+    context: &DeploymentPreflight,
+    artifact: &[u8],
+    index: usize,
+    chunks: usize,
+) -> Result<(String, Vec<InstructionBox>)> {
+    let final_chunk = index + 1 == chunks;
+    // The retained artifact is bounded by `MAX_DEPLOYMENT_ARTIFACT_BYTES`, so both fit `u32`.
+    let chunk_index = u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
+    let chunk_count =
+        u32::try_from(chunks).wrap_err("contract upload chunk count does not fit u32")?;
+    let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
+        code_hash: context.code_hash,
+        total_size: artifact.len() as u64,
+        chunk_index,
+        chunk_count,
+        chunk: artifact[index * SMART_CONTRACT_CODE_CHUNK_BYTES
+            ..((index + 1) * SMART_CONTRACT_CODE_CHUNK_BYTES).min(artifact.len())]
+            .to_vec(),
+    })];
+    if final_chunk {
+        instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+            code_hash: context.code_hash,
+            total_size: artifact.len() as u64,
+            chunk_count,
+        }));
+    }
+    let name = if final_chunk {
+        "register_bytes_finalize".to_owned()
+    } else {
+        format!("register_bytes_chunk_{:04}_of_{chunks:04}", index + 1)
+    };
+    Ok((name, instructions))
+}
+
+/// Expected manifest-registration stage, bound to the verified artifact and retained signer.
+fn manifest_stage(
+    actual: &[InstructionBox],
+    verified: &ivm_artifact_admission::VerifiedContractArtifact,
+    signer: &iroha_crypto::PublicKey,
+) -> Result<(String, Vec<InstructionBox>)> {
+    if actual.len() != 1 {
+        return Err(eyre!(
+            "manifest stage must contain exactly one registration"
+        ));
+    }
+    let registration = actual[0]
+        .as_any()
+        .downcast_ref::<RegisterSmartContractCode>()
+        .ok_or_else(|| eyre!("manifest stage is not native registration"))?;
+    let mut manifest = registration.manifest.clone();
+    let provenance = manifest
+        .provenance
+        .take()
+        .ok_or_else(|| eyre!("retained manifest has no signed provenance"))?;
+    if manifest != verified.manifest || provenance.signer != *signer {
+        return Err(eyre!(
+            "retained manifest or signer differs from the verified artifact and retained authority"
+        ));
+    }
+    provenance
+        .signature
+        .verify(&provenance.signer, &manifest.signature_payload_bytes())?;
+    Ok((
+        "register_manifest".to_owned(),
+        vec![InstructionBox::from(registration.clone())],
+    ))
+}
+
+/// Expected atomic alias compare-and-swap deployment commit stage.
+fn commit_stage(context: &DeploymentPreflight) -> (String, Vec<InstructionBox>) {
+    (
+        "commit_deployment".to_owned(),
+        vec![InstructionBox::from(CommitContractDeployment {
+            expected_deploy_nonce: context.deploy_nonce,
+            contract_address: context.contract_address.clone(),
+            code_hash: context.code_hash,
+            contract_alias: context.contract_alias.clone(),
+            lease_expiry_ms: None,
+            expected_previous_contract_address: context.previous_contract_address.clone(),
+        })],
+    )
 }

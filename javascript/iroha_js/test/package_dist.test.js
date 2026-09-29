@@ -13,7 +13,6 @@ import * as packageTransactionExports from "../dist/transaction.js";
 import * as packageCryptoExports from "../dist/public/crypto.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
 import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
-import * as packageSccpExports from "../dist/sccp.js";
 import { _createCryptoApi } from "../dist/crypto.js";
 import { createNativeRuntime } from "../dist/nativeRuntime.js";
 import {
@@ -409,7 +408,6 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./normalizers",
     "./privacy-capabilities",
     "./race",
-    "./sccp",
     "./smart-contract-deployment",
     "./sorafs",
     "./sumeragi-typed",
@@ -486,92 +484,6 @@ test("package privacy capability policy is isolated behind its explicit subpath"
     Object.hasOwn(packageExports.ToriiBrowserClient.prototype, "getPrivacyCapabilitiesV1"),
     false,
   );
-});
-
-test("package SCCP exports expose the exact four-mainnet inventory", () => {
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(packageSccpExports)
-        .filter(([name, value]) => name.startsWith("SCCP_DOMAIN_") && Number.isInteger(value))
-        .sort(([left], [right]) => left.localeCompare(right)),
-    ),
-    {
-      SCCP_DOMAIN_BSC: 2,
-      SCCP_DOMAIN_ETH: 1,
-      SCCP_DOMAIN_SORA: 0,
-      SCCP_DOMAIN_TON: 4,
-      SCCP_DOMAIN_TRON: 5,
-    },
-  );
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(packageSccpExports)
-        .filter(([name, value]) => name.startsWith("SCCP_CODEC_") && Number.isInteger(value))
-        .sort(([left], [right]) => left.localeCompare(right)),
-    ),
-    {
-      SCCP_CODEC_CANONICAL_TEXT: 1,
-      SCCP_CODEC_EVM_ADDRESS20: 2,
-      SCCP_CODEC_TON_ACCOUNT36: 7,
-      SCCP_CODEC_TRON_ADDRESS21: 5,
-    },
-  );
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
-    "sora-taira",
-    "ethereum-mainnet",
-    "bsc-mainnet",
-    "tron-mainnet",
-    "ton-mainnet",
-  ]);
-  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["ton-mainnet"], {
-    profile: "ton-mainnet",
-    tag: 0x44,
-    domain: packageSccpExports.SCCP_DOMAIN_TON,
-    sora: false,
-    globalId: -239,
-  });
-  assert.deepEqual(packageSccpExports.SCCP_PAYLOAD_KINDS, ["transfer"]);
-  for (const name of [
-    "SCCP_DOMAIN_TON",
-    "SCCP_CODEC_TON_ACCOUNT36",
-    "SCCP_NETWORK_PROFILES",
-  ]) {
-    assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
-  }
-});
-
-test("package SCCP exports expose TON while rejecting diagnostic helper surfaces", () => {
-  for (const name of ["SCCP_DOMAIN_TON", "SCCP_CODEC_TON_ACCOUNT36"]) {
-    assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
-  }
-  const retiredNames = [
-    "sccpBuildTonMessageBundleSourceProofWithDeployment",
-    "sccpTonFixtureValidatorSetHash",
-    "SCCP_DOMAIN_SOL",
-    "SCCP_DOMAIN_SOLANA",
-    "SCCP_CODEC_SOLANA_PUBKEY32",
-    "SCCP_CODEC_SOLANA_BASE58",
-    "SCCP_SOLANA_TESTNET_GENESIS_HASH",
-    "deriveSccpSolanaDestinationHashesV1",
-    "deriveSccpSolanaNativeVerifierConfigHashV1",
-    "deriveSccpSolanaSourceIdentityHashesV1",
-    "SCCP_CODEC_SORA_ASSET_ID",
-    "normalizeSccpProofManifests",
-    "normalizeSccpSourceAdapterEngineDeployment",
-  ];
-  for (const [surface, exports] of [
-    ["root", packageExports],
-    ["./sccp", packageSccpExports],
-  ]) {
-    for (const name of retiredNames) {
-      assert.equal(
-        Object.prototype.hasOwnProperty.call(exports, name),
-        false,
-        `${surface} must not export retired ${name}`,
-      );
-    }
-  }
 });
 
 test("package Nexus browser export has an enforced browser-only dependency graph", async () => {

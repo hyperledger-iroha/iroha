@@ -28,6 +28,10 @@ pub(super) struct MaskingShape {
 }
 
 /// Explicit resource policy without any production default.
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive maximum, named like the crate's other `*Limits` policies"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MaskingLimits {
     /// Maximum exact trace coefficient extent.

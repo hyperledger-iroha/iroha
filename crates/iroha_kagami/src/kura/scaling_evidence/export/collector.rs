@@ -10,7 +10,7 @@ use crate::kura::scaling_evidence::lane_proof::{
 };
 use iroha_core::{
     query::native_context_archive::NativeContextArchive,
-    state::{AllocationBudget, NativeLaneStateProjectionV1},
+    state::{AllocationBudget, NativeExecutionProjectionV1},
 };
 use iroha_model_base::chain::ChainId;
 use std::num::NonZeroUsize;
@@ -179,7 +179,7 @@ pub(crate) fn collect_native_inputs(
             projection.as_slice().len(),
             limits.total_bytes,
         )?;
-        let state: NativeLaneStateProjectionV1 = canonical(projection.as_slice())?;
+        let state: NativeExecutionProjectionV1 = canonical(projection.as_slice())?;
         let mut frames = Vec::new();
         if let Some(section) = block.lane_merge() {
             let count = section.merges.iter().try_fold(0usize, |count, merge| {

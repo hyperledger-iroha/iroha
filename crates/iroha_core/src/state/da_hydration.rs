@@ -288,31 +288,12 @@ impl State {
             return Ok(hydrated);
         }
         let mut saw_da_commitments = false;
-        let hash_only_prefix = self.kura.hash_only_unavailable_prefix_len(replay_len);
-        if hash_only_prefix > 0 {
-            debug!(
-                hash_only_prefix,
-                replay_len,
-                "skipping hash-only hard-fork snapshot blocks while hydrating DA indexes"
-            );
-        }
-        for (idx, expected_hash) in committed_hash_prefix
-            .iter()
-            .enumerate()
-            .skip(hash_only_prefix)
-        {
+        for (idx, expected_hash) in committed_hash_prefix.iter().enumerate() {
             let height = idx + 1;
             let height_u64 = u64::try_from(height).expect("committed block height must fit u64");
             let height_u64 = NonZeroU64::new(height_u64).expect("block height is non-zero");
             let height_usize = NonZeroUsize::new(height).expect("block height is non-zero");
             let Some(block) = self.kura.get_block(height_usize) else {
-                if self.kura.is_hash_only_block_height(height_usize) {
-                    debug!(
-                        height,
-                        "skipping hash-only hard-fork snapshot block while hydrating DA indexes"
-                    );
-                    continue;
-                }
                 return Err(DaIndexHydrationError::MissingBlock { height: height_u64 });
             };
             let block_hash = block.hash();

@@ -17,7 +17,7 @@ pub(super) struct NetworkCommandArgs {
 #[derive(Subcommand, Debug)]
 enum NetworkCommand {
     /// Bind an exact network and make it the workspace default; store references to runtime files.
-    Configure(ConfigureArgs),
+    Configure(Box<ConfigureArgs>),
     /// Show the default and all configured network identities without loading a signer.
     List,
 }
@@ -374,29 +374,7 @@ fn configure(root: &Path, args: &ConfigureArgs, contract: Option<&str>) -> Comma
         .lock_exclusive(Path::new("Musubi.networks.lock"))
         .map_err(atomic_diagnostic)?;
     let mut document = read_bindings(root)?;
-    let retained_config = if args.wallet.is_none() && args.wallet_dir.is_none() {
-        document
-            .get("networks")
-            .and_then(toml::Value::as_table)
-            .and_then(|networks| networks.get(&args.name))
-            .and_then(toml::Value::as_table)
-            .and_then(|binding| binding.get("config"))
-            .and_then(toml::Value::as_str)
-            .map(|path| resolve_reference(root, Path::new(path)))
-    } else {
-        None
-    };
-    let config = if let Some(config) = &args.config {
-        absolute_reference(config)?
-    } else if let Some(config) = retained_config {
-        config
-    } else {
-        let store =
-            wallet::open_store(Some(&root.join("Musubi.toml")), args.wallet_dir.as_deref())?;
-        store
-            .config_path(args.wallet.as_deref().unwrap_or("default"))
-            .map_err(wallet::wallet_error)?
-    };
+    let config = configured_client_path(root, args, &document)?;
     let image = RegistryPublicConfigImageV1::load(Some(&config))
         .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
     let (network_id, profile) = image
@@ -474,6 +452,39 @@ fn configure(root: &Path, args: &ConfigureArgs, contract: Option<&str>) -> Comma
         message,
         data: selected.json(),
     })
+}
+
+/// Select the bound client file: an explicit `--config`, the network's retained reference when
+/// no wallet is requested, or the selected integrated wallet's client file.
+fn configured_client_path(
+    root: &Path,
+    args: &ConfigureArgs,
+    document: &toml::Table,
+) -> Result<PathBuf, Diagnostic> {
+    let retained_config = if args.wallet.is_none() && args.wallet_dir.is_none() {
+        document
+            .get("networks")
+            .and_then(toml::Value::as_table)
+            .and_then(|networks| networks.get(&args.name))
+            .and_then(toml::Value::as_table)
+            .and_then(|binding| binding.get("config"))
+            .and_then(toml::Value::as_str)
+            .map(|path| resolve_reference(root, Path::new(path)))
+    } else {
+        None
+    };
+    let config = if let Some(config) = &args.config {
+        absolute_reference(config)?
+    } else if let Some(config) = retained_config {
+        config
+    } else {
+        let store =
+            wallet::open_store(Some(&root.join("Musubi.toml")), args.wallet_dir.as_deref())?;
+        store
+            .config_path(args.wallet.as_deref().unwrap_or("default"))
+            .map_err(wallet::wallet_error)?
+    };
+    Ok(config)
 }
 
 fn encode_bindings(document: &toml::Table) -> Result<String, Diagnostic> {
@@ -847,7 +858,7 @@ mod tests {
         let workspace = contract_workspace(root.path());
         let path = public_config(root.path());
         let args = NetworkCommandArgs {
-            command: NetworkCommand::Configure(ConfigureArgs {
+            command: NetworkCommand::Configure(Box::new(ConfigureArgs {
                 selection: SelectionArgs::default(),
                 name: "taira".to_owned(),
                 config: Some(path.clone()),
@@ -858,7 +869,7 @@ mod tests {
                 fee_program_revision: None,
                 contract: Some("coffee-club".to_owned()),
                 alias: Some("coffee-club::universal".parse().expect("alias")),
-            }),
+            })),
         };
         run_network(Some(workspace.root_manifest_path()), &args)
             .expect("configure declared target");

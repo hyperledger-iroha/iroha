@@ -416,26 +416,23 @@ fn receipt_rejects_unlisted_scaffold_and_nonempty_initial_runtime() {
 }
 
 #[test]
-fn canonical_reader_paths_follow_chain_namespace_and_bounds() {
+fn canonical_reader_path_follow_chain_namespace_and_bounds() {
     let f = Fixture::new();
     for index in 0..4 {
         let path = f.root.join(format!("peer{index}.toml"));
         let text = Zeroizing::new(fs::read_to_string(&path).unwrap());
         let config = parse_localnet_peer_config(&text, Some(&path)).unwrap();
-        let (blocks, _) = canonical_reader_paths(&config).unwrap();
+        let blocks = canonical_reader_path(&config).unwrap();
         let root = config.kura.store_dir.value();
         assert!(Path::new(&blocks).starts_with(root));
-        assert!(Path::new(&merge).starts_with(root));
         assert_ne!(Path::new(&blocks), root);
-        assert_ne!(blocks, merge);
         assert_eq!(Path::new(&blocks), root.join("blocks/canonical"));
-        assert_eq!(Path::new(&merge), root.join("merge_ledger/canonical.log"));
         let mut altered = config.clone();
         altered.kura.store_dir = iroha_config::base::WithOrigin::inline(PathBuf::from("relative"));
-        assert!(canonical_reader_paths(&altered).is_err());
+        assert!(canonical_reader_path(&altered).is_err());
         altered.kura.store_dir =
             iroha_config::base::WithOrigin::inline(PathBuf::from(format!("/{}", "x".repeat(4096))));
-        assert!(canonical_reader_paths(&altered).is_err());
-        assert_eq!((blocks, merge), canonical_reader_paths(&config).unwrap());
+        assert!(canonical_reader_path(&altered).is_err());
+        assert_eq!(blocks, canonical_reader_path(&config).unwrap());
     }
 }

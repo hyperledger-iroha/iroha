@@ -929,9 +929,7 @@ pub mod oracle {
 pub mod kura {
     use crate::{
         kura::FsyncMode,
-        parameters::actual::{
-            KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy, KuraReplicaAdvertPolicy,
-        },
+        parameters::actual::{KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy},
     };
     use iroha_config_base::util::Bytes;
     use nonzero_ext::nonzero;
@@ -959,24 +957,6 @@ pub mod kura {
             max_bytes: MEMBERSHIP_STORAGE_MAX_BYTES,
             memory_bytes: MEMBERSHIP_STORAGE_MEMORY_BYTES,
         };
-    /// Number of recent lane-history entries retained alongside the block store.
-    pub const LANE_HISTORY_RETENTION: NonZeroUsize = nonzero!(512_usize);
-    /// Distinct remote peers that must advertise a canonical block before local body eviction.
-    pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
-    /// Number of authenticated historical advert keys retained immediately before the protected
-    /// in-memory block tail.
-    pub const REPLICA_ADVERT_EVICTABLE_WINDOW: NonZeroUsize = nonzero!(4_096_usize);
-    /// Default lifetime of one authenticated remote replica observation.
-    pub const REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
-    /// Default cadence for proactively refreshing selected-keeper replica adverts.
-    pub const REPLICA_ADVERT_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
-    /// Complete default authenticated replica-advert policy.
-    pub const REPLICA_ADVERT_POLICY: KuraReplicaAdvertPolicy = KuraReplicaAdvertPolicy {
-        eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
-        evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
-        ttl: REPLICA_ADVERT_TTL,
-        refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
-    };
     /// Maximum complete stored FASTPQ artifact bytes, matching the proof-sidecar default.
     pub const FASTPQ_ARTIFACT_MAX_BYTES: NonZeroUsize =
         nonzero!(super::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.0 as usize);
@@ -4136,229 +4116,13 @@ pub mod zk {
 }
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use iroha_config_base::util::Bytes;
     use iroha_crypto::Algorithm;
-    use iroha_data_model::{
-        block::consensus_v2::{
-            MAX_DA_ENCODED_PAYLOAD_BYTES, MAX_EXECUTED_BLOCK_WIRE_BYTES, MAX_VALIDATORS_PER_HEIGHT,
-        },
-        merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
-    };
-    use nonzero_ext::nonzero;
-    use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        time::Duration,
-    };
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.
     pub const ROUND_TIMEOUT_CADENCE_MULTIPLIER: u32 = 10;
-    /// Critical-message retransmission is one fifth of the derived view-zero deadline.
-    pub const RETRANSMIT_DIVISOR: u32 = 5;
-    /// Maximum transactions selected for one candidate block.
-    pub const BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
-    /// Maximum canonical block-body size in bytes.
-    pub const BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
-    /// Smallest per-height durable-body budget that can hold one maximum
-    /// checksummed frame plus conservative envelope headroom.
-    pub const BODY_STORE_MIN_BYTES_PER_HEIGHT: u64 =
-        MAX_EXECUTED_BLOCK_WIRE_BYTES + MAX_DA_ENCODED_PAYLOAD_BYTES + 1024 * 1024;
-    /// Aggregate final body-frame bytes retained for one active height.
-    pub const BODY_STORE_MAX_BYTES_PER_HEIGHT: Bytes = Bytes(1024 * 1024 * 1024);
-    /// Proposal queue scan budget relative to the transaction limit.
-    pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
-    /// Serialized reducer command FIFO capacity.
-    pub const QUEUE_COMMAND_CAPACITY: NonZeroUsize = nonzero!(1024_usize);
-    /// Maximum simultaneously materialized authenticated non-validator fair-ingress lanes.
-    pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
-    /// Certified-body and block-sync outer-ingress message capacity.
-    ///
-    /// Every admitted validator owns five protected positions (general source,
-    /// ordinary progress, certified fence escape, timeout vote, and transport completion), while
-    /// each configured authenticated non-validator source owns three positions.
-    /// Deriving the default from the protocol roster ceiling keeps the queue
-    /// count allocation representable for every legal height context; byte
-    /// quotas remain explicitly roster-scaled by deployment generators.
-    pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
-        5 * MAX_VALIDATORS_PER_HEIGHT + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
-    );
-    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
-    ///
-    /// One isolated quota is reserved for every protocol-permitted validator
-    /// and every configured authenticated non-validator lane. This keeps the
-    /// default safe when a signed NPoS election expands to its default ceiling.
-    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(1122_usize * 1024 * 1024);
-    /// Per-ingress-source canonical outer-ingress wire-byte partition. The
-    /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
-    /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
-    /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
-    /// protocol floors when deployments choose a smaller global block body.
-    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(34_usize * 1024 * 1024);
-    /// Fixed wire-envelope headroom beyond body or chunk-hash bytes.
-    pub const BODY_ENVELOPE_HEADROOM_BYTES: usize = 64 * 1024;
-    /// Maximum chunk count in the recommended signed DA layout.
-    pub const RECOMMENDED_DA_MAX_CHUNK_COUNT: usize = 1024;
-    /// Canonical `Vec<Hash>` bytes for the recommended signed DA layout.
-    ///
-    /// Bare Norito encodes the fixed sequence count in eight bytes and each
-    /// hash as a one-byte compact element length plus 32 payload bytes. Height
-    /// activation separately derives the exact requirement from the frozen
-    /// layout and fails closed if it exceeds the configured partition.
-    pub const TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES: usize =
-        8 + RECOMMENDED_DA_MAX_CHUNK_COUNT * 33;
-    /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
-    pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
-    /// Per-validator source bytes isolated for a TC, CommitQC, or CommitQC response.
-    ///
-    /// The maximum 31-validator certificate forms fit this bound. Height
-    /// activation derives and checks their exact canonical wire requirement.
-    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 1024 * 1024;
-    /// Payload-chunk ingress and orphan-buffer capacity.
-    pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
-    /// Reconstructed bodies waiting for reducer delivery.
-    pub const QUEUE_READY_BODY_CAPACITY: NonZeroUsize = nonzero!(128_usize);
-    /// Smallest reducer FIFO admitting normal, progress, and completion regions.
-    pub const MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
-    /// Divisor used to reserve trusted completion slots from the reducer command FIFO.
-    pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
-    /// Maximum effects one serialized reducer input can emit.
-    ///
-    /// This is shared with the executable refinement gate so configuration
-    /// validation reserves the exact same producer batch used by production.
-    pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
-    /// Number of separately reserved certified Serve/Producer phase families.
-    pub const V2_CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
-    /// Maximum height-local lifecycle records addressable by the canonical slot index.
-    pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
-    /// Number of independently reserved exact-output progress classes.
-    ///
-    /// Safety, lane-progress, and bulk-progress each require one ownership
-    /// unit for every source in a maximum fanout.
-    pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
-    /// Ready-body byte budget relative to the per-body bound.
-    pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
-    /// Authenticated merge-QC identities retained by one height-local adapter.
-    pub const V2_AUTHENTICATED_MERGE_QC_CAPACITY: NonZeroUsize = nonzero!(64_usize);
-    /// Protocol implementation ceiling for authenticated merge-QC cache entries.
-    pub const V2_AUTHENTICATED_MERGE_QC_CAPACITY_MAX: usize = 4_096;
-    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
-    pub const V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES: NonZeroUsize = nonzero!(1024_usize * 1024);
-    /// Absolute implementation ceiling for merge-leader frame headroom.
-    pub const V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
-    pub const V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES: NonZeroUsize = nonzero!(1024_usize * 1024);
-    /// Absolute implementation ceiling for autonomous carrier headroom.
-    pub const V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Cadence for retrying durable autonomous queue reservation.
-    pub const V2_AUTONOMOUS_PRODUCER_RECHECK: Duration = Duration::from_millis(100);
-    /// Longest admitted autonomous producer recheck cadence.
-    pub const V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS: u64 = 60_000;
-    /// Consecutive identical recovery waits before the stage is reported stuck.
-    pub const V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS: NonZeroU32 = nonzero!(32_u32);
-    /// Attempts spent in each exponential historical-recovery retry tier.
-    pub const V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS: NonZeroU32 = nonzero!(4_u32);
-    /// Highest exponential historical-recovery retry tier.
-    pub const V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER: NonZeroU32 = nonzero!(6_u32);
-    /// Absolute implementation ceiling for attempt-count recovery thresholds.
-    pub const V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX: u32 = 1_048_576;
-    /// Highest retry tier representable by the `u32` exponential multiplier.
-    pub const V2_HISTORICAL_RECOVERY_RETRY_TIER_MAX: u32 = 31;
-    /// Sidecar chunks transferred during one bounded adapter service turn.
-    pub const V2_SIDECAR_SERVICE_BURST: NonZeroUsize = nonzero!(8_usize);
-    /// Absolute implementation ceiling for one sidecar service burst.
-    pub const V2_SIDECAR_SERVICE_BURST_MAX: usize = 4_096;
-    /// Concurrent certified merge-sidecar assemblies retained globally.
-    pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY: NonZeroUsize = nonzero!(32_usize);
-    /// Hard ceiling for concurrent certified merge-sidecar assemblies.
-    pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX: usize = 4_096;
-    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
-    pub const V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER: NonZeroUsize = nonzero!(4_usize);
-    /// Hard ceiling for per-peer certified merge-sidecar assemblies.
-    pub const V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER_MAX: usize = 4_096;
-    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
-    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES: NonZeroUsize =
-        nonzero!(64_usize * 1024 * 1024);
-    /// Hard ceiling for globally reserved incomplete sidecar bytes.
-    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MAX: usize = 1024 * 1024 * 1024;
-    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
-    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER: NonZeroUsize =
-        nonzero!(32_usize * 1024 * 1024);
-    /// Hard ceiling for per-peer reserved incomplete sidecar bytes.
-    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER_MAX: usize = 1024 * 1024 * 1024;
-    /// Minimum byte corridor retaining one decided and one ordinary full entry.
-    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN: usize = 2 * MAX_MERGE_LEDGER_ENTRY_BYTES;
-    /// Deferred global blocks waiting for exact certified sidecars.
-    pub const V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY: NonZeroUsize = nonzero!(128_usize);
-    /// Hard ceiling for deferred global blocks.
-    pub const V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY_MAX: usize = 65_536;
-    /// Maximum future carrier-height distance admitted for deferred sidecars.
-    pub const V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE: NonZeroU64 = nonzero!(64_u64);
-    /// Hard ceiling for future carrier-height distance.
-    pub const V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX: u64 = 1_048_576;
-    /// Base timeout before retrying an incomplete certified sidecar request.
-    pub const V2_MERGE_SIDECAR_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-    /// Longest admitted certified sidecar request timeout.
-    pub const V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS: u64 = 300_000;
-    /// Concurrent response sessions retained for one authenticated source.
-    pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE: NonZeroUsize = nonzero!(2_usize);
-    /// Hard ceiling for response sessions retained per source.
-    pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE_MAX: usize = 4_096;
-    /// Response bytes retained for one authenticated source.
-    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE: NonZeroUsize =
-        nonzero!(16_usize * 1024 * 1024);
-    /// Hard ceiling for retained response bytes per source.
-    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MAX: usize = 1024 * 1024 * 1024;
-    /// Minimum response-byte corridor able to serve one protocol-sized entry.
-    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
-    /// Idempotency request gates retained for one authenticated source.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize = nonzero!(4_usize);
-    /// Hard ceiling for request gates retained per source.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX: usize = 4_096;
-    /// Certified merge entries retained in Kura before canonical carrier commitment.
-    pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
-    /// Hard ceiling for pending certified merge entries retained by Kura.
-    pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX: usize = 65_536;
-    /// Aggregate bytes retained by pending Kura control-sidecar stores.
-    pub const V2_PENDING_CONTROL_SIDECAR_BYTES: NonZeroUsize = nonzero!(256_usize * 1024 * 1024);
-    /// Hard ceiling for the shared pending Kura control-sidecar byte budget.
-    pub const V2_PENDING_CONTROL_SIDECAR_BYTES_MAX: usize = 2 * 1024 * 1024 * 1024;
-    /// Minimum shared budget able to retain one protocol-sized certified merge entry.
-    pub const V2_PENDING_CONTROL_SIDECAR_BYTES_MIN: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
-    /// Durable merge-signing decisions retained before committed-frontier GC.
-    pub const V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
-    /// Hard ceiling for durable merge-signing decisions.
-    pub const V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX: usize = 1_048_576;
-    /// Framing, high-water, and atomic-replacement headroom retained beside one decision.
-    pub const V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES: usize = 64 * 1024;
-    /// Runtime byte ceiling for one canonical merge-signing decision.
-    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES: NonZeroUsize =
-        nonzero!(16_usize * 1024 * 1024 + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES);
-    /// Hard ceiling for one merge-signing decision artifact.
-    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Minimum record ceiling covering one maximum entry plus framing.
-    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN: usize =
-        MAX_MERGE_LEDGER_ENTRY_BYTES + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
-    /// Aggregate bytes retained in the merge-signing journal.
-    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES: NonZeroUsize = nonzero!(256_usize * 1024 * 1024);
-    /// Hard ceiling for the aggregate merge-signing journal.
-    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX: usize = 2 * 1024 * 1024 * 1024;
-    /// Minimum aggregate budget covering one maximum record and atomic metadata.
-    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MIN: usize =
-        V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
-    /// Durable Native AMX signing decisions retained at one height.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY: NonZeroUsize = nonzero!(524_288_usize);
-    /// Absolute implementation ceiling for durable Native AMX signing decisions.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX: usize = 1_048_576;
-    /// Runtime byte ceiling for one canonical Native AMX signing record.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024);
-    /// Absolute implementation ceiling for one canonical Native AMX signing record.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_MAX: usize = 16 * 1024;
-    /// Runtime byte ceiling for the Native AMX signing chain anchor.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES: NonZeroUsize = nonzero!(4_usize * 1024);
-    /// Absolute implementation ceiling for the Native AMX signing chain anchor.
-    pub const V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_MAX: usize = 4 * 1024;
     /// Minimum lead time between publishing and activating a consensus key.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
     /// Dual-key overlap window during rotation.
@@ -4948,7 +4712,7 @@ pub mod sccp {
         pub const POLL_INTERVAL_MS: u64 = 60_000;
         /// Timeout of one RPC request before failing over to the next endpoint.
         pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
-        /// Largest encoded advance the keeper builds.
+        /// Largest encoded advance the keeper submits.
         pub const MAX_ADVANCE_BYTES: usize = 262_144;
         /// Longest accepted endpoint list per chain.
         pub const MAX_ENDPOINTS_PER_LIST: usize = 64;

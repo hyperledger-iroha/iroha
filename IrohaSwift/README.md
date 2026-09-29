@@ -1905,7 +1905,7 @@ symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
-`getSumeragiStatus()` returns the sole native protocol-8 status model. Its
+`getSumeragiStatus()` returns the sole native protocol-1 status model. Its
 current-round, memory and same-applied-cut beacon readiness observations do not
 confer finality authority. The JSON decoder requires every nullable field,
 rejects duplicate/unknown fields and signed or non-integral number tokens, and

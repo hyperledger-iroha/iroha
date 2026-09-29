@@ -23,6 +23,7 @@ use iroha_core::{
     queue::Queue as CoreQueue,
     smartcontracts::Execute,
     state::{State, StateReadOnly, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, PreparedTestChainConfig, TestChainConfig},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{
@@ -89,7 +90,7 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, UNIX_EPOCH},
 };
 use tempfile::{TempDir, tempdir};
@@ -1612,12 +1613,18 @@ struct ToriiHarness {
     #[allow(dead_code)]
     kiso_child: Child,
     state: Arc<State>,
+    native_history: Option<Mutex<Option<PinReadbackHistory>>>,
     queue: Arc<CoreQueue>,
     network_id: NetworkId,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
     // Keeps Torii persistence (including the exclusive advert replay lock)
     // isolated for the lifetime of each parallel test harness.
     _torii_data_dir: TempDir,
+}
+// Query fixtures retain their actual original genesis or live certified chain.
+enum PinReadbackHistory {
+    Prepared(PreparedTestChainConfig),
+    Running(CertifiedTestChain),
 }
 impl ToriiHarness {
     async fn shutdown(self) {
@@ -2049,8 +2056,26 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
+    build_torii_harness_with_history(cfg, None)
+}
+
+fn build_certified_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
+    let mut config = TestChainConfig::new(World::default(), 1_000);
+    config.chain_id = cfg.common.chain.clone();
+    let original = CertifiedTestChain::prepare(config).expect("original discovery genesis");
+    build_torii_harness_with_history(cfg, Some(original))
+}
+
+fn build_torii_harness_with_history(
+    cfg: &actual_cfg::Root,
+    original: Option<PreparedTestChainConfig>,
+) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
+    if let Some(original) = &original {
+        cfg.genesis.expected_hash = original.genesis.expected_hash();
+        cfg.genesis.public_key = original.genesis.public_key().clone();
+    }
     isolate_discovery_persistence(&mut cfg.torii, &torii_data_dir);
     let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
         let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
@@ -2097,17 +2122,26 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         transport
     });
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
     let chain_id = cfg.common.chain.clone();
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        World::default(),
-        kura.clone(),
-        query.clone(),
-        chain_id.clone(),
-        network_id,
-    ));
+    let (state, kura, native_history) = if let Some(original) = original {
+        (
+            Arc::clone(&original.state),
+            Arc::clone(&original.kura),
+            Some(Mutex::new(Some(PinReadbackHistory::Prepared(original)))),
+        )
+    } else {
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            network_id,
+        ));
+        (state, kura, None)
+    };
+    let query = state.query_handle.clone();
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(CoreQueue::from_config(queue_cfg, queue_events));
@@ -2160,6 +2194,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         app,
         kiso_child,
         state,
+        native_history,
         queue,
         network_id,
         alias_policy,
@@ -2409,8 +2444,9 @@ fn create_manifest_readback_setup_with_seed(
         .insert(manifest_digest, record);
     tx.apply();
     block
-        .commit_empty_block_for_testing()
-        .expect("commit typed pin readback fixture");
+        .commit_world_overlay_for_testing()
+        .expect("seed typed pin query world");
+    commit_pin_readback_fixture(harness);
     *next_height = height + 1;
     ManifestSetup {
         manifest_digest,
@@ -3343,29 +3379,36 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
     harness.shutdown().await;
 }
-// These fixtures use an explicit synthetic empty committed block after world-only
-// alias/metadata setup. The helper binds the readback to a real State block index;
-// it does not qualify consensus or sign an alias governance decision.
+// World-only query setup is captured by an actual original native publication.
+// Successors contain the test chain's signed clock work; no empty block is fabricated.
 fn commit_pin_readback_fixture(harness: &ToriiHarness) {
-    let (height, previous) = {
-        let view = harness.state.view();
-        (
-            u64::try_from(view.block_hashes().len()).expect("fixture height fits u64") + 1,
-            view.latest_block_hash(),
-        )
+    let mut owner = harness
+        .native_history
+        .as_ref()
+        .expect("certified query harness")
+        .lock()
+        .expect("native query history lock");
+    let chain = match owner.take().expect("original native history") {
+        PinReadbackHistory::Prepared(original) => CertifiedTestChain::from_prepared(original)
+            .expect("actual genesis executes and publishes"),
+        PinReadbackHistory::Running(mut chain) => {
+            let next_time = u64::try_from(
+                chain
+                    .state()
+                    .view()
+                    .latest_block()
+                    .unwrap()
+                    .header()
+                    .creation_time()
+                    .as_millis(),
+            )
+            .unwrap()
+                + 1_000;
+            chain.commit_at(next_time, Vec::new());
+            chain
+        }
     };
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero fixture height"),
-        previous,
-        None,
-        height,
-        0,
-    );
-    harness
-        .state
-        .block(header)
-        .commit_empty_block_for_testing()
-        .expect("commit fixture world at a new finalized readback cursor");
+    *owner = Some(PinReadbackHistory::Running(chain));
 }
 async fn assert_finalized_pin_readback(
     harness: &ToriiHarness,
@@ -3695,7 +3738,7 @@ async fn sorafs_pin_manifest_rejects_noncanonical_digest_and_cursor() {
 }
 #[tokio::test]
 async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor() {
-    let harness = build_torii_harness(&iroha_torii::test_utils::mk_minimal_root_cfg());
+    let harness = build_certified_torii_harness(&iroha_torii::test_utils::mk_minimal_root_cfg());
     let path = format!("/v1/sorafs/pin/{}", "ab".repeat(32));
     assert_eq!(
         pin_readback_status(&harness, &path).await,
@@ -3743,7 +3786,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
@@ -3877,7 +3920,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
@@ -3944,7 +3987,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
@@ -4006,7 +4049,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let hard_expiry = harness.alias_policy.hard_expiry_secs();
@@ -4065,7 +4108,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_project
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let now = unix_now_secs();
@@ -4137,7 +4180,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let base = create_manifest_readback_setup(&harness, &mut next_height);
     let successor_timestamp = unix_now_secs().saturating_sub(30);
@@ -4236,7 +4279,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-    let harness = build_torii_harness(&cfg);
+    let harness = build_certified_torii_harness(&cfg);
     let mut next_height = 1;
     let manifest =
         create_manifest_readback_setup_with_seed(&harness, &mut next_height, 0xC1, None, None);

@@ -28,7 +28,7 @@ pub use attestation::{
 
 /// The wire-format version of [`WireMessage`] for the P2P handshake (§3.5). Every incompatible
 /// change replaces this layout directly; no alternate decoder is accepted.
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Vote / certificate kind (§3.3).
 #[derive(
@@ -137,6 +137,105 @@ pub struct Proposal {
 }
 
 impl Proposal {
+    /// Check the signed justification shape before invoking its caller's authenticated verifier.
+    pub(crate) fn justify_defect(
+        &self,
+        height: u64,
+        mut verify: impl FnMut(&TimeoutCert) -> bool,
+    ) -> Option<Defect> {
+        match (self.view, &self.justify) {
+            (0, None) => None,
+            (0, Some(_)) => Some(Defect::UnexpectedJustify),
+            (_, None) => Some(Defect::MissingJustify),
+            (view, Some(tc)) => {
+                (tc.height != height || Some(tc.view) != view.checked_sub(1) || !verify(tc))
+                    .then_some(Defect::InvalidJustify)
+            }
+        }
+    }
+
+    /// Check the signed parent link; cached and independent verification share its shape rules.
+    pub(crate) fn parent_defect(
+        &self,
+        genesis_parent: bool,
+        height: u64,
+        parent: (Hash32, Hash32),
+        mut verify: impl FnMut(&Qc) -> bool,
+    ) -> Option<Defect> {
+        if genesis_parent {
+            return self
+                .parent_qc
+                .is_some()
+                .then_some(Defect::UnexpectedParentQc);
+        }
+        let Some(qc) = &self.parent_qc else {
+            return Some(Defect::MissingParentQc);
+        };
+        (qc.kind != VoteKind::Commit || qc.height != height || qc.value() != parent || !verify(qc))
+            .then_some(Defect::InvalidParentQc)
+    }
+
+    /// Signed header checks shared by intake and independent evidence attribution. Only the
+    /// mutation harness disables individual checks; evidence always enables every rule.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn header_defect(
+        &self,
+        instance: Hash32,
+        height: u64,
+        parent: (Hash32, Hash32),
+        config: &crate::types::HeightConfig,
+        topology: &crate::topology::Topology,
+        bh: Hash32,
+        enabled: impl Fn(Defect) -> bool,
+    ) -> Option<Defect> {
+        let p = self;
+        let header = &p.header;
+        let checks = [
+            (header.instance != instance, Defect::HeaderInstance),
+            (header.height != height, Defect::HeaderHeight),
+            (header.epoch != config.epoch.id, Defect::EpochContext),
+            (
+                height == config.epoch.last_height && !header.attest,
+                Defect::BoundaryAttestation,
+            ),
+            (header.parent_hash != parent.0, Defect::ParentHash),
+            (header.parent_result != parent.1, Defect::ParentResult),
+            (
+                header.payload_len > config.params.max_block_bytes,
+                Defect::PayloadTooLarge,
+            ),
+            (header.payload_len == 0, Defect::EmptyPayload),
+        ];
+        if let Some((_, defect)) = checks
+            .into_iter()
+            .find(|(failed, defect)| *failed && enabled(*defect))
+        {
+            return Some(defect);
+        }
+        let w = p.view;
+        let certified = p
+            .justify
+            .as_ref()
+            .and_then(|tc| tc.high_pqc.as_ref())
+            .filter(|_| w > 0 && enabled(Defect::TcRule));
+        if let Some(q) = certified {
+            // Re-proposal: exactly Q's block; Q's honest signers checked the rest.
+            return (bh != q.block_hash).then_some(Defect::TcRule);
+        }
+        let fresh = [
+            (header.origin_view != w, Defect::OriginView),
+            (header.proposer != topology.leader(w), Defect::Proposer),
+            (
+                header.skipped_leaders != topology.skipped_leader_keys(&config.committee, w),
+                Defect::SkippedLeaders,
+            ),
+        ];
+        fresh
+            .into_iter()
+            .find(|(failed, defect)| *failed && enabled(*defect))
+            .map(|(_, defect)| defect)
+    }
+
     /// `block_hash(self.header)`.
     pub fn block_hash(&self, crypto: &dyn Crypto) -> Hash32 {
         self.header.hash(crypto)
@@ -198,43 +297,51 @@ pub struct Vote {
     pub attestation: Option<CommitAttestation>,
 }
 
-impl Vote {
-    /// The signing preimage of this vote.
-    pub fn preimage(&self) -> Vec<u8> {
-        preimage::vote_preimage(
-            self.kind,
-            &self.instance,
-            &self.epoch,
-            self.height,
-            self.view,
-            &self.block_hash,
-            &self.result,
-            self.attest,
-        )
-    }
+// Votes and their QCs sign exactly the same content. Keep their preimage and application
+// statement construction in one implementation so no field can diverge between the two.
+macro_rules! vote_content {
+    ($($subject:ty => $needs_attestation:ident);* $(;)?) => { $(
+        impl $subject {
+            /// The signing preimage of this signed subject.
+            pub fn preimage(&self) -> Vec<u8> {
+                preimage::vote_preimage(
+                    self.kind,
+                    &self.instance,
+                    &self.epoch,
+                    self.height,
+                    self.view,
+                    &self.block_hash,
+                    &self.result,
+                    self.attest,
+                )
+            }
 
-    /// The voted value `(block_hash, result)`.
-    pub fn value(&self) -> (Hash32, Hash32) {
-        (self.block_hash, self.result)
-    }
+            /// The signed value `(block_hash, result)`.
+            pub fn value(&self) -> (Hash32, Hash32) {
+                (self.block_hash, self.result)
+            }
 
-    /// Whether this vote must carry an attestation: a Commit vote of a flagged block (§3.7).
-    pub fn needs_attestation(&self) -> bool {
-        self.kind == VoteKind::Commit && self.attest
-    }
+            /// Whether this signed subject must carry an attestation: a Commit vote of a flagged block (§3.7).
+            pub fn $needs_attestation(&self) -> bool {
+                self.kind == VoteKind::Commit && self.attest
+            }
 
-    /// The commit statement `att_preimage(height, block_hash, result)` this vote's attestation
-    /// covers (§3.7).
-    pub fn statement(&self) -> Vec<u8> {
-        preimage::att_preimage(
-            &self.instance,
-            &self.epoch,
-            self.height,
-            &self.block_hash,
-            &self.result,
-        )
-    }
+            /// The commit statement `att_preimage(height, block_hash, result)` this signed subject's attestation
+            /// covers (§3.7).
+            pub fn statement(&self) -> Vec<u8> {
+                preimage::att_preimage(
+                    &self.instance,
+                    &self.epoch,
+                    self.height,
+                    &self.block_hash,
+                    &self.result,
+                )
+            }
+
+        }
+    )*};
 }
+vote_content! { Vote => needs_attestation; Qc => needs_attestations; }
 
 /// A timeout vote (§3.3).
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -316,50 +423,14 @@ impl Qc {
         &mut self,
         budget: &mv::allocation::AllocationBudget,
     ) -> Result<(), WitnessAdmissionError> {
-        if let Some(witness) = &mut self.attestation_witness {
-            witness.admit(budget)?;
-        }
-        Ok(())
-    }
-
-    /// The vote preimage every signer signed.
-    pub fn preimage(&self) -> Vec<u8> {
-        preimage::vote_preimage(
-            self.kind,
-            &self.instance,
-            &self.epoch,
-            self.height,
-            self.view,
-            &self.block_hash,
-            &self.result,
-            self.attest,
-        )
-    }
-
-    /// Whether this certificate must carry attestations: a `CommitQC` of a flagged block (§3.7).
-    pub fn needs_attestations(&self) -> bool {
-        self.kind == VoteKind::Commit && self.attest
-    }
-
-    /// The commit statement `att_preimage(height, block_hash, result)` its attestations cover.
-    pub fn statement(&self) -> Vec<u8> {
-        preimage::att_preimage(
-            &self.instance,
-            &self.epoch,
-            self.height,
-            &self.block_hash,
-            &self.result,
-        )
+        self.attestation_witness
+            .as_mut()
+            .map_or(Ok(()), |witness| witness.admit(budget))
     }
 
     /// `qc_digest(self)` (§3.3).
     pub fn digest(&self, crypto: &dyn Crypto) -> Hash32 {
         preimage::qc_digest(crypto, self)
-    }
-
-    /// The certified value `(block_hash, result)`.
-    pub fn value(&self) -> (Hash32, Hash32) {
-        (self.block_hash, self.result)
     }
 }
 
@@ -540,7 +611,52 @@ pub enum WireMessage {
     ApplicationControl(ApplicationControl),
 }
 
+// The exact same graph is borrowed for custody inspection and borrowed mutably for
+// admission. Generating only the borrow variation keeps newly added carriers in both paths.
+macro_rules! witness_iterators {
+    ($($name:ident, $iter:ident, $borrow:ident, [$($mut:tt)?]);* $(;)?) => { $(
+        fn $name(&$($mut)? self) -> impl Iterator<Item = &$($mut)? ResultWitness> {
+            fn qc(value: &$($mut)? Qc) -> Option<&$($mut)? ResultWitness> {
+                value.attestation_witness.$borrow()
+            }
+            fn tc(value: &$($mut)? TimeoutCert) -> Option<&$($mut)? ResultWitness> {
+                value.high_pqc.$borrow().and_then(qc)
+            }
+            let mut fixed = [None, None, None];
+            let mut entries: &$($mut)? [SyncEntry] = &$($mut)? [];
+            match self {
+                Self::Vote(value) => {
+                    fixed[0] = value.attestation.$borrow().map(|a| &$($mut)? a.witness);
+                }
+                Self::Qc(value) => fixed[0] = qc(value),
+                Self::Proposal(value) => {
+                    fixed[0] = value.parent_qc.$borrow().and_then(qc);
+                    fixed[1] = value.justify.$borrow().and_then(tc);
+                }
+                Self::Timeout(value) => fixed[0] = value.high_pqc.$borrow().and_then(qc),
+                Self::Tc(value) => fixed[0] = tc(value),
+                Self::Status(value) => {
+                    fixed[0] = value.committed_qc.$borrow().and_then(qc);
+                    fixed[1] = value.high_pqc.$borrow().and_then(qc);
+                    fixed[2] = value.high_tc.$borrow().and_then(tc);
+                }
+                Self::SyncResponse(value) => entries = &$($mut)? value.blocks,
+                Self::SyncRequest(_) | Self::BlockRequest(_) | Self::BlockResponse(_)
+                | Self::ApplicationControl(_) => {}
+            }
+            fixed.into_iter().flatten().chain(
+                entries.$iter().filter_map(|entry| qc(&$($mut)? entry.commit_qc))
+            )
+        }
+    )*};
+}
+
 impl WireMessage {
+    witness_iterators! {
+        witnesses, iter, as_ref, [];
+        witnesses_mut, iter_mut, as_mut, [mut];
+    }
+
     /// Whether every present result witness already belongs to this exact original pool.
     ///
     /// This performs no allocation and does not validate signatures or require a witness
@@ -550,36 +666,7 @@ impl WireMessage {
         &self,
         budget: &mv::allocation::AllocationBudget,
     ) -> bool {
-        let qc = |value: &Qc| {
-            value
-                .attestation_witness
-                .as_ref()
-                .is_none_or(|w| w.admitted_to(budget))
-        };
-        let optional = |value: &Option<Qc>| value.as_ref().is_none_or(qc);
-        let tc = |value: &TimeoutCert| optional(&value.high_pqc);
-        match self {
-            Self::Vote(value) => value
-                .attestation
-                .as_ref()
-                .is_none_or(|a| a.witness.admitted_to(budget)),
-            Self::Qc(value) => qc(value),
-            Self::Proposal(value) => {
-                optional(&value.parent_qc) && value.justify.as_ref().is_none_or(tc)
-            }
-            Self::Timeout(value) => optional(&value.high_pqc),
-            Self::Tc(value) => tc(value),
-            Self::Status(value) => {
-                optional(&value.committed_qc)
-                    && optional(&value.high_pqc)
-                    && value.high_tc.as_ref().is_none_or(tc)
-            }
-            Self::SyncResponse(value) => value.blocks.iter().all(|entry| qc(&entry.commit_qc)),
-            Self::SyncRequest(_)
-            | Self::BlockRequest(_)
-            | Self::BlockResponse(_)
-            | Self::ApplicationControl(_) => true,
-        }
+        self.witnesses().all(|witness| witness.admitted_to(budget))
     }
 
     /// Admit every result witness before a production message is retained by consensus.
@@ -593,54 +680,8 @@ impl WireMessage {
         &mut self,
         budget: &mv::allocation::AllocationBudget,
     ) -> Result<(), WitnessAdmissionError> {
-        fn optional_qc(
-            value: &mut Option<Qc>,
-            budget: &mv::allocation::AllocationBudget,
-        ) -> Result<(), WitnessAdmissionError> {
-            if let Some(value) = value {
-                value.admit_attestation_witness(budget)?;
-            }
-            Ok(())
-        }
-        fn tc(
-            value: &mut TimeoutCert,
-            budget: &mv::allocation::AllocationBudget,
-        ) -> Result<(), WitnessAdmissionError> {
-            optional_qc(&mut value.high_pqc, budget)
-        }
-        match self {
-            Self::Vote(vote) => {
-                if let Some(share) = &mut vote.attestation {
-                    share.witness.admit(budget)?;
-                }
-            }
-            Self::Qc(value) => value.admit_attestation_witness(budget)?,
-            Self::Proposal(value) => {
-                optional_qc(&mut value.parent_qc, budget)?;
-                if let Some(value) = &mut value.justify {
-                    tc(value, budget)?;
-                }
-            }
-            Self::Timeout(value) => optional_qc(&mut value.high_pqc, budget)?,
-            Self::Tc(value) => tc(value, budget)?,
-            Self::Status(value) => {
-                optional_qc(&mut value.committed_qc, budget)?;
-                optional_qc(&mut value.high_pqc, budget)?;
-                if let Some(value) = &mut value.high_tc {
-                    tc(value, budget)?;
-                }
-            }
-            Self::SyncResponse(value) => {
-                for entry in &mut value.blocks {
-                    entry.commit_qc.admit_attestation_witness(budget)?;
-                }
-            }
-            Self::SyncRequest(_)
-            | Self::BlockRequest(_)
-            | Self::BlockResponse(_)
-            | Self::ApplicationControl(_) => {}
-        }
-        Ok(())
+        self.witnesses_mut()
+            .try_for_each(|witness| witness.admit(budget))
     }
 
     /// The instance id the message claims.
@@ -717,16 +758,7 @@ impl WireMessage {
     /// # Errors
     /// Oversized frame, malformed or non-canonical encoding, or a violated limit.
     pub fn decode(bytes: &[u8], max_frame: usize) -> Result<Self, CodecError> {
-        if bytes.len() > max_frame {
-            return Err(CodecError::TooLarge {
-                len: bytes.len(),
-                max: max_frame,
-            });
-        }
-        let message: Self =
-            norito::decode_canonical(bytes).map_err(|e| CodecError::Norito(e.to_string()))?;
-        message.check_limits()?;
-        Ok(message)
+        decode_bounded(bytes, max_frame, Self::check_limits)
     }
 
     /// Structural size limits that do not depend on a committee (keys, bitmaps, TC entries,
@@ -737,10 +769,8 @@ impl WireMessage {
     pub fn check_limits(&self) -> Result<(), CodecError> {
         match self {
             Self::Proposal(p) => check_proposal(p),
-            Self::Vote(x) => {
-                check_attestation(x.attestation.as_ref().map(|a| a.signature.as_slice()))
-            }
-            Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
+            // Signature and witness lengths are invariant in their opaque bounded owners.
+            Self::Vote(_) | Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
             Self::Qc(c) => check_qc(c),
             Self::Timeout(t) => check_opt_qc(t.high_pqc.as_ref()),
             Self::Tc(t) => check_tc(t),
@@ -773,21 +803,33 @@ impl WireMessage {
     }
 }
 
+/// One bounded canonical decode path for wire messages and independent evidence frames.
+fn decode_bounded<T>(
+    bytes: &[u8],
+    max: usize,
+    check: fn(&T) -> Result<(), CodecError>,
+) -> Result<T, CodecError>
+where
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
+    if bytes.len() > max {
+        return Err(CodecError::TooLarge {
+            len: bytes.len(),
+            max,
+        });
+    }
+    let value =
+        norito::decode_canonical(bytes).map_err(|error| CodecError::Norito(error.to_string()))?;
+    check(&value)?;
+    Ok(value)
+}
+
 pub(crate) fn check_qc(qc: &Qc) -> Result<(), CodecError> {
     if qc.signers.as_bytes().len() > MAX_BITMAP_BYTES {
         return Err(CodecError::Limit("bitmap"));
     }
     if qc.attestations.len() > MAX_COMMITTEE_SIZE {
         return Err(CodecError::Limit("attestations"));
-    }
-    qc.attestations
-        .iter()
-        .try_for_each(|a| check_attestation(Some(a.as_slice())))
-}
-
-fn check_attestation(attestation: Option<&[u8]>) -> Result<(), CodecError> {
-    if attestation.is_some_and(|a| a.len() > MAX_ATTESTATION_SIGNATURE_BYTES) {
-        return Err(CodecError::Limit("attestation"));
     }
     Ok(())
 }
@@ -864,13 +906,11 @@ fn wire_schema_hash() -> [u8; 16] {
 /// that are not such a frame. Never panics; for every frame that
 /// [`WireMessage::decode`] accepts it equals [`WireMessage::traffic_class`].
 pub fn traffic_class_of_frame(frame: &[u8]) -> Option<TrafficClass> {
-    let header = frame.get(..FRAME_HEADER)?;
-    let length = u64::from_le_bytes(header.get(23..31)?.try_into().ok()?);
-    if header.get(..6)? != b"NRT0\0\0"
-        || header.get(6..22)? != wire_schema_hash()
-        || header.get(22) != Some(&0)
-        || header.get(39) != Some(&COMPACT_LEN)
-        || usize::try_from(length).ok()? != frame.len() - FRAME_HEADER
+    let header = norito::core::Header::read(frame.get(..FRAME_HEADER)?).ok()?;
+    if header.schema != wire_schema_hash()
+        || header.compression != norito::core::Compression::None
+        || header.flags != COMPACT_LEN
+        || usize::try_from(header.length).ok()? != frame.len() - FRAME_HEADER
     {
         return None;
     }
@@ -990,6 +1030,7 @@ pub enum Defect {
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
+#[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {
     /// Same `(I, h, v)`, both signed by `L(h, v)`, different `(bh, ad)`.
     ProposalEquivocation(Box<Proposal>, Box<Proposal>),
@@ -1038,16 +1079,7 @@ impl Evidence {
     /// Rejects oversized, malformed, noncanonical, truncated or suffixed frames and invalid
     /// bounded proof structure before any application consults a claimed signer.
     pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        if bytes.len() > MAX_EVIDENCE_FRAME_BYTES {
-            return Err(CodecError::TooLarge {
-                len: bytes.len(),
-                max: MAX_EVIDENCE_FRAME_BYTES,
-            });
-        }
-        let value: Self = norito::decode_canonical(bytes)
-            .map_err(|error| CodecError::Norito(error.to_string()))?;
-        value.check_limits()?;
-        Ok(value)
+        decode_bounded(bytes, MAX_EVIDENCE_FRAME_BYTES, Self::check_limits)
     }
 
     /// Check native artifact bounds without accepting their claimed authority context.
@@ -1068,20 +1100,7 @@ impl Evidence {
                 proposal(first)?;
                 proposal(second)
             }
-            Self::VoteEquivocation(first, second) => {
-                check_attestation(
-                    first
-                        .attestation
-                        .as_ref()
-                        .map(|value| value.signature.as_slice()),
-                )?;
-                check_attestation(
-                    second
-                        .attestation
-                        .as_ref()
-                        .map(|value| value.signature.as_slice()),
-                )
-            }
+            Self::VoteEquivocation(_, _) => Ok(()),
             Self::TimeoutEquivocation(first, second) => {
                 check_opt_qc(first.high_pqc.as_ref())?;
                 check_opt_qc(second.high_pqc.as_ref())
@@ -1496,7 +1515,7 @@ mod tests {
             signers: Bitmap::from_bytes(vec![0; MAX_BITMAP_BYTES + 1]),
             ..sample_qc(VoteKind::Commit, 0)
         };
-        let cases = [
+        let cases = vec![
             WireMessage::Qc(big_bitmap.clone()),
             WireMessage::Timeout(Box::new(TimeoutVote {
                 high_pqc: Some(big_bitmap.clone()),
@@ -1714,7 +1733,7 @@ mod tests {
                 "{name}: raw frame"
             );
         }
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 1);
         assert!(TrafficClass::Control < TrafficClass::Proposal);
         assert!(TrafficClass::Proposal < TrafficClass::Bulk);
         assert_eq!(class_of_tag(11, false), None);
@@ -1769,7 +1788,17 @@ mod tests {
                 }],
             }),
         ];
-        for mut message in messages {
+        for (mut message, expected) in messages.into_iter().zip([1, 1, 2, 1, 1, 3, 1]) {
+            let read: Vec<_> = message.witnesses().map(core::ptr::from_ref).collect();
+            let write: Vec<_> = message
+                .witnesses_mut()
+                .map(|value| core::ptr::from_ref(&*value))
+                .collect();
+            assert_eq!(read.len(), expected, "all witness carriers visited");
+            assert_eq!(
+                read, write,
+                "mutable admission visits the same original owners"
+            );
             let before = message.encode().unwrap();
             let budget = AllocationBudget::new(4096);
             assert!(!message.attestation_witnesses_admitted_to(&budget));

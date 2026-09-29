@@ -109,7 +109,7 @@ mod tests {
                         .hash_parent(
                             oracle,
                             1,
-                            index as u32,
+                            u32::try_from(index).unwrap(),
                             digest(left).unwrap(),
                             digest(right).unwrap(),
                         )

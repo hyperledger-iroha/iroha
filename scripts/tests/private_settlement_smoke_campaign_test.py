@@ -167,8 +167,8 @@ def finality(network: object, identities: list[str], *, height: int = 306) -> di
           "phase": {"phase": "commit", "details": None}, "subject": subject,
           "execution_commitment": {"synthetic": True}, "signers": [0, 1, 2], "aggregate_signature": [1] * 96}
     header = {name: None for name in ("prev_block_hash", "merkle_root", "result_merkle_root", "da_proof_policies_hash",
-        "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash", "sccp_commitment_root",
-        "confidential_features", "execution_context_hash")}
+        "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash", "confidential_features",
+        "execution_context_hash")}
     header.update(height=height, creation_time_ms=123456, view_change_index=0)
     return {"version": 2, "block_header": header, "finality_artifact": {"format_version": 4, "protocol_version": 4,
         "height": height, "height_context": context, "subject": subject, "block_hash": block_hash,
@@ -609,7 +609,7 @@ class DriverBoundaryTests(unittest.TestCase):
         for flag in ("--locked", "--offline", "--release", "--no-run"):
             self.assertIn(flag, integration)
         validator = commands["build-validator"]
-        self.assertEqual(validator[validator.index("--features") + 1], "test-network-message-control")
+        self.assertEqual(validator[validator.index("--features") + 1], "test-network-private-settlement-route-control")
 
     def test_exact_terminal_and_discovery_reject_zero_ignored_skipped_or_duplicate(self) -> None:
         good = "running 1 test\nAPS smoke completed: synthetic fixture only\n" + (

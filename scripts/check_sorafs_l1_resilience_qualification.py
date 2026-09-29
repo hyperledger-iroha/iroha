@@ -29,7 +29,7 @@ from check_sorafs_production_readiness import (  # noqa: E402
     is_production_ready_environment,
     require_production_deployment_id_value,
 )
-from sccp_release_common import verify_ed25519  # noqa: E402
+from release_evidence_crypto import verify_ed25519  # noqa: E402
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,

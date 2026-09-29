@@ -1,4 +1,4 @@
-// SCCP v1 TON constants (specs/sccp.md revision 3, §3 and §5.3).
+// SCCP v1 TON constants (specs/sccp.md revision 4, §3 and §5.3).
 //
 // Every value here is pinned by a golden test in
 // `tests/unit/sccp-vectors.test.tolk`.

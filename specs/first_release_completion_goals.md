@@ -75,9 +75,8 @@ locates the actual slow predicates, records two unsuccessful exact rewrites and
 leaves the canonical model unchanged.
 The [retained-source and qualification record](../docs/history/2026-09-21/retained-source-and-qualification-integration.md)
 records first-mask ownership tests, fixture migration and published-schema work.
-The [SCCP Java consumer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md)
-tracks assertion migration, the executed native evidence-validator join, and
-the package producer with final candidate execution still outstanding.
+The [Java-source package producer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md#actual-package-producer-and-bounded-evidence-ownership)
+tracks the package producer with final candidate execution still outstanding.
 The [prepared insertion and stream record](../docs/history/2026-09-21/prepared-insertion-and-s-stream-integration.md)
 records bounded component ownership changes and their remaining qualification.
 The [current checkout record](../docs/history/2026-09-21/current-optimizations-qualification.md)

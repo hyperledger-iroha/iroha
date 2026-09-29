@@ -109,7 +109,7 @@ where
 
 impl<T: SerializePayload> SerializePayload for ConstVec<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        ncore::write_element_sequence::<T, _>(writer, self.0.iter(), ncore::max_archive_len())
+        ncore::write_element_sequence::<T, _>(writer, self.0.iter())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -117,26 +117,14 @@ impl<T: SerializePayload> SerializePayload for ConstVec<T> {
         let len = slice.len();
         let seq_hdr = ncore::seq_len_prefix_len(len);
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        if !ncore::packed_seq_enabled_for_flags(flags) {
-            let mut total = seq_hdr;
-            for item in slice {
-                let elem_len = item
-                    .encoded_len_exact()
-                    .or_else(|| item.encoded_len_hint())?;
-                let len_bytes = ncore::len_prefix_len_with_flags(elem_len, flags);
-                total = total.checked_add(len_bytes)?;
-                total = total.checked_add(elem_len)?;
-            }
-            return Some(total);
-        }
         let mut total = seq_hdr;
-        let entries = len.checked_add(1)?;
-        total = total.checked_add(8usize.checked_mul(entries)?)?;
         for item in slice {
-            let elem_hint = item
+            let elem_len = item
                 .encoded_len_exact()
                 .or_else(|| item.encoded_len_hint())?;
-            total = total.checked_add(elem_hint)?;
+            let len_bytes = ncore::len_prefix_len_with_flags(elem_len, flags);
+            total = total.checked_add(len_bytes)?;
+            total = total.checked_add(elem_len)?;
         }
         Some(total)
     }
@@ -145,26 +133,13 @@ impl<T: SerializePayload> SerializePayload for ConstVec<T> {
         let len = slice.len();
         let seq_hdr = ncore::seq_len_prefix_len(len);
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        if !ncore::packed_seq_enabled_for_flags(flags) {
-            let mut total = seq_hdr;
-            for item in slice {
-                let elem_exact = item.encoded_len_exact()?;
-                let len_bytes = ncore::len_prefix_len_with_flags(elem_exact, flags);
-                total = total.checked_add(len_bytes)?;
-                total = total.checked_add(elem_exact)?;
-            }
-            return Some(total);
-        }
         let mut total = seq_hdr;
-        let entries = len.checked_add(1)?;
-        let offsets_bytes = entries.checked_mul(8)?;
-        total = total.checked_add(offsets_bytes)?;
-        let mut data_total = 0usize;
         for item in slice {
             let elem_exact = item.encoded_len_exact()?;
-            data_total = data_total.checked_add(elem_exact)?;
+            let len_bytes = ncore::len_prefix_len_with_flags(elem_exact, flags);
+            total = total.checked_add(len_bytes)?;
+            total = total.checked_add(elem_exact)?;
         }
-        total = total.checked_add(data_total)?;
         Some(total)
     }
 }

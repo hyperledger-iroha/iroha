@@ -535,6 +535,7 @@ mod tests {
             signers: Bitmap::from_indices(1, [0]).unwrap(),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
             attestations: Vec::new(),
+            attestation_witness: None,
         }
     }
 

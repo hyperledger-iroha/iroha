@@ -742,10 +742,10 @@ fn qpcs_binding_uses_complete_canonical_public_evaluations_and_shared_frame() {
     })
     .expect("complete verified evaluation projection");
     let mut records = Vec::new();
-    for ordinal in 0..200 {
+    for (ordinal, position) in observed.iter().enumerate().take(200) {
         let limb = ordinal / 5;
         let repetition = ordinal % 5;
-        assert_eq!(observed[ordinal], (limb, repetition));
+        assert_eq!(*position, (limb, repetition));
         let (product, quotient) = values(limb, repetition);
         records.extend_from_slice(&[limb as u8, repetition as u8]);
         for value in [ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb], product, quotient] {

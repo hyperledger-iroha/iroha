@@ -59,7 +59,7 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::id::{AssetDefinitionId, AssetId},
-    block::{BlockHeader, consensus::LaneBlockCommitment},
+    block::BlockHeader,
     confidential::{ConfidentialMemoEnvelopeV1, ConfidentialMemoSuiteV1},
     da::manifest::DaManifestV1,
     domain::Domain,
@@ -69,8 +69,8 @@ use iroha_data_model::{
     },
     isi::{InstructionBox, Register, Transfer},
     nexus::{
-        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, LaneRelayEnvelope, TouchManifest,
-        compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, TouchManifest,
+        compute_descriptor_binding, validate_descriptor,
     },
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -158,7 +158,6 @@ use napi_derive::napi;
 #[cfg(test)]
 use norito::core as norito_core;
 use norito::{
-    codec::DecodeAll,
     decode_from_bytes,
     json::{self, Map, Value},
 };
@@ -1051,47 +1050,15 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-fn algorithm_alias_key(value: &str) -> Option<String> {
-    (!value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
-    .then(|| {
-        value
-            .bytes()
-            .filter(|byte| !matches!(*byte, b'-' | b'_'))
-            .map(|byte| char::from(byte.to_ascii_lowercase()))
-            .collect()
-    })
-}
+/// Parse an exact canonical `iroha_crypto` algorithm label; `None` selects Ed25519.
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
-    let value = value.unwrap_or("ed25519");
-    let key = algorithm_alias_key(value).ok_or_else(|| {
+    let value = value.unwrap_or(iroha_crypto::ED_25519);
+    value.parse::<Algorithm>().map_err(|_| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported crypto algorithm: {value}"),
         )
-    })?;
-    let algorithm = match key.as_str() {
-        "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
-        "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
-        "mldsa" | "mldsa65" => Algorithm::MlDsa,
-        "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
-        "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
-        "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
-        "gost256b" | "gost34102012256paramsetb" => Algorithm::Gost3410_2012_256ParamSetB,
-        "gost256c" | "gost34102012256paramsetc" => Algorithm::Gost3410_2012_256ParamSetC,
-        "gost512a" | "gost34102012512paramseta" => Algorithm::Gost3410_2012_512ParamSetA,
-        "gost512b" | "gost34102012512paramsetb" => Algorithm::Gost3410_2012_512ParamSetB,
-        "sm2" => Algorithm::Sm2,
-        _ => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("unsupported crypto algorithm: {value}"),
-            ));
-        }
-    };
-    Ok(algorithm)
+    })
 }
 fn checked_public_key_payload(public_key: &PublicKey) -> napi::Result<&[u8]> {
     public_key
@@ -1117,14 +1084,6 @@ pub fn supported_crypto_algorithms_js() -> Vec<String> {
         .iter()
         .map(|algorithm| algorithm.as_static_str().to_owned())
         .collect()
-}
-/// Normalize a user-facing algorithm label to the canonical Rust `iroha_crypto` label.
-#[napi(js_name = "normalizeCryptoAlgorithm")]
-#[allow(clippy::needless_pass_by_value)]
-pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<String> {
-    Ok(parse_crypto_algorithm(algorithm.as_deref())?
-        .as_static_str()
-        .to_owned())
 }
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
 ///
@@ -1631,115 +1590,6 @@ pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
         })
         .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
-}
-/// Relay envelope fixture used in Nexus cross-lane verification tests.
-#[napi(object)]
-pub struct JsLaneRelaySample {
-    /// Norito-encoded relay envelope bytes.
-    pub valid: Buffer,
-    /// Same envelope with a tampered checksum byte.
-    pub tampered: Buffer,
-}
-/// Return a deterministic relay envelope fixture and a tampered copy for testing.
-#[napi]
-pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
-    let lane_id = LaneId::new(3);
-    let dataspace_id = DataSpaceId::new(2);
-    let settlement = LaneBlockCommitment {
-        block_height: 1,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 0,
-        total_local_amount: "0".parse().expect("valid settlement quantity"),
-        total_xor_due: "0".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let mut header = BlockHeader::new(
-        NonZeroU64::new(1).expect("nonzero height"),
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    );
-    let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
-    header.set_da_commitments_hash(Some(da_hash));
-    let envelope = LaneRelayEnvelope::new(header, Some(da_hash), settlement, 64)
-        .map_err(norito_to_napi)?
-        .with_lane_block_descriptor_hash(Some(Hash::new(
-            b"iroha-js-lane-relay-fixture-descriptor-v1",
-        )))
-        .with_manifest_root(Some([0x42; 32]));
-    let valid =
-        Buffer::from(norito::to_bytes(&envelope).map_err(|err| norito_to_napi(format!("{err}")))?);
-    let mut tampered = valid.to_vec();
-    if let Some(last) = tampered.last_mut() {
-        *last ^= 0xFF;
-    }
-    Ok(JsLaneRelaySample {
-        valid,
-        tampered: Buffer::from(tampered),
-    })
-}
-/// Verify the Norito-encoded relay envelope bytes returned by `/v1/sumeragi/status`.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn verify_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<()> {
-    let slice = envelope.to_vec();
-    let mut view = slice.as_slice();
-    let parsed = LaneRelayEnvelope::decode_all(&mut view).or_else(|err| {
-        decode_from_bytes::<LaneRelayEnvelope>(slice.as_ref())
-            .map_err(|_| norito_to_napi(format!("{err}")))
-    })?;
-    parsed.verify().map_err(norito_to_napi)
-}
-/// Decode relay envelope bytes into a JSON string for inspection.
-/// Domainless account archives render under the caller's required network prefix.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn decode_lane_relay_envelope(
-    envelope: Uint8Array,
-    network_prefix: f64,
-) -> napi::Result<String> {
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    let slice = envelope.to_vec();
-    let mut view = slice.as_slice();
-    let parsed = LaneRelayEnvelope::decode_all(&mut view).or_else(|err| {
-        decode_from_bytes::<LaneRelayEnvelope>(slice.as_ref())
-            .map_err(|_| norito_to_napi(format!("{err}")))
-    })?;
-    json::to_json_pretty(&parsed).map_err(norito_to_napi)
-}
-/// Verify a relay envelope provided as a JSON string.
-/// Account literals must match the caller's required network prefix.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
-pub fn verify_lane_relay_envelope_json(
-    envelope_json: String,
-    network_prefix: f64,
-) -> napi::Result<()> {
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    let parsed: LaneRelayEnvelope = json::from_json(&envelope_json).map_err(norito_to_napi)?;
-    parsed.verify().map_err(norito_to_napi)
-}
-/// Compute the settlement hash for a JSON `LaneBlockCommitment`.
-/// Account literals must match the caller's required network prefix.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
-pub fn lane_settlement_hash(settlement_json: String, network_prefix: f64) -> napi::Result<String> {
-    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
-    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
-    let commitment: LaneBlockCommitment =
-        json::from_json(&settlement_json).map_err(norito_to_napi)?;
-    let hash = compute_settlement_hash(&commitment).map_err(norito_to_napi)?;
-    Ok(hex::encode_upper(hash.as_ref()))
 }
 /// Touch manifest output returned to JavaScript callers.
 #[napi(object)]
@@ -7954,65 +7804,48 @@ mod tests {
         assert!(error.reason.contains("not a Hijiri quote response"));
     }
     #[test]
-    fn crypto_algorithm_parser_accepts_supported_aliases() {
+    fn crypto_algorithm_parser_accepts_exact_canonical_labels() {
         assert_eq!(
             parse_crypto_algorithm(None).expect("default crypto algorithm"),
             Algorithm::Ed25519
         );
-        for (label, expected) in [
-            ("ed25519", Algorithm::Ed25519),
-            ("ed-25519", Algorithm::Ed25519),
-            ("SECP_256K1", Algorithm::Secp256k1),
-            ("mldsa", Algorithm::MlDsa),
-            ("ML-DSA-65", Algorithm::MlDsa),
-            ("ML_DSA_65", Algorithm::MlDsa),
-            ("ML_DSA-65", Algorithm::MlDsa),
-            ("BLS-NORMAL", Algorithm::BlsNormal),
-            ("BLS_SMALL", Algorithm::BlsSmall),
-            (
-                "GOST-3410-2012-256-PARAMSETA",
-                Algorithm::Gost3410_2012_256ParamSetA,
-            ),
-            (
-                "GOST_3410_2012_512_PARAMSETB",
-                Algorithm::Gost3410_2012_512ParamSetB,
-            ),
-            ("sm2", Algorithm::Sm2),
-        ] {
+        for expected in SUPPORTED_CRYPTO_ALGORITHMS {
+            let label = expected.as_static_str();
             assert_eq!(
-                parse_crypto_algorithm(Some(label)).expect("supported crypto algorithm alias"),
-                expected,
+                parse_crypto_algorithm(Some(label)).expect("canonical crypto algorithm label"),
+                *expected,
                 "{label}"
             );
         }
     }
     #[test]
-    fn crypto_algorithm_parser_rejects_invalid_alias_characters_and_suites() {
+    fn crypto_algorithm_parser_rejects_aliases_and_noncanonical_spellings() {
         for label in [
             "",
-            " mldsa",
-            "mldsa ",
-            "ML DSA 65",
-            "\tML-DSA-65",
-            "ML-DSA-65\n",
-            "ML.DSA.65",
-            "ML/DSA/65",
-            "ML@DSA@65",
-            "ML#DSA#65",
-            "MLKDSA65",
-            "ed－25519",
-            "MLDSA44",
-            "MLDSA87",
+            "ed",
+            "eddsa",
+            "ed-25519",
+            "ED25519",
+            "secp",
+            "SECP_256K1",
+            "mldsa",
+            "ML-DSA",
+            "ML-DSA-65",
+            "mldsa65",
+            " ml-dsa",
+            "ml-dsa ",
+            "BLS-NORMAL",
+            "bls12381g1",
+            "blssmall",
+            "gost256a",
+            "GOST-3410-2012-256-PARAMSETA",
+            "SM2",
             "ML-DSA-44",
-            "ML_DSA_87",
-            "ML-DSA-4-4",
-            "ML-DSA-４４",
-            "ML-DSA-８７",
-            "ML－DSA-65",
+            "ml\u{ff0d}dsa",
         ] {
             assert!(
                 parse_crypto_algorithm(Some(label)).is_err(),
-                "invalid crypto algorithm alias {label:?} must fail"
+                "noncanonical crypto algorithm label {label:?} must fail"
             );
         }
     }
@@ -9294,17 +9127,6 @@ seiyaku Privacy {
             Value::String(s) => s,
             other => panic!("expected hash literal string, got {other:?}"),
         }
-    }
-    #[test]
-    fn lane_relay_envelope_sample_uses_checked_validator_generation() {
-        let sample =
-            lane_relay_envelope_sample().expect("checked validator generation for relay sample");
-        assert!(!sample.valid.is_empty());
-        assert!(!sample.tampered.is_empty());
-        let mut valid = sample.valid.as_ref();
-        let envelope =
-            LaneRelayEnvelope::decode_all(&mut valid).expect("decode canonical relay sample");
-        envelope.verify().expect("verify canonical relay sample");
     }
     #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
@@ -11980,22 +11802,6 @@ seiyaku Privacy {
     }
     // Validation-fee wire, fingerprint, and rejection cases live in one bounded fragment.
     include!("validation_fee_tests.rs");
-    #[test]
-    fn retired_sccp_route_manifest_instructions_are_rejected() {
-        for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
-            let value = json::Value::Object(json::Map::from_iter([(
-                retired.to_owned(),
-                json::Value::Object(json::Map::new()),
-            )]));
-            let error = value_to_instruction(value)
-                .expect_err("retired SCCP route-manifest instruction must not decode");
-            assert!(
-                error.reason.contains("unsupported instruction"),
-                "unexpected rejection for {retired}: {}",
-                error.reason
-            );
-        }
-    }
     #[test]
     fn retired_sns_mutation_instructions_are_rejected() {
         for retired in [

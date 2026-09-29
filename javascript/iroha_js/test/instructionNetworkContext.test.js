@@ -11,7 +11,6 @@ import { NetworkId } from "../src/networkId.js";
 import { _createTransactionApi } from "../src/transaction.js";
 import { createValidationFeeConsensusApi } from "../src/validationFeeConsensus.js";
 import { createValidationFeeHijiriQuoteApi } from "../src/validationFeeHijiriQuote.js";
-import { decodeLaneRelayEnvelope, laneSettlementHash, verifyLaneRelayEnvelopeJson, verifyLaneRelayEnvelopes } from "../src/nexus.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 
@@ -135,15 +134,7 @@ test("fee verification binds every projection to the selected prefix before ente
   }
 });
 
-test("relay projections require explicit context even for empty batches", () => {
-  for (const prefix of [undefined, null, "369", 369n, -1, 65536, 0.5, NaN, Infinity]) {
-    assert.throws(() => decodeLaneRelayEnvelope(Buffer.of(1), prefix), /networkPrefix/);
-    assert.throws(() => laneSettlementHash({}, prefix), /networkPrefix/);
-    assert.throws(() => verifyLaneRelayEnvelopeJson({}, prefix), /networkPrefix/);
-    assert.throws(() => verifyLaneRelayEnvelopes([], prefix), /networkPrefix/);
-  }
-  verifyLaneRelayEnvelopes([], 369);
-});
+
 
 test("client contexts are caller-selected and missing codec context fails before network I/O", async () => {
   const networkId = NetworkId.fromBytes(Buffer.alloc(32, 1));

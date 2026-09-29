@@ -58,7 +58,6 @@ use crate::{
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
-    queue::Queue,
     state::{State, StateReadOnly, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
@@ -101,6 +100,9 @@ pub struct TestChainConfig {
     pub world: World,
     /// The genesis key: its account authorizes every genesis transaction.
     pub genesis_key: KeyPair,
+    /// Optional original BLS-normal committee custody, ordered canonically before signing genesis.
+    /// The signed genesis validator rules still reject invalid committee sizes or keys.
+    pub validator_keys: Option<Vec<KeyPair>>,
     /// Instructions of the genesis's ordinary transaction.
     pub genesis_instructions: Vec<InstructionBox>,
     /// Explicit parameters carried by the authoritative signed genesis snapshot.
@@ -111,6 +113,16 @@ pub struct TestChainConfig {
     pub genesis_time_ms: u64,
     /// Original execution configuration, fixed before signed genesis policies are derived.
     pub pipeline: iroha_config::parameters::actual::Pipeline,
+    /// Optional physical/routing and fee configuration installed before deriving signed genesis policies.
+    pub nexus: Option<iroha_config::parameters::actual::Nexus>,
+    /// Optional proof-verification configuration installed before deriving signed genesis policies.
+    pub zk: Option<iroha_config::parameters::actual::Zk>,
+    /// Optional governance policy installed before deriving signed genesis execution policies.
+    pub governance: Option<iroha_config::parameters::actual::Governance>,
+    /// Signature algorithms admitted by the original signed genesis configuration.
+    pub crypto: Option<iroha_config::parameters::actual::Crypto>,
+    /// Fraud admission configuration fixed before signed genesis execution.
+    pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// The node's committed lane blocks, which the chain's blocks merge.
     pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
@@ -135,11 +147,17 @@ impl TestChainConfig {
             chain_id: ChainId::from("sumeragi-certified-test-chain"),
             world,
             genesis_key: KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519),
+            validator_keys: None,
             genesis_instructions: Vec::new(),
             genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
             pipeline: iroha_config::parameters::actual::Pipeline::default(),
+            nexus: None,
+            zk: None,
+            governance: None,
+            crypto: None,
+            fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring::default(),
             lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         }
     }
@@ -219,7 +237,6 @@ pub struct CertifiedTestChain {
     instance: Hash32,
     /// Height, core block hash and `R` of the tip.
     tip: (u64, Hash32, Hash32),
-    router: Queue,
     clock: KeyPair,
     pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
@@ -284,11 +301,17 @@ impl CertifiedTestChain {
             chain_id,
             mut world,
             genesis_key,
+            validator_keys,
             genesis_instructions,
             genesis_parameters,
             consensus_mode,
             genesis_time_ms,
             pipeline,
+            nexus,
+            zk,
+            governance,
+            crypto,
+            fraud_monitoring,
             lane_blocks,
         } = config;
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
@@ -307,8 +330,18 @@ impl CertifiedTestChain {
                 world.accounts.insert(id, value);
             }
         }
-        let keys = fixture_keys();
-        let validators = fixture_validators();
+        let mut keys = validator_keys.unwrap_or_else(fixture_keys);
+        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let validators = keys
+            .iter()
+            .map(|key| {
+                (
+                    PeerId::new(key.public_key().clone()),
+                    bls_normal_pop_prove(key.private_key())
+                        .expect("fixture committee has checked BLS custody"),
+                )
+            })
+            .collect::<Vec<_>>();
         let (genesis, manifest) = match build_genesis(
             &chain_id,
             &genesis_key,
@@ -345,6 +378,11 @@ impl CertifiedTestChain {
             consensus_mode,
             genesis_time_ms,
             &pipeline,
+            &fraud_monitoring,
+            nexus.as_ref(),
+            zk.as_ref(),
+            governance.as_ref(),
+            crypto.as_ref(),
         )?;
         let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &genesis.encode_wire().expect("fixture genesis framing"),
@@ -543,10 +581,6 @@ impl CertifiedTestChain {
                 publisher,
             )
             .expect("attach original fixture custody");
-        let router = Queue::from_config(
-            iroha_config::parameters::actual::Queue::default(),
-            tokio::sync::broadcast::channel(16).0,
-        );
         Ok(Self {
             state,
             attestor,
@@ -563,11 +597,55 @@ impl CertifiedTestChain {
             crypto,
             instance,
             tip: (GENESIS_HEIGHT, tip.block_hash, tip.result),
-            router,
             clock,
             pasta_seeds,
             lane_blocks,
         })
+    }
+
+    /// Replay the exact certified suffix of another chain through startup's native executor.
+    /// Both chains must have executed the same original genesis. Certificates and result
+    /// preimages are independently verified before copying their original durable frames;
+    /// witness admission uses this State's own finite pool.
+    ///
+    /// # Errors
+    /// Foreign genesis/prefix, invalid original certificate, custody failure, or a replay result
+    /// that differs from the certified execution. No replacement certificate is produced.
+    pub fn replay_from(&mut self, source: &Self) -> Result<(), String> {
+        if self.network_id() != source.network_id()
+            || self.state.chain_id_ref() != source.state.chain_id_ref()
+        {
+            return Err("native replay requires the same original signed genesis".into());
+        }
+        let view = source.state.view();
+        let certified = super::certified_chain::CertifiedChain::new(&view)
+            .map_err(|error| error.to_string())?;
+        let prefix = certified
+            .certified(self.height())
+            .map_err(|error| error.to_string())?;
+        if prefix.committed().core_hash() != self.tip.1 || prefix.committed().result() != self.tip.2
+        {
+            return Err("native replay prefix differs from the original applied State".into());
+        }
+        for height in self.height() + 1..=source.height() {
+            let original = certified
+                .certified(height)
+                .map_err(|error| error.to_string())?;
+            self.kura
+                .store_block(Arc::clone(original.committed().block()))
+                .map_err(|error| error.to_string())?;
+            let entry = self
+                .blocks
+                .entry(height)
+                .ok_or_else(|| format!("original replay frame unavailable at {height}"))?;
+            self.executor.replay(&entry.block, &entry.commit_qc)?;
+            self.tip = (
+                height,
+                original.committed().core_hash(),
+                original.committed().result(),
+            );
+        }
+        Ok(())
     }
 
     /// Drain the events actually delivered by native publication, preserving their order.
@@ -921,6 +999,63 @@ impl CertifiedTestChain {
             "the fixture predicts the canonical block time"
         );
         proposal
+    }
+
+    /// Assemble original external or sealed work using this chain's authenticated successor
+    /// schedule and the production entrypoint admission and payload owners.
+    ///
+    /// # Panics
+    /// The input is empty, fails original admission, or cannot be assembled.
+    pub fn proposal_entrypoints(
+        &self,
+        entrypoints: Vec<iroha_data_model::transaction::TransactionEntrypoint>,
+    ) -> SignedBlock {
+        assert!(
+            !entrypoints.is_empty(),
+            "native proposals require original work"
+        );
+        let view = self.state.view();
+        let parent = view.latest_block().expect("original parent");
+        let schedule = view
+            .world()
+            .consensus_schedule()
+            .ready(self.height() + 1)
+            .expect("authenticated successor schedule");
+        let accepted = entrypoints
+            .into_iter()
+            .map(|entrypoint| {
+                AcceptedTransaction::accept_entrypoint(
+                    entrypoint,
+                    &self.network_id(),
+                    view.world().parameters().sumeragi().max_clock_drift(),
+                    view.world().parameters().transaction(),
+                    &self.state.crypto(),
+                )
+                .expect("original entrypoint admission")
+            })
+            .collect::<Vec<_>>();
+        payload::assemble(
+            &self.state,
+            Assembly {
+                parent: &parent,
+                view: 0,
+                cadence: Duration::from_millis(schedule.params.block_time_ms),
+            },
+            &accepted,
+        )
+        .expect("original entrypoint assembly")
+    }
+
+    /// Execute and publish original entrypoints with an exact native quorum and no caller outputs.
+    ///
+    /// # Panics
+    /// See [`Self::proposal_entrypoints`] and [`Self::commit_proposal`].
+    pub fn commit_entrypoints(
+        &mut self,
+        entrypoints: Vec<iroha_data_model::transaction::TransactionEntrypoint>,
+    ) -> CommittedBlock {
+        let proposal = self.proposal_entrypoints(entrypoints);
+        self.commit_proposal(proposal, Signers::Quorum, Default::default())
     }
 
     /// Execute, certify, publish and apply one original resultless proposal through the same
@@ -1309,6 +1444,24 @@ impl PendingTestExecution<'_> {
             .inspect_pending(self.block_hash, inspect)
     }
 
+    /// Inspect the immutable original certified overlay retained for publication.
+    /// No mutable source or publication capability escapes this callback.
+    ///
+    /// # Errors
+    /// The original source is absent, unprepared, already consumed, or the callback panics.
+    pub fn inspect_prepared<R: Send + 'static>(
+        &self,
+        inspect: impl for<'borrow, 'state> FnOnce(
+            super::executor::PreparedExecutionView<'borrow, 'state>,
+        ) -> R
+        + Send
+        + 'static,
+    ) -> Result<R, String> {
+        self.chain
+            .executor
+            .inspect_prepared(self.block_hash, inspect)
+    }
+
     /// Certify this retained R and prepare the same original Worker execution.
     /// A failed attempt retains its exact certificate and source for a retry.
     ///
@@ -1395,7 +1548,7 @@ impl Drop for PendingTestExecution<'_> {
 /// is discarded, its pristine World is moved into a new State bound to the final signed network,
 /// and the corrected original is executed again before this function returns.
 #[allow(clippy::too_many_arguments)]
-fn prepare_configured_genesis(
+pub(super) fn prepare_configured_genesis(
     mut world: World,
     chain_id: &ChainId,
     key: &KeyPair,
@@ -1405,6 +1558,11 @@ fn prepare_configured_genesis(
     mode: SumeragiConsensusMode,
     time_ms: u64,
     pipeline: &iroha_config::parameters::actual::Pipeline,
+    fraud_monitoring: &iroha_config::parameters::actual::FraudMonitoring,
+    nexus_config: Option<&iroha_config::parameters::actual::Nexus>,
+    zk: Option<&iroha_config::parameters::actual::Zk>,
+    governance: Option<&iroha_config::parameters::actual::Governance>,
+    crypto: Option<&iroha_config::parameters::actual::Crypto>,
 ) -> Result<
     (
         SignedBlock,
@@ -1414,19 +1572,71 @@ fn prepare_configured_genesis(
     ),
     StartFailure,
 > {
-    let kura = Kura::blank_kura_for_testing();
+    let da_policies =
+        nexus_config.map(|nexus| crate::da::active_proof_policy_bundle_at_height(nexus, 1));
+    let confidential = zk.map_or_else(
+        crate::state::default_genesis_confidential_policy_hash,
+        crate::state::compute_genesis_confidential_policy_hash,
+    );
+    if nexus_config.is_some() || zk.is_some() {
+        genesis = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                key,
+                da_policies.clone(),
+                Some(confidential),
+                time_ms,
+            )
+            .expect("sign configured fixture genesis with its actual DA/ZK policies")
+            .0;
+    }
     let topology =
         super::network_topology::Topology::new(validators.iter().map(|(peer, _)| peer.clone()));
     let account = AccountId::new(key.public_key().clone());
     for attempt in 0..2 {
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            NetworkId::from_genesis_hash(genesis.hash()),
-        );
+        let network = NetworkId::from_genesis_hash(genesis.hash());
+        let (mut state, kura) = if let Some(nexus) = nexus_config {
+            let (mut state, kura) =
+                State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                    world,
+                    nexus.clone(),
+                    LiveQueryStore::start_test(),
+                    chain_id.clone(),
+                    network,
+                );
+            // The generic State fixture disables fees. Reinstall the explicit caller policy
+            // before the first staged genesis execution, preserving its authenticated geometry.
+            state
+                .set_nexus_from_config(nexus.clone())
+                .expect("configured fixture Nexus");
+            (state, kura)
+        } else {
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+                network,
+            );
+            (state, kura)
+        };
+        if let Some(zk) = zk {
+            if let Err(error) = state.set_zk(zk.clone()) {
+                return Err(StartFailure {
+                    error: TestChainError::Genesis(format!("configured fixture ZK: {error}")),
+                    state: Arc::new(state),
+                });
+            }
+        }
+        if let Some(governance) = governance {
+            state.set_gov(governance.clone());
+        }
+        if let Some(crypto) = crypto {
+            state.set_crypto(crypto.clone());
+        }
         state.set_pipeline(pipeline.clone());
+        state.set_fraud_monitoring(fraud_monitoring.clone());
         let nexus = state.nexus_snapshot();
         state.install_lane_manifests_for_testing(&Arc::new(
             LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -1477,7 +1687,10 @@ fn prepare_configured_genesis(
         genesis = match manifest
             .clone()
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
-                key, None, None, time_ms,
+                key,
+                da_policies.clone(),
+                Some(confidential),
+                time_ms,
             ) {
             Ok(signed) => signed.0,
             Err(error) => {
@@ -1587,6 +1800,52 @@ fn build_genesis(
 mod tests {
     use super::*;
 
+    #[test]
+    fn configured_genesis_and_exact_certified_replay_preserve_native_ownership() {
+        let config = || {
+            let mut config = TestChainConfig::new(World::new(), 1_000);
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            nexus.fees.base_fee = 0_u32.into();
+            nexus.fees.per_byte_fee = 0_u32.into();
+            nexus.fees.per_instruction_fee = 0_u32.into();
+            nexus.fees.per_gas_unit_fee = 0_u32.into();
+            config.nexus = Some(nexus);
+            let mut zk = crate::state::default_zk_config();
+            zk.max_verify_calls_per_tx = 3;
+            config.zk = Some(zk);
+            config.validator_keys = Some(
+                (0xD1..=0xD4)
+                    .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                    .collect(),
+            );
+            config.crypto = Some(iroha_config::parameters::actual::Crypto::default());
+            config
+        };
+        let mut source = CertifiedTestChain::start(config()).unwrap();
+        assert_ne!(
+            source.validators(),
+            fixture_validators().as_slice(),
+            "caller custody is the signed original committee"
+        );
+        source.commit(Vec::new());
+        source.commit(Vec::new());
+        let mut replay = CertifiedTestChain::start(config()).unwrap();
+        replay.replay_from(&source).unwrap();
+        assert_eq!(replay.tip, source.tip);
+        assert_eq!(replay.state.zk_snapshot().max_verify_calls_per_tx, 3);
+        for height in 1..=source.height() {
+            assert_eq!(
+                replay.committed(height).block().encode_wire().unwrap(),
+                source.committed(height).block().encode_wire().unwrap()
+            );
+        }
+        let mut foreign_config = config();
+        foreign_config.genesis_time_ms += 1;
+        let mut foreign = CertifiedTestChain::start(foreign_config).unwrap();
+        assert!(foreign.replay_from(&source).is_err());
+        assert_eq!(foreign.height(), 1);
+    }
+
     fn prepared_config() -> PreparedTestChainConfig {
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("original-prepared-native-fixture");
@@ -1634,6 +1893,11 @@ mod tests {
             SumeragiConsensusMode::Permissioned,
             10_000,
             &iroha_config::parameters::actual::Pipeline::default(),
+            &iroha_config::parameters::actual::FraudMonitoring::default(),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         let genesis = iroha_genesis::validate_prepared_genesis_bundle(

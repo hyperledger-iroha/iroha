@@ -36,7 +36,6 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
   local prebuilt_build_root="${CARGO_TARGET_DIR}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}/program-build-cache"
   local prebuilt_programs_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}/programs"
   local prebuilt_default_cache="${prebuilt_build_root}/default"
-  local prebuilt_message_control_cache="${prebuilt_build_root}/message-control"
 
   # An inherited manifest digest is the parent invocation's trust capability.
   # Never replace or rebuild a bundle when that capability is present.
@@ -56,8 +55,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
     --repo-root "$prebuilt_repo_root" \
     --source-manifest "$prebuilt_source_manifest_sha256" \
     --cargo-target-dir "$CARGO_TARGET_DIR" \
-    --default-cache "$prebuilt_default_cache" \
-    --message-control-cache "$prebuilt_message_control_cache"
+    --default-cache "$prebuilt_default_cache"
 
   local prebuilt_build_lock="${prebuilt_build_root}/.sumeragi-v2-prebuild.lock"
   if ! mkdir -- "$prebuilt_build_lock"; then
@@ -95,14 +93,13 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
     trap cleanup_prebuilt_build EXIT
 
     # Cargo may otherwise accept a stale final executable whose dependency
-    # metadata survived in the fixed cache.  Remove only the five exact
+    # metadata survived in the fixed cache.  Remove only the four exact
     # top-level outputs so this invocation must relink them.
     rm -f -- \
       "${prebuilt_default_cache}/release/iroha3d" \
       "${prebuilt_default_cache}/release/iroha" \
       "${prebuilt_default_cache}/release/kagami" \
-      "${prebuilt_default_cache}/release/iroha3d_taira" \
-      "${prebuilt_message_control_cache}/release/iroha3d" || exit $?
+      "${prebuilt_default_cache}/release/iroha3d_taira" || exit $?
 
     (
       export CARGO_TARGET_DIR="$prebuilt_default_cache"
@@ -111,13 +108,6 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       run_cargo build --locked --offline --release -p irohad --bin iroha3d --bin iroha3d_taira || exit $?
       run_cargo build --locked --offline --release -p iroha_cli --bin iroha || exit $?
       run_cargo build --locked --offline --release -p iroha_kagami --bin kagami || exit $?
-    ) || exit $?
-    (
-      export CARGO_TARGET_DIR="$prebuilt_message_control_cache"
-      export ENABLE_RANS_BUNDLES=1
-      export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin iroha3d \
-        --features test-network-message-control || exit $?
     ) || exit $?
 
     # Redirect only Cargo stdout so the exact version transcript contains only
@@ -131,7 +121,6 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       --cargo-target-dir "$CARGO_TARGET_DIR" \
       --artifact-root "$IROHA_RELEASE_ARTIFACT_ROOT" \
       --default-cache "$prebuilt_default_cache" \
-      --message-control-cache "$prebuilt_message_control_cache" \
       --programs-root "$prebuilt_programs_root" \
       --cargo-version-file "$prebuilt_cargo_version_file" \
       --rustc-version-file "$prebuilt_rustc_version_file" \
@@ -174,7 +163,6 @@ sumeragi_v2_export_source_bound_localnet_binaries() {
     return 1
   fi
   export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
   export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
   export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"
   export TEST_NETWORK_BIN_IROHAD_TAIRA="${IROHA_TEST_TARGET_DIR}/release/iroha3d_taira"

@@ -1023,7 +1023,10 @@ impl ConfidentialFeatureDigest {
 }
 /// Ruleset version embedded into [`ConfidentialFeatureDigest::conf_rules_version`] for v1 networks.
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
-/// Default genesis confidential-policy hash for bundled ZK defaults and the SCCP policy input.
+/// Default genesis confidential-policy hash for bundled ZK defaults and compiled SCCP profiles.
+///
+/// Core's `default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy` test
+/// requires this pin to match the current consensus inputs; regenerate it when those change.
 pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
     0xc7, 0x36, 0xb6, 0x94, 0xd3, 0x98, 0x31, 0x82, 0x92, 0x6e, 0xe2, 0xbd, 0x49, 0x44, 0xbc, 0x87,
     0xb4, 0x7c, 0xab, 0xbe, 0xea, 0x4f, 0x1e, 0xea, 0x87, 0x4b, 0xab, 0xcb, 0x37, 0xaf, 0xaf, 0x54,

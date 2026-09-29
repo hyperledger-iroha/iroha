@@ -234,7 +234,7 @@ environment is installed and no unsupported-entrypoint fallback is attempted.
     environment.update(RAYON_NUM_THREADS=str(campaign.RAYON_WORKER_THREADS),
         IROHA_TEST_REQUIRE_NETWORK='1', IROHA_TEST_NETWORK_START_ATTEMPTS='1',
         IROHA_TEST_SKIP_BUILD='1', IROHA_TEST_BUILD_PROFILE='release',
-        TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=str(images['validator'].path),
+        TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES=str(images['validator'].path),
         APS_REAL_PROCESS_VALIDATOR_SHA256=images['validator'].sha256,
         APS_BENCHMARK_SESSION_ROOT=str(records.path),
         APS_BENCHMARK_SESSION_REQUEST=prepared['reference']['path'],

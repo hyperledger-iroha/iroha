@@ -29,14 +29,7 @@
   "tx_queue_oldest_queued_age_ms": 0,
   "lane_commitments": [],
   "dataspace_commitments": [],
-  "lane_settlement_commitments": [],
-  "lane_relay_envelopes": [],
-  "lane_payload_ownerships": [],
-  "committed_lane_blocks": [],
-  "lane_block_sessions": [],
   "lane_governance_sealed_total": 0,
   "lane_governance_sealed_aliases": [],
-  "lane_governance": [],
-  "native_amx_participant_applications": [],
-  "autonomous_lane_executions": []
+  "lane_governance": []
 }

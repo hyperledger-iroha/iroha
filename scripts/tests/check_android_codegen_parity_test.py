@@ -55,13 +55,9 @@ def _write_js_type_map(
     path.write_text(
         'const TEXT_IROHA_INSTRUCTION_V1 = "iroha.instruction.v1::";\n'
         'const TEXT_IROHA_DATA_MODEL_ISI = "iroha_data_model::isi::";\n'
-        'const RECORD_SCCP_MESSAGE_WIRE_ID =\n'
-        '  (TEXT_IROHA_INSTRUCTION_V1 + "bridge::RecordSccpMessage");\n'
         "const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({\n"
         '  "zk::ScheduleConfidentialPolicyTransition": '
         f'"{alias_type}",\n'
-        '  [RECORD_SCCP_MESSAGE_WIRE_ID]: '
-        '`${TEXT_IROHA_DATA_MODEL_ISI}bridge::RecordSccpMessage`,\n'
         "});\n"
         + projection
         + "const facade = { _instructionWireSchemaBindings: () => "
@@ -209,7 +205,7 @@ def test_js_instruction_type_map_matches_manifest_aliases(tmp_path: Path) -> Non
     )
 
     assert errors == []
-    assert summary["entry_count"] == 2
+    assert summary["entry_count"] == 1
     assert summary["manifest_matched_entry_count"] == 1
 
 
@@ -352,9 +348,6 @@ def test_current_js_computed_wire_id_and_imported_bindings_match_manifest(
     js_source = _copy_current_js_inventory(tmp_path)
     source_map = MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]
     assert len(source_map) >= 70
-    assert source_map["iroha.instruction.v1::bridge::RecordSccpMessage"] == (
-        "iroha_data_model::isi::bridge::RecordSccpMessage"
-    )
     assert source_map["iroha.instruction.v1::nft_market::OfferNftV1"] == (
         "iroha_data_model::isi::nft_market::OfferNftV1"
     )

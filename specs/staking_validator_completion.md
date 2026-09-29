@@ -67,7 +67,7 @@ compiler/runtime gates, physical funding and old source-owner removal remain ope
   Focused runtime and real transition qualification remain
   pending; signed control and Pasta integration are still in progress.
 - Account-owned lifecycle and signed peer consent: `isi/staking.rs` in the data
-  model and Core, Initial/default executor dispatch, canonical instruction
+  model and Core, initial executor dispatch, canonical instruction
   registry and generated record fixtures. Consent binds network and exact
   activation tenure; rebind also binds the previous peer. Ordinary peer
   administration retains its permission gate. Fresh candidates enter the future

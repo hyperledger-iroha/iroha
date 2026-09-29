@@ -333,11 +333,6 @@ impl StateBlock<'_> {
             {
                 return Err("output seal source differs from its actual execution".into());
             }
-            if block.execution_context().is_some_and(|context| {
-                context.native_lane_decisions.is_some() || context.merge_entry.is_some()
-            }) {
-                return Err("retired lane execution attachment".into());
-            }
             let sources = retained
                 .sources
                 .ok_or("output seal requires all actual phases")?;

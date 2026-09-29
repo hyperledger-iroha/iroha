@@ -10,6 +10,7 @@
 //! credential), binds a socket or mutates node storage. Both parse the configuration, which reads
 //! the key files it names after their custody checks (`node_secrets::verify_config_key_custody`).
 
+use crate::authenticated_genesis::AuthenticatedGenesis;
 use crate::{
     Config, GenesisBlock, MainError, build_consensus_config_caps, consensus_caps_from_genesis,
     freeze_lane_compliance_for_startup_replay, freeze_lane_manifests_for_startup_replay,
@@ -20,17 +21,13 @@ use iroha_config::kura::InitMode;
 use iroha_core::{
     kura::{BlockCount, BlockIndex, BlockStore, Kura},
     query::store::LiveQueryStore,
-    snapshot::{TryReadError, try_read_snapshot_with_bootstrap_policy},
-    sumeragi::GenesisV2Bootstrap,
+    snapshot::{TryReadError, try_read_snapshot_with_limits},
 };
 use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     NetworkId,
-    block::{
-        BlockHeader,
-        consensus_v2::{MAX_EXECUTED_BLOCK_WIRE_BYTES, PROTOCOL_VERSION},
-        decode_framed_signed_block,
-    },
+    block::{BlockHeader, consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -115,7 +112,7 @@ fn hex_hash(hash: impl Into<Hash>) -> String {
 /// signed genesis carries no valid handshake context.
 pub fn config_compatibility_v1(
     config: &Config,
-    genesis: Option<(&GenesisBlock, &GenesisV2Bootstrap)>,
+    genesis: Option<(&GenesisBlock, &AuthenticatedGenesis)>,
 ) -> ReportResult<ConfigCompatibilityV1, MainError> {
     let lane_manifests = freeze_lane_manifests_for_startup_replay(&config.nexus)
         .map_err(|error| Report::new(error).change_context(MainError::Config))
@@ -139,7 +136,7 @@ pub fn config_compatibility_v1(
                         "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
                     )
                 })?;
-            let context = bootstrap.context();
+            let context = bootstrap;
             (
                 "ready",
                 Some(hex::encode(handshake.config.native_config_fingerprint)),
@@ -250,13 +247,11 @@ pub fn check_storage(config: &Config) -> Result<StorageCheckReportV1, String> {
 fn open_kura_read_only(config: &Config) -> Result<Arc<Kura>, String> {
     let mut kura_config = config.kura.clone();
     kura_config.init_mode = InitMode::Fast;
-    // TODO: Fast mode refuses imported hash-only history; stores that were bootstrapped from a
-    // signed snapshot lineage cannot be checked until a read-only provisional opener exists.
-    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
+    // Native startup requires the original signed genesis and certified block history.
+    Kura::new_with_configured_lane_catalog(
         &kura_config,
         &config.nexus.lane_config,
         &config.nexus.configured_lane_catalog,
-        &config.snapshot.bootstrap,
     )
     .map(|(kura, _)| kura)
     .map_err(|error| {
@@ -400,7 +395,7 @@ fn snapshot_restore_dry_run(
     // snapshot height is admitted, and the snapshot's hashes are compared with the real store by
     // the caller.
     let block_count = BlockCount(usize::try_from(tip_height).map_err(|error| error.to_string())?);
-    let restored = try_read_snapshot_with_bootstrap_policy(
+    let restored = try_read_snapshot_with_limits(
         &execution_budget,
         config.snapshot.store_dir.resolve_relative_path(),
         &scratch,
@@ -415,7 +410,6 @@ fn snapshot_restore_dry_run(
         &config.common.chain,
         &NetworkId::from_genesis_hash(config.genesis.expected_hash),
         &config.zk,
-        &config.snapshot.bootstrap,
         #[cfg(feature = "telemetry")]
         iroha_core::telemetry::StateTelemetry::default(),
         &read_buffer_budget,

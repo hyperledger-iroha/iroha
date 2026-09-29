@@ -36,15 +36,6 @@ npos_min_self_bond = 1
 # Consensus-bound, roster-independent node configuration.
 [static]
 
-[static.sumeragi.block]
-max_payload_bytes = 16777216
-proposal_queue_scan_multiplier = 4
-
-[static.sumeragi.queues]
-body_source_bytes = 35651584
-chunks = 4096
-ready_bodies = 256
-
 [static.sumeragi.keys]
 allowed_algorithms = ["bls_normal"]
 
@@ -171,8 +162,6 @@ submitters = []
 [derive]
 authenticated_non_validator_sources = 4
 max_external_committee_peers = 12
-queue_commands = 4096
-queue_bodies = 1024
 
 # `derive(n)` adds `fault_tolerance = f` to every entry and emits `nexus.dataspace_catalog`.
 [[derive.dataspace_catalog]]

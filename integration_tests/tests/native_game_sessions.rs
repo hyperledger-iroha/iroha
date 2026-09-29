@@ -1,14 +1,12 @@
 //! Four-validator generic game-session release gate, using RaceV1 only as an application adapter.
 //!
 //! This starts real peers and never substitutes a verifier or marks a profile qualified.
-//! Zero-stake sessions exercise retained inputs, disputes, an authenticated 2+2 consensus
-//! vote partition, restart, and genuine native proof settlement while qualification is pending. Every convergence
-//! check also authenticates the same-height execution post-state commitment against the
-//! locally generated signed genesis committee, then compares complete local WSV checkpoint
-//! hashes bound to that exact artifact by each peer's native commit manifest. The QC root
-//! commits witnessed writes; the full WSV comparison is local test evidence, not a QC-signed
-//! full-world commitment. This ignored gate must run successfully against current validator
-//! binaries; zero-stake settlement does not qualify funded payouts or the cryptographic profile.
+//! Zero-stake sessions exercise retained inputs, disputes, restart, and genuine native proof
+//! settlement while qualification is pending. Every convergence check authenticates the
+//! complete original native carrier prefix from the locally signed genesis, including exact
+//! quorum certificates, application attestations and witnessed execution commitments. Complete
+//! game records are compared independently across every live peer. Consensus fault scenarios
+//! belong to the deterministic simulator. Zero-stake settlement does not qualify funded payouts.
 
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -27,7 +25,6 @@ use iroha_core::execution_proofs::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    block::consensus_v2::{ConsensusMode, finality::V2FinalityArtifact},
     execution_proofs::{
         ExecutionProofVerificationV1, ExecutionPublicInputsV1, RaceDnfEventV1, RaceInputFrameV1,
         RaceProverRequestV1, RaceReplayV1, RaceTrackV1,
@@ -36,10 +33,10 @@ use iroha_data_model::{
     isi::game::*,
     prelude::*,
     query::game::{FindExecutionProofVerificationById, FindGameSessionById},
+    sumeragi_finality::SumeragiFinalityProof,
     transaction::FeePaymentIntent,
 };
 use iroha_test_network::{
-    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
     Network, NetworkBuilder, NetworkPeer, init_instruction_registry, read_on_dedicated_thread,
 };
 use iroha_test_samples::ALICE_ID;
@@ -223,9 +220,8 @@ async fn finalized_state_observation(
     http: &reqwest::Client,
     peer: &NetworkPeer,
     height: u64,
-    network_id: NetworkId,
-    voters: &BTreeMap<PeerId, Vec<u8>>,
-) -> Result<Option<(HashOf<BlockHeader>, Hash, Hash)>> {
+    network: &Network,
+) -> Result<Option<(HashOf<BlockHeader>, Hash)>> {
     let url = peer
         .client()
         .client()
@@ -269,9 +265,9 @@ async fn finalized_state_observation(
             && [
                 "height",
                 "block_hash",
-                "state_root",
+                "witnessed_post_state_root",
                 "block_header",
-                "finality_artifact"
+                "finality_proof"
             ]
             .iter()
             .all(|key| fields.contains_key(*key)),
@@ -279,50 +275,79 @@ async fn finalized_state_observation(
     );
     let reported_height: u64 = norito::json::from_value(value["height"].clone())?;
     let block_hash: HashOf<BlockHeader> = norito::json::from_value(value["block_hash"].clone())?;
-    let root: Hash = norito::json::from_value(value["state_root"].clone())?;
+    let root: Hash = norito::json::from_value(value["witnessed_post_state_root"].clone())?;
     let header: BlockHeader = norito::json::from_value(value["block_header"].clone())?;
-    let artifact: V2FinalityArtifact =
-        norito::json::from_value(value["finality_artifact"].clone())?;
-    artifact.verify()?;
-    artifact.validate_for_header(&header)?;
-    let context = &artifact.height_context;
+    let proof: SumeragiFinalityProof = norito::json::from_value(value["finality_proof"].clone())?;
+    let decoded = proof.decode_checked()?;
     ensure!(
         reported_height == height
             && header.height().get() == height
-            && artifact.height == height
             && header.hash() == block_hash
-            && artifact.block_hash == block_hash
-            && artifact.commit_qc.execution_commitment.post_state_root == root,
-        "state-root response does not match the authenticated exact height/header/CommitQC"
+            && proof.block_header == header
+            && decoded.execution().post_state_root == root,
+        "state response does not bind its exact native header and witnessed execution"
     );
-    ensure!(
-        context.network_id == network_id
-            && context.mode == ConsensusMode::Permissioned
-            && context.roster.len() == 4
-            && artifact.validator_set_pops.len() == 4
-            && context.quorum.total_power == 4
-            && context.quorum.min_signers == 3,
-        "state-root finality changed the independently pinned network/committee geometry"
-    );
-    for (voter, pop) in context.roster.iter().zip(&artifact.validator_set_pops) {
-        ensure!(
-            voter.power == 1 && voters.get(&voter.validator) == Some(pop),
-            "state-root finality voter or PoP differs from the locally signed genesis"
-        );
-    }
-    // The helper validates bounded, native local checkpoint/manifest files against this
-    // already authenticated exact artifact. Its full WSV hash is not itself QC-signed.
-    let Some(world_hash) = iroha_core::kura::Kura::local_wsv_checkpoint_hash_for_tests(
-        &peer.kura_store_dir().join("blocks"),
-        &artifact,
-    )?
-    else {
+    let client = peer.client();
+    let mut blocks = read_on_dedicated_thread(move || {
+        Ok(client.client().query(FindBlocks::new()).execute_all()?)
+    })
+    .await?;
+    blocks.sort_by_key(|block| block.header().height().get());
+    if blocks
+        .last()
+        .is_none_or(|block| block.header().height().get() < height)
+    {
         return Ok(None);
-    };
-    // Preserve the actual bounded HTTP carrier only after it has passed the native
-    // finality and local checkpoint checks. The pinned signed genesis and complete
-    // Kura sidecars remain in the retained peer directories; the WSV hash is local
-    // convergence evidence and is not presented as a quorum-signed full-state root.
+    }
+    let original = network.genesis();
+    let first = blocks
+        .first()
+        .ok_or_else(|| eyre!("missing original genesis"))?;
+    ensure!(
+        first.canonical_resultless_proposal().encode_wire()?
+            == original.0.canonical_resultless_proposal().encode_wire()?,
+        "peer history replaced the independently signed genesis"
+    );
+    let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+        &network.chain_id(),
+        network.network_id(),
+        std::sync::Arc::new(first.clone()),
+    )?;
+    let mut verified = None;
+    for block in blocks
+        .into_iter()
+        .skip(1)
+        .take_while(|block| block.header().height().get() <= height)
+    {
+        let (certified, _) = prefix.push(std::sync::Arc::new(block))?.into_parts();
+        if certified.committed().height() == height {
+            verified = Some(certified);
+        }
+    }
+    let certified =
+        verified.ok_or_else(|| eyre!("native prefix did not reach requested height"))?;
+    let committed = certified.committed();
+    ensure!(
+        certified
+            .commit_qc()
+            .is_some_and(|qc| qc.signers.count_ones() == 3)
+            && committed.block_hash() == block_hash
+            && committed.commitment().execution.post_state_root == root
+            && committed.block().encode_wire()? == proof.block_wire,
+        "HTTP carrier differs from independently authenticated exact native finality"
+    );
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&original)?;
+    ensure!(
+        voters.len() == 4
+            && proof.committee.len() == 4
+            && proof
+                .committee
+                .iter()
+                .all(|member| voters.get(&PeerId::new(member.public_key.clone()))
+                    == Some(&member.proof_of_possession)),
+        "native proof committee differs from the four independently signed genesis voters"
+    );
+    // Retain the bounded source response only after verifying its complete native prefix.
     let store = peer.kura_store_dir();
     let evidence_dir = store
         .parent()
@@ -333,23 +358,13 @@ async fn finalized_state_observation(
         evidence_dir.join(format!("{height:020}-ledger-state.json")),
         &bytes,
     )?;
-    std::fs::write(
-        evidence_dir.join(format!("{height:020}-local-wsv-hash.txt")),
-        format!("{world_hash}\n"),
-    )?;
-    Ok(Some((block_hash, root, world_hash)))
+    Ok(Some((block_hash, root)))
 }
 
 async fn assert_finalized_state_convergence(
     network: &Network,
     peers: &[&NetworkPeer],
 ) -> Result<()> {
-    let genesis = network.genesis();
-    let voters = iroha_core::sumeragi::schedule::genesis_validators(&genesis)?;
-    ensure!(
-        voters.len() == 4,
-        "release gate must pin all four signed genesis validators"
-    );
     let height = futures_util::future::try_join_all(
         peers
             .iter()
@@ -367,269 +382,37 @@ async fn assert_finalized_state_convergence(
         loop {
             let mut roots = Vec::new();
             for peer in peers {
-                roots.push(finalized_state_observation(&http, peer, height, network.network_id(), &voters).await?);
+                roots.push(finalized_state_observation(&http, peer, height, network).await?);
             }
             if roots.iter().all(Option::is_some) {
                 let expected = roots[0].expect("all roots present");
                 ensure!(roots.iter().all(|root| *root == Some(expected)),
-                    "validators differ in finalized block, execution commitment or local full WSV at height {height}: {roots:?}");
-                eprintln!("same-height convergence: validators={}, height={height}, authenticated_block={}, authenticated_execution_post_state_root={}, local_full_wsv_hash={}",
-                    peers.len(), expected.0, expected.1, expected.2);
+                    "validators differ in finalized block or execution commitment at height {height}: {roots:?}");
+                eprintln!("same-height convergence: validators={}, height={height}, authenticated_block={}, authenticated_execution_post_state_root={}",
+                    peers.len(), expected.0, expected.1);
                 return Ok::<(), eyre::Report>(());
             }
             sleep(Duration::from_millis(100)).await;
         }
-    }).await.map_err(|_| eyre!("same-height finalized execution and local full-WSV convergence timed out"))?
+    }).await.map_err(|_| eyre!("same-height finalized native execution convergence timed out"))?
 }
 
-// Eight exact views keep all sender/relay/kind combinations inside the controller's
-// 64-KiB canonical command bound for native BLS peer identities. A persisted view
-// outside this inventory fails the scenario; it may never silently heal the partition.
-const PARTITION_VIEWS: u64 = 8;
-
-async fn assert_partition_round_is_covered(peer: &NetworkPeer, fault_height: u64) -> Result<()> {
-    let client = peer.client();
-    let status = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await?;
-    ensure!(
-        !status.halted.is_some()
-            && status.committed_height < fault_height
-            && status.height <= fault_height
-            && (status.height < fault_height || status.view < PARTITION_VIEWS),
-        "partition escaped its controlled round inventory: height={}, view={}, committed={}, restart_required={}",
-        status.height,
-        status.view,
-        status.committed_height,
-        status.halted.is_some(),
-    );
-    Ok(())
-}
-
-fn retain_partition_control_evidence(
-    network: &Network,
-    receiver_index: usize,
-    stage: &str,
-) -> Result<()> {
-    let evidence = network.peers()[receiver_index]
-        .consensus_message_control()
-        .ok_or_else(|| eyre!("missing feature-isolated consensus controller"))?
-        .read_current_evidence()?;
-    ensure!(
-        evidence.command_bytes.len() <= 64 * 1024,
-        "native partition command exceeded its actual encoded byte bound"
-    );
-    let directory = network.env_dir().join("game-partition-evidence");
-    std::fs::create_dir_all(&directory)?;
-    std::fs::write(
-        directory.join(format!("{receiver_index}-{stage}-command.norito.json")),
-        &evidence.command_bytes,
-    )?;
-    std::fs::write(
-        directory.join(format!("{receiver_index}-{stage}-ack.norito.json")),
-        &evidence.acknowledgement_bytes,
-    )?;
-    eprintln!(
-        "native game partition evidence: receiver={receiver_index}, stage={stage}, command_bytes={}, held={}, revision={}",
-        evidence.command_bytes.len(),
-        evidence.acknowledgement.held.len(),
-        evidence.acknowledgement.revision,
-    );
-    Ok(())
-}
-
-/// Keep all four processes and Torii endpoints alive while cutting cross-half consensus votes.
-/// Payload/transaction transport remains live: this is a consensus vote partition, not a
-/// claim that every network byte was disconnected. Exact authenticated rules also cover relays.
-async fn challenge_through_consensus_partition(
+/// Submit the original application challenge under current native consensus and compare the
+/// complete retained game record. Faulted consensus rounds are qualified in the simulator.
+async fn challenge_and_converge(
     network: &Network,
     certified: &GameSessionRecordV1,
 ) -> Result<GameSessionRecordV1> {
     assert_replicas(network, certified, 4).await?;
-    let peers = network.peers();
-    let base = peers[0].status().await?.blocks;
+    submit_instruction(&network.peers()[0].client(), challenge(certified), fees()).await?;
+    let selected = record(&network.peers()[0].client(), certified.session_id).await?;
     ensure!(
-        futures_util::future::join_all(
-            peers
-                .iter()
-                .map(|p| async move { p.status().await.is_ok_and(|s| s.blocks == base) })
-        )
-        .await
-        .into_iter()
-        .all(|at_base| at_base),
-        "partition must begin at one synchronized finalized height"
-    );
-    let fault_height = base
-        .checked_add(1)
-        .ok_or_else(|| eyre!("partition height overflow"))?;
-    let mut armed = Vec::new();
-    for (receiver_index, receiver) in peers.iter().enumerate() {
-        let control = receiver
-            .consensus_message_control()
-            .ok_or_else(|| eyre!("missing feature-isolated consensus controller"))?;
-        let before = control.read_ack()?;
-        ensure!(
-            before.rules.is_empty() && before.held.is_empty() && !before.fatal,
-            "partition controller was not initially healed"
-        );
-        let mut rules = Vec::new();
-        for (sender_index, sender) in peers.iter().enumerate() {
-            if sender_index / 2 == receiver_index / 2 {
-                continue;
-            }
-            for (via_index, via) in peers.iter().enumerate() {
-                if via_index == receiver_index {
-                    continue;
-                }
-                for view in 0..PARTITION_VIEWS {
-                    for kind in [
-                        ConsensusMessageControlKind::PrepareVote,
-                        ConsensusMessageControlKind::CommitVote,
-                        ConsensusMessageControlKind::TimeoutVote,
-                    ] {
-                        rules.push(ConsensusMessageControlRule::relayed(
-                            sender.id(),
-                            via.id(),
-                            kind,
-                            fault_height,
-                            view,
-                            ConsensusMessageControlAction::Hold,
-                        ));
-                    }
-                }
-            }
-        }
-        ensure!(
-            rules.len() == 144,
-            "partition exceeded its exact bounded rule geometry"
-        );
-        let ack = control
-            .apply(&rules, &[], 512, Duration::from_secs(45))
-            .await?;
-        ensure!(
-            ack.rules == rules
-                && ack.revision > before.revision
-                && !ack.fatal
-                && ack.overflowed == before.overflowed
-                && ack.rejected_commands == before.rejected_commands,
-            "validator did not acknowledge the exact partition rules"
-        );
-        armed.push((
-            ack.revision,
-            before.overflowed,
-            before.rejected_commands,
-            rules,
-        ));
-        retain_partition_control_evidence(network, receiver_index, "armed")?;
-    }
-    ensure!(
-        futures_util::future::join_all(peers.iter().map(|p| async move {
-            p.is_running() && p.status().await.is_ok_and(|s| s.blocks == base)
-        }))
-        .await
-        .into_iter()
-        .all(|at_base| at_base),
-        "partition installation raced with unaccounted consensus progress"
-    );
-    let partition_client = peers[0].client();
-    let signed = prepare_instruction(&partition_client, challenge(certified), fees()).await?;
-    // This phase requires acceptance only; waiting for Applied would prevent healing.
-    let transaction = partition_client
-        .account_client()
-        .submit_transaction(&signed)
-        .await?;
-    timeout(Duration::from_secs(30), async {
-        loop {
-            let mut observed = 0;
-            for (receiver_index, receiver) in peers.iter().enumerate() {
-                assert_partition_round_is_covered(receiver, fault_height).await?;
-                let ack = receiver.consensus_message_control().unwrap().read_ack()?;
-                let (revision, overflowed, rejected, rules) = &armed[receiver_index];
-                ensure!(
-                    ack.revision == *revision
-                        && ack.rules == *rules
-                        && !ack.fatal
-                        && ack.overflowed == *overflowed
-                        && ack.rejected_commands == *rejected,
-                    "partition control changed, rejected commands, or overflowed"
-                );
-                if !ack.held.is_empty() {
-                    ensure!(
-                        ack.held
-                            .iter()
-                            .all(|message| message.height == Some(fault_height)
-                                && peers
-                                    .iter()
-                                    .enumerate()
-                                    .any(|(sender_index, sender)| sender_index / 2
-                                        != receiver_index / 2
-                                        && sender.id() == message.sender)),
-                        "partition captured an unrelated height or same-half sender"
-                    );
-                    observed += 1;
-                }
-                ensure!(
-                    receiver.is_running()
-                        && receiver.status().await?.blocks == base
-                        && record(&receiver.client(), certified.session_id).await? == *certified,
-                    "2+2 partition advanced the ledger or imposed a wall-clock forfeit"
-                );
-            }
-            if observed == 4 {
-                for receiver_index in 0..peers.len() {
-                    retain_partition_control_evidence(network, receiver_index, "held")?;
-                }
-                return Ok::<(), eyre::Report>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|_| {
-        eyre!("partition did not intercept actual authenticated votes on all four receivers")
-    })??;
-    // A second observation after a bounded wall-clock interval checks that only ledger heights
-    // can advance a game deadline even while every process continues servicing requests.
-    sleep(Duration::from_secs(2)).await;
-    for peer in peers {
-        assert_partition_round_is_covered(peer, fault_height).await?;
-        ensure!(
-            peer.is_running()
-                && peer.status().await?.blocks == base
-                && record(&peer.client(), certified.session_id).await? == *certified,
-            "partition failed to preserve the exact pending checkpoint and controls"
-        );
-    }
-    for (receiver_index, peer) in peers.iter().enumerate() {
-        let healed = peer
-            .consensus_message_control()
-            .unwrap()
-            .heal_and_release_all(Duration::from_secs(45))
-            .await?;
-        ensure!(
-            !healed.fatal && healed.rules.is_empty() && healed.held.is_empty(),
-            "partition did not heal and drain its retained authenticated votes"
-        );
-        retain_partition_control_evidence(network, receiver_index, "healed")?;
-    }
-    let selected = timeout(Duration::from_secs(90), async {
-        loop {
-            let selected = record(&peers[0].client(), certified.session_id).await?;
-            if selected.phase == GamePhaseV1::SelectingCheckpoint {
-                return Ok::<_, eyre::Report>(selected);
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| eyre!("healed committee did not commit the originally submitted challenge"))??;
-    ensure!(
-        selected.checkpoint == certified.checkpoint
+        selected.phase == GamePhaseV1::SelectingCheckpoint
+            && selected.checkpoint == certified.checkpoint
             && selected.pending_certificate == certified.pending_certificate,
-        "healing rewrote accepted gameplay evidence"
+        "native challenge rewrote accepted gameplay evidence"
     );
     assert_replicas(network, &selected, 4).await?;
-    eprintln!(
-        "authenticated 2+2 consensus vote partition healed: height={fault_height}, transaction={transaction}"
-    );
     Ok(selected)
 }
 
@@ -641,7 +424,7 @@ impl AsRef<Table> for ConfigLayer {
 }
 
 #[test]
-#[ignore = "explicit release gate: requires four current native consensus-message-control validator binaries"]
+#[ignore = "explicit release gate: requires four current native validator binaries"]
 fn generic_game_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> {
     // Native genesis/configuration construction and unoptimized AIR verification need
     // the same bounded stack used by the existing blocking network-test runtime.
@@ -670,7 +453,6 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_consensus_message_control()
         .with_block_cadence(Duration::from_millis(500))
         // The test carries the proof inside an ordinary signed typed ISI. Native defaults
         // already permit 10-MiB transactions / 16-MiB DA bodies; the separate TxGossip
@@ -812,7 +594,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             fees(),
         ).await?;
         let certified = record(&client, session_id).await?;
-        let selected = challenge_through_consensus_partition(&network, &certified).await?;
+        let selected = challenge_and_converge(&network, &certified).await?;
         ensure!(
             selected.phase == GamePhaseV1::SelectingCheckpoint,
             "challenge not applied"

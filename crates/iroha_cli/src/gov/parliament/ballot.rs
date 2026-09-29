@@ -16,10 +16,9 @@
 //! `ballot status` shows this account's part in the active hidden ballots of an
 //! attempt (and whether a key file can cast them), and `ballot relay` submits
 //! other jurors' published records. The trusted checkpoint is pinned from an
-//! independent source; the retired Sumeragi v2 finality-anchor lookup has no
-//! replacement until casting proofs move to Sumeragi finality proofs
-//! (TODO(ws24): re-anchor ballots on `SumeragiFinalityVerifier` with that
-//! migration). Invitation responses, public-finding
+//! independently authenticated canonical `SumeragiFinalityCheckpoint` file.
+//! Every page extends its native certified decision and retained committee schedule.
+//! Invitation responses, public-finding
 //! endorsements and absences are the sibling `iroha gov parliament
 //! respond-invitation|endorse|record-absence` commands, and the threshold
 //! opening is `iroha gov parliament finalize-opened-ballot`.
@@ -98,6 +97,7 @@ use iroha_data_model::{
         ParliamentRecordBallotDropoutV1, ParliamentRegisterBallotParticipantV1,
     },
     parliament_casting::ParliamentTimedOvnCastingContextBindingV1,
+    sumeragi_finality::SumeragiFinalityCheckpoint,
 };
 use iroha_torii_shared::parliament_api::{
     PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BASE64_BYTES_V1,
@@ -108,7 +108,7 @@ use norito::json::JsonSerialize;
 use rand::{TryCryptoRng, TryRngCore};
 use zeroize::Zeroizing;
 
-use self::files::{BallotState, TimedOvnSeedV1, TrustedCheckpoint};
+use self::files::{BallotState, TimedOvnSeedV1};
 use super::{member::member_transition, parse_ballot_attempt_id, parse_governance_attempt_id};
 use crate::{CliOutputFormat, Run, RunContext, gov::shared::print_with_summary};
 
@@ -355,7 +355,7 @@ trait BallotSource {
     fn casting_proof_page(
         &self,
         ballot_attempt_id: BallotAttemptId,
-        checkpoint: TrustedCheckpoint,
+        checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<ParliamentTimedOvnCastingProofResponseV1>;
 
     /// The public (unauthenticated) casting context, decoded and replayed.
@@ -372,14 +372,11 @@ impl BallotSource for Client {
     fn casting_proof_page(
         &self,
         ballot_attempt_id: BallotAttemptId,
-        checkpoint: TrustedCheckpoint,
+        checkpoint: &SumeragiFinalityCheckpoint,
     ) -> Result<ParliamentTimedOvnCastingProofResponseV1> {
-        self.get_parliament_timed_ovn_casting_proof_page(
-            ballot_attempt_id,
-            checkpoint.height,
-            checkpoint.context_id,
-        )
-        .wrap_err("failed to fetch the Parliament casting proof")
+        self.get_parliament_timed_ovn_casting_proof_page(ballot_attempt_id, checkpoint)
+            .map(|(page, _checkpoint)| page)
+            .wrap_err("failed to fetch the Parliament casting proof")
     }
 
     fn public_casting_context(
@@ -406,10 +403,10 @@ impl BallotSource for Client {
 /// Outcome of authenticating one casting-proof page.
 enum CastingPageOutcome {
     /// An intermediate page: promote the checkpoint and fetch the next page.
-    Promote(TrustedCheckpoint),
+    Promote(SumeragiFinalityCheckpoint),
     /// The terminal page with its replayed, binding-matched archive.
     Terminal {
-        checkpoint: TrustedCheckpoint,
+        checkpoint: SumeragiFinalityCheckpoint,
         context: Box<ValidatedParliamentTimedOvnCastingContextArchiveV1>,
         binding: Box<ParliamentTimedOvnCastingContextBindingV1>,
     },
@@ -423,26 +420,17 @@ enum CastingPageOutcome {
 fn authenticate_casting_page(
     page: &ParliamentTimedOvnCastingProofResponseV1,
     network_id: NetworkId,
-    checkpoint: TrustedCheckpoint,
+    checkpoint: &SumeragiFinalityCheckpoint,
     ballot_attempt_id: BallotAttemptId,
 ) -> Result<CastingPageOutcome> {
-    let binding = page
-        .verify_consensus_page_against(
-            network_id,
-            checkpoint.height,
-            checkpoint.context_id,
-            ballot_attempt_id,
-        )
+    let (binding, evaluated) = page
+        .verify_consensus_page_against(network_id, checkpoint, ballot_attempt_id)
         .map_err(|reason| eyre!("Parliament casting proof verification failed: {reason}"))?;
-    if page.evaluated_block_height < checkpoint.height
-        || (page.more_available && page.evaluated_block_height == checkpoint.height)
+    if page.evaluated_block_height < checkpoint.height()
+        || (page.more_available && page.evaluated_block_height == checkpoint.height())
     {
         bail!("Parliament casting proof page does not advance the trusted checkpoint");
     }
-    let evaluated = TrustedCheckpoint {
-        height: page.evaluated_block_height,
-        context_id: *page.evaluated_context_id.0.as_ref(),
-    };
     match (page.more_available, binding) {
         (true, None) => Ok(CastingPageOutcome::Promote(evaluated)),
         (false, Some(binding)) => {
@@ -480,8 +468,8 @@ fn fetch_authenticated_casting_context<S: BallotSource>(
 ) -> Result<AuthenticatedCastingContext> {
     for _ in 0..MAX_CASTING_PROOF_PAGES {
         let checkpoint = state.checkpoint();
-        let page = source.casting_proof_page(ballot_attempt_id, checkpoint)?;
-        match authenticate_casting_page(&page, network_id, checkpoint, ballot_attempt_id)? {
+        let page = source.casting_proof_page(ballot_attempt_id, &checkpoint)?;
+        match authenticate_casting_page(&page, network_id, &checkpoint, ballot_attempt_id)? {
             CastingPageOutcome::Promote(next) => state.promote(next)?,
             CastingPageOutcome::Terminal {
                 checkpoint,
@@ -910,47 +898,24 @@ fn note<C: RunContext>(context: &mut C, line: impl core::fmt::Display) -> Result
     Ok(())
 }
 
-fn parse_context_id(input: &str) -> Result<[u8; 32], String> {
-    let id = files::decode_lower_hex32(input, "context id").map_err(|error| error.to_string())?;
-    if !files::is_canonical_hash(&id) {
-        return Err("must be a canonical Iroha hash (non-zero, low bit set)".to_owned());
-    }
-    Ok(id)
-}
-
 /// Ballot state file and the one-time initialization of its trust anchor.
 #[derive(clap::Args, Debug)]
 pub struct BallotStateArgs {
-    /// Ballot state file holding the trusted checkpoint
-    /// [default: `<key-file>.state.json`].
+    /// Canonical native checkpoint state file [default: `<key-file>.state.nrt`].
     #[arg(long, value_name = "PATH")]
     pub state_file: Option<PathBuf>,
-    /// Height of an independently trusted finality checkpoint; initializes a new state file.
-    #[arg(long, requires = "trusted_checkpoint_context_id")]
-    pub trusted_checkpoint_height: Option<u64>,
-    /// Lowercase hex height-context id of that checkpoint.
-    #[arg(
-        long,
-        value_name = "HEX",
-        requires = "trusted_checkpoint_height",
-        value_parser = parse_context_id
-    )]
-    pub trusted_checkpoint_context_id: Option<[u8; 32]>,
+    /// Independently authenticated, owner-only canonical Sumeragi checkpoint; initializes new state.
+    #[arg(long, value_name = "PATH")]
+    pub trusted_checkpoint_file: Option<PathBuf>,
 }
 
 impl BallotStateArgs {
-    /// Checkpoint that initializes a new state file, if both flags are present.
-    fn init(&self) -> Result<Option<TrustedCheckpoint>> {
-        match (
-            self.trusted_checkpoint_height,
-            self.trusted_checkpoint_context_id,
-        ) {
-            (Some(height), Some(context_id)) => Ok(Some(TrustedCheckpoint { height, context_id })),
-            (None, None) => Ok(None),
-            _ => {
-                bail!("--trusted-checkpoint-height and --trusted-checkpoint-context-id go together")
-            }
-        }
+    /// Read the complete independently selected checkpoint, if supplied.
+    fn init(&self) -> Result<Option<SumeragiFinalityCheckpoint>> {
+        self.trusted_checkpoint_file
+            .as_deref()
+            .map(files::load_checkpoint)
+            .transpose()
     }
 
     /// State-file path: `--state-file`, else the default next to `key_file`.
@@ -967,7 +932,7 @@ impl BallotStateArgs {
         match self.path(key_file) {
             Some(path) => BallotState::open(&path, *network_id.as_bytes(), init).map(Some),
             None if init.is_some() => bail!(
-                "--trusted-checkpoint-* flags initialize a state file; name it with --state-file \
+                "--trusted-checkpoint-file initializes a state file; name it with --state-file \
                  or --key-file"
             ),
             None => Ok(None),
@@ -1619,7 +1584,7 @@ pub struct StatusArgs {
     /// Timed-OVN key file to check against the committed registration (read only).
     #[arg(long, value_name = "PATH")]
     pub key_file: Option<PathBuf>,
-    /// Ballot state file to report (read only) [default: `<key-file>.state.json`].
+    /// Ballot state file to report (read only) [default: `<key-file>.state.nrt`].
     #[arg(long, value_name = "PATH")]
     pub state_file: Option<PathBuf>,
 }
@@ -1668,7 +1633,7 @@ impl StatusArgs {
             trusted_checkpoint_height: custody
                 .state
                 .as_ref()
-                .map(|state| state.checkpoint().height),
+                .map(|state| state.checkpoint().height()),
             ballots,
         };
         let value =

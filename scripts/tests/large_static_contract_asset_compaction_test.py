@@ -27,7 +27,12 @@ MINIMUM_NET_REDUCTION = 2_000
 # to both sides, preserving that reduction. Retiring the IVM preparation test
 # and adding its rejection contract removes another 111 lines. Removing no-op
 # runtime passes and merging the current SCCP contract leaves a measured
-# reduction of 2,752 lines. The 2,000-line obligation is unchanged.
+# reduction of 2,752 lines. Removing the retired consensus diagnostics and
+# merging the current schema tests and native audit/lifecycle coverage yields
+# 3,045 lines of measured reduction. Retiring the admission-intent schema
+# and asserting its absence removes another 80 lines (3,125 total).
+# Retiring orphaned lane/AMX schema assertions and scalar inventories removes
+# another 106 lines (3,231 total); the 2,000-line obligation is unchanged.
 ORIGINAL_PREIMAGE_RUST_LINES = 12_327
 ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
 PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
@@ -68,11 +73,11 @@ SOURCE_PATHS = ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_clean
  'crates/iroha_torii/src/openapi/tests/sorafs_pop_contracts.rs')
 SOURCE_LINE_LEDGER = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1672,
  'crates/iroha_torii/src/openapi.rs': 254,
- 'crates/iroha_torii/src/openapi/tests.rs': 3066,
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 2985,
- 'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 1037,
+ 'crates/iroha_torii/src/openapi/tests.rs': 2984,
+ 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 2968,
+ 'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 844,
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': 69,
- 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 699,
+ 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 580,
  'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs': 153,
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': 342,
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': 190,
@@ -83,9 +88,9 @@ SOURCE_LINE_LEDGER = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas
  'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': 28,
  'crates/iroha_torii/src/openapi/tests/sns_contract.rs': 361,
  'crates/iroha_torii/src/openapi/tests/soracloud_lease_contracts.rs': 475,
- 'crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs': 1118,
+ 'crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs': 1113,
  'crates/iroha_torii/src/openapi/tests/sorafs_pop_contracts.rs': 177,
- 'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2769,
+ 'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2770,
  'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 1123,
  'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2282}
 ASSETS = {
@@ -164,7 +169,7 @@ SECTION_ORDER = {'cleanup': ('secret_scalar_owner_clears_constructor_and_transfe
              'openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.rows.2',
              'openapi.static_account_operations_publish_exact_auth_and_private_responses.strings.1',
              'openapi.static_account_operations_publish_exact_auth_and_private_responses.rows.1',
-             'openapi.sccp_schema_serialization_excludes_retired_and_secret_fields.strings.1',
+             'openapi.sccp_schema_serialization_excludes_secret_fields.strings.1',
              'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.rows.1',
              'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.1',
              'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.2',
@@ -188,7 +193,6 @@ SECTION_ORDER = {'cleanup': ('secret_scalar_owner_clears_constructor_and_transfe
              'openapi.generated_spec_includes_documented_paths.path_present.1',
              'openapi.generated_spec_includes_documented_paths.path_present.2',
              'openapi.generated_spec_includes_documented_paths.path_present.3',
-             'openapi.generated_spec_includes_documented_paths.path_absent.4',
              'openapi.generated_spec_includes_documented_paths.path_present.5',
              'openapi.generated_spec_includes_documented_paths.path_absent.6',
              'openapi.generated_spec_includes_documented_paths.path_present.7',
@@ -245,7 +249,6 @@ SECTION_ORDER = {'cleanup': ('secret_scalar_owner_clears_constructor_and_transfe
              'openapi.static_account_operations_publish_exact_auth_and_private_responses.method_rows',
              'openapi.musubi_provider_bundle_attestation.schema_rows',
              'openapi.transaction_payload.required',
-             'openapi.transaction_admission_intent.labels',
              'vpn.governance_mutation.request_property_rows',
              'vpn.governance_mutation.required_field_rows',
              'vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.6',
@@ -280,7 +283,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                              'checked_openapi_assets_match_package_authority',
                                              'public_lane_staking_schema_closes_status_variants_and_unbond_cutoff',
                                              'compiled_projection_matches_served_bytes',
-                                             'transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl',
+                                             'transaction_payload_schema_requires_closed_domain_and_positive_ttl',
                                              'authenticated_transaction_nullable_fields_are_required_and_nullable',
                                              'incoming_static_openapi_contracts_remain_bound_to_runtime_routes',
                                              'static_account_operations_publish_exact_auth_and_private_responses',
@@ -289,7 +292,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                              'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
                                              'openapi_uint64_bounds_keep_exact_integer_tokens_recursively'),
  'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': ('static_authority_is_the_complete_catalog_projection_with_exact_effects',
-                                                                   'sccp_schema_serialization_excludes_retired_and_secret_fields',
+                                                                   'sccp_schema_serialization_excludes_secret_fields',
                                                                    'sccp_governance_openapi_tracks_the_v1_parliament_proposal',
                                                                    'production_constants_embedded_in_openapi_remain_frozen',
                                                                    'openapi_route_auth_metadata_matches_enabled_catalog_projection',
@@ -327,14 +330,11 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                    'openapi_schemas_include_system_keys'),
  'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': ('pipeline_status_openapi_exposes_only_the_exact_first_release_scope',
                                                                  'npos_schema_excludes_retired_process_local_and_vrf_surfaces',
-                                                                 'native_amx_participant_diagnostics_schema_is_closed_and_bounded',
-                                                                 'autonomous_lane_execution_diagnostics_schema_is_closed_and_bounded',
                                                                  'status_openapi_uses_only_exact_scalar_probe_paths',
                                                                  'operator_webauthn_openapi_is_closed_bounded_and_capacity_aware',
                                                                  'finality_attestation_tip_progress_openapi_matches_native_bindings'),
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': ('fee_quote_decision_schema_is_an_exact_closed_payer_union',),
- 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': ('sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility',
-                                                                    'inrou_guest_image_schema_requires_one_concrete_published_artifact',
+ 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': ('inrou_guest_image_schema_requires_one_concrete_published_artifact',
                                                                     'inrou_first_release_openapi_matches_block_clock_and_exact_admission',
                                                                     'native_finality_schemas_are_exact_closed_and_bounded',
                                                                     'native_finality_schema_matches_executed_norito_json_and_rejects_retired_fields',
@@ -439,11 +439,11 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                                 'secret_byte_cleanup_accounting_is_isolated_between_threads')}
 ATTRIBUTE_SIGNATURE = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
  'crates/iroha_torii/src/openapi.rs': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
- 'crates/iroha_torii/src/openapi/tests.rs': 'd9e6cb53f27640c5894b89707ef9a3bf0fd003a7b2d0dbd7817afbe25788106a',
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 'ff32006097c6713351591afda7f5e5395b55ab505ee626912d9e6080f9d5099f',
- 'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': '975e68e04f92f9da7d88ba116299d764ae2a0abc7b21b867fdd7a407413e0bd5',
+ 'crates/iroha_torii/src/openapi/tests.rs': 'fd68bfc0a7fd23918b87ee9eaecc2bc14ec8c1009091e451d1a12c0d8ba3e41c',
+ 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 'aba62dbf9b4549579d1940c2ddf57632fe0ddd483c730853c32e69c728b3fbab',
+ 'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 'e9c818b7a47d03eeafa5846b96838acaca60a99594e6b125d8bc564f7d1e5d1a',
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': '32dc22a816d915f8cc2dd33fc257a38306ba0061f330594d4287a45ddc604ad6',
- 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 'c695f6c6becb09fd9ea16c9c3efb2df32ce608ac8d1231c7c9aa65b8f9e207af',
+ 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': 'bf1c6423a7530ecb83c985d6463c4e8e5236e23a8d31cff78f75880b6e7b59a3',
  'crates/iroha_torii/src/openapi/tests/hijiri_quote_contract.rs': '61f9b333943bab13defdf1e7454e88f819cc5c4e206890bfaac9aa2da3054cf4',
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': 'b1b49d0c5d309eb98a9db7bcba90c415ad86ed10d41fb55fd9216bbf7fb2cd12',
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': 'a0721c177ae54f8127c3f74c46c2435970238f7e49c3d1fc1d0149dfea3280e7',

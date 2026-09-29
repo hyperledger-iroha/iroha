@@ -568,70 +568,6 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
     ));
 }
 
-#[test]
-fn ordinary_owner_refuses_merge_control_before_any_execution_continuation() {
-    use iroha_data_model::{
-        block::{BlockExecutionContextBundle, CertifiedMergeLedgerReference},
-        merge::MergeQuorumCertificate,
-    };
-    let state = fixture(65_536, None);
-    let validators = Vec::<iroha_model_base::peer::PeerId>::new();
-    // Deliberately untrusted control: source exclusion must not consume it as
-    // an empty ordinary carrier or attempt to turn its shape into authority.
-    let reference = CertifiedMergeLedgerReference {
-        version: 1,
-        entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"merge-control")),
-        encoded_len: 1,
-        epoch_id: 1,
-        execution_batch_hash: None,
-        entrypoint_count: None,
-        entrypoint_merkle_root: None,
-        result_merkle_root: None,
-        base_state_height: None,
-        base_state_hash: None,
-        merge_qc: MergeQuorumCertificate::new(
-            0,
-            1,
-            2,
-            HashOf::from_untyped_unchecked(Hash::new(b"parent")),
-            state.network_id,
-            1,
-            HashOf::new(&validators),
-            validators,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Hash::new(b"untrusted"),
-        ),
-    };
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        None,
-        None,
-        2,
-        0,
-    ));
-    builder.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference),
-    ));
-    let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-    let mut block = state.block(source.header());
-    block.reserve_ordinary_execution_outputs(&source).unwrap();
-    let fragments = block.committed_fragment_count();
-    assert!(
-        block
-            .produce_ordinary_execution_outputs(&source, |_| panic!(
-                "foreign source must not enter continuation"
-            ))
-            .is_err()
-    );
-    assert_eq!(block.committed_fragment_count(), fragments);
-    assert!(matches!(
-        block.commit().unwrap_err(),
-        TransactionsBlockError::ExecutionOutputCapacity
-    ));
-}
-
 #[path = "output_network_penalty_tests.rs"]
 mod penalties;
 
@@ -924,14 +860,10 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     cache_owner.set_checkout_refusal_for_test(Some(reason));
     exec_witness::start_block();
     let mut block = state.block(source.header());
-    let mut cache =
-        IvmCache::with_prepared_contract_cache(block.pipeline.cache_size, cache_owner.clone());
     let before = exec_witness::snapshot_exec_witness();
-    let accepted =
-        AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(entry.clone()));
     assert_eq!(
-        block.validate_transaction(accepted, &mut cache),
-        Err(reason.into())
+        execute(&mut block, &source),
+        Err(ExecutionAttemptError::Deferred(reason.into()))
     );
     assert_eq!(exec_witness::snapshot_exec_witness(), before);
     assert_eq!(block.gas_used_in_block, 0);
@@ -955,12 +887,14 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
         Repeats::Exactly(2)
     );
     cache_owner.set_checkout_refusal_for_test(None);
-    let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(entry));
-    let callbacks = block
-        .validate_transaction(accepted, &mut cache)
-        .expect("local recovery")
-        .1
-        .expect("same source succeeds");
+    drop(block);
+    exec_witness::start_block();
+    let mut block = state.block(source.header());
+    execute(&mut block, &source).expect("same original source succeeds after local recovery");
+    let callbacks = network_row(&block, 0)
+        .result
+        .as_ref()
+        .expect("source succeeds");
     assert_eq!(
         callbacks.len(),
         1,

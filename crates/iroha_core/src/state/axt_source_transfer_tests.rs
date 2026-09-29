@@ -51,107 +51,78 @@ fn test_delta(from_before: u32, to_before: u32) -> TransferDeltaTranscript {
     }
 }
 
-fn source_target(parent: &SignedBlock, rejected: bool, retain_transcripts: bool) -> SignedBlock {
-    let keypair: KeyPair = super::checked_keypair();
-    let authority = AccountId::new(keypair.public_key().clone());
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        nonzero!(2_u64),
-        Some(parent.hash()),
-        None,
-        parent.header().creation_time_ms + 1,
-        0,
-    ));
-    let mut tx = TransactionBuilder::new(
-        *super::DEFAULT_TEST_NETWORK_ID,
-        authority,
-        FeePaymentIntent::authority(Vec::new(), None),
-    );
-    tx.set_creation_time(Duration::from_millis(7));
-    let tx = tx.sign(keypair.private_key());
-    let entrypoint = TransactionEntrypoint::External(tx.clone());
-    let source_hash = Hash::from(entrypoint.execution_call_hash());
-    builder.push_transaction(tx);
-    let mut block = builder.build_with_signature(0, keypair.private_key());
-    let result = if rejected {
-        TransactionResult::new(Err(
-            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::NotPermitted("source rejected".into()),
-            ),
-        ))
-    } else {
-        TransactionResult::new(Ok(Vec::new()))
-    };
-    let transcripts = if retain_transcripts {
-        BTreeMap::from([(
-            source_hash,
-            vec![TransferTranscript {
-                batch_hash: source_hash,
-                deltas: vec![test_delta(10, 0), test_delta(9, 1)],
-                authority_digest: Hash::new(b"source test authority"),
-                poseidon_preimage_digest: None,
-            }],
-        )])
-    } else {
-        BTreeMap::new()
-    };
-    block
-        .set_execution_outputs(
-            vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                input_index: 0,
-                result,
-                completions: Vec::new(),
-            })],
-            u64::from(!rejected),
-            transcripts,
-            Vec::new(),
-            Default::default(),
-            BTreeSet::new(),
-            &ExecutionOutputLimits {
-                max_outputs: 8,
-                max_output_bytes: 1024 * 1024,
-                max_total_output_bytes: 4 * 1024 * 1024,
-                max_executed_wire_bytes: 4 * 1024 * 1024,
-            },
-        )
-        .expect("bounded synthetic source result");
-    block
-}
-
 fn finalized_fixture(rejected: bool, retain_transcripts: bool) -> CommittedNetworkProofFixture {
-    CommittedNetworkProofFixture::new(
-        |parent| source_target(parent, rejected, retain_transcripts),
-        true,
-    )
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::{
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition, id::AssetId},
+        domain::Domain,
+        isi::{InstructionBox, Log, Mint, Register, TransferAssetBatch, TransferAssetBatchEntry},
+    };
+    let domain = DomainId::try_new("wonderland", "universal").unwrap();
+    let definition = test_delta(10, 0).asset_definition;
+    let source = AssetId::new(definition.clone(), (*ALICE_ID).clone());
+    let mut config = TestChainConfig::new(World::new(), 1000);
+    config.genesis_key = iroha_test_samples::ALICE_KEYPAIR.clone();
+    config.genesis_instructions = vec![
+        Register::domain(Domain::new(domain.clone())).into(),
+        Register::account(Account::new((*BOB_ID).clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            definition.clone(),
+            "rose",
+            AssetBalancePolicy::Global,
+            Some(domain),
+        ))
+        .into(),
+        Mint::asset_quantity(10_u32, source).into(),
+    ];
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    let instructions: Vec<InstructionBox> = if retain_transcripts || rejected {
+        vec![
+            TransferAssetBatch::new(vec![
+                TransferAssetBatchEntry::new(
+                    (*ALICE_ID).clone(),
+                    (*BOB_ID).clone(),
+                    definition.clone(),
+                    if rejected { 1000_u32 } else { 1_u32 },
+                ),
+                TransferAssetBatchEntry::new(
+                    (*ALICE_ID).clone(),
+                    (*BOB_ID).clone(),
+                    definition,
+                    1_u32,
+                ),
+            ])
+            .into(),
+        ]
+    } else {
+        vec![
+            Log::new(
+                iroha_data_model::Level::INFO,
+                "no transfer transcript".into(),
+            )
+            .into(),
+        ]
+    };
+    let tx = chain.sign(&iroha_test_samples::ALICE_KEYPAIR, instructions, 1001);
+    assert_eq!(chain.commit(vec![tx]), vec![!rejected]);
+    CommittedNetworkProofFixture::from_chain(chain)
 }
 
-fn source_state(fixture: &CommittedNetworkProofFixture) -> Box<State> {
-    let state = Box::new(
-        State::try_new_with_chain_and_network_id(
-            crate::state::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            World::default(),
-            Arc::clone(&fixture.kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            (*super::DEFAULT_TEST_CHAIN_ID).clone(),
-            fixture.artifacts[0].height_context.network_id,
-            #[cfg(feature = "telemetry")]
-            Default::default(),
-        )
-        .expect("State startup over authenticated test Kura"),
-    );
-    let mut hashes = state.block_hashes.block();
-    for block in &fixture.blocks {
-        hashes.push(block.hash());
-    }
-    hashes.commit();
-    state
+fn source_state(fixture: &CommittedNetworkProofFixture) -> Arc<State> {
+    Arc::clone(&fixture.state)
 }
 
 fn source_claim(block: &SignedBlock) -> AxtSourceTransferOccurrenceV1 {
     let source = block.network_entrypoint_at(0).expect("source input");
     let source_hash = Hash::from(source.execution_call_hash());
-    let delta = test_delta(9, 1);
+    let delta = block
+        .fastpq_transcripts()
+        .get(&source_hash)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.deltas.get(1))
+        .cloned()
+        .unwrap_or_else(|| test_delta(9, 1));
     AxtSourceTransferOccurrenceV1 {
         source_tx_commitment: source_hash.into(),
         source_success_receipt_digest: [0x71; 32],

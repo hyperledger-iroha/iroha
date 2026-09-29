@@ -1,7 +1,7 @@
 import Foundation
 
 /// Sole native status protocol revision.
-public let sumeragiStatusProtocolVersion: UInt16 = 8
+public let sumeragiStatusProtocolVersion: UInt16 = 1
 
 private func requireNativeStatusFields(_ decoder: Decoder, _ fields: [String]) throws {
     let container = try decoder.container(keyedBy: NativeStatusCodingKey.self)
@@ -244,4 +244,3 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         }
     }
 }
-

@@ -32,7 +32,8 @@
 //! Routes that serve stored data-model records (registry, outbound records, rosters, bridge
 //! keys) use those records directly.
 //!
-//! TODO(ws35): add the remaining §6 read-API records (attestation views, history, governance).
+//! TODO(ws35): add the remaining §6 read-API records (attestation views and the governance
+//! targets beyond the proposal listing).
 
 use iroha_data_model::{bridge::SccpNetworkV1, sccp::attestation::SccpAttestationStatementV1};
 use norito::codec::{Decode, Encode};

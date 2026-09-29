@@ -1,7 +1,7 @@
 # SCCP v1 TON contracts: build, tests and artifacts
 
 This note covers the repository tooling for the TON destination of SCCP v1
-(`specs/sccp.md` revision 3, §5.3–§5.5). The contracts live in
+(`specs/sccp.md` revision 4, §5.3–§5.5). The contracts live in
 [`contracts/ton/sccp`](../../contracts/ton/sccp):
 
 | Contract | Source | Role |
@@ -54,8 +54,9 @@ check (`acton wrapper --all` in a scratch copy must reproduce
 StateInit golden check. Wrapper names are the PascalCase contract ids.
 
 For local end-to-end runs against a full TON node emulation, use
-`acton simulator` (it replaces the retired lightweight localnet); the lane
-tests of `integration_tests/tests/sccp_lanes/ton.rs` own that flow.
+`acton simulator`. The four-validator TON lane scenarios belong to the
+`integration_tests/tests/sccp_lanes/` harness, which does not have them yet
+(TODO(ws36)).
 
 ## Test vectors
 

@@ -36,6 +36,10 @@ Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 Local contract durable-state fixtures require exact NFC path spelling and
 reject duplicate decoded JSON keys.
 
+Binding-only IVM proof helpers are removed. Core rejects `IvmProved` until the
+complete native STARK execution relation and State-owned finalized anchor are
+available. Generic proof and verifying-key registry commands remain available.
+
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
 coordinator. Retry the same apply command with the same inventory and authorization;
@@ -554,57 +558,44 @@ The CLI builds, quotes, signs, and submits VK registry transactions with the acc
 the active client configuration. VK JSON files contain public registry data only; signing
 authorities and private keys are not accepted in these files.
 
-Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
+Register a verifying-key DTO produced by the circuit's canonical tooling:
 
 The optional `namespace` field defaults to `core` when omitted or `null`. Set it
 to `kagemusha_v1` for KAGEMUSHA V1 verifier records. Explicit namespace values
 must be non-empty and must not contain leading or trailing whitespace.
 
 ```bash
-cat >vk_register.json <<'JSON'
-{
-  "backend": "halo2/ipa",
-  "name": "vk_add",
-  "version": 1,
-  "circuit_id": "circuit_alpha",
-  "namespace": "core",
-  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "vk_bytes": "BASE64..."
-}
-JSON
 iroha app zk vk register --json vk_register.json
 ```
 
-Update an existing verifying key (version must increase). You may supply only the commitment:
+The DTO must contain the admitted circuit's exact key, schema, curve and proof
+limit. Retain these values from its canonical generator or authenticated release
+artifact; do not invent circuit names or transcript parameters.
+
+To update an existing record, use a generated registration DTO with the same
+registry name and increase its `version` before submitting it:
 
 ```bash
-cat >vk_update.json <<'JSON'
-{
-  "backend": "halo2/ipa",
-  "name": "vk_add",
-  "version": 2,
-  "circuit_id": "circuit_alpha",
-  "public_inputs_schema_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "commitment_hex": "0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd"
-}
-JSON
 iroha app zk vk update --json vk_update.json
 ```
+
+Register and update use the standard CLI fee-quote, signing and submission
+workflow. JSON mode returns the standard transaction receipt on stdout;
+submission does not claim that the transaction has reached `Applied` finality.
+
+Keep generated key metadata together. If you omit embedded `vk_bytes`, retain
+both the exact `commitment_hex` and the mandatory nonzero `vk_len`. Arbitrary
+circuit IDs and schema hashes are rejected by the production registry.
 
 Read a VK record as JSON:
 
 ```bash
-iroha app zk vk get --backend halo2/ipa --name vk_add
+iroha app zk vk get --backend halo2/ipa --name <registered-key-name>
 ```
 
-Compute the schema hash expected in the VK registry:
-
-```bash
-# From a Norito-encoded OpenVerifyEnvelope
-iroha app zk schema-hash --norito proof_env.norito
-# Or from raw public-input bytes (hex)
-iroha app zk schema-hash --public-inputs-hex 0x0123abcd...
-```
+Use the canonical generator's `public_inputs_schema_hash_hex` unchanged. It
+identifies the circuit's fixed schema descriptor; hashing a proof's concrete
+public-input values does not produce a registry schema digest.
 
 ### ZK attachments (app API convenience)
 
@@ -639,9 +630,17 @@ settings do not authorize callers to inject opaque KAGEMUSHA commitments.
 Encrypted memo envelopes remain available as a local wallet utility:
 
 ```bash
-iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
-  --ciphertext-b64 AQIDBA== --print-json --output memo.bin
+iroha app zk envelope --envelope-json memo.json --output memo.bin
+iroha app zk envelope --envelope-json memo.json --format base64
 ```
+
+`memo.json` is one typed `ConfidentialMemoEnvelopeV1` produced by the wallet's
+encryption API. This command validates and encodes an existing encrypted memo.
+Choose `--format base64`, `hex`, or `json` for exactly one stdout value; base64
+is the default without `--output`. An output file contains Norito bytes. This
+local command does not load `client.toml` or signing credentials; transaction and
+credential globals are rejected. Input files and JSON allocations use the CLI's
+bounded decoder.
 
 ### Register a ZK-capable asset
 
@@ -814,6 +813,24 @@ The full Iroha CLI reference is rendered from the live command tree and is not
 checked into the repository. Redirect it to an operator-chosen path when a
 standalone copy is needed. Kagami retains its smaller checked-in
 `CommandLineHelp.md` snapshot and validates that snapshot in its unit tests.
+
+Parliament timed-OVN `ballot register` and `ballot cast` require a complete,
+independently authenticated `SumeragiFinalityCheckpoint` before reading or
+creating seed material. Initialize custody once with
+`--trusted-checkpoint-file <checkpoint.nrt>`, using the canonical headered Norito
+checkpoint exported by `SumeragiFinalityVerifier::export_checkpoint`. The input
+must be an owner-only regular file. Its signed genesis, chain label, retained
+committee schedule and certified tip remain bound together; a height and digest
+alone cannot initialize trust. Fetching a checkpoint from the same untrusted
+proof response does not establish an independent trust anchor.
+
+The owner-only state file defaults to `<key-file>.state.nrt`; `--state-file`
+selects another path. It stores the same complete canonical checkpoint format
+and advances atomically after each authenticated proof page under an exclusive
+file lock. Existing state rejects initialization flags. Scalar JSON checkpoint
+files and the former height/context-id arguments are rejected. `ballot status`
+reads existing custody without changing it; `ballot dropout` authenticates its
+context whenever a state file is selected, including through a lost key's path.
 
 The fixed scaling generator accepts its private development seed only through
 `kagami localnet --scaling-lanes <1|4> --seed-fd <FD>`. The fixed Python owner

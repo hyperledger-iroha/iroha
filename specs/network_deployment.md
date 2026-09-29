@@ -1242,7 +1242,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
 **The seven Taira definitions become one profile plus `networks/taira.toml`.**
 - The config and genesis template, the kagami hidden branch, `defaults::taira`, the `iroha3d_taira` guards, the Python copies (`taira_devnet.py:142-169`, `taira_constants.py`), the CLI constants (`taira_public_reset.rs:39-56`, `taira.rs:53-57`, `taira_dataspace_deploy.rs:1166-1173`) and the rewrite stages are all deleted.
 - The drifted dpn, is2 and cbsi catalog is not carried over.
-- Consumers read the verified card: the five SoraFS and SCCP scripts use `iroha network status https://taira.sora.org --json`. The SDK `TairaTestnetProfile` copies and the chain-id literals are re-pointed in P8.
+- Consumers read the verified card: the five SoraFS scripts use `iroha network status https://taira.sora.org --json`. The SDK `TairaTestnetProfile` copies and the chain-id literals are re-pointed in P8.
 
 ---
 
@@ -1416,7 +1416,7 @@ Line counts come from `wc -l` on this branch unless marked ~. Everything below i
 - `crates/iroha_config/tests/taira_config_contracts.rs`, `iroha_config/tests/fixtures.rs`, `crates/iroha_genesis/src/lib.rs:3333-3475`, `crates/iroha_kagami/src/{wizard.rs:1883-1900, genesis/sign.rs:1785,2363}`: move to profile fixtures.
 - `scripts/docker_entrypoint.sh` and `scripts/tests/docker_entrypoint_test.py` (P8).
 - Sumeragi v2 release-gate scripts that list `iroha3d_taira`: `run_sumeragi_v2_release_gates.sh`, `sumeragi_v2_prebuilt_bundle.{py,sh}`, `write_sumeragi_v2_release_receipt*.py`, `bootstrap_sumeragi_v2_release_receipt_replay.py`, `run_sumeragi_v2_seed_matrix.sh`, `panic_recovery_boundaries.inventory` and their pytests. They move to `iroha3d` (P8).
-- `mobile_sdk_artifacts.yml:48-49`, `sorafs-orchestrator-sdk.yml:14-15` path filters, `scripts/check_workspace_target_inventory.py` and its test, and SoraFS and SCCP users of `taira_constants` (P8).
+- `mobile_sdk_artifacts.yml:48-49`, `sorafs-orchestrator-sdk.yml:14-15` path filters, `scripts/check_workspace_target_inventory.py` and its test, and SoraFS users of `taira_constants` (P8).
 - `status.md:59` link (P0).
 - `AGENTS.md` Taira bullets and `skills/sora-taira-testnet/SKILL.md` (P8, text proposed in §13).
 

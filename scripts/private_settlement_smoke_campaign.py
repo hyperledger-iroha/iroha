@@ -474,8 +474,8 @@ def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any])
         "nexus_amx_context_hash", "execution_policy_hash", "da_layout", "leader_seed"}, "height context")
     header = fields(proof["block_header"], {"height", "prev_block_hash", "merkle_root", "result_merkle_root",
         "da_proof_policies_hash", "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash",
-        "sccp_commitment_root", "creation_time_ms", "view_change_index", "confidential_features",
-        "execution_context_hash"}, "block header")
+        "creation_time_ms", "view_change_index", "confidential_features", "execution_context_hash"},
+        "block header")
     require(all(type(value) is int and value == result["finalized_height"] for value in
                 (header["height"], artifact["height"], context["height"])), "finality height substitution")
     require(all(type(value) is int and value == 4 for value in
@@ -775,7 +775,7 @@ def build_commands(repo: Path, target: Path) -> dict[str, list[str]]:
     common = ["--locked", "--offline", "--release"]
     return {
         "build-validator": prefix + ["build", *common, "-p", "irohad", "--bin", "iroha3d",
-                                      "--features", "test-network-message-control", "--target-dir", str(target)],
+                                      "--features", "test-network-private-settlement-route-control", "--target-dir", str(target)],
         "build-integration": prefix + ["test", *common, "-p", "integration_tests", "--test", "nexus_and_streaming",
             "--features", "atomic-private-settlement-smoke", "--no-run", "--message-format=json",
             "--target-dir", str(target)],
@@ -821,7 +821,7 @@ def invocation_environment(request_path: Path, evidence: Path, result_path: Path
     environment.update({"RAYON_NUM_THREADS": str(RAYON_WORKER_THREADS),
         "IROHA_TEST_REQUIRE_NETWORK": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
         "IROHA_TEST_SKIP_BUILD": "1", "IROHA_TEST_BUILD_PROFILE": "release",
-        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": validator["path"],
+        "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES": validator["path"],
         "APS_REAL_PROCESS_REQUEST": str(request_path), "APS_REAL_PROCESS_RESULT": str(result_path),
         "APS_REAL_PROCESS_REQUEST_SHA256": sha(read_bytes(request_path)),
         "APS_REAL_PROCESS_VALIDATOR_SHA256": validator["sha256"], "APS_REAL_PROCESS_EVIDENCE_DIR": str(evidence)})

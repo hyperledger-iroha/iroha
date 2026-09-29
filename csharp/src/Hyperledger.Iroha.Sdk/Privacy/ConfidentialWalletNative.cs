@@ -12,8 +12,8 @@ public static class ConfidentialNotes
     public static byte[] Diversifier(ReadOnlySpan<byte> seed)
     {
         if (seed.Length is < 1 or > 4096) throw new ArgumentException("Diversifier seed must contain 1 to 4096 bytes.");
-        ConfidentialWalletNative.RequireAvailable(); var copy = seed.ToArray(); var output = new byte[32];
-        try { ConfidentialWalletNative.DerivationCheck(ConfidentialWalletNative.Diversifier(copy, new((uint)copy.Length), output, new(32))); return output; }
+        ConfidentialWalletNative.RequireAvailable(); var copy = new byte[seed.Length]; var output = new byte[32];
+        try { seed.CopyTo(copy); ConfidentialWalletNative.DerivationCheck(ConfidentialWalletNative.Diversifier(copy, new((uint)copy.Length), output, new(32))); return output; }
         finally { CryptographicOperations.ZeroMemory(copy); }
     }
     public static byte[] OwnerTag(ReadOnlySpan<byte> spendKey, ReadOnlySpan<byte> diversifier)

@@ -37,40 +37,9 @@ pub struct Kura {
     /// Finite membership segment and workspace limits, without an environment override.
     #[config(nested)]
     pub membership_storage: KuraMembershipStorage,
-    /// Number of recent lane-history entries retained alongside the block store.
-    #[config(
-        env = "KURA_LANE_HISTORY_RETENTION",
-        default = "defaults::kura::LANE_HISTORY_RETENTION"
-    )]
-    pub lane_history_retention: NonZeroUsize,
     /// Bounded FASTPQ artifact content store. No environment-based policy override is accepted.
     #[config(nested)]
     pub fastpq_artifacts: KuraFastpqArtifacts,
-    /// Distinct remote peers that must advertise a canonical block before local body eviction.
-    #[config(
-        env = "KURA_EVICTION_REQUIRED_REPLICAS",
-        default = "defaults::kura::EVICTION_REQUIRED_REPLICAS"
-    )]
-    pub eviction_required_replicas: NonZeroUsize,
-    /// Number of authenticated historical advert keys retained immediately before the protected
-    /// in-memory block tail.
-    #[config(
-        env = "KURA_REPLICA_ADVERT_EVICTABLE_WINDOW",
-        default = "defaults::kura::REPLICA_ADVERT_EVICTABLE_WINDOW"
-    )]
-    pub replica_advert_evictable_window: NonZeroUsize,
-    /// Lifetime in milliseconds of one authenticated remote replica observation.
-    #[config(
-        env = "KURA_REPLICA_ADVERT_TTL_MS",
-        default = "defaults::kura::REPLICA_ADVERT_TTL.into()"
-    )]
-    pub replica_advert_ttl_ms: DurationMs,
-    /// Cadence in milliseconds for proactively refreshing selected-keeper replica adverts.
-    #[config(
-        env = "KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MS",
-        default = "defaults::kura::REPLICA_ADVERT_REFRESH_INTERVAL.into()"
-    )]
-    pub replica_advert_refresh_interval_ms: DurationMs,
     /// Fsync policy for block persistence.
     #[config(env = "KURA_FSYNC_MODE", default = "defaults::kura::FSYNC_MODE")]
     pub fsync_mode: KuraFsyncMode,
@@ -95,12 +64,7 @@ impl Kura {
             block_hash_history_bytes,
             transaction_history_bytes,
             membership_storage,
-            lane_history_retention,
             fastpq_artifacts,
-            eviction_required_replicas,
-            replica_advert_evictable_window,
-            replica_advert_ttl_ms,
-            replica_advert_refresh_interval_ms,
             fsync_mode,
             fsync_interval_ms,
             debug:
@@ -130,15 +94,6 @@ impl Kura {
         if let Err(error) = fastpq_artifacts.validate() {
             emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(error));
         }
-        let replica_advert = actual::KuraReplicaAdvertPolicy {
-            eviction_required_replicas,
-            evictable_window: replica_advert_evictable_window,
-            ttl: replica_advert_ttl_ms.0,
-            refresh_interval: replica_advert_refresh_interval_ms.0,
-        };
-        if let Err(error) = replica_advert.validate(blocks_in_memory) {
-            emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(error));
-        }
         actual::Kura {
             init_mode,
             store_dir,
@@ -151,9 +106,7 @@ impl Kura {
                 max_bytes: membership_storage.max_bytes,
                 memory_bytes: membership_storage.memory_bytes,
             },
-            lane_history_retention,
             fastpq_artifacts,
-            replica_advert,
             debug_output_new_blocks,
             fsync_mode,
             fsync_interval: fsync_interval_ms.0,

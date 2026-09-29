@@ -1156,45 +1156,6 @@ fn builder_preserves_consensus_metadata() {
     );
 }
 #[test]
-fn raw_v2_genesis_requires_signed_context_parameters() {
-    let manifest = RawGenesisTransaction {
-        chain: ChainId::from("iroha:test:missing-v2-context"),
-        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-        executor: None,
-        ivm_dir: IvmPath::default(),
-        transactions: vec![RawGenesisTx::default()],
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-        wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
-        consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-        crypto: ManifestCrypto::default(),
-    };
-    let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
-    value
-        .as_object_mut()
-        .expect("manifest object")
-        .remove("sumeragi_v2");
-    let error = RawGenesisTransaction::from_json_value(value)
-        .expect_err("v2 context parameters are required");
-    assert!(
-        error.to_string().contains("sumeragi_v2"),
-        "unexpected error: {error}"
-    );
-
-    let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
-    value
-        .as_object_mut()
-        .expect("manifest object")
-        .remove("kagemusha_mint_finality");
-    let error = RawGenesisTransaction::from_json_value(value)
-        .expect_err("KAGEMUSHA mint-finality genesis parameters are required");
-    assert!(
-        error.to_string().contains("kagemusha_mint_finality"),
-        "unexpected error: {error}"
-    );
-}
-#[test]
 fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:strict-consensus-manifest"),

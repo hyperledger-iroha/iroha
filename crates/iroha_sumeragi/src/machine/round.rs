@@ -4,7 +4,6 @@
 use super::{Build, Core, ExecState, Me, Mine, PendingApply, Tip, Via, votes::Pools};
 use crate::{
     api::{Action, HaltReason, LocalFault},
-    crypto::verify_qc_signatures,
     message::{BlockHeader, Evidence, Qc, VoteKind, WireMessage},
     pacemaker::{effective_t_max, t_req_nominal},
     safety::{SafetyRecord, SignerChoice, select_signer},
@@ -85,7 +84,7 @@ impl Core {
         }
         // Step 5.
         let next = self.height.saturating_add(1);
-        if self.config(&next).is_some() {
+        if self.config(next).is_some() {
             self.enter_height(next, late);
         } else {
             self.awaiting = true;
@@ -175,8 +174,29 @@ impl Core {
 
     /// `enter_height` (§6.8 step 5): enter round `(new_h, 0)`. `late`: the entry came from
     /// awaiting, sync, a `Status` or a restart (§6.8 step 5, §6.11 proposal request).
+    /// Clear transient work of the previous view. Height entry and TC advancement keep
+    /// their distinct durable locks, timeout records and proposal mutation checks.
+    pub(super) fn reset_view(&mut self) {
+        self.t_enter = self.now;
+        self.t_prop = None;
+        self.t_body = None;
+        self.asked = false;
+        self.stage = self.hint;
+        self.t_ready = None;
+        self.t_pqc = None;
+        self.t_lastvote = None;
+        self.retx = [None, None];
+        self.build = Build::Idle;
+        self.fresh_build = None;
+        self.repropose = false;
+        self.resend_recorded = None;
+        self.proposal_sent_at = None;
+        self.repushed.clear();
+        self.request_pushed.clear();
+    }
+
     pub(super) fn enter_height(&mut self, new_h: u64, late: bool) {
-        let Some(cfg) = self.config(&new_h).cloned() else {
+        let Some(cfg) = self.config(new_h).cloned() else {
             self.awaiting = true;
             return;
         };
@@ -203,27 +223,12 @@ impl Core {
         self.awaiting = false;
         self.height = new_h;
         self.view = 0;
-        self.t_enter = self.now;
-        self.t_prop = None;
-        self.t_body = None;
+        self.reset_view();
         self.late_entry = late;
-        self.asked = false;
         self.timeout_view = None;
         self.proposal = None;
-        self.stage = self.hint;
-        self.t_ready = None;
-        self.t_pqc = None;
-        self.t_lastvote = None;
         self.mine = Mine::default();
-        self.retx = [None, None];
-        self.build = Build::Idle;
-        self.fresh_build = None;
         self.control_received.clear();
-        self.repropose = false;
-        self.resend_recorded = None;
-        self.proposal_sent_at = None;
-        self.repushed.clear();
-        self.request_pushed.clear();
         self.answered.clear();
         self.votes = Pools::new(cfg.committee.n());
         self.timeouts = vec![None; cfg.committee.n()];
@@ -264,7 +269,7 @@ impl Core {
             self.probe.clear();
             return;
         }
-        if let Some(next) = self.config(&self.tip.height.saturating_add(2)) {
+        if let Some(next) = self.config(self.tip.height.saturating_add(2)) {
             let committee = next.committee.clone();
             let epoch = next.epoch.id;
             if self.probe_epoch != Some(epoch) {
@@ -281,7 +286,7 @@ impl Core {
 
     /// Topology of `height` from its configuration and the recent committed headers.
     pub(super) fn topology_of(&self, height: u64) -> Option<Topology> {
-        let config = self.config(&height)?;
+        let config = self.config(height)?;
         let headers: Vec<BlockHeader> = self.recent_headers.iter().cloned().collect();
         Some(Topology::compute(
             &*self.crypto,
@@ -441,7 +446,7 @@ impl Core {
         }
         if self.awaiting {
             let next = self.tip.height.saturating_add(1);
-            if self.config(&next).is_some() {
+            if self.config(next).is_some() {
                 self.enter_height(next, true);
             }
         } else if a.saturating_add(1) == self.height {
@@ -456,7 +461,7 @@ impl Core {
         header: &BlockHeader,
         outcome: AppliedConfig,
     ) -> Option<Vec<(u64, ConfigSlot)>> {
-        let current = self.config(&height)?;
+        let current = self.config(height)?;
         if header.epoch != current.epoch.id || !current.epoch.contains(height) {
             return None;
         }
@@ -506,10 +511,10 @@ impl Core {
             }
         };
         for (height, slot) in &updates {
-            if let ConfigSlot::Ready(config) = slot {
-                if crate::pacemaker::validate_chain(&config.params, u64::MAX).is_err() {
-                    return None;
-                }
+            if let ConfigSlot::Ready(config) = slot
+                && crate::pacemaker::validate_chain(&config.params, u64::MAX).is_err()
+            {
+                return None;
             }
             if let Some(existing) = self.configs.get(height) {
                 match (existing, slot) {
@@ -554,19 +559,11 @@ impl Core {
         let config_height = c.height;
         #[cfg(sumeragi_mutation = "MS15")]
         let config_height = self.tip.height;
-        let Some(config) = self.config(&config_height) else {
+        let Some(config) = self.config(config_height) else {
             return;
         };
         // The Commit signatures alone prove the violation; attestations are not checked (§7.6).
-        if verify_qc_signatures(
-            &*self.crypto,
-            &self.instance,
-            &config.epoch.id,
-            &config.committee,
-            c,
-        )
-        .is_err()
-        {
+        if self.verifier(config).verify_qc_signatures(c).is_err() {
             return;
         }
         if let Some(qc) = our_qc {

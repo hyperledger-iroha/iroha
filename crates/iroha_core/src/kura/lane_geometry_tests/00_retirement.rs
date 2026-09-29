@@ -61,7 +61,6 @@ fn kura_config(root: &Path) -> KuraConfig {
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Always,
         fsync_interval: FSYNC_INTERVAL,
-        lane_history_retention: LANE_HISTORY_RETENTION,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
@@ -70,7 +69,6 @@ fn kura_config(root: &Path) -> KuraConfig {
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 fn configured_primary_catalog(alias: &str) -> LaneCatalog {
@@ -200,37 +198,41 @@ fn persist_create_intent(
 fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
-    let lane_count = nonzero!(2_u32);
+    let lane_count = nonzero!(3_u32);
     let primary = ModelLaneConfig::default();
     let second = ModelLaneConfig {
         id: LaneId::new(1),
         alias: "same-height-a".to_owned(),
         ..ModelLaneConfig::default()
     };
-    let relabelled = ModelLaneConfig {
+    let third = ModelLaneConfig {
+        id: LaneId::new(2),
         alias: "same-height-b".to_owned(),
         ..second.clone()
     };
     let initial_catalog =
         LaneCatalog::new(lane_count, vec![primary.clone()]).expect("initial catalog");
     let added_catalog =
-        LaneCatalog::new(lane_count, vec![primary.clone(), second]).expect("added catalog");
-    let relabelled_catalog =
-        LaneCatalog::new(lane_count, vec![primary, relabelled]).expect("relabelled catalog");
+        LaneCatalog::new(lane_count, vec![primary.clone(), second.clone()]).expect("added catalog");
+    let expanded_catalog =
+        LaneCatalog::new(lane_count, vec![primary, second, third]).expect("expanded catalog");
     let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let added = RuntimeLaneConfig::from_catalog(&added_catalog);
-    let relabelled = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
+    let expanded = RuntimeLaneConfig::from_catalog(&expanded_catalog);
     let initial_incarnations =
         BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x51; Hash::LENGTH]))]);
     let added_incarnations = BTreeMap::from([
         (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
         (LaneId::new(1), Hash::prehashed([0x52; Hash::LENGTH])),
     ]);
-    let mut relabelled_incarnations = added_incarnations.clone();
-    relabelled_incarnations.insert(LaneId::new(1), Hash::prehashed([0x53; Hash::LENGTH]));
+    let mut expanded_incarnations = added_incarnations.clone();
+    expanded_incarnations.insert(LaneId::new(2), Hash::prehashed([0x53; Hash::LENGTH]));
     let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let added_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 7)]);
+    let mut expanded_activations = added_activations.clone();
+    expanded_activations.insert(LaneId::new(2), 7);
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_incarnations);
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &added,
@@ -251,19 +253,19 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     .expect("publish first height-seven transition");
     kura.apply_lane_geometry_transition_at_height(
         &added,
-        &relabelled,
+        &expanded,
         &added_incarnations,
-        &relabelled_incarnations,
+        &expanded_incarnations,
         &added_activations,
-        &added_activations,
+        &expanded_activations,
         &BTreeSet::new(),
         7,
     )
     .expect("apply second height-seven transition");
     kura.mark_lane_geometry_catalog_published(
-        &relabelled,
-        &relabelled_incarnations,
-        &added_activations,
+        &expanded,
+        &expanded_incarnations,
+        &expanded_activations,
         None,
     )
     .expect("publish second height-seven transition");
@@ -310,19 +312,19 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
     .expect("republish first transition");
     kura.apply_lane_geometry_transition_at_height(
         &added,
-        &relabelled,
+        &expanded,
         &added_incarnations,
-        &relabelled_incarnations,
+        &expanded_incarnations,
         &added_activations,
-        &added_activations,
+        &expanded_activations,
         &BTreeSet::new(),
         7,
     )
     .expect("retry second transition in sequence");
     kura.mark_lane_geometry_catalog_published(
-        &relabelled,
-        &relabelled_incarnations,
-        &added_activations,
+        &expanded,
+        &expanded_incarnations,
+        &expanded_activations,
         None,
     )
     .expect("republish second transition");
@@ -744,25 +746,15 @@ fn journal_instance_recovery_refuses_occupied_and_unauthorized_targets_without_w
     let binding = &operation.created;
     let blocks = kura.binding_blocks_path(binding);
     let before = fs::read(kura.lane_geometry_journal_path()).unwrap();
-    let previous = std::mem::replace(
-        &mut *kura.provisional_snapshot_bootstrap.lock(),
-        crate::kura::SnapshotBootstrapRuntimeState::Pending(
-            crate::kura::ProvisionalSnapshotBootstrap {
-                hash_only_prefix_height: 1,
-                bootstrap_lineage_hash: None,
-                hash_journal_digest: None,
-            },
-        ),
-    );
+    kura.canonical_storage_poisoned
+        .store(true, Ordering::Release);
     let refused = kura.recover_journal_owned_lane_instances_on_startup();
-    *kura.provisional_snapshot_bootstrap.lock() = previous;
-    assert!(matches!(
-        refused,
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
+    kura.canonical_storage_poisoned
+        .store(false, Ordering::Release);
+    assert!(matches!(refused, Err(Error::CanonicalStoragePoisoned)));
     assert!(
         !blocks.exists(),
-        "ordinary recovery cannot use provisional snapshot state"
+        "ordinary recovery cannot use poisoned canonical state"
     );
     fs::create_dir_all(&blocks).unwrap();
     let foreign = blocks.join("foreign-unowned-data");
@@ -803,99 +795,6 @@ fn startup_rejects_nonempty_instance_scaffolding_without_repair() {
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::read(&journal_path).unwrap(), journal);
-    }
-}
-
-#[test]
-fn authoritative_reference_restore_never_recreates_missing_initial_or_dynamic_marker() {
-    for dynamic in [false, true] {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().join("kura");
-        let (initial, extended) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let (extended_incarnations, extended_activations) = extended_geometry();
-        let kura = open_kura(&root, &initial);
-        authenticate_transition_fixture_primary(&kura, &initial, &initial_incarnations);
-        let (catalog, incarnations, activations, lane_id) = if dynamic {
-            // Structural storage transition, not a finality or WSV authority fixture.
-            kura.apply_lane_geometry_transition_at_height(
-                &initial,
-                &extended,
-                &initial_incarnations,
-                &extended_incarnations,
-                &initial_activations,
-                &extended_activations,
-                &BTreeSet::new(),
-                9,
-            )
-            .unwrap();
-            kura.mark_lane_geometry_catalog_published(
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-                None,
-            )
-            .unwrap();
-            (
-                &extended,
-                &extended_incarnations,
-                &extended_activations,
-                LaneId::new(1),
-            )
-        } else {
-            (
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-                LaneId::SINGLE,
-            )
-        };
-        let entry = kura.lane_storage_entry(lane_id).unwrap();
-        assert_eq!(entry.activation_height > 0, dynamic);
-        let blocks = entry.blocks_dir(&root);
-        let marker = blocks.join(MARKER_FILE_NAME);
-        let marker_bytes = fs::read(&marker).unwrap();
-        let namespace = Kura::lane_artifact_dir(&blocks);
-        if namespace.exists() {
-            fs::remove_dir(&namespace).unwrap();
-        }
-        fs::remove_file(&marker).unwrap();
-        let before = native_observation_tree(&root);
-        let active = kura.lane_storage_entries.lock().clone();
-        let mut receipts = Vec::new();
-        {
-            let _geometry = kura.lane_geometry_lock.lock();
-            let _sidecar = kura.sidecar_lock.lock();
-            let error = kura
-                .ensure_authoritative_lane_markers_with_receipts(
-                    catalog,
-                    incarnations,
-                    activations,
-                    Some(&mut receipts),
-                )
-                .expect_err("a restored reference cannot recreate its missing marker");
-            assert_geometry_io_error(
-                &error,
-                ErrorKind::InvalidData,
-                "authoritative lane storage has no incarnation marker",
-            );
-        }
-        assert!(receipts.is_empty());
-        assert!(!marker.exists() && !namespace.exists());
-        assert_eq!(native_observation_tree(&root), before);
-        assert_eq!(*kura.lane_storage_entries.lock(), active);
-
-        // Returning the original bytes repairs the injected fault; only then may
-        // the existing owner provision the optional empty auxiliary namespace.
-        fs::write(&marker, &marker_bytes).unwrap();
-        {
-            let _geometry = kura.lane_geometry_lock.lock();
-            let _sidecar = kura.sidecar_lock.lock();
-            kura.ensure_authoritative_lane_markers(catalog, incarnations, activations)
-                .unwrap();
-        }
-        assert!(namespace.is_dir());
-        assert_eq!(fs::read(&marker).unwrap(), marker_bytes);
     }
 }
 

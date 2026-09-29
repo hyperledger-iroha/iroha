@@ -161,7 +161,7 @@ fn event_proof(
         &genesis,
         &anchor_ref,
         &MINTER,
-        Some((500, event, succeed)),
+        Some(&(500, event, succeed)),
     );
     let top = chain.shard_block(11, &event_block.link.block_id, &anchor_ref, &MINTER, None);
     let (master, _) = chain.master_block(150, 100, 0, T0 + 500, &top.link.block_id, &[], 4);

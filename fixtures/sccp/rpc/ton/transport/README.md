@@ -38,7 +38,7 @@ Captured on 2026-09-28 from the TON mainnet liteserver
 | `get_block_proof_forward` | `getBlockProof` mode 1 from the key block to the block (one `blockLinkForward`) |
 | `get_block_proof_key_hop` | `getBlockProof` mode 1 from the previous key block to the key block (a key-block hop) |
 | `get_block_proof_backward` | `getBlockProof` mode 1 from the block back to the key block (one `blockLinkBack`) |
-| `get_all_shards_info`, `get_block` | of the block |
+| `get_block` | of the block |
 | `get_config_params` | mode 0, parameters 34, 28 and 15 at the key block |
 | `get_account_state` | the jetton master at the block |
 | `get_transactions` | 3 transactions of the jetton master from its latest `(lt, hash)` (taken from `toncenter.com` `getAddressInformation`) |

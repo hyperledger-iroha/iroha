@@ -246,7 +246,8 @@ fn sign_modified_batches(
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions(instructions);
+            .with_instructions(instructions)
+            .with_metadata(genesis_transaction_metadata(index as u64).unwrap());
             builder.set_creation_time(Duration::from_millis(
                 u64::try_from(index).expect("fixture transaction index fits") + 1,
             ));
@@ -277,7 +278,8 @@ fn sign_modified_envelopes(
                 authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions(instructions);
+            .with_instructions(instructions)
+            .with_metadata(genesis_transaction_metadata(index as u64).unwrap());
             builder.set_creation_time(Duration::from_millis(
                 u64::try_from(index).expect("fixture transaction index fits") + 1,
             ));
@@ -387,6 +389,24 @@ fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
 #[test]
 fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
     let (manifest, key_pair, _, _) = prepared_proposal_fixture();
+    for replacement in [
+        Metadata::default(),
+        genesis_transaction_metadata(1).unwrap(),
+    ] {
+        let source = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
+            if index == 0 {
+                *builder = builder.clone().with_metadata(replacement.clone());
+            }
+        });
+        let error = validate_prepared_genesis_bundle(
+            &source.encode_wire().unwrap(),
+            &manifest,
+            key_pair.public_key(),
+            source.hash(),
+        )
+        .expect_err("missing or misordered genesis admission metadata must fail closed");
+        assert!(error.to_string().contains("non-canonical envelope fields"));
+    }
     let with_nonce = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
         if index == 0 {
             builder.set_nonce(core::num::NonZeroU32::new(1).expect("non-zero nonce"));

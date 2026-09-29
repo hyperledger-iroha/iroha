@@ -127,9 +127,6 @@ impl crate::seal::Instruction for DeploySoracloudAppInfra {}
 impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -189,9 +186,6 @@ impl crate::seal::Instruction for UpgradeSoracloudAppInfra {}
 impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1757,9 +1751,6 @@ macro_rules! impl_soracloud_decode_from_slice {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = soracloud_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -1780,10 +1771,6 @@ macro_rules! impl_soracloud_unit_decode_from_slice {
     ($ty:ty) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let flags = soracloud_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 if !bytes.is_empty() {
                     return Err(norito::core::Error::LengthMismatch);
                 }

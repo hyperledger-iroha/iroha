@@ -37,7 +37,7 @@ std::thread_local! {
         std::cell::RefCell::new(None);
 }
 #[cfg(all(test, unix))]
-pub(crate) fn install_descriptor_root_read_test_hooks(
+pub fn install_descriptor_root_read_test_hooks(
     after_target_bind: impl FnOnce() + 'static,
     before_revalidation: impl FnOnce() + 'static,
 ) {

@@ -652,11 +652,11 @@ fn resign(a: &mut SumeragiFinalityAttestation, k: &KeyPair) {
 }
 
 #[test]
-fn committee_size_accepts_exact_3f_plus_1_from_4_to_128() {
+fn committee_size_accepts_exact_3f_plus_1_from_4_to_31() {
     for n in 0..=140 {
         assert_eq!(
             CommitteeSize::new(n).is_ok(),
-            (4..=128).contains(&n) && (n - 1) % 3 == 0
+            (4..=31).contains(&n) && (n - 1) % 3 == 0
         );
     }
     for n in SIZES {

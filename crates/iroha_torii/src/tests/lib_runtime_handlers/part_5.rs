@@ -474,278 +474,6 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
 }
 #[cfg(feature = "connect")]
-struct FreshQueuePlanIngressFixture {
-    peer: SharedAppState,
-    journal_dir: Arc<tempfile::TempDir>,
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    server: Option<tokio::task::JoinHandle<()>>,
-}
-#[cfg(feature = "connect")]
-impl FreshQueuePlanIngressFixture {
-    fn assert_durable(&self, app: &SharedAppState, transaction: &SignedTransaction) {
-        let mut bindings = Vec::new();
-        for (name, receiver) in [("local", app), ("peer", &self.peer)] {
-            assert!(
-                receiver
-                    .queue
-                    .contains_pending_hash(transaction.hash_as_entrypoint(), &receiver.state,)
-            );
-            assert!(
-                !receiver
-                    .state
-                    .queue_plan_admission_registry_entrypoint_present(
-                        transaction.hash_as_entrypoint(),
-                    )
-                    .expect("coherent canonical registry"),
-                "this fixture must exercise fresh receipt admission, not canonical retry"
-            );
-            let accepted = routing::accept_transaction_for_ingress(
-                receiver.state.clone(),
-                TransactionEntrypoint::External(transaction.clone()),
-                &receiver.telemetry,
-            )
-            .expect("inspect the actually admitted signed input");
-            let claim = receiver
-                .queue
-                .durable_plan_admission_claim_with_state(&accepted, &receiver.state)
-                .expect("original durable claim is coherent")
-                .expect("real receipt receiver retains its original journal owner");
-            assert!(claim.global_admission_identity.is_some());
-            bindings.push(
-                iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim)
-                    .expect("original receipt binding"),
-            );
-            assert!(
-                std::fs::metadata(self.journal_dir.path().join(format!("{name}.norito")))
-                    .expect("actual receiver journal")
-                    .len()
-                    > 0
-            );
-        }
-        assert_eq!(
-            bindings[0], bindings[1],
-            "both real authorities admitted the exact same binding"
-        );
-    }
-
-    async fn finish(mut self) {
-        let _ = self
-            .shutdown
-            .take()
-            .expect("one peer shutdown owner")
-            .send(());
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            self.server.take().expect("one peer task"),
-        )
-        .await
-        .expect("signed peer should shut down")
-        .expect("signed peer should finish");
-    }
-}
-#[cfg(feature = "connect")]
-impl Drop for FreshQueuePlanIngressFixture {
-    fn drop(&mut self) {
-        // A failed assertion still closes the server without aborting an in-flight receipt.
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-    }
-}
-#[cfg(feature = "connect")]
-#[inline(never)]
-fn seed_fresh_queue_plan_submitter_for_test(state: &IrohaState, authority: &AccountId) {
-    let missing = state.view().world().account(authority).is_err();
-    if !missing {
-        return;
-    }
-    // End this large StateBlock frame before entering the validator setup frames.
-    let mut block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut tx = block.transaction();
-    Register::account(Account::new(authority.clone()))
-        .execute(&ALICE_ID, &mut tx)
-        .expect("seed original universal submitter account");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("publish fixture account");
-}
-#[cfg(feature = "connect")]
-fn install_fresh_queue_plan_authorities_for_test(
-    app: &mut SharedAppState,
-    signers: &[KeyPair],
-    local_index: usize,
-    transactions: &[&SignedTransaction],
-) {
-    let app = Arc::get_mut(app).expect("unique fresh ingress app");
-    app.local_peer_id = Some(PeerId::new(signers[local_index].public_key().clone()));
-    app.torii_proxy_bridge_signer = signers[local_index].clone();
-    let state = Arc::get_mut(&mut app.state).expect("unique fresh ingress State");
-    for transaction in transactions {
-        assert_eq!(
-            transaction.admission_intent(),
-            TransactionAdmissionIntent::QueuePlanSynced
-        );
-        assert!(
-            !state
-                .queue_plan_admission_registry_entrypoint_present(transaction.hash_as_entrypoint(),)
-                .expect("empty canonical admission registry")
-        );
-        seed_fresh_queue_plan_submitter_for_test(state, transaction.authority());
-    }
-    let bindings = signers
-        .iter()
-        .enumerate()
-        .map(|(index, signer)| {
-            let validator = AccountId::new(signer.public_key().clone());
-            ensure_runtime_peer_binding_for_test(
-                state,
-                &validator,
-                signer,
-                &format!("fresh-ingress-{index}"),
-            );
-            (validator, PeerId::new(signer.public_key().clone()))
-        })
-        .collect::<Vec<_>>();
-    let mut topology = state.commit_topology.block();
-    topology.clear();
-    for (_, peer) in &bindings {
-        topology.push(peer.clone());
-    }
-    topology.commit();
-    install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, bindings)]);
-    app.sumeragi = queue_plan_capacity_handle_for_test(
-        *state.network_id_ref(),
-        iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
-        signers,
-    );
-}
-#[cfg(feature = "connect")]
-async fn fresh_queue_plan_ingress_for_test(
-    app: &mut SharedAppState,
-    transactions: &[&SignedTransaction],
-) -> FreshQueuePlanIngressFixture {
-    fresh_queue_plan_ingress_with_peer_for_test(app, mk_app_state_for_tests(), transactions).await
-}
-#[cfg(feature = "connect")]
-async fn fresh_queue_plan_ingress_with_peer_for_test(
-    app: &mut SharedAppState,
-    mut peer: SharedAppState,
-    transactions: &[&SignedTransaction],
-) -> FreshQueuePlanIngressFixture {
-    // Same real four-authority path as the live-pending regression below. The
-    // origin and signed HTTP receiver each persist a claim before their receipt.
-    let signers = (0_u8..4)
-        .map(|index| {
-            checked_torii_test_keypair_from_seed_byte(
-                0xe0 + index,
-                Algorithm::BlsNormal,
-                "fresh QueuePlan receipt authority",
-            )
-        })
-        .collect::<Vec<_>>();
-    install_fresh_queue_plan_authorities_for_test(app, &signers, 0, transactions);
-    install_fresh_queue_plan_authorities_for_test(&mut peer, &signers, 1, transactions);
-    let journal_dir = Arc::new(tempfile::tempdir().expect("fresh QueuePlan receiver journals"));
-    for (name, receiver) in [("local", &*app), ("peer", &peer)] {
-        receiver
-            .queue
-            .install_plan_journal(
-                &journal_dir.path().join(format!("{name}.norito")),
-                1024 * 1024,
-                true,
-            )
-            .expect("install original receiver journal");
-    }
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind real receipt receiver");
-    let peer_url = format!("http://{}/", listener.local_addr().unwrap());
-    let validators = signers
-        .iter()
-        .enumerate()
-        .map(|(index, signer)| {
-            (
-                AccountId::new(signer.public_key().clone()),
-                PeerId::new(signer.public_key().clone()),
-                (index == 1).then_some(peer_url.as_str()),
-            )
-        })
-        .collect::<Vec<_>>();
-    for receiver in [&*app, &peer] {
-        install_lane_manifest_registry_with_torii_urls_for_test(
-            &receiver.state,
-            &[(LaneId::SINGLE, validators.clone())],
-        );
-    }
-    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    let context = app
-        .queue
-        .plan_admission_context_with_state(&app.state, &plan)
-        .expect("original route authority");
-    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
-    assert_eq!(
-        context,
-        peer.queue
-            .plan_admission_context_with_state(&peer.state, &plan)
-            .expect("peer route authority")
-    );
-    let layer = axum::middleware::from_fn_with_state::<
-        _,
-        _,
-        (axum::extract::State<SharedAppState>, axum::extract::Request),
-    >(
-        peer.clone(),
-        operator_signatures::enforce_torii_proxy_peer_signature,
-    );
-    let router = axum::Router::new()
-        .route(
-            TORII_INTERNAL_PROXY_HTTP_PATH,
-            axum::routing::post(handler_internal_torii_proxy_request).layer(layer),
-        )
-        .with_state(peer.clone());
-    let (shutdown, requested) = tokio::sync::oneshot::channel();
-    let journal_owner = journal_dir.clone();
-    let server = tokio::spawn(async move {
-        // Keep both paths alive through graceful shutdown even if the test unwinds.
-        let _journal_owner = journal_owner;
-        axum::serve(listener, router.into_make_service())
-            .with_graceful_shutdown(async move {
-                let _ = requested.await;
-            })
-            .await
-            .expect("serve authenticated fresh receipts");
-    });
-    FreshQueuePlanIngressFixture {
-        peer,
-        journal_dir,
-        shutdown: Some(shutdown),
-        server: Some(server),
-    }
-}
-#[cfg(feature = "connect")]
-fn signed_queue_plan_log_for_test(
-    network_id: NetworkId,
-    authority: AccountId,
-    message: &str,
-    keypair: &KeyPair,
-) -> SignedTransaction {
-    TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, message.to_owned())])
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-    .sign(keypair.private_key())
-}
-#[cfg(feature = "connect")]
 fn lifecycle_transaction_with_nonce_for_test(
     app: &SharedAppState,
     key: &KeyPair,
@@ -766,149 +494,20 @@ fn lifecycle_transaction_with_nonce_for_test(
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
-    // Public Log admission requires an exact QueuePlan certificate. Keep four real
-    // authorities and obtain f+1 receipts from the local queue and a signed HTTP
-    // peer request; neither a lifecycle intent nor an injected queue entry tests
-    // the public handler's live-pending path.
-    let signers = (0_u8..4)
-        .map(|offset| {
-            checked_torii_test_keypair_from_seed_byte(
-                0xd8_u8.wrapping_add(offset),
-                Algorithm::BlsNormal,
-                "derive live pending QueuePlan authority",
-            )
-        })
-        .collect::<Vec<_>>();
-    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
-        0xd8,
-        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        &signers,
+    let key = checked_torii_test_ed25519_keypair(0xd8, "live pending native authority");
+    let app = native_ingress_app_for_test(&[&key]);
+    let transaction = signed_log_transaction_for_test(
+        *app.state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        "native live pending status",
+        &key,
     );
-    Arc::get_mut(&mut app)
-        .expect("unique app state")
-        .high_load_tx_threshold = usize::MAX;
-    let (mut peer_app, _) = incoming_proxy_submit_fixture_with_validator_signers(
-        0xd8,
-        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        &signers,
-    );
-    {
-        let peer = Arc::get_mut(&mut peer_app).expect("unique peer app state");
-        peer.local_peer_id = Some(PeerId::from(signers[1].public_key().clone()));
-        peer.torii_proxy_bridge_signer = signers[1].clone();
-        peer.high_load_tx_threshold = usize::MAX;
-    }
-    let journal_dir = tempfile::tempdir().expect("live pending QueuePlan journals");
-    for (name, receiver) in [("local", &app), ("peer", &peer_app)] {
-        receiver
-            .queue
-            .install_plan_journal(
-                &journal_dir.path().join(format!("{name}.norito")),
-                1024 * 1024,
-                true,
-            )
-            .expect("install actual receiver QueuePlan journal");
-    }
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind live pending authority");
-    let peer_url = format!(
-        "http://{}/",
-        listener
-            .local_addr()
-            .expect("live pending authority address")
-    );
-    let validators = signers
-        .iter()
-        .enumerate()
-        .map(|(index, signer)| {
-            (
-                AccountId::new(signer.public_key().clone()),
-                PeerId::from(signer.public_key().clone()),
-                (index == 1).then_some(peer_url.as_str()),
-            )
-        })
-        .collect::<Vec<_>>();
-    let lanes = [(LaneId::SINGLE, validators)];
-    for receiver in [&app, &peer_app] {
-        install_lane_manifest_registry_with_torii_urls_for_test(&receiver.state, &lanes);
-    }
-    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    let context = app
-        .queue
-        .plan_admission_context_with_state(&app.state, &plan)
-        .expect("local live pending authority context");
-    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
-    assert_eq!(
-        context,
-        peer_app
-            .queue
-            .plan_admission_context_with_state(&peer_app.state, &plan)
-            .expect("peer live pending authority context"),
-        "both durable receivers must authenticate the same canonical route and roster"
-    );
-    let peer_layer = axum::middleware::from_fn_with_state::<
-        _,
-        _,
-        (axum::extract::State<SharedAppState>, axum::extract::Request),
-    >(
-        peer_app.clone(),
-        operator_signatures::enforce_torii_proxy_peer_signature,
-    );
-    let router = axum::Router::new()
-        .route(
-            TORII_INTERNAL_PROXY_HTTP_PATH,
-            axum::routing::post(handler_internal_torii_proxy_request).layer(peer_layer),
-        )
-        .with_state(peer_app.clone());
-    let (shutdown, shutdown_requested) = tokio::sync::oneshot::channel();
-    let peer_task = tokio::spawn(async move {
-        axum::serve(listener, router.into_make_service())
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_requested.await;
-            })
-            .await
-            .expect("serve actual signed QueuePlan receiver");
-    });
-    let TransactionEntrypoint::External(transaction) =
-        queue_plan_synced_test_entrypoint(&request).clone()
-    else {
-        panic!("live pending fixture must retain its signed external transaction")
-    };
     let tx_hash = transaction.hash();
-    let response = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&transaction),
-    )
-    .await
-    .expect("accepted")
-    .into_response();
-    let status = response.status();
-    let body = torii_body_bytes(response, "live pending admission response").await;
-    let _ = shutdown.send(());
-    tokio::time::timeout(Duration::from_secs(5), peer_task)
+    let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
-        .expect("signed QueuePlan receiver should shut down")
-        .expect("signed QueuePlan receiver should finish");
-    assert_eq!(
-        status,
-        StatusCode::ACCEPTED,
-        "actual certified handler admission: {}",
-        String::from_utf8_lossy(&body)
-    );
-    assert!(
-        peer_app
-            .queue
-            .contains_pending_hash(transaction.hash_as_entrypoint(), &peer_app.state),
-        "the second authenticated authority must have durably admitted the same input"
-    );
-    assert!(
-        app.queue
-            .contains_pending_hash(transaction.hash_as_entrypoint(), &app.state),
-        "fixture transaction should remain pending in the live queue"
-    );
+        .expect("native public handler admission");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_native_pending_for_test(&app, &transaction);
     app.pipeline_status_cache.record_entry(
         tx_hash.clone(),
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
@@ -949,9 +548,7 @@ fn pipeline_status_local_read_keeps_approved_cache() {
 }
 #[tokio::test]
 async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
-    let mut app = mk_app_state_for_tests();
-    let (block, entrypoint_hash) = make_signed_block(1, None);
-    let tx_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
+    let (mut app, tx_hash, _chain) = canonical_outcome_test_fixture(false);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -2176,6 +1773,55 @@ fn trigger_completion_query_caps_explicit_from_height() {
     assert_eq!(explicit_history.scanned_blocks, 2);
     assert!(explicit_history.completions.is_empty());
 }
+fn native_ingress_app_for_test(keys: &[&KeyPair]) -> SharedAppState {
+    let accounts = keys
+        .iter()
+        .map(|key| AccountId::new(key.public_key().clone()))
+        .map(|authority| Account::new(authority.clone()).build(&authority));
+    native_ingress_app_with_world_for_test(World::with([], accounts, []))
+}
+
+fn native_ingress_app_with_world_for_test(world: World) -> SharedAppState {
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 1_000))
+        .expect("prepare signed native ingress genesis");
+    let validator = prepared.validator_keys[0].clone();
+    let chain =
+        CertifiedTestChain::from_prepared(prepared).expect("execute signed native ingress genesis");
+    let mut app = mk_app_state_for_tests();
+    let unique = Arc::get_mut(&mut app).unwrap();
+    unique.state = chain.state().clone();
+    unique.kura = chain.kura().clone();
+    unique.local_peer_id = Some(PeerId::new(validator.public_key().clone()));
+    unique.torii_proxy_bridge_signer = validator;
+    unique.signed_query_admission = Arc::new(
+        routing::SignedQueryAdmission::new(
+            chain.network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(120),
+            NonZeroUsize::new(1_024).unwrap(),
+        )
+        .expect("native genesis query admission"),
+    );
+    app
+}
+
+fn assert_native_pending_for_test(app: &SharedAppState, transaction: &SignedTransaction) {
+    use iroha_version::codec::EncodeVersioned as _;
+    assert!(
+        app.queue
+            .contains_pending_hash(transaction.hash_as_entrypoint(), &app.state)
+    );
+    assert!(
+        lifecycle_pending_wire(app)
+            .contains(&TransactionEntrypoint::External(transaction.clone()).encode_versioned())
+    );
+    assert!(
+        !app.state
+            .has_committed_entrypoint(transaction.hash_as_entrypoint())
+    );
+}
+
 fn executed_history_test_fixture(
     config: iroha_core::sumeragi::test_chain::TestChainConfig,
     key: &KeyPair,
@@ -2486,10 +2132,6 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
         app.kura.store_block(replacement.clone()),
         Err(iroha_core::kura::Error::CanonicalBlockWireMismatch { height: 2 })
     ));
-    assert!(matches!(
-        app.kura.replace_top_block(replacement),
-        Err(iroha_core::kura::Error::CanonicalBlockWireMismatch { height: 2 })
-    ));
     let outcome = canonical_transaction_outcome(&app.state, &hash)
         .expect("rejected mutations preserve canonical authority")
         .expect("indexed transaction");
@@ -2626,7 +2268,8 @@ fn transaction_details_test_world(accounts: &[AccountId]) -> World {
         .map(|account_id| Account::new(account_id).build(owner));
     World::with([domain], accounts, [])
 }
-fn store_and_index_transaction_details_block(
+// Deliberately omit native certification: raw custody and an index are not finality.
+fn store_unverified_transaction_details_block(
     app: &SharedAppState,
     block: SignedBlock,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -2645,7 +2288,7 @@ fn store_and_index_transaction_details_block(
         usize::try_from(header.height().get()).expect("transaction-details height fits usize"),
     )
     .expect("transaction-details height is nonzero");
-    let block_hash = store_finalized_history_fixture(app, block);
+    let block_hash = store_block(app, block);
     let mut state_block = app.state.block(header.clone());
     state_block.block_hashes.push_for_tests(block_hash);
     state_block
@@ -2699,7 +2342,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
     let network_id = *app.state.network_id_ref();
     let router = Router::new()
         .route(
-            iroha_torii_shared::uri::TRANSACTION_DETAILS,
+            route_catalog::pipeline::TRANSACTION_DETAILS.path(),
             post(super::handler_pipeline_transaction_details),
         )
         .route(
@@ -2834,7 +2477,7 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         true,
     );
     let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash);
-    let block = chain.committed(2).block();
+    let block = chain.committed(2).block().clone();
     let (_, output) = block.network_output_at(0).unwrap();
     assert_eq!(output.input_index, 0);
     assert_eq!(
@@ -2956,7 +2599,116 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
     ));
 }
 #[tokio::test]
-async fn transaction_details_native_beneficiaries_preserve_restricted_history_isolation() {
+async fn transaction_details_authenticates_executed_native_registration_and_transfer_beneficiaries()
+{
+    use iroha_core::sumeragi::test_chain::TestChainConfig;
+    use iroha_data_model::isi::{InstructionBox, Register, Transfer};
+    let sender_key = checked_torii_test_ed25519_keypair(0x24, "native beneficiary sender");
+    let beneficiary_key = checked_torii_test_ed25519_keypair(0x37, "native beneficiary recipient");
+    let unrelated_key = checked_torii_test_ed25519_keypair(0x38, "native beneficiary unrelated");
+    let sender = AccountId::new(sender_key.public_key().clone());
+    let beneficiary = AccountId::new(beneficiary_key.public_key().clone());
+    let unrelated = AccountId::new(unrelated_key.public_key().clone());
+    for register in [true, false] {
+        for applied in [true, false] {
+            let asset_definition =
+                iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .xor_asset_definition_id;
+            let mut accounts = vec![sender.clone(), unrelated.clone()];
+            if !register || !applied {
+                accounts.push(beneficiary.clone());
+            }
+            let world = World::with_assets(
+                [],
+                accounts
+                    .into_iter()
+                    .map(|id| Account::new(id).build(&sender)),
+                [AssetDefinition::numeric(
+                    asset_definition.clone(),
+                    "XOR".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&sender)],
+                [Asset::new(
+                    AssetId::new(asset_definition.clone(), sender.clone()),
+                    Quantity::from(10_u32),
+                )],
+                [],
+            );
+            let instruction: InstructionBox = if register {
+                Register::account(Account::new(beneficiary.clone())).into()
+            } else {
+                Transfer::asset_quantity(
+                    AssetId::new(asset_definition, sender.clone()),
+                    Quantity::from(if applied { 7_u32 } else { 11_u32 }),
+                    beneficiary.clone(),
+                )
+                .into()
+            };
+            let (app, hash, chain) = executed_history_test_fixture(
+                TestChainConfig::new(world, 1_000),
+                &sender_key,
+                vec![instruction],
+                applied,
+            );
+            let entrypoint_hash = iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash);
+            let committed = chain.committed(2);
+            assert_eq!(
+                committed
+                    .block()
+                    .network_output_at(0)
+                    .unwrap()
+                    .1
+                    .result
+                    .is_ok(),
+                applied
+            );
+            for (label, key, allowed) in [
+                ("sender", &sender_key, true),
+                ("beneficiary", &beneficiary_key, applied),
+                ("unrelated", &unrelated_key, false),
+            ] {
+                let response = super::handler_pipeline_transaction_details(
+                    State(app.clone()),
+                    HeaderMap::new(),
+                    crate::loopback_connect_info(),
+                    None,
+                    versioned_query_for_test(signed_transaction_details_query(
+                        &app,
+                        key,
+                        entrypoint_hash,
+                    )),
+                )
+                .await;
+                if allowed {
+                    let response = response.unwrap_or_else(|error| {
+                        panic!("register={register} applied={applied} {label}: {error}")
+                    });
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let body =
+                        torii_body_bytes(response, "executed native beneficiary details").await;
+                    let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
+                        norito::decode_canonical_with_limits(
+                            &body,
+                            norito::canonical_decode_limits(body.len()),
+                        )
+                        .unwrap();
+                    assert_eq!(details.transaction.entrypoint().hash(), entrypoint_hash);
+                    assert_eq!(details.transaction.result().is_ok(), applied);
+                } else {
+                    assert!(
+                        matches!(response, Err(Error::Query(ValidationFail::NotPermitted(_)))),
+                        "register={register} applied={applied} {label}: native beneficiary isolation"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn transaction_details_rejects_uncertified_native_beneficiary_claims() {
     use iroha_data_model::{
         alias_setup::{
             AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
@@ -3022,7 +2774,7 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
             false,
         ),
     ];
-    for (label, instruction, names_native_beneficiary) in instructions {
+    for (label, instruction, _) in instructions {
         for applied in [true, false] {
             let mut app =
                 crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
@@ -3050,9 +2802,6 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                 "sign native beneficiary details fixture",
             );
             let entrypoint_hash = transaction.hash_as_entrypoint();
-            let expected_wire = transaction
-                .encode_wire_v1()
-                .expect("native transaction wire");
             // The same equality predicate still cannot be used as a global inventory read.
             let request = request_for_test(
                 &beneficiary,
@@ -3102,15 +2851,11 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                     ),
                 ],
             );
-            store_and_index_transaction_details_block(&app, block, entrypoint_hash);
-            for (caller_label, key_pair, allowed) in [
-                ("sender", &sender_key, true),
-                (
-                    "beneficiary",
-                    &beneficiary_key,
-                    applied && names_native_beneficiary,
-                ),
-                ("unrelated", &unrelated_key, false),
+            store_unverified_transaction_details_block(&app, block, entrypoint_hash);
+            for (caller_label, key_pair) in [
+                ("sender", &sender_key),
+                ("beneficiary", &beneficiary_key),
+                ("unrelated", &unrelated_key),
             ] {
                 let response = super::handler_pipeline_transaction_details(
                     State(app.clone()),
@@ -3124,35 +2869,10 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                     )),
                 )
                 .await;
-                if allowed {
-                    let response = response.unwrap_or_else(|error| {
-                        panic!("{label}/{caller_label}/{applied}: exact details denied: {error}")
-                    });
-                    assert_eq!(response.status(), StatusCode::OK);
-                    assert_eq!(
-                        response.headers()[axum::http::header::CONTENT_TYPE],
-                        crate::utils::NORITO_MIME_TYPE,
-                    );
-                    let body = torii_body_bytes(response, "native beneficiary details").await;
-                    let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
-                        norito::decode_canonical_with_limits(
-                            &body,
-                            norito::canonical_decode_limits(body.len()),
-                        )
-                        .expect("native beneficiary details canonical Norito");
-                    let TransactionEntrypoint::External(committed) =
-                        details.transaction.entrypoint()
-                    else {
-                        panic!("native details must retain the actual external transaction");
-                    };
-                    assert_eq!(committed.encode_wire_v1().unwrap(), expected_wire);
-                    assert_eq!(details.transaction.result().is_ok(), applied);
-                } else {
-                    assert!(
-                        matches!(response, Err(Error::Query(ValidationFail::NotPermitted(_)))),
-                        "{label}/{caller_label}/{applied}: only a successful actual native beneficiary may read"
-                    );
-                }
+                assert!(
+                    response.is_err(),
+                    "{label}/{caller_label}/{applied}: uncertified stored outputs cannot authorize history"
+                );
             }
         }
     }
@@ -3261,8 +2981,101 @@ fn transaction_details_rejects_unsigned_and_broadened_queries() {
         "unbounded transaction history must not qualify as an exact details query",
     );
 }
+fn commit_native_history_entrypoint(
+    chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
+    entrypoint: TransactionEntrypoint,
+) -> iroha_core::sumeragi::certified_chain::CommittedBlock {
+    chain.commit_entrypoints(vec![entrypoint])
+}
+
 #[tokio::test]
-async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias() {
+async fn pipeline_status_resolves_native_executed_sealed_reveal_and_signed_alias() {
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::transaction::signed::{
+        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+    };
+    let key = checked_torii_test_ed25519_keypair(0x26, "native sealed history authority");
+    let authority = AccountId::new(key.public_key().clone());
+    let mut chain =
+        CertifiedTestChain::start(TestChainConfig::new(world_with_account(&authority), 1_000))
+            .unwrap();
+    let mut builder = TransactionBuilder::new(
+        chain.network_id(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(Duration::from_millis(1_001));
+    let signed = builder
+        .with_instructions([Log::new(Level::INFO, "native sealed history".into())])
+        .sign(key.private_key());
+    let signed_hash = signed.hash();
+    let salt = [0xA7; 32];
+    let commitment = compute_sealed_transaction_commitment(&chain.network_id(), &signed, salt, 4);
+    let sealed = SignedSealedTransactionCommitment::sign(
+        SealedTransactionCommitmentPayload::new(
+            chain.network_id(),
+            signed.authority().clone(),
+            commitment,
+            3,
+            4,
+            None,
+        ),
+        key.private_key(),
+    );
+    let committed = commit_native_history_entrypoint(
+        &mut chain,
+        TransactionEntrypoint::SealedCommitment(sealed),
+    );
+    assert!(
+        committed
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .is_ok()
+    );
+    let reveal =
+        TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(commitment, signed, salt));
+    let reveal_hash = reveal.hash();
+    let committed = commit_native_history_entrypoint(&mut chain, reveal);
+    assert!(
+        committed
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .is_ok()
+    );
+    let mut app = mk_app_state_for_tests();
+    let unique = Arc::get_mut(&mut app).unwrap();
+    unique.state = chain.state().clone();
+    unique.kura = chain.kura().clone();
+    let signed_alias = iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash);
+    for identity in [reveal_hash, signed_alias] {
+        assert_eq!(
+            canonical_carrier_hash_for_indexed_transaction_identity(
+                app.as_ref(),
+                NonZeroUsize::new(3).unwrap(),
+                &identity,
+            )
+            .unwrap(),
+            reveal_hash
+        );
+    }
+    for hash in [reveal_hash.to_string(), signed_hash.to_string()] {
+        let response =
+            pipeline_status_response(app.clone(), hash, None, "native sealed history").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = torii_json_body(response).await;
+        assert_eq!(payload["status"]["kind"].as_str(), Some("Applied"));
+        assert_eq!(payload["resolved_from"].as_str(), Some("state"));
+    }
+}
+
+#[tokio::test]
+async fn pipeline_status_rejects_uncertified_sealed_reveal_carrier_and_signed_alias() {
     let app = mk_app_state_for_tests();
     let (block, reveal_entry_hash) = make_sealed_reveal_block(1, None);
     let signed_hash = block
@@ -3273,7 +3086,7 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
     let signed_entrypoint_alias =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
-    let block_hash = store_finalized_history_fixture(&app, block);
+    let block_hash = store_block(&app, block);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
@@ -3287,49 +3100,19 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
         .insert_block(entrypoint_hashes, height_nz);
     state_block.commit().expect("commit");
     app.state.update_latest_block_header_cache_for_tests(header);
-    assert_eq!(
-        canonical_carrier_hash_for_indexed_transaction_identity(
-            app.as_ref(),
-            height_nz,
-            &signed_entrypoint_alias,
-        )
-        .expect("signed execution alias resolves its sealed carrier"),
-        reveal_entry_hash
-    );
-    let resp =
-        pipeline_status_response(app.clone(), reveal_entry_hash.to_string(), None, "ok").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let payload = torii_json_body(resp).await;
-    assert_eq!(
-        payload
-            .get("status")
-            .and_then(|status| status.get("kind"))
-            .and_then(norito::json::Value::as_str),
-        Some("Applied")
-    );
-    assert_eq!(
-        payload
-            .get("resolved_from")
-            .and_then(norito::json::Value::as_str),
-        Some("state")
-    );
-    let resp = pipeline_status_response(app, signed_hash.to_string(), None, "signed alias").await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let payload = torii_json_body(resp).await;
-    assert_eq!(
-        payload
-            .get("status")
-            .and_then(|status| status.get("kind"))
-            .and_then(norito::json::Value::as_str),
-        Some("Applied")
-    );
-    assert_eq!(
-        payload
-            .get("resolved_from")
-            .and_then(norito::json::Value::as_str),
-        Some("state")
-    );
+    for identity in [reveal_entry_hash, signed_entrypoint_alias] {
+        assert!(
+            canonical_carrier_hash_for_indexed_transaction_identity(
+                app.as_ref(),
+                height_nz,
+                &identity,
+            )
+            .is_err(),
+            "an indexed synthetic reveal must not replace a native commit certificate"
+        );
+    }
 }
+
 #[tokio::test]
 async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let (app, tx_hash, _chain) = canonical_outcome_test_fixture(false);
@@ -3662,7 +3445,10 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .execution()
         .post_state_root;
     let router = Router::new()
-        .route(uri::LEDGER_STATE_PROOF, get(handler_ledger_state_proof))
+        .route(
+            route_catalog::core::LEDGER_STATE_PROOF.path(),
+            get(handler_ledger_state_proof),
+        )
         .with_state(app.clone());
     let request = Request::builder()
         .uri("/v1/ledger/state-proof/2")

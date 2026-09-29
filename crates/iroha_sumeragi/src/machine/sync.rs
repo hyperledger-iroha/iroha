@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use super::{Core, MAX_WANTS, Via, Want};
 use crate::{
     api::Action,
-    crypto::verify_qc,
     message::{Block, Qc, SyncEntry, SyncRequest, SyncResponse, VoteKind, WireMessage},
     types::{Hash32, PublicKey},
 };
@@ -118,7 +117,7 @@ impl Core {
             self.sync.add_source(from);
             return;
         }
-        if self.config(&c.height).is_some() {
+        if self.config(c.height).is_some() {
             if self.verify_qc_cached(c) {
                 self.sync.verified = c.height;
                 self.sync.add_source(from);
@@ -193,18 +192,14 @@ impl Core {
     // good (found by the simulator: F17 seed 106, a Byzantine responder rewriting the result of
     // its CommitQCs). Entries beyond a gap are dropped and fetched again (Appendix E, E3).
     fn keep_buffer_contiguous(&mut self, next: u64) {
-        let mut expect = next;
-        let mut cut = None;
-        for height in self.sync.buffer.keys() {
-            if *height < next {
-                continue;
-            }
-            if *height != expect {
-                cut = Some(*height);
-                break;
-            }
-            expect = expect.saturating_add(1);
-        }
+        let cut = self
+            .sync
+            .buffer
+            .range(next..)
+            .zip(std::iter::successors(Some(next), |height| {
+                height.checked_add(1)
+            }))
+            .find_map(|((height, _), expected)| (*height != expected).then_some(*height));
         if let Some(cut) = cut {
             let dropped = self.sync.buffer.split_off(&cut);
             let bytes: usize = dropped.values().map(entry_bytes).sum();
@@ -316,14 +311,10 @@ impl Core {
     pub(super) fn process_sync_buffer(&mut self) {
         loop {
             let next = self.next_height();
-            while let Some((height, entry)) = self.sync.buffer.first_key_value() {
-                if *height >= next {
-                    break;
-                }
-                let bytes = entry_bytes(entry);
-                self.sync.buffer_bytes = self.sync.buffer_bytes.saturating_sub(bytes);
-                self.sync.buffer.pop_first();
-            }
+            let pending = self.sync.buffer.split_off(&next);
+            let stale = std::mem::replace(&mut self.sync.buffer, pending);
+            let bytes: usize = stale.values().map(entry_bytes).sum();
+            self.sync.buffer_bytes = self.sync.buffer_bytes.saturating_sub(bytes);
             if self.awaiting || self.halted.is_some() || self.height != next {
                 return;
             }
@@ -340,18 +331,17 @@ impl Core {
             #[cfg(not(sumeragi_mutation = "MS15"))]
             let committee = &self.cfg.committee;
             #[cfg(sumeragi_mutation = "MS15")]
-            let committee = &(self.config(&self.tip.height).unwrap_or(&self.cfg)).committee;
+            let committee = &(self.config(self.tip.height).unwrap_or(&self.cfg)).committee;
             let verified = self
                 .cert_cache
                 .contains(&entry.commit_qc.digest(&*self.crypto))
-                || verify_qc(
+                || crate::crypto::Verifier::new(
                     &*self.crypto,
-                    &*self.attestation.verifier,
                     &self.instance,
                     &self.cfg.epoch.id,
                     committee,
-                    &entry.commit_qc,
                 )
+                .verify_qc(&*self.attestation.verifier, &entry.commit_qc)
                 .is_ok();
             if !linked || !verified {
                 self.sync.buffer.clear();

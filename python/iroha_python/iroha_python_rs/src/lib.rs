@@ -53,7 +53,7 @@ use iroha_data_model::{
         definition::{AssetBalancePolicy, validate_asset_name},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
-    block::{BlockHeader, SignedBlock, consensus::LaneBlockCommitment, decode_framed_signed_block},
+    block::{BlockHeader, SignedBlock, decode_framed_signed_block},
     domain::prelude::Domain,
     escrow::{
         AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
@@ -90,8 +90,7 @@ use iroha_data_model::{
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneLifecycleParameterV1,
-        LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope,
-        compute_settlement_hash,
+        LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
     },
     nft::NftId,
     parameter::Parameter,
@@ -188,9 +187,7 @@ use iroha_torii_shared::{
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::{
-    codec,
-    codec::DecodeAll,
-    decode_from_bytes,
+    codec, decode_from_bytes,
     derive::{Encode as NEnc, JsonDeserialize},
     json,
     json::JsonSerialize,
@@ -12021,10 +12018,89 @@ fn verify_committed_transaction_inclusion_py(
         json::to_value(&tip.context_id())
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
     );
+    let mut execution_json = json::Map::new();
+    execution_json.insert(
+        "parent_state_root".into(),
+        json::to_value(&execution_commitment.parent_state_root)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "post_state_root".into(),
+        json::to_value(&execution_commitment.post_state_root)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "ordinary_writes_root".into(),
+        json::to_value(&execution_commitment.ordinary_writes_root)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "kagemusha_top_up_root".into(),
+        json::to_value(&execution_commitment.kagemusha_top_up_root)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "kagemusha_top_up_count".into(),
+        json::to_value(&execution_commitment.kagemusha_top_up_count)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "executed_block_wire_len".into(),
+        json::to_value(&execution_commitment.executed_block_wire_len)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    execution_json.insert(
+        "executed_block_wire_hash".into(),
+        json::to_value(&execution_commitment.executed_block_wire_hash)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    let transaction_input_commitment =
+        match execution_commitment.transaction_input_commitment.as_ref() {
+            None => json::Value::Null,
+            Some(tree) => {
+                let mut value = json::Map::new();
+                value.insert(
+                    "root".into(),
+                    json::to_value(&tree.root())
+                        .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                );
+                value.insert(
+                    "leaf_count".into(),
+                    json::to_value(&tree.leaf_count().get())
+                        .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                );
+                json::Value::Object(value)
+            }
+        };
+    execution_json.insert(
+        "transaction_input_commitment".into(),
+        transaction_input_commitment,
+    );
+    let transaction_output_commitment =
+        match execution_commitment.transaction_output_commitment.as_ref() {
+            None => json::Value::Null,
+            Some(tree) => {
+                let mut value = json::Map::new();
+                value.insert(
+                    "root".into(),
+                    json::to_value(&tree.root())
+                        .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                );
+                value.insert(
+                    "leaf_count".into(),
+                    json::to_value(&tree.leaf_count().get())
+                        .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                );
+                json::Value::Object(value)
+            }
+        };
+    execution_json.insert(
+        "transaction_output_commitment".into(),
+        transaction_output_commitment,
+    );
     result.insert(
         "execution_commitment".into(),
-        json::to_value(execution_commitment)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        json::Value::Object(execution_json),
     );
     result.insert(
         "executed_block_wire_hash".into(),
@@ -14534,75 +14610,6 @@ fn bn254_sub_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 fn bn254_mul_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_mul_cuda(a, b)
 }
-#[pyfunction]
-/// Return a deterministic relay envelope fixture and a tampered copy for testing.
-fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
-    let lane_id = LaneId::new(3);
-    let dataspace_id = DataSpaceId::new(2);
-    let settlement = LaneBlockCommitment {
-        block_height: 1,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let mut header = BlockHeader::new(
-        NonZeroU64::new(1).expect("nonzero height"),
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    );
-    let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
-    header.set_da_commitments_hash(Some(da_hash));
-    let envelope = LaneRelayEnvelope::new(header, Some(da_hash), settlement, 64)
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let valid = norito::to_bytes(&envelope)
-        .map_err(|err| PyValueError::new_err(format!("failed to serialize envelope: {err}")))?;
-    let mut tampered = valid.clone();
-    if let Some(last) = tampered.last_mut() {
-        *last ^= 0xFF;
-    }
-    Ok((valid, tampered))
-}
-#[pyfunction]
-/// Verify the Norito-encoded relay envelope bytes returned by `/v1/sumeragi/status`.
-fn verify_lane_relay_envelope_bytes_py(envelope: &[u8]) -> PyResult<()> {
-    let mut slice = envelope;
-    let parsed = LaneRelayEnvelope::decode_all(&mut slice)
-        .map_err(|err| PyValueError::new_err(format!("failed to decode relay envelope: {err}")))?;
-    parsed
-        .verify()
-        .map_err(|err| PyValueError::new_err(err.to_string()))
-}
-#[pyfunction]
-/// Decode relay envelope bytes into a JSON string for inspection.
-fn decode_lane_relay_envelope_json_py(envelope: &[u8]) -> PyResult<String> {
-    let mut slice = envelope;
-    let parsed = LaneRelayEnvelope::decode_all(&mut slice)
-        .map_err(|err| PyValueError::new_err(format!("failed to decode relay envelope: {err}")))?;
-    let value = norito::json::to_value(&parsed)
-        .map_err(|err| PyValueError::new_err(format!("failed to encode envelope JSON: {err}")))?;
-    norito::json::to_string_pretty(&value)
-        .map_err(|err| PyValueError::new_err(format!("failed to encode envelope JSON: {err}")))
-}
-#[pyfunction]
-/// Compute the settlement hash for a JSON `LaneBlockCommitment`.
-fn lane_settlement_hash_py(settlement_json: &str) -> PyResult<String> {
-    let commitment: LaneBlockCommitment = norito::json::from_str(settlement_json)
-        .map_err(|err| PyValueError::new_err(format!("invalid settlement JSON: {err}")))?;
-    let hash = compute_settlement_hash(&commitment)
-        .map_err(|err| PyValueError::new_err(format!("failed to hash settlement: {err}")))?;
-    Ok(hex_encode_upper(hash.as_ref()))
-}
 fn privacy_compiled_profile_catalog() -> PyResult<PrivacyCompiledProfileCatalogV1> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
         PyRuntimeError::new_err(format!(
@@ -15097,20 +15104,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         verify_signed_transaction_versioned_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(lane_relay_envelope_fixture_py, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        verify_lane_relay_envelope_bytes_py,
-        module
-    )?)?;
     module.add_function(wrap_pyfunction!(
         canonical_genesis_header_hash_v1_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(
-        decode_lane_relay_envelope_json_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(lane_settlement_hash_py, module)?)?;
     module.add_function(wrap_pyfunction!(derive_confidential_keyset_py, module)?)?;
     module.add_function(wrap_pyfunction!(sm2_fixture_from_seed_py, module)?)?;
     module.add_function(wrap_pyfunction!(encode_connect_frame_py, module)?)?;

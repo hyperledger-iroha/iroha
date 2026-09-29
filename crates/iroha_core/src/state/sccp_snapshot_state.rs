@@ -71,7 +71,6 @@ pub(crate) struct SnapshotSccpState {
     pub(super) sccp_light_client_sets: snapshot_storage::SnapshotStorage,
     pub(super) sccp_light_client_checkpoints: snapshot_storage::SnapshotStorage,
     pub(super) sccp_light_client_stride_index: snapshot_storage::SnapshotStorage,
-    pub(super) sccp_light_client_checkpoint_expiry: snapshot_storage::SnapshotStorage,
 }
 
 /// Append the key of one envelope member, preceded by a comma after the first member.
@@ -128,7 +127,6 @@ macro_rules! serialize_sccp_fields {
             store sccp_light_client_sets,
             store sccp_light_client_checkpoints,
             store sccp_light_client_stride_index,
-            store sccp_light_client_checkpoint_expiry,
         )
     };
     (@members $world:expr, $out:expr, $serialize:ident; $($kind:ident $field:ident,)*) => {{
@@ -320,12 +318,6 @@ impl SnapshotSccpState {
         let light_client_stride_index = self
             .sccp_light_client_stride_index
             .decode::<(SccpNetworkV1, u64), u64>("sccp_light_client_stride_index", |_, _| true)?;
-        let light_client_checkpoint_expiry =
-            self.sccp_light_client_checkpoint_expiry
-                .decode::<(u64, SccpNetworkV1, u64), ()>(
-                    "sccp_light_client_checkpoint_expiry",
-                    |_, _| true,
-                )?;
         world.sccp_parameters = self.sccp_parameters;
         world.sccp_reset_nonce = self.sccp_reset_nonce;
         world.sccp_bridge_keys = bridge_keys;
@@ -356,7 +348,6 @@ impl SnapshotSccpState {
         world.sccp_light_client_sets = light_client_sets;
         world.sccp_light_client_checkpoints = light_client_checkpoints;
         world.sccp_light_client_stride_index = light_client_stride_index;
-        world.sccp_light_client_checkpoint_expiry = light_client_checkpoint_expiry;
         Ok(())
     }
 }

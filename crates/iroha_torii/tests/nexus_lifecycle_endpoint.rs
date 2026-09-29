@@ -16,7 +16,7 @@ use iroha_core::{
 };
 use iroha_data_model::nexus::LaneLifecycleStatusV1;
 use iroha_model_base::topology::LaneId;
-use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
+use iroha_torii_shared::route_catalog::core::NEXUS_LIFECYCLE_GET;
 use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -106,7 +106,7 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
     let response = fixtures::request(
         &harness.app,
         Request::builder()
-            .uri(NEXUS_LANE_LIFECYCLE)
+            .uri(NEXUS_LIFECYCLE_GET.path())
             .header("accept", "application/json")
             .body(Body::empty())
             .expect("request"),
@@ -163,7 +163,7 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
     let response = fixtures::request(
         &harness.app,
         Request::builder()
-            .uri(NEXUS_LANE_LIFECYCLE)
+            .uri(NEXUS_LIFECYCLE_GET.path())
             .header("accept", "application/x-norito")
             .body(Body::empty())
             .expect("request"),
@@ -212,7 +212,7 @@ async fn lifecycle_get_returns_exact_present_runtime_root_in_both_formats() {
         let response = fixtures::request(
             &harness.app,
             Request::builder()
-                .uri(NEXUS_LANE_LIFECYCLE)
+                .uri(NEXUS_LIFECYCLE_GET.path())
                 .header("accept", accept)
                 .body(Body::empty())
                 .unwrap(),
@@ -237,7 +237,7 @@ async fn lifecycle_get_honors_api_token_access_policy() {
     let harness = build_app_with_api_token(Some(API_TOKEN));
     for supplied_token in [None, Some("wrong-token")] {
         let mut request = Request::builder()
-            .uri(NEXUS_LANE_LIFECYCLE)
+            .uri(NEXUS_LIFECYCLE_GET.path())
             .header("accept", "application/json");
         if let Some(token) = supplied_token {
             request = request.header("x-api-token", token);
@@ -251,7 +251,7 @@ async fn lifecycle_get_honors_api_token_access_policy() {
     let response = fixtures::request(
         &harness.app,
         Request::builder()
-            .uri(NEXUS_LANE_LIFECYCLE)
+            .uri(NEXUS_LIFECYCLE_GET.path())
             .header("accept", "application/json")
             .header("x-api-token", API_TOKEN)
             .body(Body::empty())
@@ -270,8 +270,16 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
     let before_limits = harness.queue.queue_limits().for_lane(lane);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"forbidden-local","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     for (method, path, expected_status) in [
-        ("POST", NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
-        ("HEAD", NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
+        (
+            "POST",
+            NEXUS_LIFECYCLE_GET.path(),
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        (
+            "HEAD",
+            NEXUS_LIFECYCLE_GET.path(),
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
         ("POST", "/v1/nexus/lifecycle/", StatusCode::NOT_FOUND),
         ("POST", "/v1/Nexus/lifecycle", StatusCode::NOT_FOUND),
         (
@@ -299,7 +307,7 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
         .await
         .expect("response");
         assert_eq!(response.status(), expected_status, "{method} {path}");
-        if path == NEXUS_LANE_LIFECYCLE {
+        if path == NEXUS_LIFECYCLE_GET.path() {
             let allow = response
                 .headers()
                 .get("allow")

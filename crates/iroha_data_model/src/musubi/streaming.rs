@@ -94,11 +94,6 @@ struct SemanticReleaseSource<'a>(&'a MusubiReleaseManifestV1);
 
 impl norito::core::SerializePayload for SemanticReleaseSource<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return Err(norito::core::Error::UnsupportedFeature(
-                "borrowed Musubi semantic release packed struct",
-            ));
-        }
         let fields: [&dyn norito::core::SerializePayload; 8] = [
             &self.0.release,
             &self.0.edition,
@@ -115,9 +110,6 @@ impl norito::core::SerializePayload for SemanticReleaseSource<'_> {
         Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() {
-            return None;
-        }
         let fields: [&dyn norito::core::SerializePayload; 8] = [
             &self.0.release,
             &self.0.edition,
@@ -453,11 +445,6 @@ impl norito::NoritoSchema for MusubiProviderBundleAttestationSetPreimageV1<'_> {
 // This payload is private to the fixed-layout canonical digest.
 impl norito::core::SerializePayload for MusubiProviderBundleAttestationSetPreimageV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return Err(norito::core::Error::UnsupportedFeature(
-                "borrowed Musubi attestation set packed struct",
-            ));
-        }
         norito::core::write_len_prefixed(writer, &self.archive_id)?;
         norito::core::write_len_prefixed(writer, &self.replication_order)?;
         norito::core::write_len_prefixed(writer, &AttestationReferences(self.references))
@@ -468,12 +455,10 @@ struct AttestationReferences<'a>(&'a [MusubiProviderBundleAttestationRefV1]);
 
 impl norito::core::SerializePayload for AttestationReferences<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        // Fixed canonical flags do not use packed offsets, so the codec streams
-        // these borrowed rows without allocating an offset table or row copies.
+        // The codec streams these borrowed rows without allocating row copies.
         norito::core::write_element_sequence::<MusubiProviderBundleAttestationRefV1, _>(
             writer,
             self.0.iter(),
-            norito::core::max_archive_len(),
         )
     }
 }

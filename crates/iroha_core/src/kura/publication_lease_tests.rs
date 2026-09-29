@@ -134,7 +134,7 @@ fn joint_kura_lease_holds_every_actual_fence_and_unwind_releases_each() {
 }
 
 #[test]
-fn real_canonical_and_queue_plan_leases_wake_the_same_physical_wait() {
+fn real_canonical_lease_wakes_the_physical_wait() {
     let kura = Kura::blank_kura_for_testing();
     let canonical = kura.canonical_publication_lease();
     let mut wait = busy(&kura, "canonical_chain_lock").wait_for_release();
@@ -142,15 +142,7 @@ fn real_canonical_and_queue_plan_leases_wake_the_same_physical_wait() {
     assert!(poll(&mut wait, &count).is_pending());
     drop(canonical);
     assert!(poll(&mut wait, &count).is_ready());
-    let queue = kura
-        .try_queue_plan_publication_at_height(0)
-        .unwrap()
-        .unwrap();
-    let mut wait = busy(&kura, "canonical_chain_lock").wait_for_release();
-    assert!(poll(&mut wait, &count).is_pending());
-    drop(queue);
-    assert!(poll(&mut wait, &count).is_ready());
-    assert_eq!(count.0.load(Ordering::SeqCst), 2);
+    assert_eq!(count.0.load(Ordering::SeqCst), 1);
     drop(
         kura.try_publication_lease()
             .expect("exact retry after production lease"),

@@ -1318,8 +1318,6 @@ mod tests {
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),
-                lane_history_retention:
-                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 debug_output_new_blocks: false,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
@@ -1329,7 +1327,6 @@ mod tests {
                 membership_storage:
                     iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             sumeragi: Sumeragi::default(),
             block_sync: BlockSync {
@@ -1368,7 +1365,6 @@ mod tests {
                 resources: Default::default(),
                 verification_public_key: None,
                 signing_private_key: None,
-                bootstrap: iroha_config::parameters::user::SnapshotBootstrapPolicy::default(),
             },
             telemetry_profile: iroha_config::parameters::actual::TelemetryProfile::Disabled,
             telemetry: None,

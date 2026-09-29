@@ -56,6 +56,7 @@ pub(super) fn result_of(block: &Block) -> Hash32 {
 /// A scripted driver around one core. Actions are absorbed like a driver would: records and
 /// bodies become durable at once (unless held), `CommitBlock` is applied, local fetches are
 /// served from the body store. Execution and payload building are answered by the test.
+#[allow(clippy::struct_excessive_bools, reason = "independent test switches")]
 pub(super) struct H {
     pub v: FakeValidators,
     pub log: SignLog,

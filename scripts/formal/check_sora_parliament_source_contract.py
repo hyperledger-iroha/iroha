@@ -1215,10 +1215,6 @@ def main() -> int:
             "crates/iroha_core/src/queue.rs",
             ("Executable::IvmProved(proved)",),
         ),
-        (
-            "crates/iroha_data_model/src/visit/mod.rs",
-            ("Executable::IvmProved(proved)", "visitor.visit_ivm(&proved.bytecode)"),
-        ),
     ):
         require_all(ivm_path, read(ivm_path), bindings)
     torii_path = "crates/iroha_torii/src/lib.rs"
@@ -1235,75 +1231,6 @@ def main() -> int:
         raise RuntimeError(f"{overlay_path}: retired IVM proof producer remains")
     trigger_path = "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs"
     require_proved_trigger_rejection(read(trigger_path))
-
-    # Every maintained SCCP SDK must accept the same proof-carrying execution
-    # policy that Rust and OpenAPI publish. In particular, `vk_ref` is a
-    # governed verification-key identity, not a retired extension field.
-    for ivm_sdk_path, bindings in (
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SccpJsonParser.java",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                'Set.of("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit")',
-                'requiredObject(value, "vk_ref")',
-            ),
-        ),
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SccpModels.java",
-            (
-                "class PortableVerifyingKeyReferenceV1",
-                "PortableVerifyingKeyReferenceV1 verifyingKeyReference",
-            ),
-        ),
-        (
-            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/SccpModels.kt",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                "data class SccpPortableVerifyingKeyReferenceV1(",
-                'setOf("version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit")',
-                'requiredObject(value, "vk_ref")',
-            ),
-        ),
-        (
-            "python/iroha_torii_client/governance_proposals.py",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                "class GovernanceSccpPortableVerifyingKeyRef:",
-                "vk_ref: GovernanceSccpPortableVerifyingKeyRef",
-                'record["vk_ref"]',
-            ),
-        ),
-        (
-            "python/iroha_torii_client/sccp.py",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                "class SccpPortableVerifyingKeyRef:",
-                "vk_ref: SccpPortableVerifyingKeyRef",
-                "execution_policy.vk_ref.commitment",
-            ),
-        ),
-        (
-            "javascript/iroha_js/src/sccp.js",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                "function portableVerifyingKeyIdField(value, label)",
-                'new Set(["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"])',
-                "executionPolicy.commitment",
-                '"verifying_key_version"',
-                "record.verifying_key_version !== policy.version",
-            ),
-        ),
-        (
-            "javascript/iroha_js/index.d.ts",
-            (
-                '"ivm_proved_record_sccp_message_v1"',
-                "export interface SccpPortableVerifyingKeyRefV1",
-                "readonly vk_ref: SccpPortableVerifyingKeyRefV1",
-                "readonly verifying_key_version: number",
-            ),
-        ),
-    ):
-        require_all(ivm_sdk_path, read(ivm_sdk_path), bindings)
 
     types_path = "crates/iroha_data_model/src/governance/types.rs"
     types = read(types_path)

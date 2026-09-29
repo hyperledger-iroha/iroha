@@ -1921,7 +1921,7 @@ def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
 
     rejected_profiles = (
         checker.ShippingProfile("irohad", ("dev-tools",)),
-        checker.ShippingProfile("irohad", ("test-network-message-control",)),
+        checker.ShippingProfile("irohad", ("test-network-private-settlement-route-control",)),
         checker.ShippingProfile("irohad", ("test-network-parliament-signers",)),
         checker.ShippingProfile("iroha_cli", ("cli_integration_harness",)),
         checker.ShippingProfile("new_release_package"),
@@ -1935,12 +1935,12 @@ def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
             raise AssertionError(f"unreviewed shipping profile accepted: {profile}")
 
     graph = """irohad feature "daemon"
-irohad feature "test-network-message-control"
+irohad feature "test-network-private-settlement-route-control"
 irohad feature "test-network-parliament-signers"
 """
     assert checker.unauthorized_root_features_in_graph(graph, "irohad") == (
-        "test-network-message-control",
         "test-network-parliament-signers",
+        "test-network-private-settlement-route-control",
     )
 
 
@@ -1967,7 +1967,7 @@ def test_production_acceleration_roots_are_admitted_with_existing_shipping_featu
     ("ivm", "ivm_zk_tests"),
     ("ivm", "ivm_vrf_tests"),
     ("irohad", "accel-cuda"),
-    ("irohad", "test-network-message-control"),
+    ("irohad", "test-network-private-settlement-route-control"),
     ("connect_norito_bridge", "dev-tools"),
 ))
 def test_acceleration_admission_does_not_enable_test_or_toolkit_helper_roots(

@@ -82,8 +82,6 @@ class NoritoCodecContractsTest(unittest.TestCase):
             (GATE.validate_encoding, GATE.CORE, "encoded_payload_len", "value.serialize(&mut encoder)?;", "let _ = value;", "encoding.actual_measurement"),
             (GATE.validate_encoding, GATE.CORE, "write_len_prefixed", "encoded_payload_len(value)?", "0", "encoding.field_uses_owned_measurement"),
             (GATE.validate_encoding, GATE.CORE, "serialize_to_writer_exact", "if exact.rejected_write()", "if false", "encoding.public_exact_checks_output"),
-            (GATE.validate_encoding, GATE.FIELDS, "write_packed_fields", ".try_reserve_exact(fields.len())", ".try_reserve_exact(0)", "encoding.packed_allocation_bound"),
-            (GATE.validate_encoding, GATE.FIELDS, "write_packed_fields", "bits.len() != fields.len().div_ceil(8)", "bits.len() < fields.len().div_ceil(8)", "encoding.packed_bitset_bounds"),
             (GATE.validate_encoding, GATE.FRAMES, "write_frame_with_prefix", "encoded_frame_len(value)?", "0", "encoding.frame_owned_measurement"),
             (GATE.validate_encoding, GATE.FRAMES, None, "return Err(Error::ChecksumMismatch);", "return Ok(());", "encoding.frame_rejects:ChecksumMismatch"),
             (GATE.validate_encoding, GATE.FRAMES, None, "serialize_result?;", "let _ = serialize_result;", "encoding.frame_preserves_child_error"),
@@ -108,8 +106,8 @@ class NoritoCodecContractsTest(unittest.TestCase):
 
     def test_missing_owner_is_not_hidden_by_a_test_copy(self) -> None:
         sources = dict(self.sources)
-        sources[GATE.FIELDS] = "#[cfg(test)]\nmod copied_owner {\n" + sources[GATE.FIELDS] + "\n}\n"
-        self.assert_rejected(GATE.validate_encoding, sources, f"owner.operation:{GATE.FIELDS}::write_packed_fields")
+        sources[GATE.FRAMES] = "#[cfg(test)]\nmod copied_owner {\n" + sources[GATE.FRAMES] + "\n}\n"
+        self.assert_rejected(GATE.validate_encoding, sources, f"owner.operation:{GATE.FRAMES}::write_frame_with_prefix")
 
     def test_current_runtime_contract_cannot_be_ignored(self) -> None:
         name = GATE.RUNTIME_CONTRACTS[GATE.CODEGEN][0]

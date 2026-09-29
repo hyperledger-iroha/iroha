@@ -1,6 +1,8 @@
 //! Original-mask replay from closed immutable MAIN witness owners.
 
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
+#[cfg(test)]
+use super::super::super::prover_observation::{PhaseTimerV1, PhaseV1};
 use super::*;
 use crate::privacy_engines::transparent_stark::{ReplayableTraceMaskV1, sample_trace_mask_v1};
 
@@ -44,18 +46,63 @@ impl MainTraceMaskGroupV1 {
         for column in 0..width {
             // Preserve the original source-before-entropy order and reject bad
             // native columns before sampling their masks. No native column survives.
+            #[cfg(test)]
+            let source_timer = PhaseTimerV1::start_v1(PhaseV1::SampleSourceColumns);
             let native = source(column)?;
+            #[cfg(test)]
+            source_timer.complete_v1();
             if native.len() != native_rows
                 || native.iter().any(|value| F::canonical(value.0).is_none())
             {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
+            #[cfg(test)]
+            let mask_timer = PhaseTimerV1::start_v1(PhaseV1::SampleMaskDraws);
             masks.push(sample_trace_mask_v1(MASK_DEGREE, rng).map_err(map_transparent_error_v1)?);
+            #[cfg(test)]
+            mask_timer.complete_v1();
         }
         Ok(Self {
             native_log,
             common_log,
             masks,
+        })
+    }
+
+    /// Reuse bounded source batches while the original sampler preserves the
+    /// exact per-column validation and entropy draw sequence when source
+    /// construction succeeds. A failed batch construction can reject before
+    /// the corresponding scalar source would have been reached; no proof is
+    /// published in either case. The pending iterator owns at most eight
+    /// clearing columns on error and unwind too.
+    pub(in super::super) fn sample_batched_v1<R: TryRngCore>(
+        native_log: u8,
+        common_log: u8,
+        width: usize,
+        rng: &mut R,
+        mut source: impl FnMut(
+            core::ops::Range<usize>,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        let mut pending = Vec::new().into_iter();
+        let mut next_column = 0;
+        Self::sample_v1(native_log, common_log, width, rng, |column| {
+            if column != next_column {
+                return Err(ZkX509StarkErrorV1::InternalInvariant);
+            }
+            if pending.len() == 0 {
+                let end = column
+                    .checked_add(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                    .min(width);
+                let batch = source(column..end)?;
+                if batch.len() != end - column {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                pending = batch.into_iter();
+            }
+            next_column += 1;
+            pending.next().ok_or(ZkX509StarkErrorV1::InternalInvariant)
         })
     }
 
@@ -647,7 +694,7 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 impl MainTraceReplaySourcesV1<'_, '_> {
     /// Extract each SHA run once, while preserving public group/registration
     /// order and the closed base/bound phase. Other sources remain serial.
-    fn native_columns_v1(
+    pub(super) fn native_columns_v1(
         &self,
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
@@ -788,3 +835,7 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "main_mask_sampling_tests.rs"]
+mod mask_sampling_tests;

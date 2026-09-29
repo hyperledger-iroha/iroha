@@ -13,8 +13,7 @@
 //! bodies, `StateInit`s and external messages) and [`cell_from_boc`] reads one back (contract
 //! code artifacts).
 //!
-//! TODO(ws3A): deduplicate the cell hashing with `crate::ton_native` once the retired TON
-//! proof code is purged.
+//! TODO(ws3A): deduplicate the cell hashing with the `BoC` cell hashing of `crate::ton_native`.
 
 use std::sync::Arc;
 

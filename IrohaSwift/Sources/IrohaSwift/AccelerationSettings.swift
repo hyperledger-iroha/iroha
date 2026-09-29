@@ -112,4 +112,3 @@ public struct AccelerationState: Sendable {
         self.cuda = cuda
     }
 }
-

@@ -34,6 +34,11 @@ use crate::{
 /// Include every temporary pinned/device allocation and every escaping host output.
 /// The owner adds its exact shared Rust control layout to `host_bytes` itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "public request fields keep the `*_bytes` names of the public \
+              GpuResourceLimits ceilings they are admitted against"
+)]
 pub struct WorkRequest {
     /// Output and ordinary host backing requested by this operation.
     pub host_bytes: usize,
@@ -105,6 +110,17 @@ fn initialize_pinned<T: Copy>(
 
 impl CudaDevice<'_> {
     /// Admit the complete request and construct one nonblocking stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] for an empty artifact list, an
+    /// oversized artifact, or a request whose host backing total overflows;
+    /// [`CudaFailure::Busy`] when an owner lock is contended;
+    /// [`CudaFailure::Capacity`] when this device index is capped away or a
+    /// device, pool, in-flight, stream, module or metadata ceiling cannot admit
+    /// the request; [`CudaFailure::Quarantined`] when the device is quarantined;
+    /// and [`CudaFailure::Driver`] when context binding, module loading or
+    /// stream creation fails.
     pub fn prepare(
         &self,
         artifacts: &[PtxArtifact],
@@ -182,7 +198,7 @@ impl CudaDevice<'_> {
                 // non-null handle returned with an error. No commands are queued.
                 checked(unsafe {
                     sys::cuStreamCreate(
-                        &mut state.stream,
+                        &raw mut state.stream,
                         sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32,
                     )
                 })
@@ -196,6 +212,16 @@ impl CudaWork {
     /// Allocate a typed native/pinned pair from this original complete request.
     /// Both allocations are synchronous; ownership is installed before the next
     /// fallible call. Inputs are copied separately before asynchronous enqueue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] for a zero-sized `T`, an
+    /// unrepresentable layout, or a null or misaligned pinned allocation;
+    /// [`CudaFailure::Busy`] when an owner lock is contended or a command is
+    /// pending; [`CudaFailure::Capacity`] when the remaining device or pinned
+    /// reservation cannot cover the buffer; [`CudaFailure::Quarantined`] when the
+    /// device is quarantined; and [`CudaFailure::Driver`] when context binding or
+    /// a native allocation fails.
     pub fn buffer<T: DeviceCopy + Copy>(
         &self,
         len: usize,
@@ -240,13 +266,16 @@ impl CudaWork {
             }
             self.inner.primary.bound(|| {
                 if layout.size() != 0 {
-                    checked(unsafe { sys::cuMemAlloc_v2(&mut buffer.device, layout.size()) })?;
+                    checked(unsafe { sys::cuMemAlloc_v2(&raw mut buffer.device, layout.size()) })?;
                     let mut pinned = ptr::null_mut();
-                    let allocated = unsafe { sys::cuMemHostAlloc(&mut pinned, layout.size(), 0) };
+                    let allocated =
+                        unsafe { sys::cuMemHostAlloc(&raw mut pinned, layout.size(), 0) };
                     // Install custody before inspecting the driver's return code.
                     buffer.pinned = pinned.cast::<T>();
                     checked(allocated)?;
-                    if buffer.pinned.is_null() || (buffer.pinned as usize) % layout.align() != 0 {
+                    if buffer.pinned.is_null()
+                        || !(buffer.pinned as usize).is_multiple_of(layout.align())
+                    {
                         return Err(CudaFailure::InvalidRequest);
                     }
                 }
@@ -258,6 +287,11 @@ impl CudaWork {
 
     /// Copy original caller input into stable pinned custody, then enqueue upload.
     /// Caller input is never mutated or referenced by the asynchronous command.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] when `input` and `buffer` differ in
+    /// length, and otherwise the errors of [`Self::upload_generated`].
     pub fn upload<T: DeviceCopy + Copy>(
         &self,
         buffer: &mut CudaBuffer<'_, T>,
@@ -273,6 +307,14 @@ impl CudaWork {
     /// This avoids an intermediate host allocation for canonical packing or
     /// scalar conversion. The generator runs synchronously; a panic enqueues no
     /// native work, and neither caller storage nor a movable temporary is a DMA target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] for a buffer of another work owner,
+    /// [`CudaFailure::Busy`] when an owner lock is contended or a command is
+    /// pending, [`CudaFailure::Quarantined`] when the device is quarantined, and
+    /// [`CudaFailure::Driver`] when context binding or the upload enqueue fails,
+    /// which also quarantines the device.
     pub fn upload_generated<T: DeviceCopy + Copy>(
         &self,
         buffer: &mut CudaBuffer<'_, T>,
@@ -327,6 +369,15 @@ impl CudaWork {
     /// kernel writes must stay within those allocations. Scalar argument pointers
     /// are copied synchronously by the driver, and may not themselves become DMA
     /// targets. The consumer retains arithmetic/geometry and artifact qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] for more than 32 arguments, geometry
+    /// or shared memory outside the device capabilities, or an artifact not
+    /// admitted by this work; [`CudaFailure::Busy`] when an owner lock is
+    /// contended; [`CudaFailure::Quarantined`] when the device is quarantined; and
+    /// [`CudaFailure::Driver`] when context binding, symbol lookup or the launch
+    /// enqueue fails. A failed enqueue also quarantines the device.
     pub unsafe fn launch(
         &self,
         artifact: PtxArtifact,
@@ -363,7 +414,9 @@ impl CudaWork {
         let module = *module.handle.lock();
         self.inner.primary.bound(|| {
             let mut function = ptr::null_mut();
-            checked(unsafe { sys::cuModuleGetFunction(&mut function, module, symbol.as_ptr()) })?;
+            checked(unsafe {
+                sys::cuModuleGetFunction(&raw mut function, module, symbol.as_ptr())
+            })?;
             // Mark before even a failed enqueue: a driver error is not a witness
             // that every pointer is no longer in use by this exact stream.
             if !state.phase.begin(self.inner.primary.health.usable()) {
@@ -393,6 +446,14 @@ impl CudaWork {
 
     /// Observe successful completion of all preceding commands on this stream.
     /// A timeout or driver failure permanently quarantines this physical owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::Busy`] when an owner lock is contended,
+    /// [`CudaFailure::Quarantined`] when the device is quarantined or completion
+    /// is uncertain, [`CudaFailure::Timeout`] when the stream is still pending at
+    /// the finite deadline, and [`CudaFailure::Driver`] when context binding or
+    /// the stream query fails.
     pub fn wait(&self) -> Result<(), CudaFailure> {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
@@ -432,6 +493,10 @@ impl CudaWork {
     /// Every downloaded element must have been initialized to a valid T by a
     /// completed upload or admitted kernel. Uninitialized device output and invalid
     /// Rust bit patterns are forbidden even if the stream completed successfully.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Self::download_prefix`] for the complete buffer.
     pub unsafe fn download<T: DeviceCopy + Copy + Default>(
         &self,
         buffer: &mut CudaBuffer<'_, T>,
@@ -447,6 +512,16 @@ impl CudaWork {
     /// Every element in `0..initialized_len` must contain a valid initialized T
     /// from an admitted kernel or completed upload. The remaining device bytes
     /// are never read, copied, or exposed as Rust values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CudaFailure::InvalidRequest`] when `initialized_len` exceeds the
+    /// buffer or the buffer belongs to another work owner,
+    /// [`CudaFailure::Capacity`] when the work's host reservation cannot fund the
+    /// output, [`CudaFailure::Busy`] when an owner lock is contended or
+    /// publication is not permitted, [`CudaFailure::Quarantined`] when the device
+    /// is quarantined, [`CudaFailure::Driver`] when the download enqueue fails,
+    /// which also quarantines the device, and any error of [`Self::wait`].
     pub unsafe fn download_prefix<T: DeviceCopy + Copy + Default>(
         &self,
         buffer: &mut CudaBuffer<'_, T>,
@@ -533,7 +608,7 @@ impl CudaWork {
         &self,
         buffer: &CudaBuffer<'_, T>,
     ) -> Result<(), CudaFailure> {
-        if ptr::eq::<WorkInner>(&*self.inner, &**buffer.parent) {
+        if ptr::eq::<WorkInner>(&raw const *self.inner, &raw const **buffer.parent) {
             Ok(())
         } else {
             Err(CudaFailure::InvalidRequest)
@@ -595,7 +670,7 @@ impl<T: DeviceCopy + Copy> Drop for CudaBuffer<'_, T> {
             }
             return;
         }
-        let _gate = self.parent.primary.gate.lock();
+        let gate = self.parent.primary.gate.lock();
         if self.parent.state.lock().phase == Phase::Pending {
             self.parent.primary.health.quarantine(true);
         }
@@ -617,7 +692,7 @@ impl<T: DeviceCopy + Copy> Drop for CudaBuffer<'_, T> {
             self.parent.primary.health.quarantine(true);
             return;
         }
-        drop(_gate);
+        drop(gate);
         // SAFETY: checked physical cleanup precedes byte refunds and parent release.
         unsafe {
             ManuallyDrop::drop(&mut self.device_charge);
@@ -642,7 +717,7 @@ impl Drop for WorkInner {
             }
             return;
         }
-        let _gate = self.primary.gate.lock();
+        let gate = self.primary.gate.lock();
         let state = self.state.get_mut();
         if state.phase == Phase::Pending {
             self.primary.health.quarantine(true);
@@ -660,7 +735,7 @@ impl Drop for WorkInner {
             return;
         }
         state.stream = ptr::null_mut();
-        drop(_gate);
+        drop(gate);
         // SAFETY: stream is gone and every typed child has released its parent share.
         // Native/module/context parents are released before original work refunds.
         unsafe {

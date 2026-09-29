@@ -7,7 +7,7 @@ use crate::{
     TransitionBatch, proof::PublicIO,
 };
 
-fn assert_frame<T>(row: &Value, shape: &str, value: T)
+fn assert_frame<T>(row: &Value, shape: &str, value: &T)
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + std::fmt::Debug + Eq,
 {
@@ -20,8 +20,8 @@ where
     assert_eq!(row["serialize_schema_hash"].as_str(), Some(hash.as_str()));
     assert_eq!(row["deserialize_schema_hash"].as_str(), Some(hash.as_str()));
     let original = hex::decode(row["frame_hex"].as_str().expect("captured frame")).unwrap();
-    assert_eq!(norito::to_bytes(&value).unwrap(), original, "{shape}");
-    assert_eq!(norito::decode_from_bytes::<T>(&original).unwrap(), value);
+    assert_eq!(norito::to_bytes(value).unwrap(), original, "{shape}");
+    assert_eq!(norito::decode_from_bytes::<T>(&original).unwrap(), *value);
 
     let mut wrong_identity = original.clone();
     wrong_identity[6] ^= 1;
@@ -42,11 +42,11 @@ where
     assert_eq!(group["case"].as_str(), Some(case));
     let frames = group["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 5);
-    assert_frame(&frames[0], "root", value.clone());
-    assert_frame(&frames[1], "option_none", None::<T>);
-    assert_frame(&frames[2], "option_some", Some(value.clone()));
-    assert_frame(&frames[3], "vec_empty", Vec::<T>::new());
-    assert_frame(&frames[4], "vec_two", vec![value.clone(), value]);
+    assert_frame(&frames[0], "root", &value);
+    assert_frame(&frames[1], "option_none", &None::<T>);
+    assert_frame(&frames[2], "option_some", &Some(value.clone()));
+    assert_frame(&frames[3], "vec_empty", &Vec::<T>::new());
+    assert_frame(&frames[4], "vec_two", &vec![value.clone(), value]);
 }
 
 #[test]

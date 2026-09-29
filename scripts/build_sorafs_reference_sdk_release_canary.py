@@ -63,7 +63,7 @@ from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     SupplyChainSourceResult,
     validate_supply_chain_sources,
 )
-from sccp_release_common import verify_ed25519  # noqa: E402
+from release_evidence_crypto import verify_ed25519  # noqa: E402
 from sorafs_reference_sdk_signed_manifest import (  # noqa: E402
     SignedManifestSourceError,
     VerifiedSignedManifestSources,

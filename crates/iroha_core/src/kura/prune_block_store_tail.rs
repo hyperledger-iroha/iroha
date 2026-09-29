@@ -78,12 +78,6 @@ impl BlockStore {
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
         self.commit_marker_pending = None;
         self.commit_marker_count = pruned_index_count;
-        if self
-            .read_verified_snapshot_tail_marker()?
-            .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
-        {
-            self.remove_verified_snapshot_tail_marker()?;
-        }
         Ok(())
     }
 }

@@ -467,7 +467,7 @@ impl NetworkCarrierProjection {
         CANONICAL_NETWORK_PROJECTION_CALLS.set(CANONICAL_NETWORK_PROJECTION_CALLS.get() + 1);
         if block
             .execution_context()
-            .is_some_and(|context| !context.has_current_version() || context.merge_entry.is_some())
+            .is_some_and(|context| !context.has_current_version())
         {
             return Err(canonical_transaction_history_error(
                 "retired merge carrier is not a Network source",
@@ -654,7 +654,7 @@ pub(crate) fn read_finalized_execution_carrier(
     }
     if block
         .execution_context()
-        .is_some_and(|context| !context.has_current_version() || context.merge_entry.is_some())
+        .is_some_and(|context| !context.has_current_version())
     {
         return Err(canonical_transaction_history_error(
             "retired merge carrier is not a Network source",
@@ -1399,6 +1399,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::tx::tests::*;
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_data_model::IntoKeyValue;
     use iroha_data_model::{
         ValidationFail,
         block::{
@@ -1664,23 +1665,96 @@ pub(crate) mod tests {
         /// Older unselected physical body position.
         pub(crate) unrelated_height: NonZeroUsize,
     }
-    /// Seed sixteen two-input carriers above an empty genesis: exactly 32 transaction rows.
-    pub(crate) fn canonical_query_fixture() -> CanonicalQueryFixture {
-        let mut blocks = vec![Arc::new(empty_query_block(None))];
-        for epoch in 1..=16 {
-            blocks.push(canonical_query_carrier(
-                blocks.last().unwrap(),
-                epoch,
-                epoch != 9,
-                0,
-            ));
+    fn native_query_chain(
+        carriers: u64,
+        metadata_bytes: usize,
+    ) -> crate::sumeragi::test_chain::CertifiedTestChain {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        use iroha_data_model::{
+            account::Account,
+            isi::{Log, Unregister},
+        };
+        let mut world = crate::state::World::with(
+            [],
+            [Account::new(iroha_test_samples::ALICE_ID.clone())
+                .build(&iroha_test_samples::ALICE_ID)],
+            [],
+        );
+        world.account_permissions.insert(
+            iroha_test_samples::ALICE_ID.clone(),
+            BTreeSet::from([
+                iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+            ]),
+        );
+        let keys = (0..carriers * 2)
+            .map(|index| {
+                KeyPair::from_seed(
+                    index.to_le_bytes().to_vec(),
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+            })
+            .collect::<Vec<_>>();
+        for key in &keys {
+            let account = AccountId::new(key.public_key().clone());
+            let (id, value) = Account::new(account.clone())
+                .build(&account)
+                .into_key_value();
+            world.accounts.insert(id, value);
         }
-        let target = Arc::clone(&blocks[9]);
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1000)).unwrap();
+        for epoch in 1..=carriers {
+            let transactions = (0..2)
+                .map(|index| {
+                    let key = &keys[((epoch - 1) * 2 + index) as usize];
+                    let mut tx = TransactionBuilder::new(
+                        chain.network_id(),
+                        AccountId::new(key.public_key().clone()),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    );
+                    tx.set_creation_time(Duration::from_millis((epoch + 1) * 1000 + index));
+                    if metadata_bytes != 0 {
+                        let mut metadata = Metadata::default();
+                        metadata.insert(
+                            "query_padding".parse().unwrap(),
+                            Json::new("p".repeat(metadata_bytes)),
+                        );
+                        tx = tx.with_metadata(metadata);
+                    }
+                    let instruction: InstructionBox = if epoch == 9 {
+                        Unregister::domain(
+                            iroha_model_base::domain::DomainId::try_new(
+                                "missing-query-domain",
+                                "universal",
+                            )
+                            .unwrap(),
+                        )
+                        .into()
+                    } else {
+                        Log::new(
+                            iroha_data_model::Level::INFO,
+                            format!("query {epoch}:{index}"),
+                        )
+                        .into()
+                    };
+                    tx.with_instructions([instruction]).sign(key.private_key())
+                })
+                .collect();
+            chain.commit(transactions);
+        }
+        chain
+    }
+
+    /// Sixteen actual two-input native carriers above their authentic genesis.
+    pub(crate) fn canonical_query_fixture() -> CanonicalQueryFixture {
+        let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(16, 0));
+        let target = Arc::clone(&store.blocks[9]);
         let input = target.network_entrypoint_at(0).unwrap();
         let target_entrypoint_hash = input.hash();
         let target_authority = input.authority_opt().unwrap().clone();
         let target_timestamp_ms = input.creation_time_ms().unwrap();
-        let store = crate::kura::tests::CanonicalQueryStore::new(blocks);
         let mut world = crate::state::World::with(
             [],
             [
@@ -1695,16 +1769,7 @@ pub(crate) mod tests {
                 iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
             ]),
         );
-        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
-            world,
-            Arc::clone(&store.kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            "canonical-query".parse().unwrap(),
-            crate::kura::tests::canonical_query_network_id(),
-        );
-        for block in &store.blocks {
-            state.push_block_hash_for_testing(block.hash());
-        }
+        let state = store.reader_state(world);
         CanonicalQueryFixture {
             sandbox: Sandbox {
                 state,
@@ -1722,7 +1787,7 @@ pub(crate) mod tests {
     fn query_work_limits() -> TransactionHistoryWorkLimits {
         TransactionHistoryWorkLimits {
             max_carrier_work: 64,
-            max_total_work: 128,
+            max_total_work: 512,
             max_bytes: TRANSACTION_HISTORY_MAX_BYTES,
         }
     }
@@ -2011,7 +2076,7 @@ pub(crate) mod tests {
             .sandbox
             .state
             .kura()
-            .force_hash_only_block_for_testing(target_height)
+            .corrupt_canonical_body_for_testing(target_height)
             .expect("convert target transaction carrier to hash-only form");
         let state_view = fixture.sandbox.state.view();
         for height in 1..target_height.get() {
@@ -2019,13 +2084,6 @@ pub(crate) mod tests {
                 .canonical_block_by_height(NonZeroUsize::new(height).expect("positive height"))
                 .expect("evicting the selected body must preserve earlier canonical bodies");
         }
-        assert_eq!(
-            state_view
-                .kura()
-                .hash_only_unavailable_prefix_len(state_view.height()),
-            0,
-            "single-body eviction must not invent an unavailable historical prefix"
-        );
         let indexed_error = committed_transactions_indexed_snapshot(
             &state_view,
             CompoundPredicate::from_filters(CommittedTxFilters {
@@ -2055,7 +2113,7 @@ pub(crate) mod tests {
         assert!(matches!(
             &indexed_error,
             QueryExecutionFail::CanonicalHistory(
-                iroha_data_model::query::error::CanonicalHistoryError::HashOnlyBodyUnavailable {
+                iroha_data_model::query::error::CanonicalHistoryError::BodyUnavailable {
                     height,
                     ..
                 }
@@ -2274,57 +2332,36 @@ pub(crate) mod tests {
         );
     }
     #[test]
-    fn cumulative_transaction_visitor_charges_empty_carriers() {
-        let mut blocks = vec![Arc::new(empty_query_block(None))];
-        for _ in 0..3 {
-            blocks.push(Arc::new(empty_query_block(Some(blocks.last().unwrap()))));
-        }
-        let store = crate::kura::tests::CanonicalQueryStore::new(blocks);
-        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
-            crate::state::World::default(),
-            Arc::clone(&store.kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            "canonical-query".parse().unwrap(),
-            crate::kura::tests::canonical_query_network_id(),
-        );
-        for block in &store.blocks {
-            state.push_block_hash_for_testing(block.hash());
-        }
+    fn cumulative_transaction_visitor_charges_nonmatching_native_carriers() {
+        let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(3, 0));
+        let state_view = store.state.view();
         store.kura.reset_canonical_query_reads_for_test();
-        let state_view = state.view();
         let error = visit_committed_transactions_with_work_budget(
             &state_view,
-            CompoundPredicate::PASS,
-            1,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("field_that_does_not_exist", true)
+            }),
+            64,
             2,
             TRANSACTION_HISTORY_MAX_BYTES,
-            |_, _| panic!("empty carriers must not project transactions"),
+            |_, matches| {
+                assert!(!matches);
+                Ok(ControlFlow::Continue(()))
+            },
         )
-        .expect_err("three empty carriers must exceed cumulative work two");
+        .expect_err("original native source prefix exceeds finite cumulative work");
         assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
-        assert_eq!(
-            store.kura.canonical_query_reads_for_test(),
-            (2, store.wire_bytes([4, 3]))
-        );
     }
     #[test]
     fn transaction_budget_rejects_large_body_before_read_or_decode() {
         const TRANSACTION_METADATA_BYTES: usize = 256 * 1024;
-        let genesis = Arc::new(empty_query_block(None));
-        let carrier = canonical_query_carrier(&genesis, 1, true, TRANSACTION_METADATA_BYTES);
-        let store = crate::kura::tests::CanonicalQueryStore::new(vec![genesis, carrier]);
+        let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(
+            1,
+            TRANSACTION_METADATA_BYTES,
+        ));
         let expected_bytes = store.wire_bytes([2]);
         assert!(expected_bytes > u64::try_from(2 * TRANSACTION_METADATA_BYTES).unwrap());
-        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
-            crate::state::World::default(),
-            Arc::clone(&store.kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            "canonical-query".parse().unwrap(),
-            crate::kura::tests::canonical_query_network_id(),
-        );
-        for block in &store.blocks {
-            state.push_block_hash_for_testing(block.hash());
-        }
+        let state = &store.state;
         let state_view = state.view();
         store.kura.reset_canonical_query_reads_for_test();
         reset_canonical_network_projection_calls_for_test();

@@ -1,7 +1,7 @@
 # TON SCCP v1 contract security invariants
 
 Scope: `SccpTairaXorMinter`, `SccpTairaXorWallet` and `SccpConsumedBucket`
-(`specs/sccp.md` revision 3, §5.1 and §5.3). Build, test and golden tooling is
+(`specs/sccp.md` revision 4, §5.1 and §5.3). Build, test and golden tooling is
 described in
 [`docs/source/sccp_ton_release_builder.md`](../../../docs/source/sccp_ton_release_builder.md).
 The Acton emulator suite in `tests/unit` exercises these invariants; the

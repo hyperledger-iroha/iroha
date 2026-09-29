@@ -13,9 +13,6 @@ use crate::{
         ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
     },
     state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, World, WorldReadOnly as _},
-    sumeragi::v2_context::{
-        V2ContextBuildError, finalized_global_beacon_npos_successor_seed_from_sources,
-    },
 };
 use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
 use iroha_crypto::{
@@ -24,12 +21,12 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, consensus_v2 as wire},
+    block::BlockHeader,
     governance::types::{
-        BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
-        GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
-        GovernanceExpectedHeadV1, GovernanceStageV1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
-        ParliamentBody, ProposalContentId, RiskTierV1, SortitionRequestId, SortitionRequestV1,
+        BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId, GovernanceAttemptStatusV1,
+        GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
+        GovernanceStageV1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentBody,
+        ProposalContentId, RiskTierV1, SortitionRequestId, SortitionRequestV1,
         parliament_candidate_root_v1,
     },
 };
@@ -791,106 +788,6 @@ pub(crate) fn pending_batched_sortition_attempt(
     (governance_attempt_id, request_ids, attempt)
 }
 
-pub(super) fn live_producer_context(
-    keys: &[KeyPair],
-    network_id: NetworkId,
-    parent_hash: HashOf<BlockHeader>,
-    epoch_end_height: u64,
-) -> wire::HeightContext {
-    let roster = keys
-        .iter()
-        .map(|key| wire::ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let parent_round = wire::ConsensusRound {
-        context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"threshold beacon fixture parent context",
-        ))),
-        height: 40,
-        view: 0,
-    };
-    // This fixture enters epoch seven immediately after boundary block 40.
-    // Retain the real generation-zero keys and installed beacon through that
-    // exact predecessor, then derive the contiguous authorization once.
-    let (previous_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
-            network_id,
-            6,
-            parent_round.height,
-            &roster,
-        );
-    assert!(matches!(
-        previous_authorization.beacon,
-        iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(_)
-    ));
-    let kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-            &previous_authorization,
-            &kagemusha_mint_finality_authority,
-            epoch_end_height,
-            previous_authorization.beacon,
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
-            [0; 32],
-        );
-    assert_eq!(kagemusha_mint_finality_authorization.epoch, 7);
-    assert_eq!(kagemusha_mint_finality_authorization.first_height, 41);
-    assert_eq!(
-        kagemusha_mint_finality_authorization.last_height,
-        epoch_end_height
-    );
-    let context = wire::HeightContext {
-        network_id,
-        protocol_version: wire::PROTOCOL_VERSION,
-        height: 41,
-        epoch: 7,
-        epoch_end_height,
-        next_epoch_snapshot: None,
-        snapshot_bootstrap: None,
-        mode: wire::ConsensusMode::Npos,
-        parent_commit_qc: Some(wire::QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: wire::GlobalPhase::Commit,
-            subject: wire::BlockSubject {
-                parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-                    b"threshold beacon fixture grandparent",
-                ))),
-                block_hash: parent_hash,
-                payload_hash: Hash::new(b"threshold beacon fixture parent payload"),
-            },
-            execution_commitment:
-                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"threshold beacon fixture parent state"),
-                    Hash::new(b"threshold beacon fixture post state"),
-                    Hash::new(b"threshold beacon fixture ordinary writes"),
-                    1,
-                    Hash::new(b"threshold beacon fixture executed block"),
-                ),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        }),
-        quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
-        roster,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
-        nexus_amx_context_hash: Hash::new(b"threshold beacon fixture nexus"),
-        execution_policy_hash: Hash::new(b"threshold beacon fixture execution policy"),
-        da_layout: wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 3,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
-        leader_seed: [0x91; 32],
-    };
-    context.validate().expect("valid live beacon context");
-    context
-}
-
 #[test]
 fn threshold_beacon_session_validates_complete_canonical_transcript() {
     let (session, expected) = validated_threshold_session();
@@ -1508,108 +1405,58 @@ fn threshold_beacon_partial_reducer_is_bound_fail_closed_and_subset_invariant() 
 }
 
 #[test]
-fn npos_successor_seed_requires_one_exact_finalized_pulse_and_chain_anchor() {
+fn npos_successor_seed_binds_verified_pulse_and_target_epoch() {
     const BOUNDARY_HEIGHT: u64 = 42;
     const SUCCESSOR_EPOCH: u64 = 9;
     let (fixture, pulse, _cursor, anchor) = signed_pulse_fixture();
-    let mut key_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
-            .expect("valid finalized beacon key");
-    key_record
-        .activate(key_record.session.adaptive_dkg.finalized_at_height)
-        .expect("activate finalized beacon key");
-    let link = GlobalThresholdBeaconPulseLinkV1 {
-        pulse_id: pulse.pulse_id,
-        seed: pulse.seed,
-        height: pulse.height,
-        round: pulse.round,
-    };
-    let world = World::new();
-    {
-        let mut block = world.block();
-        block
-            .global_beacon_key_sessions
-            .insert(pulse.session_id, key_record);
-        block
-            .global_beacon_active_session
-            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
-        block.global_beacon_pulses.insert(pulse.pulse_id, pulse);
-        block.global_beacon_pulse_slots.insert(
-            (
-                BeaconSessionId::for_network_v1(&pulse.network_id),
-                pulse.height,
-            ),
-            pulse.pulse_id,
-        );
-        block
-            .global_beacon_latest_pulse
-            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
-        block.commit();
-    }
-    let mut block_hashes = (1_u8..=41)
-        .map(|marker| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([marker; 32])))
-        .collect::<Vec<_>>();
-    block_hashes[usize::try_from(anchor.height - 1).expect("small anchor height")] =
-        anchor.block_hash;
-    let world_view = world.view();
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &fixture.session,
+        &pulse,
+        anchor,
+        &pulse.context,
+    )
+    .expect("authenticated pulse and exact chain anchor");
     let expected_seed =
         global_threshold_beacon_npos_successor_seed_v1(&pulse, BOUNDARY_HEIGHT, SUCCESSOR_EPOCH);
-    assert_ne!(
-        expected_seed, pulse.seed,
-        "NPoS must not reuse the raw pulse seed"
-    );
+    assert_ne!(expected_seed, pulse.seed, "NPoS seed has its own domain");
     assert_ne!(
         expected_seed,
         global_threshold_beacon_npos_successor_seed_v1(
             &pulse,
             BOUNDARY_HEIGHT,
             SUCCESSOR_EPOCH + 1,
-        ),
-        "the target epoch is part of the NPoS seed domain"
+        )
     );
-    assert_eq!(
-        finalized_global_beacon_npos_successor_seed_from_sources(
-            &world_view,
-            &block_hashes,
-            &pulse.network_id,
-            BOUNDARY_HEIGHT,
+    assert_ne!(
+        expected_seed,
+        global_threshold_beacon_npos_successor_seed_v1(
+            &pulse,
+            BOUNDARY_HEIGHT + 1,
             SUCCESSOR_EPOCH,
-        ),
-        Ok(expected_seed)
+        )
     );
-
-    let empty_world = World::new();
-    assert_eq!(
-        finalized_global_beacon_npos_successor_seed_from_sources(
-            &empty_world.view(),
-            &block_hashes,
-            &pulse.network_id,
-            BOUNDARY_HEIGHT,
-            SUCCESSOR_EPOCH,
-        ),
-        Err(V2ContextBuildError::MissingPreBoundaryBeaconPulse)
+    let mut foreign = pulse;
+    foreign.network_id = beacon_fixture_network_id(0x82);
+    assert!(
+        verify_finalized_global_threshold_beacon_pulse_v1(
+            &fixture.session,
+            &foreign,
+            anchor,
+            &pulse.context,
+        )
+        .is_err()
     );
-    assert_eq!(
-        finalized_global_beacon_npos_successor_seed_from_sources(
-            &world_view,
-            &block_hashes,
-            &beacon_fixture_network_id(0x82),
-            BOUNDARY_HEIGHT,
-            SUCCESSOR_EPOCH,
-        ),
-        Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)
-    );
-    block_hashes[usize::try_from(anchor.height - 1).expect("small anchor height")] =
+    let mut wrong_anchor = anchor;
+    wrong_anchor.block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFE; 32]));
-    assert_eq!(
-        finalized_global_beacon_npos_successor_seed_from_sources(
-            &world_view,
-            &block_hashes,
-            &pulse.network_id,
-            BOUNDARY_HEIGHT,
-            SUCCESSOR_EPOCH,
-        ),
-        Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)
+    assert!(
+        verify_finalized_global_threshold_beacon_pulse_v1(
+            &fixture.session,
+            &pulse,
+            wrong_anchor,
+            &pulse.context,
+        )
+        .is_err()
     );
 }
 

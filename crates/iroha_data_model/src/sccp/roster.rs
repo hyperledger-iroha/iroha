@@ -154,14 +154,6 @@ impl SccpBridgeRosterV1 {
         self.nonzero_member_count() < usize::from(self.threshold)
     }
 
-    /// Return whether this generation signs Taira height `height`.
-    ///
-    /// A generation signs `activation_height ..= handoff_height` (open-ended while current).
-    #[must_use]
-    pub fn signs_height(&self, height: u64) -> bool {
-        height >= self.activation_height && self.handoff_height.is_none_or(|last| height <= last)
-    }
-
     /// Return the member addresses in slot order (the §3.7 digest input).
     pub fn addresses(&self) -> impl Iterator<Item = &[u8; 20]> {
         self.members.iter().map(|member| &member.address)
@@ -299,14 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn signing_range_is_activation_through_handoff() {
-        let mut value = roster(&[1, 2, 3, 4]);
-        assert!(!value.signs_height(9));
-        assert!(value.signs_height(10));
-        assert!(value.signs_height(u64::MAX));
-        value.handoff_height = Some(20);
-        assert!(value.signs_height(20));
-        assert!(!value.signs_height(21));
+    fn addresses_are_in_slot_order() {
+        let value = roster(&[1, 2, 3, 4]);
         assert_eq!(
             value.addresses().copied().collect::<Vec<_>>(),
             vec![[1; 20], [2; 20], [3; 20], [4; 20]]

@@ -74,10 +74,12 @@ fn rounds_into(
 }
 
 /// Apply one AESENC round into caller-owned storage. A length mismatch leaves it unchanged.
+#[cfg(test)]
 pub fn aesenc_many_into(states: &[[u8; 16]], key: [u8; 16], destination: &mut [[u8; 16]]) -> bool {
     rounds_into(states, &[key], destination, false, false)
 }
 /// Apply one AESDEC round into caller-owned storage. A length mismatch leaves it unchanged.
+#[cfg(test)]
 pub fn aesdec_many_into(states: &[[u8; 16]], key: [u8; 16], destination: &mut [[u8; 16]]) -> bool {
     rounds_into(states, &[key], destination, true, false)
 }

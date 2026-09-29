@@ -116,11 +116,12 @@ fn validate_value_schema(
     }
     for node in &schema.nodes {
         if let EntrypointValueTypeNodeV1::Error(descriptor) = node
-            && catalog.get(descriptor.identity.as_str()).copied() != Some(descriptor) {
-                return Err(invalid(format!(
-                    "{context} boundary error schema does not match its error_types catalog"
-                )));
-            }
+            && catalog.get(descriptor.identity.as_str()).copied() != Some(descriptor)
+        {
+            return Err(invalid(format!(
+                "{context} boundary error schema does not match its error_types catalog"
+            )));
+        }
     }
     Ok(())
 }
@@ -274,7 +275,9 @@ mod tests {
         for schema in [query_view(), query_page()] {
             assert_roundtrip(&with_return_schema(schema));
         }
-        let mut nodes = vec![Node::Tuple(MAX_ENTRYPOINT_RETURN_WORDS as u16)];
+        let mut nodes = vec![Node::Tuple(
+            u16::try_from(MAX_ENTRYPOINT_RETURN_WORDS).expect("return window fits u16"),
+        )];
         nodes.extend(vec![
             Node::Leaf(EntrypointValueKindV1::Int);
             MAX_ENTRYPOINT_RETURN_WORDS
@@ -365,7 +368,9 @@ mod tests {
         let mut wrong_name = fixture_manifest(None);
         wrong_name.entrypoints.as_mut().unwrap()[0].return_type = Some("bool".to_owned());
         assert_rejected_everywhere(&wrong_name);
-        let mut nodes = vec![Node::Tuple((MAX_ENTRYPOINT_RETURN_WORDS + 1) as u16)];
+        let mut nodes = vec![Node::Tuple(
+            u16::try_from(MAX_ENTRYPOINT_RETURN_WORDS + 1).expect("oversized window fits u16"),
+        )];
         nodes.extend(vec![
             Node::Leaf(EntrypointValueKindV1::Int);
             MAX_ENTRYPOINT_RETURN_WORDS + 1

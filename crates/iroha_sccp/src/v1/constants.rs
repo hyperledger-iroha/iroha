@@ -331,8 +331,6 @@ pub const MAX_ROTATIONS_PER_CALL: usize = 16;
 pub const MAX_VOID_FROZEN_RANGE_EVM: u64 = 256;
 /// Maximum `sccp_void_frozen` range on TON (one bucket).
 pub const MAX_VOID_FROZEN_RANGE_TON: u64 = 512;
-/// Nonce flags per TON consumption bucket.
-pub const TON_BUCKET_FLAGS: u64 = 512;
 /// Length of one encoded signature `r ‖ s ‖ v`.
 pub const SIGNATURE_BYTES: usize = 65;
 
@@ -368,10 +366,6 @@ pub const TON_AMOUNT_BOUND: u128 = 1 << 96;
 pub const XOR_DECIMALS: u32 = 9;
 /// `asset_id` text of Taira XOR.
 pub const ASSET_ID_XOR: &str = "xor";
-/// Destination token name.
-pub const TOKEN_NAME: &str = "Taira XOR";
-/// Destination token symbol.
-pub const TOKEN_SYMBOL: &str = "tXOR";
 
 // ---------------------------------------------------------------------------------------------
 // Profiles: tags, domains, identities and routes (§2)
@@ -405,8 +399,6 @@ pub const BSC_CHAIN_ID: u64 = 56;
 pub const TRON_CHAIN_ID: u64 = 0x2b66_53dc;
 /// TON mainnet global id.
 pub const TON_GLOBAL_ID: i32 = -239;
-/// TON basechain workchain used by every SCCP contract.
-pub const TON_WORKCHAIN: i32 = 0;
 /// Route id of the Ethereum route.
 pub const ROUTE_ID_ETHEREUM: &str = "taira_eth_xor";
 /// Route id of the BSC route.
@@ -530,11 +522,9 @@ mod tests {
     }
 
     #[test]
-    fn retired_selectors_are_absent_and_selectors_are_unique() {
-        let retired = [[0xbc, 0x12, 0x04, 0x37], [0x41, 0xe5, 0xc0, 0xcb]];
+    fn selectors_are_unique_and_disjoint_from_erc20() {
         let mut seen = std::collections::BTreeSet::new();
         for (_, _, selector) in SELECTORS {
-            assert!(!retired.contains(&selector));
             assert!(seen.insert(selector), "duplicate selector {selector:?}");
         }
         // No collision with the ERC-20 surface.

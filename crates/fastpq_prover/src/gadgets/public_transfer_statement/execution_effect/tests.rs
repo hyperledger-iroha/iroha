@@ -17,6 +17,11 @@ use iroha_data_model::{
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 
+/// Narrow one small fixture position or level to its `u32` wire field.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn balance(account: &AccountId) -> FastpqExecutionBalanceV1 {
     FastpqExecutionBalanceV1 {
         asset: FastpqExecutionAssetV1 {
@@ -159,7 +164,7 @@ fn transfer_mint_transfer_and_transfer_burn_transfer_preserve_complete_chronolog
         assert_eq!(statements[1].new_root, statements[2].old_root);
         for (index, statement) in statements.iter().enumerate() {
             let pair = prepared.pair(index).unwrap();
-            assert_eq!(pair.occurrence, [0, index as u32, index as u32]);
+            assert_eq!(pair.occurrence, [0, narrow_u32(index), narrow_u32(index)]);
             for leg in 0..2 {
                 let row = &prepared.rows()[pair.row_indices[leg]];
                 assert_eq!(row.effect_ordinal as usize, index);
@@ -208,7 +213,7 @@ fn supply_chain_arithmetic_ordinals_and_rows_fail_closed() {
             0 => {
                 changed.effects.swap(1, 2);
                 for (i, e) in changed.effects.iter_mut().enumerate() {
-                    e.ordinal = i as u32;
+                    e.ordinal = narrow_u32(i);
                 }
             }
             1 => changed.effects[1].ordinal = 0,

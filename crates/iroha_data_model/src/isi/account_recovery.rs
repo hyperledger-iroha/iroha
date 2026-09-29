@@ -105,9 +105,6 @@ macro_rules! impl_decode_one_field {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = account_recovery_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 let $field = super::decode_aos_canonical_field::<$field_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -127,9 +124,6 @@ macro_rules! impl_decode_two_fields {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = account_recovery_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 let $first = super::decode_aos_canonical_field::<$first_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,

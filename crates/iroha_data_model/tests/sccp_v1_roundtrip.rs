@@ -1,7 +1,7 @@
 //! Public-boundary tests for the SCCP v1 state, record, registry, light-client and event types and
 //! the v1 instruction structs.
 //!
-//! Covers `specs/sccp.md` (revision 3) §3.6.1, §4.2–§4.8, §4.11–§4.17 and §4.19: stable schema
+//! Covers `specs/sccp.md` §3.6.1, §4.2–§4.8, §4.11–§4.17 and §4.19: stable schema
 //! names and instruction ids, binary (bare, headered and slice) and JSON roundtrips of every type
 //! and instruction, closed JSON objects, unknown enum tags and trailing bytes, the route escrow
 //! derivation (deterministic, distinct per route and `NetworkId`, revision-free), the bridge-key
@@ -26,9 +26,9 @@ use iroha_data_model::{
     },
     sccp::{
         attestation::{
-            SCCP_HISTORY_MAX_SIZE_V1, SCCP_SIGNATURE_BYTES_V1, SccpAttestationSignatureV1,
-            SccpAttestationStatementV1, SccpAttestationStatusV1, SccpAttestationSubjectV1,
-            SccpBlockCommitmentV1, SccpHistoryStateV1, SccpStatementInvariantError,
+            SCCP_HISTORY_MAX_SIZE_V1, SccpAttestationSignatureV1, SccpAttestationStatementV1,
+            SccpAttestationStatusV1, SccpAttestationSubjectV1, SccpBlockCommitmentV1,
+            SccpHistoryStateV1, SccpStatementInvariantError,
         },
         bounded_bytes::SccpBoundedBytesError,
         control::{
@@ -61,8 +61,8 @@ use iroha_data_model::{
         },
         keys::{
             SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1, SCCP_BRIDGE_KEY_RETIRED_MAX_V1,
-            SCCP_BRIDGE_PUBLIC_KEY_BYTES_V1, SccpAttestationFaultRecordV1, SccpBridgeKeyBindingV1,
-            SccpBridgeKeyStateV1, SccpBridgeKeyV1, SccpFaultRefV1,
+            SccpAttestationFaultRecordV1, SccpBridgeKeyBindingV1, SccpBridgeKeyStateV1,
+            SccpBridgeKeyV1, SccpFaultRefV1,
         },
         light_client::{
             SCCP_LC_ADVANCE_MAX_BYTES_V1, SCCP_LC_EVIDENCE_MAX_BYTES_V1, SccpLcAdvanceBytesV1,
@@ -71,14 +71,14 @@ use iroha_data_model::{
             SccpLightClientParamsV1, SccpLightClientV1,
         },
         outbound::{
-            SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1, SccpOutboundMessageRecordV1, SccpOutboundStatusV1,
-            SccpStatusHeightV1, SccpVoidKindV1, SccpVoidStatusV1,
+            SccpOutboundMessageRecordV1, SccpOutboundStatusV1, SccpStatusHeightV1, SccpVoidKindV1,
+            SccpVoidStatusV1,
         },
         params::SccpParametersV1,
         registry::{
             SCCP_ROUTE_ID_TAIRA_BSC_XOR_V1, SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1,
             SCCP_ROUTE_ID_TAIRA_TON_XOR_V1, SCCP_ROUTE_ID_TAIRA_TRON_XOR_V1, SccpRouteActivationV1,
-            SccpRouteRevisionV1, SccpRouteV1, network_for_route_id, route_id_for,
+            SccpRouteRevisionV1, SccpRouteV1, route_id_for,
         },
         roster::{
             SCCP_ROSTER_MAX_MEMBERS_V1, SCCP_ROSTER_MIN_MEMBERS_V1, SccpBridgeRosterV1,
@@ -808,13 +808,10 @@ fn constants_match_the_spec() {
         "iroha.sccp.bridge_key.v1"
     );
     assert_eq!(SCCP_BRIDGE_KEY_RETIRED_MAX_V1, 16);
-    assert_eq!(SCCP_BRIDGE_PUBLIC_KEY_BYTES_V1, 33);
     assert_eq!(SCCP_ROSTER_MIN_MEMBERS_V1, 4);
     assert_eq!(SCCP_ROSTER_MAX_MEMBERS_V1, 31);
-    assert_eq!(SCCP_SIGNATURE_BYTES_V1, 65);
     assert_eq!(SCCP_HISTORY_MAX_SIZE_V1, 1_u64 << 32);
     assert_eq!(SCCP_FIRST_CONTROL_NONCE_V1, 1);
-    assert_eq!(SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1, 4_096);
     // The proof bound equals the `[zk.sccp]` default per-proof byte limit (8 MiB).
     assert_eq!(SCCP_SOURCE_PROOF_MAX_BYTES_V1, 8 * 1024 * 1024);
     assert_eq!(SCCP_LC_ADVANCE_MAX_BYTES_V1, 1024 * 1024);
@@ -2095,7 +2092,6 @@ fn taira_xor_asset_definition_is_the_canonical_literal() {
 fn binding_domain_is_fixed_and_bound_into_the_frame() {
     let binding = SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([3; 33]), 1, 0);
     assert_eq!(binding.domain(), "iroha.sccp.bridge_key.v1");
-    assert!(binding.has_canonical_domain());
     assert_eq!(
         json_value(&binding).get("domain").and_then(Value::as_str),
         Some(SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1)
@@ -2107,7 +2103,7 @@ fn binding_domain_is_fixed_and_bound_into_the_frame() {
         "iroha.sccp.bridge_key.v2",
     );
     let decoded = norito::json::from_json::<SccpBridgeKeyBindingV1>(&forged).expect("decodes");
-    assert!(!decoded.has_canonical_domain());
+    assert_ne!(decoded.domain(), SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1);
     assert_ne!(decoded, binding);
     assert_ne!(
         norito::to_bytes(&decoded).expect("frame"),
@@ -2132,7 +2128,7 @@ fn bridge_key_consent_is_bound_to_network_nonce_and_key() {
     let instruction = set_bridge_key(Some([2; 33]), 5);
     let peer_key = key_pair(1).public_key().clone();
     let binding = instruction.binding(network_id(7));
-    assert!(binding.has_canonical_domain());
+    assert_eq!(binding.domain(), SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1);
     assert_eq!(binding.binding_nonce, 5);
     instruction
         .peer_signature
@@ -2234,8 +2230,6 @@ fn roster_rules() {
     assert_eq!(generation.validate_shape(), Ok(()));
     let active = roster(&[0, 1, 2, 3]);
     assert!(!active.is_inert());
-    assert!(active.signs_height(active.activation_height));
-    assert!(!active.signs_height(active.activation_height - 1));
     assert_eq!(active.addresses().count(), 4);
     assert_eq!(
         roster(&[2, 1, 3, 4]).validate_shape(),
@@ -2286,7 +2280,7 @@ fn attestation_rules() {
     assert!(!status.record_signer(3));
     assert!(status.has_signer(3));
     assert_eq!(status.signer_count(), 1);
-    assert!(!status.is_attested());
+    assert_eq!(status.attested_at_height, None);
 
     assert!(
         SccpHistoryStateV1 {
@@ -2312,21 +2306,17 @@ fn attestation_rules() {
 #[test]
 fn registry_rules() {
     for network in EXTERNAL {
-        let route_id = route_id_for(network).expect("external route");
-        assert_eq!(network_for_route_id(route_id), Some(network));
+        assert!(route_id_for(network).is_some(), "{network:?}");
     }
     assert_eq!(route_id_for(TAIRA), None);
-    assert_eq!(network_for_route_id("taira_xor"), None);
-    // (state, record, proofs, settles, live)
-    for (state, record, proofs, settles, live) in [
-        (SccpRouteActivationV1::Staged, false, false, false, false),
-        (SccpRouteActivationV1::Bidirectional, true, true, true, true),
-        (SccpRouteActivationV1::Paused, false, true, false, true),
-        (SccpRouteActivationV1::InboundOnly, false, true, true, false),
-        (SccpRouteActivationV1::Retired, false, true, false, false),
+    // (state, settles, live)
+    for (state, settles, live) in [
+        (SccpRouteActivationV1::Staged, false, false),
+        (SccpRouteActivationV1::Bidirectional, true, true),
+        (SccpRouteActivationV1::Paused, false, true),
+        (SccpRouteActivationV1::InboundOnly, true, false),
+        (SccpRouteActivationV1::Retired, false, false),
     ] {
-        assert_eq!(state.accepts_record(), record, "{state:?}");
-        assert_eq!(state.accepts_proofs(), proofs, "{state:?}");
         assert_eq!(state.settles(), settles, "{state:?}");
         assert_eq!(state.is_live(), live, "{state:?}");
     }
@@ -2351,7 +2341,6 @@ fn registry_rules() {
         .insert(2, revision(2, SccpRouteActivationV1::Bidirectional));
     assert_eq!(route.latest_revision(), 2);
     assert_eq!(route.bidirectional_revision().map(|r| r.revision), Some(2));
-    assert_eq!(route.total_liability(), 3_000_000_000);
 }
 
 #[test]

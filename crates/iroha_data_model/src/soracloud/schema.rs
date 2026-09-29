@@ -466,7 +466,6 @@ pub struct SoraInrouManifestV1 {
     /// Schema version; must equal [`SORA_INROU_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
     /// Admitted guest image assets keyed by guest ISA; at least one native profile is required.
-    #[norito(json = "crate::json_helpers::sora_inrou_guest_images_map")]
     pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
 }
 

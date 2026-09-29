@@ -1,3 +1,52 @@
+/// Validate physical routing catalogs against the native consensus committee bounds.
+///
+/// The former merge-ledger envelope budget is not an authority for native lanes:
+/// each lane now certifies its own bounded payload before the global chain merges it.
+fn validate_lane_authority_geometry(
+    lanes: &LaneCatalog,
+    dataspaces: &DataSpaceCatalog,
+) -> Result<(), LaneLifecycleError> {
+    if lanes.lanes().is_empty() || lanes.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
+        return Err(LaneLifecycleError::CommitteeGeometry(
+            "active lane count exceeds the protocol bound".to_owned(),
+        ));
+    }
+    for lane in lanes.lanes() {
+        let dataspace = dataspaces
+            .by_id(lane.dataspace_id)
+            .ok_or(LaneLifecycleError::UnknownDataspace(lane.dataspace_id))?;
+        if !(1..=10).contains(&dataspace.fault_tolerance) {
+            return Err(LaneLifecycleError::CommitteeGeometry(format!(
+                "lane {} requires 1 <= f <= 10 for its 3f + 1 committee",
+                lane.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod native_lane_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn physical_routes_require_a_dataspace_with_native_committee_geometry() {
+        let lanes = LaneCatalog::default();
+        assert!(validate_lane_authority_geometry(&lanes, &DataSpaceCatalog::default()).is_ok());
+        let foreign = DataSpaceCatalog::new(vec![iroha_data_model::nexus::DataSpaceMetadata {
+            id: DataSpaceId::new(1),
+            alias: "foreign".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("valid foreign dataspace");
+        assert!(matches!(
+            validate_lane_authority_geometry(&lanes, &foreign),
+            Err(LaneLifecycleError::UnknownDataspace(DataSpaceId::UNIVERSAL))
+        ));
+    }
+}
+
 struct LaneTopologyDiff<'a> {
     #[cfg(test)]
     added: Vec<&'a iroha_config::parameters::actual::LaneConfigEntry>,
@@ -479,7 +528,8 @@ mod physical_catalog_addition_tests {
     fn retired_drain_metadata_never_creates_an_open_physical_route() {
         let mut lane = iroha_data_model::nexus::LaneConfig::default();
         ensure_no_retired_physical_drain_metadata(&lane).unwrap();
-        lane.metadata.insert(AUTOSCALE_META_DRAIN_STATE.into(), "{}".into());
+        lane.metadata
+            .insert(AUTOSCALE_META_DRAIN_STATE.into(), "{}".into());
         assert!(ensure_no_retired_physical_drain_metadata(&lane).is_err());
         assert!(!autoscale_lane_accepts_proposal_height(&lane, 1));
         assert!(!autoscale_lane_accepts_proposal_height(&lane, u64::MAX));

@@ -192,6 +192,23 @@ pub struct PendingExecutionView<'borrow, 'state> {
     pub witness: &'borrow mut iroha_data_model::block::consensus::ExecWitness,
 }
 
+/// Immutable observation of the actual certificate-authorized publication overlay.
+/// No source mutation or publication capability is exposed by this test view.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub struct PreparedExecutionView<'borrow, 'state> {
+    /// The exact originally executed carrier with its native certificate.
+    pub block: &'borrow CommittedBlock,
+    /// The original prepared overlay whose projected snapshot will be published.
+    pub state: &'borrow StateBlock<'state>,
+    /// The original execution witness, retained with certified R.
+    pub witness: &'borrow iroha_data_model::block::consensus::ExecWitness,
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+type PreparedInspection = Box<
+    dyn for<'borrow, 'state> FnOnce(Result<PreparedExecutionView<'borrow, 'state>, String>) + Send,
+>;
+
 #[cfg(any(test, feature = "iroha-core-tests"))]
 type PendingInspection = Box<
     dyn for<'borrow, 'state> FnOnce(Result<PendingExecutionView<'borrow, 'state>, String>) + Send,
@@ -200,6 +217,8 @@ type PendingInspection = Box<
 enum Request {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     InspectPending(Hash32, PendingInspection),
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    InspectPrepared(Hash32, PreparedInspection),
     Execute(Block, Hash32, mpsc::SyncSender<Option<ExecOutcome>>),
     Discard(u64, Vec<Hash32>),
     Prepare(
@@ -306,6 +325,29 @@ impl StateExecutor {
                     let result = original.and_then(|original| {
                         catch_unwind(AssertUnwindSafe(|| inspect(original)))
                             .map_err(|_| "pending execution inspection panicked".to_owned())
+                    });
+                    let _ = reply.send(result);
+                }),
+            )
+        })
+        .ok_or_else(|| "original execution Worker stopped".to_owned())?
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn inspect_prepared<R: Send + 'static>(
+        &self,
+        block_hash: Hash32,
+        inspect: impl for<'borrow, 'state> FnOnce(PreparedExecutionView<'borrow, 'state>) -> R
+        + Send
+        + 'static,
+    ) -> Result<R, String> {
+        self.call(|reply| {
+            Request::InspectPrepared(
+                block_hash,
+                Box::new(move |original| {
+                    let result = original.and_then(|original| {
+                        catch_unwind(AssertUnwindSafe(|| inspect(original)))
+                            .map_err(|_| "prepared execution inspection panicked".to_owned())
                     });
                     let _ = reply.send(result);
                 }),
@@ -670,6 +712,38 @@ impl<'s> Worker<'s> {
                                 witness: &mut live.witness,
                             })
                         });
+                inspect(original);
+            }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
+            Request::InspectPrepared(block_hash, inspect) => {
+                let original = self
+                    .live
+                    .as_ref()
+                    .ok_or_else(|| "no original prepared execution".to_owned())
+                    .and_then(|live| {
+                        if live.block_hash != block_hash {
+                            return Err(
+                                "prepared inspection belongs to a different execution".into()
+                            );
+                        }
+                        let PublicationPhase::Prepared {
+                            committed,
+                            state_events: Some(_),
+                            ..
+                        } = &live.phase
+                        else {
+                            return Err("original execution is not prepared for publication".into());
+                        };
+                        let state = live
+                            .overlay
+                            .as_deref()
+                            .ok_or_else(|| "original prepared overlay was consumed".to_owned())?;
+                        Ok(PreparedExecutionView {
+                            block: committed,
+                            state,
+                            witness: &live.witness,
+                        })
+                    });
                 inspect(original);
             }
             Request::Execute(block, block_hash, reply) => {
@@ -1551,6 +1625,10 @@ impl<'s> Worker<'s> {
                 state: std::ptr::from_ref(self.state) as usize,
                 tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                     height: live.header.height,
+                    creation_time_ms: u64::try_from(
+                        committed.as_ref().header().creation_time().as_millis(),
+                    )
+                    .expect("block creation time fits u64"),
                     iroha_hash: committed.as_ref().hash(),
                     core_hash: live.block_hash.0,
                     result: live.result.0,
@@ -1979,6 +2057,7 @@ mod native_execution_authorization_tests {
             state: std::ptr::from_ref(&original) as usize,
             tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                 height: 1,
+                creation_time_ms: 0,
                 iroha_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
                     b"origin identity test",
                 )),

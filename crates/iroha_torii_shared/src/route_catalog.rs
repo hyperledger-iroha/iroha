@@ -1583,7 +1583,7 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
-    /// Read a ledger execution-state root with exact Sumeragi-v2 finality.
+    /// Read a ledger execution-state root with authenticated native Sumeragi finality.
     pub const LEDGER_STATE_ROOT: RouteDescriptor = RouteDescriptor::new(
         "ledger.state_root",
         HttpMethod::Get,
@@ -1595,7 +1595,7 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
-    /// Read exact Sumeragi-v2 ledger execution-state finality.
+    /// Read authenticated native Sumeragi ledger execution-state finality.
     pub const LEDGER_STATE_PROOF: RouteDescriptor = RouteDescriptor::new(
         "ledger.state_proof",
         HttpMethod::Get,

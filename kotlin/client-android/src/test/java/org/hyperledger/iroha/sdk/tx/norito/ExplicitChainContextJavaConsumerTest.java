@@ -13,15 +13,16 @@ import org.hyperledger.iroha.sdk.IrohaKeyManager;
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.sdk.crypto.keystore.KeySecurityPreference;
 import org.hyperledger.iroha.sdk.address.AccountAddress;
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile;
 import org.hyperledger.iroha.sdk.core.model.Executable;
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent;
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.sdk.core.model.JsonValue;
 import org.hyperledger.iroha.sdk.core.model.NetworkId;
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload;
 import org.hyperledger.iroha.sdk.norito.NoritoCodec;
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder;
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder;
-import org.hyperledger.iroha.sdk.sccp.SccpV1;
 import org.hyperledger.iroha.sdk.tx.SignedTransaction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Tag;
@@ -29,7 +30,7 @@ import org.junit.jupiter.api.Tag;
 /** Java Android consumers retain explicit, isolated I105 codec contexts and canonical envelopes. */
 @Tag("host-native")
 class ExplicitChainContextJavaConsumerTest {
-  private static final int TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1;
+  private static final int TAIRA = TairaTestnetProfile.I105_DISCRIMINANT;
   private static final int OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT;
   private static final IrohaKeyManager ACCOUNTS = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ED25519);
 
@@ -132,6 +133,41 @@ class ExplicitChainContextJavaConsumerTest {
               SignedTransactionEncoder.decode(
                   replaceSizedField(canonicalEnvelope, 1, rejected)));
     }
+  }
+
+  @Test
+  public void transactionCodecPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity()
+      throws Exception {
+    final String selector =
+        "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web";
+    final FeeSponsorProgramId program = FeeSponsorProgramId.parse(selector);
+    final FeePaymentIntent expectedFeePayment =
+        FeePaymentIntent.sponsor(program, 1L, Collections.emptyList(), 9L);
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(TAIRA);
+    final byte[] encoded =
+        codec.encodeTransaction(
+            new TransactionPayload(
+                NetworkId.parse(
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+                account(0x11, TAIRA),
+                7L,
+                Executable.instructions(Collections.emptyList()),
+                100_000L,
+                null,
+                expectedFeePayment,
+                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                Collections.emptyMap(),
+                null));
+    final TransactionPayload decoded = codec.decodeTransaction(encoded);
+    final FeePaymentIntent.Sponsor decodedSponsor =
+        (FeePaymentIntent.Sponsor) decoded.getFeePayment();
+    assertEquals(
+        Integer.valueOf(TAIRA),
+        AccountAddress.detectI105Discriminant(decodedSponsor.programId.sponsor));
+    assertArrayEquals(encoded, codec.encodeTransaction(decoded));
+    assertEquals(selector, program.literal());
+
+    expectIllegalArgument(() -> new FeeSponsorProgramId(program.sponsor, "cbsi_e\u0301"));
   }
 
   private static TransactionPayload payload(String authority) {

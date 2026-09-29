@@ -210,47 +210,22 @@ final class ToriiJSONValueTests: XCTestCase {
         )
     }
 
-    func testGovernanceLargeIntegersAreLimitedToSccpCaps() throws {
-        let exact = "1000000000000000000000"
-        let data = Data("{\"max_wrapped_supply\":\(exact)}".utf8)
-        let exactIntegerLexemes = try governanceValidatedProposalJSON(data).numberLexemes
-        let decoder = JSONDecoder()
-        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = exactIntegerLexemes
-        let proposal = try decoder.decode(ToriiJSONValue.self, from: data)
-        XCTAssertNoThrow(
-            try governanceRequireExactJSONIntegers(
-                proposal,
-                codingPath: [],
-                context: "proposal",
-                exactIntegerLexemes: exactIntegerLexemes
-            )
-        )
-        XCTAssertThrowsError(
-            try governanceRequireExactJSONIntegers(
-                .object(["checkpoint_height": .integer(exact)]),
-                codingPath: [],
-                context: "proposal"
-            )
-        )
-    }
-
     func testGovernanceCanonicalScannerRetainsStricterUnsignedPolicy() throws {
         let maximum = SccpUInt128.maximumDecimal
         let accepted = Data(
-            "{\"max_wrapped_supply\":\(maximum),\"checkpoint_height\":9007199254740991}".utf8
+            "{\"max_wrapped_supply\":\"\(maximum)\",\"checkpoint_height\":9007199254740991}".utf8
         )
         let validated = try governanceValidatedProposalJSON(accepted)
-        XCTAssertEqual(validated.value["max_wrapped_supply"], .integer(maximum))
-        XCTAssertEqual(validated.numberLexemes.count, 2)
+        XCTAssertEqual(validated.value["max_wrapped_supply"], .string(maximum))
+        XCTAssertEqual(validated.numberLexemes.count, 1)
 
         let invalid = [
             #"{"checkpoint_height":9007199254740992}"#,
             #"{"checkpoint_height":-0}"#,
             #"{"checkpoint_height":1.0}"#,
             #"{"checkpoint_height":1e0}"#,
+            "{\"max_wrapped_supply\":\(maximum)}",
             #"{"max_wrapped_supply":340282366920938463463374607431768211456}"#,
-            #"{"max_wrapped_supply":"1"}"#,
-            #"{"max_outstanding_liability":null}"#,
             #"{"max_wrapped_supply":1,"max_wrapped_supply":2}"#,
             #"[1,2]"#,
         ]

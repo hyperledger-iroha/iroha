@@ -8,6 +8,8 @@ use norito::json::Value;
 use crate::{CodecError, CodecErrorKind, CodecResult};
 
 pub const MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+/// Most negative integer JavaScript represents exactly, `-(2^53 - 1)`.
+pub const MIN_SAFE_INTEGER: i64 = -((1_i64 << 53) - 1);
 
 pub fn parse_u64(value: Value, label: &str) -> CodecResult<u64> {
     let parsed = match value {
@@ -47,6 +49,11 @@ pub fn u64_json(value: u64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_integer_bounds_are_symmetric() {
+        assert_eq!(i128::from(MIN_SAFE_INTEGER), -i128::from(MAX_SAFE_INTEGER));
+    }
 
     #[test]
     fn unsigned_sdk_projection_has_one_exact_representation() {

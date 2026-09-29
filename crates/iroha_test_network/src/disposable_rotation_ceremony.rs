@@ -11,6 +11,7 @@ use iroha_core::{
     validator_committee_evidence::{
         ValidatorCommitteeProvisioningEvidenceV1, ValidatorCommitteeSelectionEvidenceV1,
         verify_validator_committee_provisioning_evidence_v1,
+        verify_validator_committee_selection_evidence_v1,
     },
 };
 use iroha_data_model::{
@@ -1256,7 +1257,10 @@ pub async fn prepare_disposable_pending_custody(
     );
     iroha_config::parameters::validate_production_runtime_handle(&input.handle)
         .map_err(|error| eyre!("invalid production beacon provider handle: {error:?}"))?;
-    let chain_id = ChainId::from(input.chain_id.as_str());
+    let chain_id = input
+        .chain_id
+        .parse::<ChainId>()
+        .map_err(|error| eyre!("invalid chain identifier: {error}"))?;
     let cursor =
         NativeJournalCursor::new(chain_id.clone(), input.network_id, input.finality_limits)
             .map_err(|error| eyre!(error))?;

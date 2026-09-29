@@ -101,17 +101,6 @@ impl SccpNetworkV1 {
     pub const fn is_external(self) -> bool {
         !self.is_sora()
     }
-    /// Return whether V1 can safely admit this external network as a message source.
-    ///
-    /// Only families with exact value-moving source and destination implementations
-    /// are representable in the first-release registry.
-    #[must_use]
-    pub const fn supports_native_inbound_source(self) -> bool {
-        matches!(
-            self,
-            Self::EthereumMainnet | Self::BscMainnet | Self::TronMainnet | Self::TonMainnet
-        )
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -242,12 +231,9 @@ mod tests {
         }
     }
     #[test]
-    fn native_source_support_is_closed_to_exact_external_inventory() {
+    fn sora_and_external_partition_the_inventory() {
         for network in NETWORKS {
-            assert_eq!(
-                network.supports_native_inbound_source(),
-                network.is_external()
-            );
+            assert_eq!(network.is_external(), !network.is_sora());
             assert_eq!(network.is_sora(), network == SccpNetworkV1::SoraTaira);
         }
     }

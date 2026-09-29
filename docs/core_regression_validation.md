@@ -606,8 +606,7 @@ four-validator network suites were not rerun.
   Closed lanes retain their committed, pinned close committee for global
   drain certification while ordinary proposal authority remains closed. FASTPQ lane
   extraction validates both transcript and source-capture inventories before
-  removing either. SCCP admission checks retained route and replay state before
-  expensive proof work and stages replay mutations until settlement succeeds.
+  removing either.
 - The Initial executor admits the native asset-escrow lifecycle through its
   ownership and transfer-control checks. Metadata limits measure JSON text.
   SM helper failures during gas quotation now record their failure metric.

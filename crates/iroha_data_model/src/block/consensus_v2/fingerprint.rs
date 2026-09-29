@@ -1,11 +1,11 @@
-//! Canonical Sumeragi v2 consensus-parameters fingerprint projection.
+//! Canonical Sumeragi consensus-parameters fingerprint projection.
 use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
 use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
-const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0";
-/// Version of the canonical v2 consensus-parameters projection.
+const DOMAIN: &[u8] = b"iroha:sumeragi:v1:consensus-parameters-fingerprint:v1\0";
+/// Version of the canonical consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;
 #[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(
@@ -35,7 +35,7 @@ struct NposGenesisFingerprintInput {
     activation_lag_blocks: u64,
     slashing_delay_blocks: u64,
 }
-/// Compute the deterministic v2 consensus-parameters fingerprint.
+/// Compute the deterministic consensus-parameters fingerprint.
 ///
 /// Only first-release frozen inputs are representable in the encoded
 /// projection: mode, cadence, block bound, signed DA/Nexus context, and `NPoS`
@@ -168,14 +168,14 @@ mod tests {
         let mut params = permissioned_params();
         params.v2_context.da_layout.chunk_size_bytes = 0;
         let error = compute(&params).expect_err("zero DA chunk size must fail closed");
-        assert!(error.contains("invalid Sumeragi v2 genesis context"));
+        assert!(error.contains("invalid Sumeragi genesis context"));
     }
     #[test]
     fn zero_execution_policy_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
         params.v2_context.execution_policy_hash = [0; 32];
         let error = compute(&params).expect_err("zero execution-policy hash must fail closed");
-        assert!(error.contains("invalid Sumeragi v2 genesis context"));
+        assert!(error.contains("invalid Sumeragi genesis context"));
     }
     #[test]
     fn npos_invalid_committee_geometry_is_rejected_before_hashing() {

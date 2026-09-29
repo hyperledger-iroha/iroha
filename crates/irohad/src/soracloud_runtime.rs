@@ -783,10 +783,13 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         )?;
         let route = self
             .queue
-            .route_payload_with_state(&payload, self.state.as_ref())
+            .route_payload_plan_with_state(&payload, self.state.as_ref())
             .wrap_err_with(|| {
                 format!("route internal Soracloud runtime mutation at `{endpoint}`")
             })?;
+        let iroha_core::queue::RoutingPlan::Single(route) = route else {
+            eyre::bail!("Soracloud runtime submission requires one resolved route");
+        };
         let latest_header = self.state.latest_block_header_fast();
         let observation_time_ms = latest_header
             .as_ref()
@@ -805,7 +808,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
                 &payload,
                 observation_time_ms,
                 next_block_height,
-                Some(route.dataspace_id),
+                Some(route.route.dataspace_id),
             )
         }
         .map_err(|error| {

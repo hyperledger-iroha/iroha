@@ -176,11 +176,7 @@ impl StateBlock<'_> {
         &mut self,
         block: &SignedBlock,
     ) -> Result<(), String> {
-        if block.header() != self._curr_block
-            || block
-                .execution_context()
-                .is_some_and(|context| context.native_lane_decisions.is_some())
-        {
+        if block.header() != self._curr_block {
             return Err("ordinary output plan differs from its applying source".into());
         }
         block.validate_proposal_commitments()?;

@@ -22,11 +22,6 @@ path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "pk2_bridge_finality_verify"
-path = "src/bin/pk2_bridge_finality_verify.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
@@ -47,10 +42,6 @@ workspace = true
 # corridors; ordinary Core builds additionally select the optional accelerator.
 default = ["node", "simd"]
 dev-tools = []
-# Non-shipping, feature-isolated process-cut hooks used by the dedicated
-# `iroha_test_network` daemon. The default/node feature graph never enables
-# these hooks.
-test-network-native-amx-fault-injection = ["json"]
 # Non-shipping, read-only private-settlement state commitments used only by
 # adversarial real-process release tests. Shipping/default feature graphs must
 # never expose the diagnostic surface that consumes this evidence.
@@ -100,7 +91,7 @@ sm-ffi-openssl = [
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []
 # Support lightweight telemetry, including diagnostics
-telemetry = ["ivm/telemetry"]
+telemetry = []
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable stable fixed-width Core kernels and primitives SIMD backends.
@@ -273,7 +264,7 @@ required-features = ["bench"]
 [[bench]]
 name = "kura"
 harness = false
-required-features = ["bench"]
+required-features = ["bench", "iroha-core-tests"]
 
 [[bench]]
 name = "state"
@@ -359,10 +350,10 @@ required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
-# SCCP v1 core skeleton public-boundary tests (`specs/sccp.md` §4).
+# SCCP v1 core public-boundary tests (`specs/sccp.md` §4).
 [[test]]
-name = "sccp_skeleton"
-path = "tests/sccp_skeleton.rs"
+name = "sccp_public_boundary"
+path = "tests/sccp_public_boundary.rs"
 
 [[test]]
 name = "iroha_core_group_01"

@@ -139,14 +139,6 @@
       ]
     },
     {
-      "id": "sumeragi.da.required",
-      "values": [
-        "encoding",
-        "data_shards",
-        "parity_shards"
-      ]
-    },
-    {
       "id": "bridge.proof.required",
       "values": [
         "block_header",
@@ -335,60 +327,6 @@
         "lane_relay_envelopes",
         "rbc_status",
         "missing_qc_total"
-      ]
-    },
-    {
-      "id": "native.receipt.required",
-      "values": [
-        "network_id",
-        "lane_incarnation",
-        "authority_context_height",
-        "lane_block_height",
-        "lane_block_view",
-        "coordinator_proposal_hash"
-      ]
-    },
-    {
-      "id": "native.leg.required",
-      "values": [
-        "lane_id",
-        "dataspace_id",
-        "participant_proposal",
-        "participant_settlement",
-        "participant_settlement_hash",
-        "prepare_qc",
-        "commit_qc"
-      ]
-    },
-    {
-      "id": "native.proposal.required",
-      "values": [
-        "descriptor",
-        "proposal_hash",
-        "payload_block_hint"
-      ]
-    },
-    {
-      "id": "native.body.required",
-      "values": [
-        "round",
-        "epoch",
-        "network_id",
-        "coordinator_lane_incarnation",
-        "participant_lane_incarnation",
-        "participant_previous_block_height",
-        "participant_previous_block_descriptor_hash",
-        "participant_lane_block_height",
-        "participant_lane_block_view",
-        "participant_proposal_hash",
-        "participant_settlement_commitment",
-        "participant_validator_set_hash",
-        "participant_validator_count",
-        "participant_min_quorum",
-        "authority_context_height",
-        "coordinator_lane_block_view",
-        "coordinator_proposal_hash",
-        "planned_coordinator_block_height"
       ]
     },
     {

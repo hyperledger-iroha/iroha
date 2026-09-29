@@ -264,9 +264,7 @@ fn borrowed_attestation_set_uses_canonical_flags_inside_another_layout_context()
     )
     .expect("canonical digest");
     let _ambient = norito::core::DecodeFlagsGuard::enter(
-        norito::core::header_flags::COMPACT_LEN
-            | norito::core::header_flags::PACKED_SEQ
-            | norito::core::header_flags::PACKED_STRUCT,
+        norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
     );
     assert_eq!(
         musubi_provider_bundle_attestation_set_digest_v1(

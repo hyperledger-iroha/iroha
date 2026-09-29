@@ -14,10 +14,7 @@ use crate::{
         test_chain::{CertifiedTestChain, Signers, TestChainConfig},
     },
 };
-use iroha_sumeragi::{
-    crypto::{NoAttestation, verify_qc},
-    preimage::payload_hash,
-};
+use iroha_sumeragi::{crypto::NoAttestation, preimage::payload_hash};
 
 fn with_worker(
     test: impl FnOnce(
@@ -184,14 +181,13 @@ pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (
         .height_config()
         .unwrap()
         .committee;
-    verify_qc(
+    iroha_sumeragi::crypto::Verifier::new(
         &**worker.context.crypto.as_ref().unwrap(),
-        &NoAttestation,
         &chain.instance(),
         &block.header.epoch,
         &committee,
-        &qc,
     )
+    .verify_qc(&NoAttestation, &qc)
     .unwrap();
     (block, qc)
 }
@@ -341,14 +337,13 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
             .height_config()
             .unwrap()
             .committee;
-        verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &**worker.context.crypto.as_ref().unwrap(),
-            &NoAttestation,
             &chain.instance(),
             &block.header.epoch,
             &committee,
-            &alternate,
         )
+        .verify_qc(&NoAttestation, &alternate)
         .unwrap();
         assert!(worker.prepare(&block, &alternate).is_err());
         assert!(worker.commit(&block, &alternate).is_err());
@@ -1847,7 +1842,8 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                 foreign.prepare(
                     &original.overlay,
                     original.valid.as_ref(),
-                    original.phase.ready().unwrap()
+                    original.phase.ready().unwrap(),
+                    &original.witness
                 ),
                 Err(NativeContextArchiveError::Source(_)),
             ));

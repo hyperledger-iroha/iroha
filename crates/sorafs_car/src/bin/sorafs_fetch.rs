@@ -914,9 +914,10 @@ fn run() -> Result<(), String> {
         (length, hasher.finalize().into())
     };
     if let Some((_, digest)) = streamed_stats
-        && digest != payload_digest_bytes {
-            return Err("streamed payload digest mismatch".into());
-        }
+        && digest != payload_digest_bytes
+    {
+        return Err("streamed payload digest mismatch".into());
+    }
     let mut car_spool = car_out.as_deref().map(private_output_spool).transpose()?;
     let mut car_stats = if let Some(spool) = car_spool.as_mut() {
         let mut writer = BufWriter::new(spool);
@@ -925,7 +926,7 @@ fn run() -> Result<(), String> {
                 .lock()
                 .map_err(|error| error.to_string())?
                 .reader()?;
-            
+
             CarStreamingWriter::new(&plan)
                 .write_from_reader(&mut reader, &mut writer)
                 .map_err(|error| error.to_string())?

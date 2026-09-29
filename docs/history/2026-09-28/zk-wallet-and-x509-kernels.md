@@ -741,7 +741,7 @@ were absent, and an authoritative process inventory showed neither build still
 running. Their retained logs did not contain a terminal result. Apple had
 completed the arm64 macOS release slice and C consumer link before stopping
 during the next slice; no five-slice artifact is claimed. The unchanged candidate
-patch and all 37 captured untracked files were rehashed successfully, and the
+patch and all 38 captured untracked files were rehashed successfully, and the
 normal five-slice builder resumed with a fresh log and
 `apple-cache-repair/retry3-command.json` receipt. The independent concurrent
 Parliament CLI build was left running.
@@ -762,3 +762,425 @@ validation, not whole-site or independent language qualification.
 The same21pages now also include the stable C# helper name
 `ConfidentialChangeNote.ToInput`; both scoped validators pass again. The
 Rust-only page/result captures are retained alongside the later C# update.
+
+
+The C# helper reference in each of those21pages now links directly to the SDK's
+local-wallet section and runnable example. The current i18n and content-policy
+validators pass on the final linked pages; the previous unlinked captures remain
+separate. A current SDK implementation search also finds no retired caller-key
+confidential proof builders or `ivm-execution-v1` labels in the inspected JavaScript, Python, Swift, Kotlin and C#
+SDK source directories. Game-specific `ExecutionProofEnvelopeV1` names belong to a separate
+relation and were not renamed based on spelling alone.
+
+
+## Rust external API compiler qualification
+
+Seven external compiler controls now pass against fresh normal Core metadata
+emitted at11:34:40 UTC by the separate CLI Core compilation. A positive library
+uses the public `ConfidentialProver` and consuming change helper. Each of the six
+actual rustdoc import snippets rejects with exactly the intended `E0603` private
+function error, rather than a missing dependency or unrelated compilation error.
+The metadata hash was unchanged through all checks. The source snippets, complete
+compiler commands and diagnostics, rustc version/hash, three wallet source hashes,
+and retained metadata are in
+`dist/zk-remediation/rust-wallet-api-20260928/compiler-guards`.
+
+This establishes the public visibility cut and helper typechecking. It does not
+claim a full CLI build, native change-proof execution, the cargo rustdoc runner,
+or whole-release qualification. The current wallet example and native regression
+selection remain separately queued/running.
+
+## Swift job cleanup and exact SDK registry follow-up
+
+Swift's owned job now closes its native handle after dispatch returns, including
+a driver failure before native consumption. Closing an already-consumed handle
+is harmless. The six focused wrapper tests pass in 2.157 seconds after a fresh
+build, including accepted-job lifetime after close/cancellation, partial setup
+failure, the new before-consumption failure, and malformed-result cleanup. All
+five captured source/manifest inputs remain unchanged throughout the run.
+`dist/zk-remediation/swift-wallet-cleanup-20260928` records the command, log and
+source hashes. This uses the existing authenticated ABI-24 note artifact and
+does not execute the new native wallet proof API. A separate agent reviewed the
+cleanup without changing it. The ongoing five-slice Apple build retains its
+frozen sources; later Swift changes require a normal source-authenticated warm
+refresh before final native consumer qualification.
+
+The exact registry label controls separately pass: JavaScript's current source
+and public dist entrypoints (2 tests), Python (13 tests), Swift (9 tests),
+C# (87 tests), and Kotlin with Java-source consumers (12 tests). They accept
+`ivm-replay-binding-v1`, reject retired execution
+labels/aliases and preserve exact backend discrimination. Python also compares
+all ten SDK source mirrors with the current Rust registry. Its installed registry
+module is byte-identical to current source; the normal wheel loader authenticates
+the retained native extension with SHA-256
+`42c5053d0a0ec4f28c356965f31353c75e327d93d05c99611b79ed6436ad9f1f`.
+The initial Python attempts stopped before assertions because pytest, then
+blake3, then the native extension were unavailable in those environments. Their
+failures remain recorded alongside the successful dedicated installed-package
+run. No stub module, alternate native path or loader bypass is used.
+
+Commands, exact source hashes and results are retained in
+`dist/zk-remediation/replay-label-sdk-20260928`; C# has its separate
+`verifying-key-backend-receipt.json` in the wallet evidence directory. This is
+registry/API coverage, not proof-system or whole-release qualification.
+Kotlin's ten and Java's two tests use JDK 21 while retaining the JDK-8 compilation
+guards; all six source hashes remain unchanged. Its separate command, XML and
+class hashes are in
+`dist/zk-remediation/zk03-sdk-labels-20260928/kotlin-java-receipt.json`.
+
+## Current Rust public example
+
+The normal current-root `cargo +1.93.1 run --locked --offline -p iroha_core
+--example confidential_redemption` completes successfully. It generates and
+locally verifies a 13,741-byte `ConfidentialFullUnshield` proof for one actual
+note, without caller-selected keys or dummy inputs. The retained executable has
+SHA-256 `b1031b6d0c0af3decba71c20a76a73a69a0f7d7e3fbf97587993309309c42e1b`.
+The command, full log, executable and source review are retained in
+`dist/zk-remediation/2026-09-28/rust-wallet-example-current`.
+
+The queued-to-final 2,428-file capture records 29 differences: 28 unrelated
+Core/state/consensus/queue files and one FASTPQ test-only fixture. All equal the
+separate observation made when compilation entered Core. No wallet, ZK, X509,
+Norito or Cargo manifest production inputs changed. The normal build retains
+six unrelated Core warnings. This is an actual local public-API proof run, not
+a frozen whole-workspace release or a strict-lint pass. Native retained-change
+helper regressions remain part of the separate captured Core test retry.
+
+## Public SDK proofs against the current Core verifier
+
+The JavaScript public change/redemption recipe's retained public proofs verify
+against the normal Core library built for the current Rust example. The
+14,215-byte change proof and 13,741-byte full-redemption proof both roundtrip
+through current canonical Norito encoding and verify against current canonical
+keys. Each rejects a wrong relation, wrong key, insufficient byte budget,
+tampered inner proof, retired circuit identifier and retired backend.
+The independent consumer finishes in 42.04 seconds with maximum resident size
+83,083,264 bytes; its inputs remain unchanged throughout execution.
+
+The source, exact compiler/library hashes, command, public proof pair and
+complete results are retained under
+`dist/zk-remediation/sdk-current-core-interop-20260928` and
+`dist/zk-remediation/js-change-refresh-20260928/interop`. The proof-pair SHA-256
+is `214c97ee430a9e37ef6d65f514b6a31f4e949045ac3d462be5c7039912193217`;
+the independent consumer executable SHA-256 is
+`76e5d8ff83c50cb6300f0563353ae115213b07e042707592eabab730656fe087`.
+Only public proof/context data is retained. This establishes captured SDK/Core
+wire and circuit interoperability. It does not authenticate the supplied tree
+root, establish ledger authorization or qualify a whole release.
+
+## Default genesis policy pin
+
+The final native Core selection passes 106 controls, ignores six diagnostics
+and exposes one failure in the ordinary queue's certified-chain fixture. The
+existing `default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy`
+State test independently reproduces the mismatch: the bundled Data Model pin
+predates the current ZK limits and compiled SCCP profile input. The fixture and
+production digest validation remain unchanged.
+
+The corrected pin is
+`c736b694d3983182926ee2bd4944bc87b47cabbeea4f1eea874babcb37afaf54`.
+The normal current Core library's public default/config/component APIs derive
+it. Independent length-framed SHA-256 recombination agrees, using ZK component
+`57e5efbd4875d8b747cc48b61e84e316c83b777ae636be994451cdef8e8a3f5b`
+and SCCP component
+`cca2254c48b3449411af63cec35e6659e43f4caf02a08d5300797f9d7e49ec05`.
+The source hash, component harness, commands and independent calculation are in
+`dist/zk-remediation/genesis-policy-pin-20260928`. The normal compiled State and
+queue regression reruns remain pending; the independent calculation alone is
+not network qualification.
+
+## Current FASTPQ developer guidance
+
+The public FASTPQ guide now describes the canonical masked ordinary/AXT APIs,
+independently authenticated expected statements, explicit resource limits and
+the CPU/Metal execution contract. Its English source and all 20 maintained
+translations pass the documentation repository's actual i18n/content validators
+on an exact copied route (21 pages, 0.527 seconds, unchanged source hashes).
+The literal Rust example compiles against the normal default-feature FASTPQ
+library and its matching Data Model dependency in 1.753 seconds. This is a
+compile check, not another proof execution. The English source SHA-256 is
+`b28c3d7512f1aeaaab1e56a39dfa28934190f04c930391071a49bb7f10e67f96`.
+
+VitePress browser checks confirm readable English, Arabic, Hebrew and Urdu
+pages at a 1280-pixel desktop viewport. The three RTL pages preserve right-to-left
+prose and left-to-right, left-aligned code, without document overflow. The local
+preview server and temporary browser tab are closed. Scoped source captures,
+validator commands/results, compiler inputs and browser observations are in
+`dist/zk-remediation/fastpq-public-docs-20260928`. Initial translation-service
+rate-limit failures and missing literal-identifier validator failures remain
+recorded separately; corrected final validation passes. These checks are not
+whole-site build, mobile-layout or independent language-audit evidence.
+
+The later qualification-paragraph refresh records the complete fixed-seed CPU/Metal
+child proof byte equality in English and all 20 translations. The refreshed
+21-page i18n/content validation passes in 0.625 seconds with unchanged source
+hashes and no errors. English SHA-256 is
+`e451912b862232b50d36b13f1d6dbe7c1b0b38b4997ddffc4f609e3535b852d3`.
+The literal Rust code remains identical to the compiled example; no repeat
+proof execution or independent language review is claimed. The separate
+`validation-cpu-parity` results preserve the earlier checks.
+
+The implementation plan now records the actual masked relation and outstanding
+API, maximum-shape, hardware, network and independent-review outcomes. Its
+superseded 1,537-line source is preserved byte-for-byte in
+`fastpq-plan-before-deep-reconciliation.md`, SHA-256
+`3490d4690baf2727a27bc4f59c3cba8fd2db6b4b7270a7e98d50a973b5f24628`.
+The first-release transparent-API removal remains explicitly pending until its
+prepared patch can be applied without racing the optimized Core build.
+
+The readiness record is likewise reduced to current protocol, resource and
+developer contracts, scoped retained-proof evidence and outstanding outcomes.
+Its exact prior bytes are in `fastpq-readiness-before-deep-reconciliation.md`,
+SHA-256 `fe6881f497aba8c47be88e92908b5d12ef9a2a41cb7ce7e88a46481c250f7b80`.
+The historical archive guard passes with 64,736 records and 67,311 occurrences;
+the two new source archives additionally match their captured originals exactly.
+
+## CLI proof-job outcomes
+
+`zk ivm prove --wait` previously returned success for both `done` and `error`.
+It now preserves the terminal JSON, returns failure with the server's error
+detail, and checks that a response identifies the exact requested job before
+acting on its status. Intermediate responses remain unprinted; malformed
+status, mismatched identity and output failures cannot appear successful.
+
+The actual production handler and its five repository regression tests compile
+with warnings denied against normal Norito/eyre libraries, and all five pass.
+The source capture, extracted-source harness, compiler inputs and results are in
+`dist/zk-remediation/zk-cli-job-outcomes-20260928`. The initial test-macro path
+compile error and later unused-error warning are preserved alongside the fixed
+run. This checks the exact status/output logic; normal CLI Cargo compilation and
+an HTTP-backed CLI run remain separate validation work.
+
+A command-level HTTP regression is prepared for the compiled CLI: pending/running
+responses followed by success, failure, wrong identity or unknown status. It
+checks machine-mode terminal JSON and process exit status through a bounded
+loopback fixture. Its current sources and exact commands are captured in
+`http-fixture-prepared.json`; no Cargo or HTTP result is claimed yet. The user
+guidance now includes the actual `iroha app zk ivm prove --wait` command path.
+
+A later source-graph refresh exposed four stale mock-boundary failures after the
+release gate began forwarding preflight inventories. The test now checks the
+exact immutable-path inventory contents and object identity at the CLI/network
+handoffs and rejects any re-listing. Existing execution, lifetime, failure and
+shipping-artifact assertions remain. The focused module passes all ten checks
+in 0.957 seconds; three adjacent inventory controls pass in 1.267 seconds.
+Production gate sources are unchanged. The original failure, before/after
+sources and terminal results are retained in
+`cli-graph-inventory-repair` under the CLI evidence directory. These are source
+graph controls, not normal CLI or network execution.
+
+## Torii replay-binding identity and key setup
+
+Review of the prepared four-validator IVM scenario found that derive, queue
+admission and the physical prover compared a complete canonical circuit identity
+with the bare semantic suffix. Valid registered replay-binding keys therefore
+failed before execution. A purpose-specific helper now requires the exact
+backend-qualified replay-binding identity at all three stages. It delegates
+backend validation to Core and rejects other valid circuit roles, crossed
+backends, bare suffixes and retired labels.
+
+The exact current helper and its two native regressions compile with warnings
+denied against fingerprint-matched normal Core/data-model libraries and pass in
+0.257 seconds. The retained executable SHA-256 is
+`e80e4b4c88727cebe1dd9ac3659303300d30cba5c980f2112f2b876c3ab6e18d`;
+commands, source and library hashes are under
+`dist/zk-remediation/torii-replay-identities-20260928`. This is helper evidence,
+not a normal Torii build or a route/network result.
+
+The server now uses Core's existing strict canonical-VK proving-key derivation
+instead of requiring a separate `.pk` file. Inline and authenticated bounded
+out-of-line verifier-key resolution remain. The optional explicit Core
+proving-key archive API retains its framing checks for advanced offline callers.
+The prover hashes the derived overlay with `norito::encode_canonical`, matching
+the Core replay verifier. The app API specifications and CLI guidance describe
+this simpler setup. A separate internal source review found no blocker in these
+changes or the generic prover's migrated canonical-key fixture.
+
+Execution-reaching route fixtures now compile and register a real signed,
+self-describing contract and activate its instance before requesting derivation
+or proving. The no-key-file success assertion and authenticated disk-VK path
+remain distinct. Normal Torii Cargo tests and the four-validator scenario are
+pending; the two helper passes do not establish those outcomes.
+The retired-codec guard passes after this canonical-overlay change (2.262
+seconds); its log and command are retained alongside the helper receipt.
+
+The route-fixture component preflight passes in 5.82 seconds against the retained
+normal Core library with test helpers and fingerprint-matched dependencies. It
+executes signed artifact/manifest registration, permission-gated activation,
+bounded VM derivation, real canonical Halo2 proving, then Core overlay building
+to check the native relation, public commitments and mandatory replay. Its first
+attempt exposed a stale fixture that staged transaction membership without the
+block hash; the shared fixture now uses `commit_empty_block_for_testing`. Both
+inline-key route positives use the same replay assertion, while the disk-only
+VK path remains distinct. The first failure, exact sources, compiler inputs and
+successful result are retained under
+`dist/zk-remediation/2026-09-28/torii-ivm-route-fixtures`. The retained library
+predates the final candidate; this is component evidence, not HTTP execution,
+fee admission, finality or current-source Torii compilation.
+
+A subsequent developer-workflow review found that generic verification accepts
+a role-specific Halo2 backend that the canonical IVM proof generator does not
+implement. Torii now rejects that identity during request preflight and at the
+worker's circuit check, using only the two backend identities documented for
+this tooling surface. Generic verification registry behavior is unchanged.
+Three exact-source helper controls pass with warnings denied in 0.242 seconds;
+their binary SHA-256 is
+`08ed66426bd23c34bb21ecefbefd6706b881165061f890aff82a3329133d76b1`.
+The receipt is in `supported-tooling-backends` under the same Torii evidence
+directory. Normal Torii route execution remains pending.
+
+The CLI request help and app API specification now include required
+`fee_payment`; the retired `metadata.gas_limit` instruction is removed. Registry
+examples select the compiled canonical replay-binding record instead of
+inventing circuit names and schema hashes. After the help edit, thirteen CLI
+graph/inventory controls pass in 2.266 seconds using Python 3.12. An earlier
+invocation used Xcode Python 3.9 and failed import discovery before any test ran;
+it was an invocation error, not a passing or failing implementation test.
+The corrected command and output are retained in
+`dist/zk-remediation/zk-cli-job-outcomes-20260928/required-fee-help`.
+
+## Canonical verifier-key generator and CLI DTO
+
+The replay-binding generator emitted a hand-built JSON template with forbidden
+signing fields and the wrong schema-field name. It also required a proving-key
+archive that server proving no longer uses. The generator and CLI now share one
+strict Norito JSON DTO. The generator obtains the canonical record from Core,
+validates registry names with the data model's bounded portable syntax, and
+writes a complete public registration file. `--pk-out` is optional. Output
+preflight and exclusive file creation reject colliding or existing paths.
+The CLI uses the same ID policy before key preparation or fee work.
+
+Four tests of the actual generator source pass with warnings denied against
+retained native dependencies: argument/public-output handling, output path
+failures, strict canonical DTO/escaping checks, and explicit archive parity.
+The non-test binary also compiles with warnings denied and writes a real
+111-byte canonical VK plus its public JSON through the documented arguments,
+without a PK file. This is component execution, not the queued normal Cargo or
+whole-CLI qualification. The new CLI early-ID regression remains in that queue.
+Commands, hashes and outputs are retained in
+`dist/zk-remediation/2026-09-28/ivm-keygen-public-dto`.
+The source-coupled examples include the generator's required `dev-tools` Cargo
+feature and use generated fields rather than placeholder circuit parameters.
+
+## Normal CLI qualification and dependency repair
+
+The normal locked, offline Cargo generator suite passes all four tests on the
+captured network candidate, with zero source drift. The following main CLI test
+build fails with `E0599`: its SoraNet dispute command still calls the ledger's
+now-static `open_dispute` function as a method. The repair calls the static
+constructor and removes the unused treasury argument; this authoring command
+only creates a public dispute record. The new compiled-CLI regression compares
+its JSON and Norito outputs, checks every supplied field and pending status,
+and rejects the removed option. The existing unit fixture keeps all assertions.
+The first repair retry caught that fixture's old struct initializer before
+executing tests; the second retry includes its one-line migration.
+
+The original failing candidates, source manifests, exact amendments and commands
+remain under `dist/zk-remediation/zk-cli-job-outcomes-20260928`. Only the command,
+its two test files and module declaration, and adjacent specification change
+between these captures. The second amended source has 20,860 entries and manifest
+SHA-256 `cf20c1bc5e20a37e866abea40dc82030729f06ddd7444ce4d9b51a6b7afb2c85`.
+These amendments do not import ongoing X509 changes into the network candidate.
+CLI HTTP, current Torii routes and four-validator qualification remain separate
+pending stages until their recorded commands complete.
+
+The native dispute test then exposes an independent output bug: `println`
+routes informational output to stderr in JSON mode, so the successful command
+has empty stdout. The command now uses typed `print_data` for JSON and
+`println_data` for its text representation. The final regression checks both
+formats against the exact decoded Norito artifact. The failed runtime and its
+source are retained; no assertion is removed.
+
+The third amended candidate, manifest SHA-256
+`08f355b78ce5ecbd7bbd61e9c63c997be1c642633eeff28be9e9dc8be1abb40c`,
+passes all 20 required normal CLI tests with no skips or source drift: generator
+4, registry 8, job-status 5, dispute unit 1, dispute shipping-command 1, and real
+HTTP proof-job polling 1. The HTTP test exercises successful/failed terminal
+jobs, wrong identity and unknown status in 6.28 seconds. The retained shipping
+CLI is SHA-256 `49874f367361410a63f1faed96937fce9ae19ac6678ba98e31c8bbfb922328c1`.
+These are focused passes; existing unrelated compiler warnings remain.
+
+Its actual generated Markdown and review diffs are retained under
+`normal-cargo-retry3/public-help-review`. The seven changed command sections
+contain the required fee intent, honest replay-binding contract, optional PK
+archive and removed unused dispute argument. Public checked-in generated
+snippets and provenance are unchanged: `iroha-docs/AGENTS.md` requires
+`pnpm refresh:iroha` from its exact pinned clean source commit. This dirty
+candidate diagnostic is not a signed-source publication. Normal Torii route
+qualification has started on the same candidate; four-validator results remain
+pending.
+
+### CLI memo and submission follow-up
+
+The subsequent command audit removes `app zk schema-hash`: it hashed concrete
+public-input values although the registry requires a fixed schema descriptor.
+Canonical key generation already emits the correct schema digest. The memo
+command now reads its typed encrypted envelope through the bounded JSON file
+owner and selects one stdout format (`base64`, `hex`, or `json`). Writing only a
+Norito file is silent on stdout. The three competing print switches and obsolete
+README construction flags are removed without aliases.
+
+VK register/update now pass their validated instruction to the standard CLI
+submission owner, which owns fee quotation, signing, instruction output and the
+transaction receipt. This removes duplicated transaction construction and the
+JSON-mode diagnostic-only result. Submission still does not establish finality.
+New controls exercise the shared dispatch/error boundary and actual binary memo
+output, malformed/oversized input and retired command rejection. The next normal
+runner expects 28 tests; the preceding 20-test result does not cover these edits.
+Scoped Rust formatting, diff whitespace and runner syntax checks pass. Frozen
+candidate amendment waits for the running Torii source-guarded test to finish.
+
+The same follow-up finds that memo encoding unnecessarily loads node client
+configuration. It now uses the existing credential-free local-tool dispatch,
+rejects irrelevant credential/transaction globals and works with an absent or
+malformed default `client.toml`. Both dispatch paths share one encoder. An
+additional actual-binary regression raises the pending normal selection to 28.
+
+The final captured CLI amendment has manifest SHA-256
+`d7c33675245a698de9a029d82121ddfd0ac8d5971b499813898ef73a96398af7`.
+The first rerun started before its source-copy process finished. Four keygen
+tests passed, but the guard found the five intended files changing during that
+stage and rejected the attempt. Its `normal-cargo-retry4` receipt is retained;
+it provides no unchanged-source qualification. After capture completed,
+`normal-cargo-retry5` checks the exact expected source manifest before every
+stage and passes all 28 required tests: generator 4, registry 10, job status 5,
+memo unit 2, memo shipping command 4, dispute unit/command 2 and HTTP polling 1.
+No tests are skipped and all eight stages have zero source drift.
+The retained CLI is SHA-256
+`91c2195ef08fe20d623999da1352f274a28dfbfd4dbd4528edd810c763c14e9a`;
+its actual Markdown help generation also passes. These receipts are under
+`dist/zk-remediation/zk-cli-job-outcomes-20260928/normal-cargo-retry5`.
+Three now-unused ZK helpers are subsequently removed after compiler warnings
+identify them. That source-only cleanup awaits the integrated rerun. Unrelated
+compiler warnings remain; this is not a strict Clippy or release claim.
+
+### Normal Torii route and worker run
+
+The normal locked/offline Torii library test build with `zk-stark` completes in
+1,976.275 seconds. Its retained native binary executes the full 129-test ZK route,
+canonical circuit identity and generic prover-worker selection: 117 pass,
+12 fail and none are ignored (177.06 seconds native test time). All eight
+required route/worker cases execute, and both the frozen source and retained
+binary remain unchanged. The original logs and result are retained under
+`dist/zk-remediation/torii-replay-identities-20260928/normal-cargo`.
+
+The positive derive route reveals a production error: it attempts to sign a
+caller-authority transaction with a synthetic server key before replacing the
+authority. Canonical signing correctly rejects the mismatch. Core derivation
+now accepts `TransactionPayload`; Torii creates an unsigned draft from the
+authenticated request. Derivation validates the fee intent and retains live
+contract permission, registered-code, manifest and execution checks. The caller
+signs the final proof-carrying transaction, and validator admission still
+verifies its signature and replays execution. The shared binding helpers are
+used by signed admission through `transaction.payload()`, avoiding a second
+policy implementation. Core tests compare bounded/unbounded unsigned derivation,
+reject retired gas metadata and retain real signed replay.
+
+Five prove/cancel fixtures omitted the production worker supervisor. Their
+fixture owner now starts the real supervisor, joins shutdown and asserts job,
+byte-budget and permit cleanup. Six scanner fixtures are corrected to initialize
+production persistence, compare the complete circuit identity, inject one
+test-only report-save failure at its actual persistence boundary, and honor the
+existing discovery cursor. Retry/backoff, cached verification and zero-read
+rejection assertions remain. Native Core/Torii reruns and four-validator
+qualification are required before these repairs are counted as passing.

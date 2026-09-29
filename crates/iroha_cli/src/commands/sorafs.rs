@@ -5563,6 +5563,9 @@ impl Run for IncentivesOpenDisputeArgs {
         if let Some(path) = &self.norito_out {
             write_norito_payload(path, &dispute)?;
         }
+        if context.output_format() == crate::CliOutputFormat::Json {
+            return context.print_data(&dispute);
+        }
         let json_bytes = if self.pretty {
             norito::json::to_vec_pretty(&dispute)?
         } else {
@@ -5570,7 +5573,7 @@ impl Run for IncentivesOpenDisputeArgs {
         };
         let output = String::from_utf8(json_bytes)
             .map_err(|err| eyre!("dispute JSON is not valid UTF-8: {err}"))?;
-        context.println(output)
+        context.println_data(output)
     }
 }
 #[derive(clap::Args, Debug)]

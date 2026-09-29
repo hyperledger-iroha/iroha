@@ -3,7 +3,7 @@
 use super::*;
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
-pub(crate) fn check_identity<T>(fixtures: &[json::Value])
+pub fn check_identity<T>(fixtures: &[json::Value])
 where
     T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {
@@ -25,7 +25,7 @@ where
     );
 }
 
-pub(crate) fn record<T>(specimen: &str, value: &T) -> json::Value
+pub fn record<T>(specimen: &str, value: &T) -> json::Value
 where
     T: NoritoSerialize + for<'a> NoritoDeserialize<'a> + PartialEq + fmt::Debug,
 {

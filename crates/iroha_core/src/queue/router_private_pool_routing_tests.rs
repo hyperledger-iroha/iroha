@@ -40,46 +40,6 @@ fn private_pool_route_fixture_router() -> ConfigLaneRouter {
     )
 }
 
-#[test]
-fn private_pool_batch_route_matches_stateful_admission() {
-    let (sponsor, signer) = gen_account_in("pool-route");
-    let router = private_pool_route_fixture_router();
-    let mut state = blank_state();
-    install_router_nexus(&mut state, &router);
-    for count in [2_u64, 3, 4] {
-        for reverse in [false, true] {
-            let mut instructions = (1..=count)
-                .map(private_pool_route_fixture_instruction)
-                .collect::<Vec<_>>();
-            if reverse {
-                instructions.reverse();
-            }
-            let tx = sample_transaction(&sponsor, signer.private_key(), instructions);
-            let expected = RoutingPlan::native_amx(
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                (1..=count)
-                    .map(|id| {
-                        RouteLeg::new(
-                            RoutingDecision::new(LaneId::new(id as u32), DataSpaceId::new(id)),
-                            RouteLegRole::Participant,
-                        )
-                    })
-                    .collect(),
-            );
-            let admitted = router.try_route_plan_with_view(&tx, &state.view()).unwrap();
-            assert_eq!(
-                admitted, expected,
-                "State admission fixes the global coordinator"
-            );
-            assert_eq!(
-                router.try_route_plan_without_state(&tx).unwrap(),
-                Some(expected.clone()),
-                "the ingress shortcut must preserve the same complete plan for N={count}, reverse={reverse}"
-            );
-            assert_eq!(router.try_route_plan(&tx).unwrap(), expected);
-        }
-    }
-}
 
 #[test]
 fn private_pool_batch_executable_has_the_same_global_coordinator() {

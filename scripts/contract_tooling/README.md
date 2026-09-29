@@ -57,8 +57,7 @@ proves that the TRON compiler (with its `CALLTOKENID`/`CALLTOKENVALUE`
 guards) produced it. `iroha sccp deployment verify` fills the eight §5.2.3
 immutables into the locked template and compares it with the deployed code.
 
-`scripts/contract_native_solc.js` exposes `compile-input` to Node harnesses,
-and `snapshot` hands a manifest to the java-tron (TRE) runner.
+`scripts/contract_native_solc.js` exposes `compile-input` to Node harnesses.
 
 ## EVM runtime
 
@@ -69,7 +68,6 @@ is ignored by git. `edr-provider.js` creates isolated in-memory chains with
 explicit chain ids, gas limits and Hardhat-style time control. The
 `scripts/sccp_evm_contract_smoke.sh` smoke installs and audits a private copy
 (`npm audit --omit=dev --audit-level=low`) before running the suite.
-`package.json` at this level holds the TVM (TRE) runtime dependencies.
 EDR execution is never TVM evidence: TRON deployment, energy and precompile
 semantics are qualified on the pinned TRE image (`tvm_runner` in
 `compiler-lock.json`).

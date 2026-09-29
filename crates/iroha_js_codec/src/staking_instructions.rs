@@ -16,7 +16,7 @@ fn safe_json_numbers(value: &Value) -> CodecResult<()> {
                 .is_some_and(|value| value > crate::json_u64::MAX_SAFE_INTEGER)
                 || number
                     .as_i64()
-                    .is_some_and(|value| value < -(crate::json_u64::MAX_SAFE_INTEGER as i64))
+                    .is_some_and(|value| value < crate::json_u64::MIN_SAFE_INTEGER)
             {
                 return Err(CodecError::new(
                     CodecErrorKind::InvalidArgument,
@@ -176,12 +176,7 @@ mod tests {
         payload.insert("unexpected".into(), Value::Bool(true));
         assert!(crate::value_to_instruction(value).is_err());
         assert!(safe_json_numbers(&Value::from(crate::json_u64::MAX_SAFE_INTEGER + 1)).is_err());
-        assert!(
-            safe_json_numbers(&Value::from(
-                -((crate::json_u64::MAX_SAFE_INTEGER + 1) as i64)
-            ))
-            .is_err()
-        );
+        assert!(safe_json_numbers(&Value::from(crate::json_u64::MIN_SAFE_INTEGER - 1)).is_err());
     }
 
     #[test]
@@ -192,7 +187,7 @@ mod tests {
         for replacement in [
             None,
             Some(Value::Null),
-            Some(Value::Object(Default::default())),
+            Some(Value::Object(json::Map::new())),
         ] {
             let mut altered = value.clone();
             let registration = altered

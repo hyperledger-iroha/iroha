@@ -19,6 +19,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Android consumers of host JNI: from `kotlin`, run `IROHA_NATIVE_LIBRARY_PATH=<absolute-rebuilt-host-library-directory> ./gradlew :client-android:testDebugHostNative --console=plain`. Missing native artifacts fail; this is separate from physical-device qualification.
 - Scripts dependencies (Python 3.10+): `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
+- Sumeragi core and simulator: `cargo test -p iroha_sumeragi --features sim`; mutation gate: `python3 scripts/sumeragi_mutation_gate.py --jobs 4`.
 
 ## Overview
 - Hyperledger Iroha 3 is a blockchain platform in its first release.
@@ -29,9 +30,16 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   revocation, and replay protection from verifiable protocol state. Do not relabel
   hardware-dependent guarantees as software guarantees. The separate KAGEMUSHA
   offline monetary-authority policy below is unchanged by SoraFS integration.
-- Sumeragi v2 DA/RBC availability is mandatory in Iroha 3 and is realized by
-  the signed RS16 `PayloadManifest`/`PayloadChunk` layout. Legacy global-RBC
-  and consensus fault-injection configuration is not a second production path.
+- Consensus is Sumeragi, one protocol (any version tag is v1: this is the
+  first release): the sans-IO core `crates/iroha_sumeragi` (contract
+  `specs/sumeragi.md`, open work `specs/sumeragi_goals.md`) run by the
+  `iroha_core::sumeragi` node driver. Lanes are separate core instances whose
+  certified blocks the global chain merges (`specs/sumeragi_lanes.md`). Signed
+  RS16 `PayloadManifest`/`PayloadChunk` payload availability remains a
+  first-release requirement that the core's full-body transport does not
+  integrate yet (goals, open question 8); raw full-body dissemination is not
+  its qualified replacement. Consensus faults are injected only in the
+  deterministic simulator, never through node configuration.
 - IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
@@ -175,16 +183,29 @@ Note: First release policy
 - Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
 - Update documentation and examples when public APIs or behavior change.
 - Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
-- Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
-- Do not attempt to disable DA/RBC in tests or add a legacy RBC bypass.
-  Revision-4 genesis and every height context must carry one valid signed RS16
-  DA layout.
-- Revision-4 QCs require exactly `2f + 1` equal validator votes from an exact
-  `3f + 1` committee; observers never pad Prepare, Commit, or Timeout quorum.
-- Exercise message loss with the feature-isolated authenticated consensus
-  message controller (`with_consensus_message_control`) and prove its hold/drop
-  acknowledgement before healing. Retired `[sumeragi.debug.rbc]` keys are
-  configuration errors, not fault-injection controls.
+- Integration tests spin real multi-peer networks. The global committee is
+  exactly `3f + 1` validators with `1 <= f <= 10` (4, 7, ..., 31) and genesis
+  rejects any other size, so network tests use at least 4 peers
+  (`specs/sumeragi.md` §1).
+- Do not add consensus bypasses, simulation branches in protocol code, or node
+  configuration toggles for protocol behavior. Chain parameters come from
+  genesis and committed state; `[sumeragi]` holds only node-local settings (the
+  spec §12.4 local-parameter overrides, keys, safety-record paths and beacon
+  custody). Idle chains create no blocks; never add empty-block production.
+- Every PrepareQC, CommitQC and TimeoutCert carries exactly `q = n - f` equal
+  validator votes (`2f + 1` for a `3f + 1` committee). Code computes quorums as
+  `n - f`, signer supersets are rejected, and observers or candidate pools
+  never vote (`specs/sumeragi.md` §1, §3.4).
+- Exercise message loss, delay, partitions, crashes and Byzantine behavior in
+  the deterministic simulator (`cargo test -p iroha_sumeragi --features sim`;
+  failures reproduce from `(scenario, seed)`, `SUMERAGI_SIM_SEEDS` sets the
+  seed count; spec §13). Each new safety or liveness rule gets a spec §13.4
+  mutation killed by a named deterministic test
+  (`python3 scripts/sumeragi_mutation_gate.py`, run nightly by
+  `.github/workflows/nightly_sumeragi.yml`). A liveness fix lands only with a
+  seed or test that fails before the fix and passes after it. Keep the core
+  within the spec §12.6 line budget. Real-peer coverage is
+  `integration_tests/tests/sumeragi.rs` and `sumeragi_lanes.rs`.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
   prefer the curated `iroha.*` tool surface. Treat

@@ -62,8 +62,8 @@ BINARY_ARTIFACTS = {
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
     "koto": BinaryArtifact("ivm", "koto"),
-    "iroha3d_message_control": BinaryArtifact(
-        "irohad", "iroha3d", ("test-network-message-control",), "message-control"
+    "iroha3d_private_settlement_routes": BinaryArtifact(
+        "irohad", "iroha3d", ("test-network-private-settlement-route-control",), "private-settlement-route-control"
     ),
 }
 PACKAGE_NAME_CHARACTERS = frozenset(

@@ -23,7 +23,7 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+import release_evidence_crypto as RELEASE_CRYPTO  # noqa: E402
 import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
 
 

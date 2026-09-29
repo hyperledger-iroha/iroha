@@ -3,18 +3,17 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use super::{Build, CertCache, Core, LocalKey, Mine, Retx, Tip, sync::SyncState, votes::Pools};
+use super::{Build, CertCache, Core, LocalKey, Mine, Tip, sync::SyncState, votes::Pools};
 use crate::{
-    api::{Action, ConfigError, HaltReason, Init, LocalParams},
+    api::{Action, ConfigError, ConfigError::InvalidInit, HaltReason, Init, LocalParams},
     crypto::{Attestation, Crypto, Signer},
-    message::{Vote, VoteKind},
-    pacemaker::{Pacemaker, effective_t_max, retransmit_spacing, validate_chain, validate_local},
-    preimage,
+    message::VoteKind,
+    pacemaker::{Pacemaker, effective_t_max, validate_chain, validate_local},
     safety::{
         RecordState, RestartPlan, SafetyRecord, check_recommit, read_record, recommit_candidate,
     },
     topology::Topology,
-    types::{ConfigSlot, Hash32, HeightConfig, Millis},
+    types::{ConfigSlot, HeightConfig, Millis},
 };
 
 impl Core {
@@ -37,24 +36,16 @@ impl Core {
     ) -> Result<(Self, Vec<Action>), ConfigError> {
         let t = init.tip.height;
         let g = init.genesis_height;
-        check_init(&init, &*crypto)?;
+        let configs: BTreeMap<u64, ConfigSlot> = init.configs.iter().cloned().collect();
+        check_init(&init, &*crypto, &configs)?;
         if init.demotion_window < 1 {
             return Err(ConfigError::DemotionWindowZero);
         }
-        let configs: BTreeMap<u64, ConfigSlot> = init.configs.iter().cloned().collect();
-        let mut required = vec![t.saturating_add(1), t.saturating_add(2)];
-        if t > g {
-            required.push(t);
-        }
-        let mut initial = Vec::new();
-        for height in &required {
-            let slot = configs
-                .get(height)
-                .ok_or(ConfigError::MissingConfig(*height))?;
-            if let Some(config) = slot.ready() {
-                initial.push(config);
-            }
-        }
+        let initial: Vec<_> = configs
+            .iter()
+            .filter(|(height, _)| **height > g)
+            .filter_map(|(_, slot)| slot.ready())
+            .collect();
         validate_local(&local, &initial)?;
         // SPEC: §9.4 leaves the chain-parameter rules to the application; the core also checks
         // the transport-independent ones for the initial configurations, so a genesis with
@@ -104,7 +95,7 @@ impl Core {
             let config_height = t.saturating_add(1);
             #[cfg(sumeragi_mutation = "MS15")]
             let config_height = t;
-            let Some(config) = self.config(&config_height) else {
+            let Some(config) = self.config(config_height) else {
                 return self.halt(HaltReason::SafetyRecordInconsistent);
             };
             match check_recommit(
@@ -180,18 +171,8 @@ impl Core {
         let tip = init.tip;
         let pm = Pacemaker::new(&local, effective_t_max(&local, &first));
         let n = first.committee.n();
-        let topo = Topology::from_parts(vec![0], &[], u64::MAX).unwrap_or_else(|| {
-            Topology::compute(
-                &*crypto,
-                &init.instance,
-                &first.epoch,
-                &first.committee,
-                0,
-                0,
-                1,
-                &[],
-            )
-        });
+        let topo = Topology::from_parts(vec![0], &[], u64::MAX)
+            .expect("one placeholder slot is a nonempty permutation");
         let rnd = topo.round(0);
         Self {
             crypto,
@@ -327,7 +308,12 @@ impl Core {
         // MA9: the recorded Prepare is rebuilt unflagged.
         let prepare = prepare.and_then(|v| {
             let attest = v.attest && !cfg!(sumeragi_mutation = "MA9");
-            self.rebuild_vote(me, (v.block_hash, v.result, attest))
+            self.record_vote(
+                me,
+                VoteKind::Prepare,
+                (v.block_hash, v.result, attest),
+                None,
+            )
         });
         if let Some(qc) = self.high_pqc.clone() {
             let sources = self.signer_keys(&qc);
@@ -388,50 +374,6 @@ impl Core {
             }
         }
     }
-
-    /// Re-sign a recorded Prepare `(bh, R, attest)` of the current view (an identical preimage
-    /// gives identical bytes, §12.1) and put it on the retransmit schedule with `t_vote = now`.
-    fn rebuild_vote(
-        &mut self,
-        me: super::Me,
-        (bh, result, attest): (Hash32, Hash32, bool),
-    ) -> Option<Vote> {
-        let kind = VoteKind::Prepare;
-        let msg = preimage::vote_preimage(
-            kind,
-            &self.instance,
-            &self.cfg.epoch.id,
-            self.height,
-            self.view,
-            &bh,
-            &result,
-            attest,
-        );
-        let sig = self.sign(me, &msg)?;
-        let vote = Vote {
-            kind,
-            instance: self.instance,
-            epoch: self.cfg.epoch.id,
-            height: self.height,
-            view: self.view,
-            block_hash: bh,
-            result,
-            attest,
-            signer: me.index,
-            sig,
-            attestation: None,
-        };
-        self.mine.prepare = Some(vote.clone());
-        self.t_lastvote = Some(self.now);
-        let t_retx = self.pm.t_retx(self.view);
-        let spacing = retransmit_spacing(1, t_retx, self.local.rebroadcast_interval);
-        self.retx[0] = Some(Retx {
-            next: self.now.saturating_add(spacing),
-            k: 1,
-            sent: self.now,
-        });
-        Some(vote)
-    }
 }
 
 /// The configured and retired keys of `Init`, in `Init.records` order, with their record
@@ -448,7 +390,7 @@ fn local_keys(
     let mut states = Vec::with_capacity(init.records.len());
     for (pk, state, retired) in &init.records {
         if keys.iter().any(|key| &key.pk == pk) {
-            return Err(ConfigError::InvalidInit("a key listed twice"));
+            return Err(InvalidInit("a key listed twice"));
         }
         let signer = signers
             .iter()
@@ -456,9 +398,9 @@ fn local_keys(
             .and_then(|i| signers.get_mut(i).and_then(Option::take));
         match (retired, signer.is_some()) {
             (false, false) => {
-                return Err(ConfigError::InvalidInit("no signer for a configured key"));
+                return Err(InvalidInit("no signer for a configured key"));
             }
-            (true, true) => return Err(ConfigError::InvalidInit("a signer for a retired key")),
+            (true, true) => return Err(InvalidInit("a signer for a retired key")),
             _ => {}
         }
         keys.push(LocalKey {
@@ -471,89 +413,71 @@ fn local_keys(
         states.push(state.clone());
     }
     if signers.iter().any(Option::is_some) {
-        return Err(ConfigError::InvalidInit(
-            "no record state for a configured key",
-        ));
+        return Err(InvalidInit("no record state for a configured key"));
     }
     Ok((keys, states))
 }
 
 /// Startup input consistency (the driver's own stores; checked, not trusted blindly).
-fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
+fn check_init(
+    init: &Init,
+    crypto: &dyn Crypto,
+    configs: &BTreeMap<u64, ConfigSlot>,
+) -> Result<(), ConfigError> {
     let tip = &init.tip;
     if tip.height < init.genesis_height {
-        return Err(ConfigError::InvalidInit("tip below genesis"));
+        return Err(InvalidInit("tip below genesis"));
     }
     let at_genesis = tip.height == init.genesis_height;
     if at_genesis != tip.commit_qc.is_none() || at_genesis != tip.header.is_none() {
-        return Err(ConfigError::InvalidInit(
-            "tip certificate or header presence",
-        ));
+        return Err(InvalidInit("tip certificate or header presence"));
     }
     if let Some(header) = &tip.header
         && (header.height != tip.height || header.hash(crypto) != tip.block_hash)
     {
-        return Err(ConfigError::InvalidInit(
-            "tip header does not match the tip",
-        ));
+        return Err(InvalidInit("tip header does not match the tip"));
     }
     // SPEC: §12.1 lists the configurations of `t` (unless `t = g`), `t + 1` and `t + 2`. One
     // above `t + 2` let commits run more than two heights ahead of apply (§10.2), and the next
     // in-order `BlockApplied` then halted the core as a driver anomaly (found by review): any
     // other height, or a height listed twice, is refused (Appendix E, E37).
-    let mut heights: Vec<u64> = init.configs.iter().map(|(height, _)| *height).collect();
-    heights.sort_unstable();
-    if heights.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ConfigError::InvalidInit("a configuration listed twice"));
+    if configs.len() != init.configs.len() {
+        return Err(InvalidInit("a configuration listed twice"));
     }
-    if heights
-        .iter()
+    if configs
+        .keys()
         .any(|height| *height < tip.height || *height > tip.height.saturating_add(2))
     {
-        return Err(ConfigError::InvalidInit(
+        return Err(InvalidInit(
             "a configuration for a height other than t, t + 1 and t + 2",
         ));
     }
-    let get = |height| {
-        init.configs
-            .iter()
-            .find(|(h, _)| *h == height)
-            .map(|(_, slot)| slot)
+    let (Some(next_height), Some(later_height)) =
+        (tip.height.checked_add(1), tip.height.checked_add(2))
+    else {
+        return Err(InvalidInit("height overflow"));
     };
-    let next_height = tip
-        .height
-        .checked_add(1)
-        .ok_or(ConfigError::InvalidInit("height overflow"))?;
-    let later_height = tip
-        .height
-        .checked_add(2)
-        .ok_or(ConfigError::InvalidInit("height overflow"))?;
-    let first = get(next_height)
+    let first = configs
+        .get(&next_height)
         .and_then(ConfigSlot::ready)
         .ok_or(ConfigError::MissingConfig(next_height))?;
     if !first.epoch.contains(next_height) {
-        return Err(ConfigError::InvalidInit(
-            "next height outside authenticated epoch",
-        ));
+        return Err(InvalidInit("next height outside authenticated epoch"));
     }
     if !at_genesis {
-        let current = get(tip.height)
+        let current = configs
+            .get(&tip.height)
             .and_then(ConfigSlot::ready)
             .ok_or(ConfigError::MissingConfig(tip.height))?;
         if !current.epoch.contains(tip.height)
-            || tip
-                .header
-                .as_ref()
-                .is_none_or(|header| header.epoch != current.epoch.id)
+            || tip.header.as_ref().map(|header| header.epoch) != Some(current.epoch.id)
             || (current.epoch.contains(next_height) && !first.same_authority(current))
             || (!current.epoch.contains(next_height) && !first.follows(current))
         {
-            return Err(ConfigError::InvalidInit(
-                "noncontiguous authenticated epoch window",
-            ));
+            return Err(InvalidInit("noncontiguous authenticated epoch window"));
         }
     }
-    let later_valid = match get(later_height) {
+    let later_valid = match configs.get(&later_height) {
         Some(ConfigSlot::Ready(later)) => {
             first.epoch.contains(later_height) && later.same_authority(first)
         }
@@ -568,14 +492,13 @@ fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
         None => false,
     };
     if !later_valid {
-        return Err(ConfigError::InvalidInit(
-            "next epoch must await its applied boundary",
-        ));
+        return Err(InvalidInit("next epoch must await its applied boundary"));
     }
     if let Some(qc) = &tip.commit_qc
         && (qc.kind != VoteKind::Commit
             || qc.height != tip.height
-            || get(tip.height)
+            || configs
+                .get(&tip.height)
                 .and_then(ConfigSlot::ready)
                 .is_none_or(|config| {
                     qc.epoch != config.epoch.id
@@ -583,9 +506,7 @@ fn check_init(init: &Init, crypto: &dyn Crypto) -> Result<(), ConfigError> {
                 })
             || qc.value() != (tip.block_hash, tip.result))
     {
-        return Err(ConfigError::InvalidInit(
-            "tip CommitQC does not match the tip",
-        ));
+        return Err(InvalidInit("tip CommitQC does not match the tip"));
     }
     Ok(())
 }

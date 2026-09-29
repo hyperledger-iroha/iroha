@@ -57,69 +57,18 @@ pub(super) fn run_call(
     progress: &mut dyn FnMut(&str),
 ) -> CommandResult {
     if let Some(journal) = args.resume.as_ref().or(args.cancel.as_ref()) {
-        let (workspace, _) = load_selected_workspace(manifest, &args.selection)?;
-        let selected = network::select_network(
-            workspace.root(),
-            args.network.as_deref(),
-            args.config.as_deref(),
-            None,
-        )?;
-        let _profile = ChainDiscriminantGuard::enter(selected.chain_discriminant);
-        let service = ContractCallService::new(selected.load_client()?).map_err(call_diagnostic)?;
-        if args.cancel.is_some() {
-            let operation_id = service.cancel(journal).map_err(call_diagnostic)?;
-            return Ok(Success {
-                message: format!("Cancelled unattempted call: {}", journal.display()),
-                data: object([
-                    ("operation_id", Value::from(operation_id)),
-                    ("status", Value::from("cancelled")),
-                    ("journal", Value::from(journal.display().to_string())),
-                ]),
-            });
-        }
-        progress("Recovering the retained permission and call hashes...");
-        return call_receipt(
-            service.resume(journal).map_err(|error| {
-                call_diagnostic(error).with_context("journal", journal.display().to_string())
-            })?,
-            journal,
-        );
+        return recover_call(manifest, args, journal, progress);
     }
-    let entrypoint = args
-        .entrypoint
-        .as_deref()
-        .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "call requires --entrypoint"))?;
-    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-        return Err(Diagnostic::new(
-            ErrorCode::Usage,
-            "entrypoint must use a non-empty canonical selector",
-        ));
-    }
+    let entrypoint = requested_entrypoint(args)?;
     let payload = deploy::parse_view_payload(&args.args)?;
     progress("Building the selected artifact and preparing its exact mutable call...");
-    let build = build::prepare_build(
-        manifest,
-        &BuildArgs {
-            selection: args.selection.clone(),
-            mode: GraphModeArgs {
-                locked: args.locked,
-                offline: false,
-                frozen: false,
-            },
-            registry: RegistryReadArgs {
-                config: args.config.clone(),
-            },
-            network: args.network.clone(),
-            chain_discriminant: None,
-        },
-        CompilerActionV1::Build,
-    )?;
+    let build = build::prepare_build(manifest, &call_build_args(args), CompilerActionV1::Build)?;
     let artifact = deploy::select_artifact(&build.execution.artifacts, args.contract.as_deref())?;
     let alias = deploy::bound_alias(&build.network, &artifact.package, &artifact.target)?;
     let bytes = deploy::read_selected_artifact(artifact)?;
     let _profile = ChainDiscriminantGuard::enter(build.network.chain_discriminant);
-    let service =
-        ContractCallService::new(build.network.load_client()?).map_err(call_diagnostic)?;
+    let service = ContractCallService::new(build.network.load_client()?)
+        .map_err(|error| call_diagnostic(&error))?;
     let slot = call_slot(
         build.workspace.root(),
         &build.network.name,
@@ -136,21 +85,13 @@ pub(super) fn run_call(
         build.workspace.root_manifest_path(),
         &build.network,
     )?;
-    let address = service.resolve_address(&alias).map_err(call_diagnostic)?;
+    let address = service
+        .resolve_address(&alias)
+        .map_err(|error| call_diagnostic(&error))?;
     let (intent, payload) = trusted_call_intent(&bytes, address, entrypoint, payload)?;
     let gas_limit = NonZeroU64::new(args.gas_limit)
         .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "gas limit must be positive"))?;
-    let fee = match deploy::selected_fee_payment(&build.network)? {
-        FeePaymentIntent::Authority(payment) => {
-            FeePaymentIntent::authority(payment.charge_limits, Some(gas_limit))
-        }
-        FeePaymentIntent::Sponsor(payment) => FeePaymentIntent::sponsor(
-            payment.program_id,
-            payment.program_revision,
-            payment.charge_limits,
-            Some(gas_limit),
-        ),
-    };
+    let fee = gas_limited_fee_payment(&build.network, gas_limit)?;
     let prepared = service
         .prepare(ContractCallRequest {
             artifact: bytes,
@@ -159,12 +100,14 @@ pub(super) fn run_call(
             intent,
             fee_payment: fee,
         })
-        .map_err(call_diagnostic)?;
-    let operation_id = prepared.operation_id().map_err(call_diagnostic)?;
+        .map_err(|error| call_diagnostic(&error))?;
+    let operation_id = prepared
+        .operation_id()
+        .map_err(|error| call_diagnostic(&error))?;
     let journal = slot.join(&operation_id);
     service
         .persist(&prepared, &journal)
-        .map_err(call_diagnostic)?;
+        .map_err(|error| call_diagnostic(&error))?;
     writer
         .replace(Path::new("active-journal"), operation_id.as_bytes())
         .map_err(atomic_diagnostic)?;
@@ -201,11 +144,96 @@ pub(super) fn run_call(
         "{permission_notice}Submitting the retained operation; interrupted work resumes with `{resume}`"
     ));
     let receipt = service.resume(&journal).map_err(|error| {
-        call_diagnostic(error)
+        call_diagnostic(&error)
             .with_context("journal", journal.display().to_string())
             .with_help(format!("resume the same operation with `{resume}`"))
     })?;
-    call_receipt(receipt, &journal)
+    call_receipt(&receipt, &journal)
+}
+/// Cancel an entirely unattempted call, or recover its retained permission and call hashes.
+fn recover_call(
+    manifest: Option<&Path>,
+    args: &CallArgs,
+    journal: &Path,
+    progress: &mut dyn FnMut(&str),
+) -> CommandResult {
+    let (workspace, _) = load_selected_workspace(manifest, &args.selection)?;
+    let selected = network::select_network(
+        workspace.root(),
+        args.network.as_deref(),
+        args.config.as_deref(),
+        None,
+    )?;
+    let _profile = ChainDiscriminantGuard::enter(selected.chain_discriminant);
+    let service = ContractCallService::new(selected.load_client()?)
+        .map_err(|error| call_diagnostic(&error))?;
+    if args.cancel.is_some() {
+        let operation_id = service
+            .cancel(journal)
+            .map_err(|error| call_diagnostic(&error))?;
+        return Ok(Success {
+            message: format!("Cancelled unattempted call: {}", journal.display()),
+            data: object([
+                ("operation_id", Value::from(operation_id)),
+                ("status", Value::from("cancelled")),
+                ("journal", Value::from(journal.display().to_string())),
+            ]),
+        });
+    }
+    progress("Recovering the retained permission and call hashes...");
+    call_receipt(
+        &service.resume(journal).map_err(|error| {
+            call_diagnostic(&error).with_context("journal", journal.display().to_string())
+        })?,
+        journal,
+    )
+}
+/// Return the requested mutable entrypoint once it is a non-empty canonical selector.
+fn requested_entrypoint(args: &CallArgs) -> Result<&str, Diagnostic> {
+    let entrypoint = args
+        .entrypoint
+        .as_deref()
+        .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "call requires --entrypoint"))?;
+    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+        return Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "entrypoint must use a non-empty canonical selector",
+        ));
+    }
+    Ok(entrypoint)
+}
+/// Build the called contract online; only the dependency lock policy is caller-selected.
+fn call_build_args(args: &CallArgs) -> BuildArgs {
+    BuildArgs {
+        selection: args.selection.clone(),
+        mode: GraphModeArgs {
+            locked: args.locked,
+            offline: false,
+            frozen: false,
+        },
+        registry: RegistryReadArgs {
+            config: args.config.clone(),
+        },
+        network: args.network.clone(),
+        chain_discriminant: None,
+    }
+}
+/// Bind the network's explicit fee payer to the signature-bound call gas limit.
+fn gas_limited_fee_payment(
+    network: &network::SelectedNetwork,
+    gas_limit: NonZeroU64,
+) -> Result<FeePaymentIntent, Diagnostic> {
+    Ok(match deploy::selected_fee_payment(network)? {
+        FeePaymentIntent::Authority(payment) => {
+            FeePaymentIntent::authority(payment.charge_limits, Some(gas_limit))
+        }
+        FeePaymentIntent::Sponsor(payment) => FeePaymentIntent::sponsor(
+            payment.program_id,
+            payment.program_revision,
+            payment.charge_limits,
+            Some(gas_limit),
+        ),
+    })
 }
 fn trusted_call_intent(
     artifact: &[u8],
@@ -247,9 +275,7 @@ fn trusted_call_intent(
                 .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?;
             (Some(arguments), Some(payload))
         }
-        None if descriptor.params.is_empty()
-            && payload.as_object().is_some_and(|fields| fields.is_empty()) =>
-        {
+        None if descriptor.params.is_empty() && payload.as_object().is_some_and(Map::is_empty) => {
             (None, None)
         }
         None => {
@@ -324,7 +350,9 @@ fn ensure_previous_call_terminal(
     deploy::validate_journal_id(id)?;
     let journal = writer.path().join(id);
     if matches!(
-        service.inspect(&journal).map_err(call_diagnostic)?,
+        service
+            .inspect(&journal)
+            .map_err(|error| call_diagnostic(&error))?,
         ContractCallDisposition::Pending
     ) {
         return Err(Diagnostic::new(
@@ -339,10 +367,10 @@ fn ensure_previous_call_terminal(
     }
     Ok(())
 }
-fn call_diagnostic(error: eyre::Report) -> Diagnostic {
+fn call_diagnostic(error: &eyre::Report) -> Diagnostic {
     Diagnostic::new(ErrorCode::Network, format!("{error:#}"))
 }
-fn call_receipt(receipt: ContractCallReceipt, journal: &Path) -> CommandResult {
+fn call_receipt(receipt: &ContractCallReceipt, journal: &Path) -> CommandResult {
     Ok(Success {
         message: format!(
             "Applied: {}\nContract: {}\nEntrypoint: {}\nHeight: {} ({}, {})\nReceipt: {}",
@@ -359,7 +387,7 @@ fn call_receipt(receipt: ContractCallReceipt, journal: &Path) -> CommandResult {
         data: object([
             (
                 "receipt",
-                norito::json::to_value(&receipt)
+                norito::json::to_value(receipt)
                     .map_err(|error| Diagnostic::new(ErrorCode::Internal, error.to_string()))?,
             ),
             ("journal", Value::from(journal.display().to_string())),

@@ -2,7 +2,7 @@
 """Create and verify private Sumeragi v2 release-binary bundles.
 
 The build directories are intentionally mutable Cargo caches.  This helper
-copies only the five final executables into a fresh, read-only invocation
+copies only the four shipping executables into a fresh, read-only invocation
 directory and publishes an exact, externally hash-anchored manifest.
 """
 
@@ -35,11 +35,6 @@ _BUILD_DIRECTORY_MODE = 0o700
 
 _BINARIES = (
     ("irohad", "release/iroha3d", "default"),
-    (
-        "irohad_message_control",
-        "message-control/release/iroha3d",
-        "message_control",
-    ),
     ("iroha", "release/iroha", "default"),
     ("kagami", "release/kagami", "default"),
     ("irohad_taira", "release/iroha3d_taira", "default"),
@@ -59,10 +54,6 @@ _KEYS = (
     "irohad_sha256",
     "irohad_size_bytes",
     "irohad_mode_octal",
-    "irohad_message_control_relative_path",
-    "irohad_message_control_sha256",
-    "irohad_message_control_size_bytes",
-    "irohad_message_control_mode_octal",
     "iroha_relative_path",
     "iroha_sha256",
     "iroha_size_bytes",
@@ -295,7 +286,6 @@ def prepare_cache(
     source_manifest_sha256: str,
     cargo_target_dir: Path,
     default_cache: Path,
-    message_control_cache: Path,
 ) -> None:
     """Create only the fixed mutable build-cache directories."""
 
@@ -311,11 +301,9 @@ def prepare_cache(
         / "program-build-cache"
     )
     expected_default = expected_root / "default"
-    expected_message = expected_root / "message-control"
-    if default_cache != expected_default or message_control_cache != expected_message:
+    if default_cache != expected_default:
         raise PrebuiltBundleError("release build caches escaped their fixed source root")
     _ensure_directory_tree(cargo_target_dir, expected_default)
-    _ensure_directory_tree(cargo_target_dir, expected_message)
 
 
 def _read_tool_version(path: Path, label: str) -> bytes:
@@ -443,7 +431,6 @@ def create_bundle(
     cargo_target_dir: Path,
     artifact_root: Path,
     default_cache: Path,
-    message_control_cache: Path,
     programs_root: Path,
     cargo_version_file: Path,
     rustc_version_file: Path,
@@ -465,7 +452,6 @@ def create_bundle(
         source_manifest_sha256,
         cargo_target_dir,
         default_cache,
-        message_control_cache,
     )
     _ensure_directory_tree(artifact_root, programs_root)
 
@@ -500,7 +486,7 @@ def create_bundle(
             relative = Path(relative_path)
             destination = bundle / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            cache = default_cache if cache_kind == "default" else message_control_cache
+            cache = default_cache
             source_relative = (
                 relative
                 if cache_kind == "default"
@@ -806,7 +792,6 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--source-manifest", required=True)
     prepare.add_argument("--cargo-target-dir", type=_path_argument, required=True)
     prepare.add_argument("--default-cache", type=_path_argument, required=True)
-    prepare.add_argument("--message-control-cache", type=_path_argument, required=True)
 
     create = subparsers.add_parser("create")
     create.add_argument("--repo-root", type=_path_argument, required=True)
@@ -814,7 +799,6 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--cargo-target-dir", type=_path_argument, required=True)
     create.add_argument("--artifact-root", type=_path_argument, required=True)
     create.add_argument("--default-cache", type=_path_argument, required=True)
-    create.add_argument("--message-control-cache", type=_path_argument, required=True)
     create.add_argument("--programs-root", type=_path_argument, required=True)
     create.add_argument("--cargo-version-file", type=_path_argument, required=True)
     create.add_argument("--rustc-version-file", type=_path_argument, required=True)
@@ -838,7 +822,6 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.source_manifest,
                 arguments.cargo_target_dir,
                 arguments.default_cache,
-                arguments.message_control_cache,
             )
         elif arguments.command == "create":
             bundle, manifest_sha256 = create_bundle(
@@ -847,7 +830,6 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.cargo_target_dir,
                 arguments.artifact_root,
                 arguments.default_cache,
-                arguments.message_control_cache,
                 arguments.programs_root,
                 arguments.cargo_version_file,
                 arguments.rustc_version_file,

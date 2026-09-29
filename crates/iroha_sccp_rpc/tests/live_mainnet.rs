@@ -54,7 +54,7 @@ fn transport(urls: &[&str]) -> HttpTransport {
 /// with Taira's clock reading `now()`; returns the light-client state.
 fn bootstrap_then_advance(
     network: SccpNetworkV1,
-    bootstrap: SccpLcBootstrapV1,
+    bootstrap: &SccpLcBootstrapV1,
     pause: Duration,
     now: impl Fn() -> u64,
     advance: impl FnOnce(u64, usize) -> Result<SccpLcAdvanceBytesV1, BuildError>,
@@ -66,7 +66,7 @@ fn bootstrap_then_advance(
         network,
         SccpLcInitExpectationV1::Absent,
         &params,
-        &bootstrap,
+        bootstrap,
         now(),
     )
     .expect("the live bootstrap verifies");
@@ -128,14 +128,14 @@ fn ethereum_bootstrap_and_advance_verify() {
     let bootstrap = builder.finalized_bootstrap().expect("bootstrap");
     let state = bootstrap_then_advance(
         SccpNetworkV1::EthereumMainnet,
-        bootstrap,
+        &bootstrap,
         Duration::ZERO,
         now_ms,
         |latest, max| builder.advance(latest, max),
     );
     let execution = EvmClient::new(transport(endpoints::ETHEREUM_EXECUTION));
     let finalized = execution
-        .block_by_number(BlockTag::Finalized, false)
+        .block_by_number(BlockTag::Finalized)
         .expect("finalized block")
         .expect("served")
         .header
@@ -161,7 +161,7 @@ fn bsc_bootstrap_and_advance_verify() {
     let bootstrap = builder.bootstrap().expect("bootstrap");
     let state = bootstrap_then_advance(
         SccpNetworkV1::BscMainnet,
-        bootstrap,
+        &bootstrap,
         Duration::from_secs(10),
         now_ms,
         |latest, max| builder.advance(latest, max),
@@ -203,7 +203,7 @@ fn tron_bootstrap_and_advance_verify() {
     let bootstrap = builder.bootstrap().expect("bootstrap");
     let state = bootstrap_then_advance(
         SccpNetworkV1::TronMainnet,
-        bootstrap,
+        &bootstrap,
         Duration::from_secs(10),
         now_ms,
         |latest, max| builder.advance(latest, max),
@@ -250,7 +250,7 @@ fn ton_bootstrap_and_advance_verify() {
     let newest = builder.newest_key_block().expect("newest key block");
     let _ = bootstrap_then_advance(
         SccpNetworkV1::TonMainnet,
-        builder.bootstrap_at(newest).expect("bootstrap"),
+        &builder.bootstrap_at(newest).expect("bootstrap"),
         Duration::ZERO,
         now_ms,
         |latest, max| builder.advance(latest, max),
@@ -275,7 +275,7 @@ fn ton_bootstrap_and_advance_verify() {
         .expect("previous key block");
     let reached = bootstrap_then_advance(
         SccpNetworkV1::TonMainnet,
-        builder.bootstrap_at(previous).expect("earlier bootstrap"),
+        &builder.bootstrap_at(previous).expect("earlier bootstrap"),
         Duration::ZERO,
         || newest_time + 60_000,
         |latest, max| builder.advance(latest, max),

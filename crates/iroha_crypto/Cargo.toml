@@ -26,7 +26,7 @@ json = ["norito/json"]
 bfv-accel = []
 # Enable GOST R 34.10-2012 with Streebog, CryptoPro 256-bit A/B/C and RFC 7836 512-bit A/B.
 # Implementation and parameter ownership live in `signature::gost`.
-gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint", "dep:subtle"]
+gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint"]
 # Enable Chinese national (SM2/SM3/SM4) algorithms.
 sm-ccm = []
 sm = ["sm-ccm", "dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979", "dep:sm4_gcm", "sm-neon"]
@@ -35,7 +35,7 @@ sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
 # Enable support for BLS signatures. The shipping `node-crypto` aggregate includes it.
-bls = ["dep:ark-serialize", "dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
+bls = ["dep:ark-serialize", "dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:w3f-bls"]
 
 # Allow creating key using random number generator which is tricky in some environments like Smart Contracts
 rand = []
@@ -44,8 +44,8 @@ rayon = ["dep:rayon"]
 # Enable elliptic-curve batch verification (deterministic) where available.
 # - Ed25519 uses ed25519-dalek's MSM-based batch verify with a deterministic transcript
 # - Secp256k1 remains per-signature (no secure MSM batch included); kept for symmetry
-ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
-pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq", "dep:subtle"]
+ecc-batch = ["ed25519-dalek/batch"]
+pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq"]
 
 [dependencies]
 mv = { workspace = true }
@@ -60,7 +60,7 @@ hex-literal = { workspace = true }
 getset = { workspace = true }
 thiserror = { version = "2.0.17" }
 displaydoc = { workspace = true, features = ["std"] }
-blake3 = { workspace = true }
+blake3 = { workspace = true, features = ["zeroize"] }
 base64 = { workspace = true }
 soranet_pq = { workspace = true, optional = true }
 
@@ -76,7 +76,7 @@ rayon = { version = "1.11.0", optional = true }
 blst = { version = "0.3.16", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
 group = { version = "0.13", default-features = false, optional = true }
-subtle = { version = "2.6.1", default-features = false, optional = true }
+subtle = { version = "2.6.1", default-features = false }
 pairing = { version = "0.23", default-features = false, optional = true }
 parking_lot = { workspace = true }
 

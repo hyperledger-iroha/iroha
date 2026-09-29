@@ -36,7 +36,7 @@ fn every_sccp_member_is_serialized_in_field_order() {
     let json::Value::Object(members) = &value else {
         panic!("the envelope is an object");
     };
-    assert_eq!(members.len(), 31, "one member per SCCP world field");
+    assert_eq!(members.len(), 30, "one member per SCCP world field");
     let mut restored = World::default();
     restore(&text, &mut restored).expect("an empty envelope restores");
     assert_eq!(encoded(&restored), text);
@@ -59,7 +59,7 @@ fn sccp_snapshot_preserves_every_current_and_undo_envelope() {
         assert_eq!(left, right, "the undo records restore identically");
         assert_eq!(*replacement.sccp_roster_current.get(), 1);
         assert_eq!(replacement.sccp_bridge_keys.len(), 1);
-        assert_eq!(replacement.sccp_light_client_checkpoint_expiry.len(), 1);
+        assert_eq!(replacement.sccp_light_client_checkpoints.len(), 1);
     }
     {
         let view = restored.view();

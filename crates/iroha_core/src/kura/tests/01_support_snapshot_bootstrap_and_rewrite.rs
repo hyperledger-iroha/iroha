@@ -15,7 +15,7 @@ use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-        defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION},
+        defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL},
     },
 };
 use iroha_crypto::{
@@ -75,74 +75,6 @@ fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
         iroha_crypto::Hash::new(label),
     ))
-}
-
-fn provisional_snapshot_metadata(tag: u8) -> ProvisionalSnapshotBootstrap {
-    ProvisionalSnapshotBootstrap {
-        hash_only_prefix_height: usize::from(tag),
-        bootstrap_lineage_hash: Some(Hash::prehashed([tag; Hash::LENGTH])),
-        hash_journal_digest: Some(Hash::prehashed([tag.wrapping_add(1); Hash::LENGTH])),
-    }
-}
-
-#[test]
-fn snapshot_bootstrap_state_blocks_until_authenticated() {
-    let kura = Kura::blank_kura_for_testing();
-    let pending = provisional_snapshot_metadata(7);
-    *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
-    assert_eq!(
-        kura.provisional_snapshot_bootstrap_metadata(),
-        Some((
-            pending.hash_only_prefix_height,
-            pending.bootstrap_lineage_hash
-        ))
-    );
-    assert!(kura.provisional_snapshot_bootstrap_pending());
-    assert!(matches!(
-        kura.ensure_snapshot_bootstrap_authenticated(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
-    assert_eq!(kura.provisional_snapshot_bootstrap_metadata(), None);
-    assert!(!kura.provisional_snapshot_bootstrap_pending());
-    assert!(kura.ensure_snapshot_bootstrap_authenticated().is_ok());
-}
-
-#[cfg(unix)]
-#[test]
-fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
-    let kura = Kura::blank_kura_for_testing();
-    let store_root = kura.store_root();
-    let retained = store_root.join("retired/blocks");
-    fs::create_dir_all(&retained).unwrap();
-    fs::write(retained.join("original.data"), b"must remain").unwrap();
-    let block = native_storage_frames(1).pop().unwrap();
-    let before = snapshot_regular_test_tree(&store_root);
-    let pending = provisional_snapshot_metadata(5);
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Pending(pending);
-    assert!(matches!(
-        kura.store_block(block),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(matches!(
-        kura.persist_fastpq_artifact(b"opaque original proof"),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(matches!(
-        kura.recover_journal_owned_lane_instances_on_startup(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    kura.write_pipeline_metadata(&PipelineRecoverySidecar::new(
-        1,
-        HashOf::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH])),
-        PipelineDagSnapshot {
-            fingerprint: [0xE5; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    ));
-    assert_eq!(snapshot_regular_test_tree(&store_root), before);
 }
 
 #[test]
@@ -758,4 +690,97 @@ fn pipeline_recovery_format_has_one_current_tag_and_rejects_unknown_tags() {
             <PipelineRecoveryFormat as DecodeAll>::decode_all(&mut invalid.as_slice()).is_err()
         );
     }
+}
+
+#[test]
+fn every_startup_mode_rejects_retired_snapshot_markers_without_changing_bytes() {
+    for (name, directory) in [
+        (VERIFIED_SNAPSHOT_TAIL_FILE_NAME, false),
+        ("verified_snapshot_tail.norito.tmp", false),
+        (".verified-snapshot-tail-unpublished", false),
+        (VERIFIED_SNAPSHOT_TAIL_FILE_NAME, true),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let mut config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let lanes = RuntimeLaneConfig::default();
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
+        let blocks = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+        let path = blocks.join(name);
+        if directory {
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("evidence"), b"retired snapshot authority").unwrap();
+        } else {
+            // Neither syntactically valid nor malformed bytes gain a decode/recovery path.
+            fs::write(&path, b"retired snapshot authority").unwrap();
+        }
+        let before = snapshot_regular_files_recursively(temp.path());
+        for mode in [InitMode::Strict, InitMode::Fast] {
+            config.init_mode = mode;
+            assert!(matches!(
+                Kura::new_with_configured_lane_catalog(&config, &lanes, &LaneCatalog::default()),
+                Err(Error::RetiredKuraArtifact { path: rejected }) if rejected == path
+            ));
+            assert_eq!(snapshot_regular_files_recursively(temp.path()), before);
+        }
+        let mut direct = BlockStore::new(&blocks);
+        assert!(matches!(
+            direct.create_files_if_they_do_not_exist(),
+            Err(Error::RetiredKuraArtifact { .. })
+        ));
+        assert!(matches!(
+            direct.init_commit_marker(),
+            Err(Error::RetiredKuraArtifact { .. })
+        ));
+        assert_eq!(snapshot_regular_files_recursively(temp.path()), before);
+    }
+}
+
+#[test]
+fn retired_snapshot_marker_is_rejected_before_initializing_storage() {
+    let temp = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let root = config.store_dir.resolve_relative_path();
+    let blocks = Kura::canonical_storage_path(&root);
+    fs::create_dir_all(&blocks).unwrap();
+    fs::write(
+        blocks.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
+        b"untrusted prefix",
+    )
+    .unwrap();
+    let before = snapshot_regular_files_recursively(temp.path());
+    assert!(matches!(
+        Kura::new_with_configured_lane_catalog(
+            &config,
+            &RuntimeLaneConfig::default(),
+            &LaneCatalog::default()
+        ),
+        Err(Error::RetiredKuraArtifact { .. })
+    ));
+    assert_eq!(snapshot_regular_files_recursively(temp.path()), before);
+    assert!(!root.join(STORE_ROOT_LOCK_FILE_NAME).exists());
+    assert!(!blocks.join(INDEX_FILE_NAME).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn retired_snapshot_symlink_is_rejected_without_following_or_removing_it() {
+    let temp = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    let blocks = kura.active_blocks_dir.lock().clone();
+    drop(kura);
+    let target = temp.path().join("untrusted-snapshot-target");
+    fs::write(&target, b"preserve exact original evidence").unwrap();
+    let marker = blocks.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME);
+    std::os::unix::fs::symlink(&target, &marker).unwrap();
+    assert!(matches!(
+        Kura::new_with_configured_lane_catalog(&config, &RuntimeLaneConfig::default(), &LaneCatalog::default()),
+        Err(Error::RetiredKuraArtifact { path }) if path == marker
+    ));
+    assert_eq!(fs::read_link(&marker).unwrap(), target);
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"preserve exact original evidence"
+    );
 }

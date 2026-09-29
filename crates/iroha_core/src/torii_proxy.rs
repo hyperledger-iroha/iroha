@@ -1172,5 +1172,4 @@ mod tests {
             ))
         );
     }
-    include!("torii_proxy/lane_admitted_input_tests.rs");
 }

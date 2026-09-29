@@ -10,10 +10,6 @@
 //! (`dataspaces/<name>.toml`), read through `iroha_config_base` so that every
 //! error names its file and key and unknown keys are rejected.
 //!
-//! [`verify`] holds the verification gates. So far it has
-//! [`verify::finality`], the light finality verifier for exact `3f + 1`
-//! committees, anchored in an authenticated genesis or a stored checkpoint.
-//!
 //! Later phases add planning and the decision hash, the converge executor and
 //! its journal, the local, container and SSH drivers, and the remaining
 //! verification gates.
@@ -21,4 +17,6 @@
 // the SSH driver and edge renderers (specs/network_deployment.md §13).
 
 pub mod definition;
+
+/// Verification gates over authenticated native protocol evidence.
 pub mod verify;

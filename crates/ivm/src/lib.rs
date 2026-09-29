@@ -581,6 +581,11 @@ pub fn set_scheduler_stack_size(bytes: usize) {
 pub fn set_prover_stack_size(bytes: usize) {
     crate::zk::set_prover_stack_size(bytes);
 }
+
+pub use crate::cuda::cuda_device_slots;
+#[cfg(feature = "cuda-hardware-tests")]
+pub use crate::cuda::{cuda_qualification_device, with_cuda_device_for_qualification};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,7 +696,3 @@ mod tests {
         assert_eq!(metal_disabled(), crate::vector::metal_disabled());
     }
 }
-
-pub use crate::cuda::cuda_device_slots;
-#[cfg(feature = "cuda-hardware-tests")]
-pub use crate::cuda::{cuda_qualification_device, with_cuda_device_for_qualification};

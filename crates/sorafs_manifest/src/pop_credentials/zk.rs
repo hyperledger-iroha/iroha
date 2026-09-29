@@ -1511,7 +1511,6 @@ pub(super) fn verify_with_reordered_public_inputs_for_test(
     public_inputs.swap(PI_COMMITMENT_ROOT, PI_REVOCATION_ROOT);
     verify_proof_bytes(material, &proof.proof_bytes, &public_inputs)
 }
-#[allow(dead_code)]
 fn _assert_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<CachedVerifierMaterial>();

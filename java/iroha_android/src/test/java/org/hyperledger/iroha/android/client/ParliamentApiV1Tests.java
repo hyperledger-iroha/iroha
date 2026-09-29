@@ -311,6 +311,62 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
+  public void sccpRouteGovernanceAdmitsOnlyTheClosedProposalEnvelope() {
+    for (final Map<String, Object> subject :
+        List.of(
+            sccpSubject("parameters", null),
+            sccpSubject("light_client", bscMainnet()),
+            sccpSubject("bridge_key_fault", "ea0130" + "AB".repeat(48)))) {
+      ParliamentApiV1.Proposal.fromJson(
+          sccpProposal(proposal -> proposal.put("base_revisions", List.of(subject))));
+    }
+
+    final List<Consumer<Map<String, Object>>> rejected =
+        List.of(
+            proposal -> proposal.put("anchor", null),
+            proposal -> proposal.remove("base_revisions"),
+            proposal -> proposal.put("base_revisions", List.of()),
+            proposal -> proposal.put("actions", List.of()),
+            proposal ->
+                proposal.put(
+                    "actions",
+                    Collections.nCopies(17, ((List<?>) proposal.get("actions")).get(0))),
+            proposal ->
+                proposal.put(
+                    "base_revisions", List.of(sccpSubject("sora_taira", bscMainnet()))),
+            proposal ->
+                proposal.put(
+                    "base_revisions", List.of(sccpSubject("parameters", bscMainnet()))),
+            proposal ->
+                proposal.put(
+                    "base_revisions",
+                    List.of(sccpSubject("bridge_key_fault", "ea0130" + "ab".repeat(48)))),
+            proposal ->
+                proposal.put(
+                    "base_revisions",
+                    List.of(
+                        sccpSubject(
+                            "route", map("network", "sora_taira", "profile", null)))),
+            proposal ->
+                proposal.put("actions", List.of(map("action", "Remove", "payload", map()))),
+            proposal ->
+                proposal.put(
+                    "actions", List.of(map("action", "freeze_light_client", "payload", null))));
+    for (final Consumer<Map<String, Object>> edit : rejected) {
+      final byte[] encoded = sccpProposal(edit);
+      assertThrows(
+          IllegalArgumentException.class, () -> ParliamentApiV1.Proposal.fromJson(encoded));
+    }
+
+    final Map<String, Object> anchorProposal = validProposal("SccpRouteGovernance");
+    anchorProposal.put(
+        "payload", map("anchor", map("network_id", networkId(), "action", map())));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(anchorProposal)));
+  }
+
+  @Test
   public void effectSensitiveProposalsRequireExactOperator() {
     for (final String kind :
         List.of("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance")) {
@@ -1726,18 +1782,19 @@ public final class ParliamentApiV1Tests {
       case "SccpRouteGovernance" ->
           payload =
               map(
-                  "anchor",
+                  "proposal",
                   map(
                       "network_id", networkId(),
-                      "action",
-                      map(
-                          "action", "Remove",
-                          "route",
+                      "base_revisions",
+                      List.of(
                           map(
-                              "lane_id", inboundLane(),
-                              "route_id", "taira_bsc_xor",
-                              "asset_key", "xor",
-                              "revision", 1))));
+                              "subject", map("subject", "route", "key", bscMainnet()),
+                              "revision", 1)),
+                      "actions",
+                      List.of(
+                          map(
+                              "action", "remove_staged",
+                              "payload", map("network", bscMainnet(), "revision", 1)))));
       case "ValidationFeePolicy" ->
           payload =
               map(
@@ -1842,10 +1899,18 @@ public final class ParliamentApiV1Tests {
         "recipients", recipients);
   }
 
-  private static Map<String, Object> inboundLane() {
-    return map(
-        "source", map("network", "bsc_mainnet", "profile", null),
-        "target", map("network", "sora_taira", "profile", null));
+  private static byte[] sccpProposal(final Consumer<Map<String, Object>> edit) {
+    final Map<String, Object> proposal = validProposal("SccpRouteGovernance");
+    edit.accept(objectValue(objectValue(proposal.get("payload")).get("proposal")));
+    return encode(proposal);
+  }
+
+  private static Map<String, Object> sccpSubject(final String subject, final Object key) {
+    return map("subject", map("subject", subject, "key", key), "revision", 0);
+  }
+
+  private static Map<String, Object> bscMainnet() {
+    return map("network", "bsc_mainnet", "profile", null);
   }
 
   private static String account(final int seed) {

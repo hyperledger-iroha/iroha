@@ -369,12 +369,12 @@ and buffered responses at 8 MiB.
 ### Native Sumeragi status
 
 `HttpClientTransport.getSumeragiStatus()` reads `GET /v1/sumeragi/status` into
-the closed protocol-8 `SumeragiStatus` model. Its current-round, footprint and
+the closed protocol-1 `SumeragiStatus` model. Its current-round, footprint and
 same-applied-cut beacon observations do not confer finality authority.
 
 ```kotlin
 val status = transport.getSumeragiStatus().join()
-check(status.protocolVersion == 8)
+check(status.protocolVersion == 1)
 println("height=${status.height} view=${status.view} leader=${status.leader}")
 ```
 
@@ -1119,20 +1119,3 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 |-----------|---------|---------|------|
 | `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
 | `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
-
-### SCCP Java consumers
-
-`core-jvm/src/sccpJavaTest/java` contains the one shared Java-source owner for
-all 31 original SCCP codec/client assertion groups. Both `:core-jvm:test` and
-`:client-android:testDebugHostNative` compile and execute these consumers against
-the Kotlin implementation. The two retired unbound-write API assertions run
-separately through `scripts/check_sccp_java_consumer_contract.py`, which checks
-compiled public declarations and inherited SDK parents without reflection. It
-also requires every runtime group in the corresponding Gradle JUnit reports;
-skipped or missing groups cannot qualify the phase.
-
-The release corridor accepts `java-source-kotlin` as its sole Java-consumer
-phase. It builds and authenticates the host ABI-25 library, runs both consumers,
-and rechecks native identity afterward. This is host execution of the Android
-consumer classpath; Android device/native packaging qualification remains a
-separate release requirement. No separate Java SDK implementation is produced.

@@ -296,6 +296,8 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
     for path in (
         ("payload", "receipt", "evidence_closure"),
         ("payload", "manifest", "enabled_profiles"),
+        ("payload", "manifest", "network_id"),
+        ("payload", "manifest", "purpose"),
         ("payload", "attestation", "approvals"),
     ):
         mutated = copy.deepcopy(release)
@@ -304,6 +306,28 @@ def test_kagemusha_registry_proposal_schemas_are_closed_and_exact() -> None:
             target = target[member]
         del target[path[-1]]
         assert not validator.is_valid(mutated), path
+    experiment = copy.deepcopy(release)
+    experiment["payload"]["manifest"]["purpose"] = {
+        "kind": "testnet_experiment",
+        "value": {
+            "asset_identity_digest": [1] * 32,
+            "asset_incarnation": [2] * 32,
+            "asset_scale": 28,
+            "liability_pool_id": [3] * 32,
+        },
+    }
+    assert validator.is_valid(experiment)
+    for purpose in (
+        {"kind": "production", "value": {}},
+        {"kind": "testnet_experiment", "value": None},
+        {"kind": "production"},
+        {"kind": "unknown", "value": None},
+    ):
+        mutated = copy.deepcopy(release)
+        mutated["payload"]["manifest"]["purpose"] = purpose
+        assert not validator.is_valid(mutated), purpose
+    experiment["payload"]["manifest"]["purpose"]["value"]["asset_scale"] = 29
+    assert not validator.is_valid(experiment)
     mutated = copy.deepcopy(release)
     mutated["payload"]["receipt"]["unexpected"] = None
     assert not validator.is_valid(mutated)

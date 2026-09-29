@@ -261,7 +261,7 @@ fn signed_floor_requires_exact_state_hash_and_committed_block_id() {
     // Without the committed frame the floor is not a committed block.
     chain
         .kura()
-        .force_hash_only_block_for_testing(std::num::NonZeroUsize::new(2).unwrap())
+        .corrupt_canonical_body_for_testing(std::num::NonZeroUsize::new(2).unwrap())
         .unwrap();
     assert_eq!(check_next(&chain, actual, [1; 32], 3), Err(Error::Finality));
 }

@@ -176,7 +176,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
-using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.SoraFs;
 using Hyperledger.Iroha.Torii;
 
@@ -208,21 +207,6 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-var inboundLane = new SccpLaneIdV1(
-    SccpNetworkV1.EthereumMainnet,
-    SccpNetworkV1.SoraTaira);
-var outboundLane = new SccpLaneIdV1(
-    SccpNetworkV1.SoraTaira,
-    SccpNetworkV1.EthereumMainnet);
-if (SccpNetworkV1.EthereumMainnet.ProfileKey() != "ethereum-mainnet"
-    || SccpNetworkV1.EthereumMainnet.DomainId() != 1u
-    || !inboundLane.IsInbound
-    || inboundLane.IsOutbound
-    || !outboundLane.IsOutbound
-    || outboundLane.IsInbound)
-{
-    throw new InvalidOperationException("Packed SCCP route model is unavailable");
-}
 if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 24u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {

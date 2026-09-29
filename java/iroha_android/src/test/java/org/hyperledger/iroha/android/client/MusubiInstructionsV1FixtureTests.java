@@ -92,7 +92,6 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
-import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -464,7 +463,7 @@ public final class MusubiInstructionsV1FixtureTests {
     }
     final String authority =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x5a), "ed25519")
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     final TransactionPayload transaction =
         TransactionPayload.builder()
             .setNetworkId(
@@ -475,7 +474,7 @@ public final class MusubiInstructionsV1FixtureTests {
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
             .build();
     final byte[] encoded =
-        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        new NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT)
             .encodeTransaction(transaction);
 
     final NoritoDecoder transactionDecoder = canonicalDecoder(encoded);
@@ -533,7 +532,7 @@ public final class MusubiInstructionsV1FixtureTests {
     final Digest32 inviteId = Digest32.fromBytes(new byte[32]);
     final String canonicalAccount =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x31), "ed25519")
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     final PackageRole owner = PackageRole.owner();
     assertThrows(
         IllegalArgumentException.class,
@@ -680,12 +679,12 @@ public final class MusubiInstructionsV1FixtureTests {
         AccountAddress.fromMultisigPolicy(
                 AccountAddress.MultisigPolicyPayload.of(
                     1, 2, Arrays.asList(firstMember, secondMember)))
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     final String reverse =
         AccountAddress.fromMultisigPolicy(
                 AccountAddress.MultisigPolicyPayload.of(
                     1, 2, Arrays.asList(secondMember, firstMember)))
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     assertTrue(!forward.equals(reverse));
     assertArrayEquals(
         TransferWirePayloadEncoder.encodeAccountIdPayload(forward),
@@ -723,12 +722,12 @@ public final class MusubiInstructionsV1FixtureTests {
         AccountAddress.fromMultisigPolicy(
                 AccountAddress.MultisigPolicyPayload.of(
                     1, 2, Arrays.asList(firstMember, secondMember)))
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     final String reverse =
         AccountAddress.fromMultisigPolicy(
                 AccountAddress.MultisigPolicyPayload.of(
                     1, 2, Arrays.asList(secondMember, firstMember)))
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     assertTrue(!forward.equals(reverse));
     assertArrayEquals(
         TransferWirePayloadEncoder.encodeAccountIdPayload(forward),
@@ -750,7 +749,7 @@ public final class MusubiInstructionsV1FixtureTests {
 
     final String unrelated =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x63), "ed25519")
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT);
     assertThrows(
         IllegalArgumentException.class,
         () ->

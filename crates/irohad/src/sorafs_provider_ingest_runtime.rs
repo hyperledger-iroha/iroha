@@ -2090,8 +2090,11 @@ impl NativeCompletionPayloadBuilderV1 {
         let mut payload = self.unsigned_completion_payload(request, order_id, provider_id)?;
         let route = self
             .queue
-            .route_payload_with_state(&payload, self.state.as_ref())
+            .route_payload_plan_with_state(&payload, self.state.as_ref())
             .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
+        let iroha_core::queue::RoutingPlan::Single(route) = route else {
+            return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
+        };
         let next_height = height
             .checked_add(1)
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
@@ -2102,7 +2105,7 @@ impl NativeCompletionPayloadBuilderV1 {
             &payload,
             payload.creation_time_ms,
             next_height,
-            Some(route.dataspace_id),
+            Some(route.route.dataspace_id),
         )
         .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)?;
         payload.fee_payment = quote.recommended_intent;
@@ -2186,18 +2189,9 @@ impl NativeTransactionIngressV1 {
             Err(failure)
                 if matches!(
                     failure.err,
-                    QueueError::PlanJournalDurabilityIndeterminate { .. }
-                ) =>
-            {
-                ProviderIngestIngressDispositionV1::Ambiguous
-            }
-            Err(failure)
-                if matches!(
-                    failure.err,
                     QueueError::Full
                         | QueueError::LatencySaturated
                         | QueueError::MaximumTransactionsPerUser
-                        | QueueError::PlanJournalDurabilityRejected { .. }
                 ) =>
             {
                 ProviderIngestIngressDispositionV1::DefinitelyNotSubmitted

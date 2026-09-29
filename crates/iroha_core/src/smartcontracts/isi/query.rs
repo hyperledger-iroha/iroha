@@ -821,7 +821,6 @@ impl ExecuteSingularQuery for SingularQueryBox {
             FindDaPinIntentByManifest,
             FindDaPinIntentByAlias,
             FindDaPinIntentByLaneEpochSequence,
-            FindLaneRelayEnvelopeByRef,
             FindFeeSponsorProgramById,
             FindSettlementReceiptById,
             FindFxCorridorPolicyRegistry,
@@ -5067,90 +5066,36 @@ mod tests {
             &ALICE_ID,
         )
     }
-    // Query/storage fixture: signed source identities and explicit typed results
-    // are authenticated by real CommitQCs. This is not an economic execution test.
+    // Every positive history row is an original execution under native Sumeragi.
     fn state_with_test_blocks_and_transactions(
         blocks: u64,
         valid_tx_per_block: usize,
         invalid_tx_per_block: usize,
-    ) -> Result<State> {
-        use iroha_data_model::block::execution_output::{
-            ExecutionOutputV1, NetworkExecutionOutputV1,
-        };
-        let kura = Kura::blank_kura_for_testing();
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world_with_test_domains(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            "canonical-query".parse().unwrap(),
-            crate::kura::tests::canonical_query_network_id(),
-        );
-        // Deliberately repeat the same signed sources across structural stored
-        // carriers: these tests exercise many-height index membership and pruning,
-        // not admission of repeated economic execution.
-        let sources = (0..valid_tx_per_block + invalid_tx_per_block)
-            .map(|index| {
-                let instructions: Vec<InstructionBox> = if index < valid_tx_per_block {
-                    vec![Log::new(iroha_logger::Level::INFO, "pass".into()).into()]
-                } else {
-                    let fail = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-                    vec![fail.clone().into(), fail.into()]
-                };
-                let mut builder = TransactionBuilder::new(
-                    state.network_id,
-                    ALICE_ID.clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                );
-                builder.set_creation_time(std::time::Duration::from_millis(
-                    1000 + u64::try_from(index).unwrap(),
-                ));
-                builder
-                    .with_instructions(instructions)
-                    .sign(ALICE_KEYPAIR.private_key())
-            })
-            .collect::<Vec<_>>();
-        let mut bodies: Vec<Arc<iroha_data_model::block::SignedBlock>> = Vec::new();
-        for height in 1..=blocks {
-            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(
-                iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(height).unwrap(),
-                    bodies.last().map(|body| body.hash()),
-                    None,
-                    height * 1000 + 500,
-                    0,
-                ),
-            );
-            let mut rows = Vec::new();
-            for (index, source) in sources.iter().enumerate() {
-                builder.push_transaction(source.clone());
-                let result = if index < valid_tx_per_block {
-                    Ok(iroha_data_model::transaction::DataTriggerSequence::default())
-                } else {
-                    Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                        ValidationFail::NotPermitted("missing fixture domain".into())))
-                };
-                rows.push(ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                    input_index: u32::try_from(index).unwrap(),
-                    result: iroha_data_model::transaction::TransactionResult::new(result),
-                    completions: Vec::new(),
-                }));
-            }
-            let mut body = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-            body.set_execution_outputs(
-                rows,
-                u64::try_from(valid_tx_per_block).unwrap(),
-                Default::default(),
-                Vec::new(),
-                Default::default(),
-                Default::default(),
-                &crate::execution_output_test_support::structural_output_limits(),
-            )
-            .unwrap();
-            state.push_block_hash_for_testing(body.hash());
-            bodies.push(Arc::new(body));
+    ) -> Result<Arc<State>> {
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        let mut config = TestChainConfig::new(world_with_test_domains(), 1000);
+        config.genesis_key = ALICE_KEYPAIR.clone();
+        let mut chain = CertifiedTestChain::start(config).expect("native query genesis");
+        for height in 2..=blocks.max(2) {
+            let sources = (0..valid_tx_per_block + invalid_tx_per_block)
+                .map(|index| {
+                    let instructions: Vec<InstructionBox> = if index < valid_tx_per_block {
+                        vec![
+                            Log::new(iroha_logger::Level::INFO, format!("pass {height}:{index}"))
+                                .into(),
+                        ]
+                    } else {
+                        vec![
+                            Unregister::domain(DomainId::try_new("dummy", "universal").unwrap())
+                                .into(),
+                        ]
+                    };
+                    chain.sign(&ALICE_KEYPAIR, instructions, height * 1000 + index as u64)
+                })
+                .collect();
+            chain.commit(sources);
         }
-        crate::kura::tests::persist_canonical_query_blocks(&kura, &bodies);
-        Ok(state)
+        Ok(Arc::clone(chain.state()))
     }
     #[tokio::test]
     async fn iter_dispatch_sorts_and_paginates_end_to_end() {
@@ -7234,14 +7179,17 @@ mod tests {
             &state.view(),
         )?
         .collect::<Vec<_>>();
-        assert_eq!(txs.len() as u64, num_blocks * 2);
+        let genesis_rows = state
+            .view()
+            .kura()
+            .get_block(nonzero!(1_usize))
+            .unwrap()
+            .network_input_hashes()
+            .len();
+        assert_eq!(txs.len(), genesis_rows + (num_blocks as usize - 1) * 2);
         assert_eq!(
             txs.iter().filter(|txn| txn.result().is_err()).count() as u64,
-            num_blocks
-        );
-        assert_eq!(
-            txs.iter().filter(|txn| txn.result().is_err()).count() as u64,
-            num_blocks
+            num_blocks - 1
         );
         Ok(())
     }
@@ -7285,7 +7233,7 @@ mod tests {
     #[test]
     fn find_transactions_bounded_replay_ignores_blocks_appended_after_start() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7316,22 +7264,8 @@ mod tests {
         };
         let mut collected = transactions_from_batch(first.batch);
         let mut cursor = first.continue_cursor;
-        let latest_height = NonZeroUsize::new(state_view.height()).expect("seeded history");
-        let latest = state_view
-            .kura()
-            .get_block(latest_height)
-            .expect("latest seeded carrier");
-        let appended =
-            crate::smartcontracts::isi::tx::tests::canonical_query_carrier(&latest, 17, true, 0);
-        // The retained WSV prefix remains fixed while durable Kura extends.
-        state_view
-            .kura()
-            .store_block(appended)
-            .expect("append exact carrier after query start");
-        crate::kura::tests::persist_v2_finality_chain_through(
-            state_view.kura(),
-            NonZeroUsize::new(18).expect("appended query carrier"),
-        );
+        // Durable custody extends through original execution; the captured WSV prefix stays fixed.
+        fixture.store.append_next();
         while let Some(current) = cursor {
             let next = query_handle
                 .handle_iter_continue(current, &ALICE_ID)
@@ -7987,9 +7921,7 @@ mod tests {
             .expect("test Kura transaction index is complete");
         assert_eq!(
             indexed_heights,
-            (1..=num_blocks)
-                .filter_map(|height| std::num::NonZeroUsize::new(height as usize))
-                .collect()
+            std::collections::BTreeSet::from([nonzero!(4_usize)])
         );
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
@@ -7998,21 +7930,9 @@ mod tests {
             &state_view,
         )?
         .collect::<Vec<_>>();
-        assert_eq!(txs.len() as u64, num_blocks);
+        assert_eq!(txs.len(), 1);
         assert!(txs.iter().all(|tx| tx.entrypoint_hash == entrypoint_hash));
-        assert_eq!(
-            txs.iter().map(|tx| tx.block_hash).collect::<Vec<_>>(),
-            (1..=num_blocks)
-                .rev()
-                .map(|height| {
-                    state_view
-                        .kura()
-                        .get_block(std::num::NonZeroUsize::new(height as usize).unwrap())
-                        .expect("block available")
-                        .hash()
-                })
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(txs[0].block_hash, block.hash());
         let unknown_hash = iroha_crypto::HashOf::<
             iroha_data_model::transaction::signed::TransactionEntrypoint,
         >::from_untyped_unchecked(Hash::new(
@@ -8026,58 +7946,6 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert!(missing.is_empty());
-        assert!(matches!(
-            state_view.kura().prune_to_height(4),
-            Err(crate::kura::Error::FinalizedV2BlockMutation {
-                rewrite_from_height: 5,
-                finalized_height: 8,
-            })
-        ));
-        assert_eq!(
-            state_view
-                .kura()
-                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
-                .expect("finalized index remains complete after refused pruning"),
-            indexed_heights
-        );
-        // Index cleanup concerns an unfinalized stored suffix. Keep the exact
-        // canonical bodies but do not copy their finality artifacts: finalized
-        // history above must remain immutable under the same pruning API.
-        let pruning_kura = Kura::blank_kura_for_testing();
-        let _pruning_state = State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&pruning_kura),
-            LiveQueryStore::start_test(),
-            state_view.chain_id().clone(),
-            *state_view.network_id(),
-        );
-        for height in 1..=num_blocks {
-            let body = state_view
-                .kura()
-                .get_block(std::num::NonZeroUsize::new(height as usize).unwrap())
-                .expect("canonical structural body remains available");
-            pruning_kura
-                .store_block(body)
-                .expect("store unfinalized index fixture");
-        }
-        assert_eq!(
-            pruning_kura
-                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
-                .expect("live admitted-body index is complete"),
-            indexed_heights
-        );
-        assert!(pruning_kura.v2_finality_artifact(num_blocks)?.is_none());
-        pruning_kura
-            .prune_to_height(4)
-            .expect("prune unfinalized test suffix");
-        assert_eq!(
-            pruning_kura
-                .get_block_heights_by_entrypoint_hash(entrypoint_hash)
-                .expect("test Kura transaction index is complete"),
-            (1..=4)
-                .filter_map(|height| std::num::NonZeroUsize::new(height as usize))
-                .collect()
-        );
         Ok(())
     }
     #[tokio::test]
@@ -8114,7 +7982,7 @@ mod tests {
                 .get_block_heights_by_transaction_timestamp_ms(timestamp_ms)
                 .expect("test Kura transaction index is complete")
                 .len() as u64,
-            num_blocks
+            1
         );
         assert_eq!(
             state_view
@@ -8122,7 +7990,7 @@ mod tests {
                 .get_block_heights_by_transaction_result_status(false)
                 .expect("test Kura transaction index is complete")
                 .len() as u64,
-            num_blocks
+            num_blocks - 1
         );
         let by_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
@@ -8165,7 +8033,7 @@ mod tests {
             &state_view,
         )?
         .collect::<Vec<_>>();
-        assert_eq!(failed.len() as u64, num_blocks);
+        assert_eq!(failed.len() as u64, num_blocks - 1);
         assert!(failed.iter().all(|tx| tx.result().as_ref().is_err()));
         let missing_authority = crate::smartcontracts::isi::tx::execute_transactions_fixture(
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {

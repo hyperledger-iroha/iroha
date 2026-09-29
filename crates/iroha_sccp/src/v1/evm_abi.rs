@@ -32,7 +32,7 @@ use super::{
     },
     eip712::AttestationFieldsV1,
     hashes::{word_address, word_bool, word_u64, word_u128},
-    network::{self, external_account_codec},
+    network::external_account_codec,
     payload::SccpTransferPayloadV1,
     proof::{ControlProofV1, HistoryProofV1, MessageProofV1},
     roster::{RosterStateV1, RosterV1},
@@ -1031,12 +1031,6 @@ fn read_address(data: &[u8], offset: usize) -> Result<[u8; 20], AbiError> {
     Ok(word[12..].try_into().expect("20 bytes"))
 }
 
-/// Whether `network` runs the EVM-family contract that this module encodes for.
-#[must_use]
-pub fn is_evm_family(network: SccpNetworkV1) -> bool {
-    network::evm_chain_id(network).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1635,10 +1629,6 @@ mod tests {
 
     #[test]
     fn evm_family_helpers() {
-        assert!(is_evm_family(SccpNetworkV1::EthereumMainnet));
-        assert!(is_evm_family(SccpNetworkV1::TronMainnet));
-        assert!(!is_evm_family(SccpNetworkV1::TonMainnet));
-        assert!(!is_evm_family(SccpNetworkV1::SoraTaira));
         assert_eq!(
             evm_family_account(SccpNetworkV1::BscMainnet, &[1; 20]),
             Ok(vec![1; 20])

@@ -511,7 +511,6 @@ fn retained_transactions(
             tx.encode_wire_v1()? == wire
                 && tx.authority() == &owner.account
                 && tx.network_id() == Some(&owner.network_id)
-                && tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
                 && hex(tx.hash().as_ref()) == text_field(&prepared, "transaction_hash")?,
             "retained transaction differs from the exact configured owner/network/wire"
         );

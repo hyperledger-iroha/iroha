@@ -81,6 +81,10 @@ fn mismatch(expected: SccpNetworkV1, found: SccpNetworkV1) -> Result<(), SccpLcE
 #[norito(tag = "chain", content = "proof", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sccp::light_client::proof::SccpSourceProofV1")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "consensus wire type: Norito encodes `Box<T>` as a length-prefixed owned payload, so boxing a variant would change the canonical frame"
+)]
 pub enum SccpSourceProofV1 {
     /// Ethereum finality or checkpoint anchor, ancestry, receipt and log selector.
     Ethereum(EthereumSourceProofV1),
@@ -188,6 +192,10 @@ pub enum SccpLcEvidenceV1 {
 #[norito(tag = "chain", content = "bootstrap", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sccp::light_client::proof::SccpLcBootstrapDataV1")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "consensus wire type: Norito encodes `Box<T>` as a length-prefixed owned payload, so boxing a variant would change the canonical frame"
+)]
 pub enum SccpLcBootstrapDataV1 {
     /// Ethereum `LightClientBootstrap` of a finalized block.
     Ethereum(EthereumNativeLightClientBootstrapV1),

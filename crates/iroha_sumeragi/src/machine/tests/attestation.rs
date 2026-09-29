@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::{
-    crypto::verify_qc,
     message::{Defect, Status},
     preimage::{KIND_COMMIT, KIND_PREPARE},
     testing::FakeVerifier,
@@ -34,14 +33,13 @@ fn committed(actions: &[Action]) -> Vec<Qc> {
 
 /// Whether `qc` verifies with its attestations under the harness committee of its height.
 fn attested_ok(h: &H, qc: &Qc) -> bool {
-    verify_qc(
+    crate::crypto::Verifier::new(
         &h.v.crypto,
-        &FakeVerifier,
         &I,
         &crate::testing::TEST_EPOCH.id,
         &h.committee_at(qc.height),
-        qc,
     )
+    .verify_qc(&FakeVerifier, qc)
     .is_ok()
 }
 

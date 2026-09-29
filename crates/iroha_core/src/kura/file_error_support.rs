@@ -111,23 +111,12 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 fn remove_commit_marker_temp_and_sync(path: &Path) -> Result<()> {
-    std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    if let Some(parent) = path.parent() {
-        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::IO(error, path.to_path_buf())),
     }
-    Ok(())
-}
-fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path) -> Result<()> {
-    std::fs::rename(temporary_path, stable_path)
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    let persisted = std::fs::OpenOptions::new()
-        .read(true)
-        .open(stable_path)
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    persisted
-        .sync_all()
-        .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
-    if let Some(parent) = stable_path.parent() {
+    if let Some(parent) = path.parent() {
         sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
     }
     Ok(())
@@ -402,15 +391,6 @@ pub enum Error {
     },
     /// Canonical Kura storage is fail-stop poisoned after an ambiguous rewrite publication
     CanonicalStoragePoisoned,
-    /// Invalid provisional snapshot bootstrap marker at `{path:?}`: {reason}
-    InvalidSnapshotBootstrapMarker {
-        /// Marker path whose bytes or bounds are invalid.
-        path: PathBuf,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Kura hash-only history is provisional until a signed snapshot authenticates its lineage
-    SnapshotBootstrapAuthenticationPending,
     /// Kura auxiliary history `{subsystem}` is unavailable after emergency Fast startup; restart in Strict mode
     EmergencyFastAuxiliaryUnavailable {
         /// Deferred inventory or derived index that cannot safely be represented as empty.
@@ -452,20 +432,6 @@ pub enum Error {
     IntConversion(#[from] std::num::TryFromIntError),
     /// Blocks count differs hashes file and index file
     HashesFileHeightMismatch,
-    /// Invalid canonical suffix above provisional snapshot prefix at height `{height}`: {reason}
-    InvalidProvisionalSnapshotSuffix {
-        /// One-based suffix height which failed validation.
-        height: u64,
-        /// Stable validation diagnostic.
-        reason: String,
-    },
-    /// Hard-fork snapshot bootstrap requires Kura hashes height `{hashes_count}` to match index height `{index_count}`
-    HardForkSnapshotBootstrapHashHeightMismatch {
-        /// Number of durable block index entries.
-        index_count: usize,
-        /// Number of block hashes recorded in the hashes journal.
-        hashes_count: usize,
-    },
     /// Block index length {length} exceeds strict-init guard {limit} bytes
     CorruptedBlockLength {
         /// Length of the corrupted block index entry in bytes.

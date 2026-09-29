@@ -4,6 +4,47 @@ use fixture::{Fixture, Height, limits, mutate_height};
 use iroha_data_model::block::execution_output::ExecutionOutputV1;
 use norito::codec::Encode as _;
 
+#[test]
+fn finality_inspection_uses_native_certificates_and_exact_chain_identity() {
+    let fixture = Fixture::new(1);
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = iroha_core::kura::BlockStore::new(directory.path());
+    store.create_files_if_they_do_not_exist().unwrap();
+    for height in &fixture.heights {
+        store.append_block_to_chain(&height.block).unwrap();
+    }
+    let mut output = Vec::new();
+    crate::kura::finality::inspect(
+        &mut output,
+        directory.path(),
+        fixture.chain.state().chain_id_ref(),
+        fixture.heights.len() as u64,
+    )
+    .unwrap();
+    let report: norito::json::Value = norito::json::from_slice(&output).unwrap();
+    assert_eq!(report["external_trust_anchor"].as_bool(), Some(false));
+    assert_eq!(
+        report["genesis_execution_authenticated"].as_bool(),
+        Some(true)
+    );
+    let proof: iroha_data_model::sumeragi_finality::SumeragiFinalityProof =
+        norito::json::from_value(report["finality_proof"].clone()).unwrap();
+    let expected = fixture.heights.last().unwrap();
+    assert_eq!(proof.block_header, expected.block.header());
+    assert_eq!(proof.block_wire, expected.block.encode_wire().unwrap());
+    let mut rejected = Vec::new();
+    assert!(
+        crate::kura::finality::inspect(
+            &mut rejected,
+            directory.path(),
+            &ChainId::from("foreign-chain-instance"),
+            fixture.heights.len() as u64,
+        )
+        .is_err()
+    );
+    assert!(rejected.is_empty());
+}
+
 fn push_with(
     verifier: &mut ScalingProofVerifier,
     height: &Height,
@@ -282,7 +323,12 @@ fn globally_authenticated_native_execution_cannot_replace_independent_route_auth
             2 => plan.lane_policy.fixed[0].dataspace = DataSpaceId::new(99),
             3 => plan.lane_policy.fixed[0].lane = LaneId::new(99),
             4 => plan.lane_policy.fixed[0].committee.swap(0, 1),
-            5 => plan.lane_policy.lane_params.block_time_ms += 1,
+            5 => {
+                plan.lane_policy.lane_params.block_cadence_ms = core::num::NonZeroU64::new(
+                    plan.lane_policy.lane_params.block_cadence_ms.get() + 1,
+                )
+                .unwrap()
+            }
             6 => plan.lane_policy.fixed[0].committee[0].pop[0] ^= 1,
             _ => plan.lane_policy.routes[0].lane = LaneId::new(99),
         }
@@ -312,7 +358,7 @@ fn globally_signed_native_batch_requires_complete_source_and_output_alignment() 
                         .execution_context
                         .as_mut()
                         .unwrap()
-                        .sumeragi_lane_merges
+                        .lane_merge
                         .as_mut()
                         .unwrap()
                         .merges
@@ -323,7 +369,7 @@ fn globally_signed_native_batch_requires_complete_source_and_output_alignment() 
                         .execution_context
                         .as_mut()
                         .unwrap()
-                        .sumeragi_lane_merges
+                        .lane_merge
                         .as_mut()
                         .unwrap()
                         .merges
@@ -348,7 +394,7 @@ fn globally_signed_native_batch_requires_complete_source_and_output_alignment() 
                         .execution_context
                         .as_mut()
                         .unwrap()
-                        .sumeragi_lane_merges
+                        .lane_merge
                         .as_mut()
                         .unwrap()
                         .merges[0]
@@ -359,7 +405,7 @@ fn globally_signed_native_batch_requires_complete_source_and_output_alignment() 
                         .execution_context
                         .as_mut()
                         .unwrap()
-                        .sumeragi_lane_merges
+                        .lane_merge
                         .as_mut()
                         .unwrap()
                         .merges[0]

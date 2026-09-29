@@ -14,7 +14,6 @@ mod duration_clamp_tests {
         user::{LaneValidatorModeConfig, SoracloudRuntime},
     };
     use iroha_config_base::{
-        env::MockEnv,
         read::ConfigReader,
         toml::TomlSource,
         util::{Bytes, DurationMs},
@@ -790,14 +789,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             programs: vec![super::ToriiRamLfeProgram {
                 program_id: "phone_retail".to_owned(),
                 secret_hex: "01020304".parse().expect("valid RAM-LFE secret"),
-                hidden_program_hex: format!(
-                    "0x{}",
-                    hex::encode(
-                        iroha_crypto::default_bfv_programmed_hidden_program()
-                            .to_bytes()
-                            .expect("default RAM-LFE hidden program should encode")
-                    )
-                ),
+                hidden_program_hex: iroha_crypto::default_bfv_programmed_hidden_program(),
                 signer_private_key: private_key,
                 receipt_ttl_ms: None,
             }],

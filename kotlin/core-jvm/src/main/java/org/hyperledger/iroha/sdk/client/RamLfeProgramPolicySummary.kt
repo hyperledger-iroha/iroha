@@ -14,6 +14,8 @@ class RamLfeProgramPolicySummary @JvmOverloads constructor(
     @JvmField val note: String?,
     @JvmField val outputOpeningPublicKey: String,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
+    /** Present for programmed RAM-FHE policies; the initializer identity is required within it. */
+    @JvmField val ramFheProfile: RamFheProfile? = null,
 ) {
     init {
         requirePublicKeyLiteral(resolverPublicKey, "resolverPublicKey")

@@ -112,8 +112,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   nested V1 ballot proof. Deploy proposals now encode `ContractCodeHash` and
   `ContractAbiHash` with their versioned 32-byte Norito layout, encode
   `AbiVersion` as numeric V1, expose exact typed public manifest provenance,
-  and reject the ignored `limits`, `window`, and `mode` fields. SCCP proposal
-  instructions bind the complete action to the exact `NetworkId` anchor. ZK public
+  and reject the ignored `limits`, `window`, and `mode` fields. ZK public
   inputs are closed to their six wire fields. Plain-ballot durations use
   canonical u64 decimal strings and accept zero. Retired the proposal-backed
   equal-Parliament-ballot, finalize, and enact client methods; binding proposal

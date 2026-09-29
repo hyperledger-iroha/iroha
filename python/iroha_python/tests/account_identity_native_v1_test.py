@@ -10,7 +10,6 @@ from iroha_python import AccountAddress
 from iroha_python.address import AddressClass, AddressHeader, CurveId, MultisigMember
 from iroha_python.crypto import AccountId
 from iroha_torii_client import _account_id
-from iroha_torii_client.sccp import _replay_principal
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = json.loads((ROOT / "fixtures/account/multisig_wire_v1.json").read_text())
@@ -63,7 +62,6 @@ def test_all_full_controller_owners_preserve_rust_fixture(item):
     assert FIXTURE["schema"] == "iroha.account.multisig-wire.v1"
     assert item["layout_flags"] == 2
     raw = bytes.fromhex(item["canonical_address_hex"])
-    payload = bytes.fromhex(item["account_id_payload_hex"])
     address = AccountAddress.from_canonical_bytes(raw)
     assert address.to_i105(753) == item["i105"]
     assert AccountAddress.parse_encoded(item["i105"]).canonical_bytes() == raw
@@ -72,7 +70,6 @@ def test_all_full_controller_owners_preserve_rust_fixture(item):
     assert _account_id.encode_i105_account_id(raw, 753) == item["i105"]
     assert str(AccountId(item["i105"])) == item["i105"]
     assert bytes(native._encode_account_id_v1(item["i105"])[1]) == bytes.fromhex(item["account_id_frame_hex"])
-    assert _replay_principal({"kind": "sora_account", "canonical_bytes": payload}, "principal") == (0, payload)
     # Generic typed instruction identities retain their complete controller.
     instructions = (
         native.Instruction.register_account(item["i105"], None),
@@ -139,23 +136,6 @@ def test_complete_native_owner_rejects_all_twelve_malformed_keys(curve, key):
     from iroha_python.address import ControllerPayload
     with pytest.raises(ValueError):
         AccountAddress(AddressHeader.new(0, AddressClass.SINGLE_KEY, 1), ControllerPayload(0 if len(key) <= 255 else 2, CurveId(curve), key))
-
-
-@pytest.mark.parametrize("item", FIXTURE["negative"], ids=lambda item: item["name"])
-def test_sccp_rejects_malformed_complete_policies(item):
-    require_account_codec_v1()
-    with pytest.raises(ValueError):
-        _replay_principal({"kind": "sora_account", "canonical_bytes": bytes.fromhex(item["account_id_payload_hex"])}, "principal")
-
-
-def test_sccp_rejects_arbitrary_trailing_and_oversized_bytes():
-    native = require_account_codec_v1()
-    valid = bytes.fromhex(FIXTURE["positive"][0]["account_id_payload_hex"])
-    for payload in (b"x", valid + b"\x00", b"\x00" * 65536):
-        with pytest.raises(ValueError):
-            native._validate_sccp_account_id_v1(payload)
-        with pytest.raises(ValueError):
-            _replay_principal({"kind": "sora_account", "canonical_bytes": payload}, "principal")
 
 
 def test_loaded_native_owner_rejects_replaced_or_removed_module(monkeypatch):

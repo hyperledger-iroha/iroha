@@ -4,13 +4,13 @@
 //! that exact block, then destroys its moved payload, then releases its charge.
 //! No public operation exposes weak references, raw ownership or the counter.
 
-use std::alloc::{Layout, alloc, handle_alloc_error};
+use std::alloc::{alloc, handle_alloc_error, Layout};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicUsize, Ordering, fence};
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 #[repr(C)]
 struct Allocation<T, Charge> {
@@ -409,8 +409,8 @@ impl<T, Charge> fmt::Debug for Reserved<T, Charge> {
 #[cfg(test)]
 mod tests {
     use super::{ErasedShared, Reserved, Shared};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::Arc;
 
     struct Charge(Arc<AtomicUsize>);
 

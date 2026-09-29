@@ -185,6 +185,7 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
     record(format!("structural_shape={:?}", fixture.resource_shape));
     let witness = zeroize::Zeroizing::new(fixture.witness.encode_v1().unwrap());
     let genesis = *fixture.statement.context.network_id.as_bytes();
+    let observation = super::super::prover_observation::ObservationV1::begin_v1();
     let start = Instant::now();
     let produced = catch_private_prover_panic_v1(|| {
         prove_zk_x509_credential_proof_v1_with_rng(
@@ -198,6 +199,8 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         )
     });
     let prove_elapsed = start.elapsed();
+    let observation = observation.finish_v1();
+    record(observation.public_text_v1());
     let proof = match produced {
         Ok(Ok(proof)) => proof,
         Ok(Err(error)) => {
@@ -268,6 +271,9 @@ fn maximum_structural_credential_proof_with_retained_public_receipt() {
         "wrong_genesis_rejected=true\ntampered_proof_rejected=true\ntime_target_met={}\nfull_release_qualification=false",
         prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,
     ));
+    observation.assert_complete_main_coverage_v1(
+        super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
+    );
     assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert!(

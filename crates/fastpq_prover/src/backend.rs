@@ -1,21 +1,25 @@
+use crate::{Error, Result, field::GoldilocksFp4V1, gadgets::transfer_integer_air, overrides};
+#[cfg(any(test, feature = "dev-tools"))]
 use crate::{
-    Error, Result, TransitionBatch,
+    TransitionBatch,
     fft::Planner,
-    field::GoldilocksFp4V1,
-    gadgets::transfer_integer_air,
-    overrides,
     proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{PoseidonPipelinePolicy, build_trace, derive_polynomial_data},
 };
 use core::convert::TryFrom;
+#[cfg(any(test, feature = "dev-tools"))]
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384DomainPrefixV1,
     GoldilocksDigest384V1, GoldilocksDigestDomainV1, StarkParameterSet, hash_bytes_384_v1,
 };
+#[cfg(any(test, feature = "dev-tools"))]
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireGoldilocksDigest384V1;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use metal::{Device, MTLDeviceLocation};
+#[cfg(any(test, feature = "dev-tools"))]
 use rayon::prelude::*;
+#[cfg(any(test, feature = "dev-tools"))]
+use std::collections::BTreeSet;
 #[cfg(windows)]
 use std::env;
 #[cfg(unix)]
@@ -23,7 +27,6 @@ use std::fs;
 #[cfg(windows)]
 use std::path::PathBuf;
 use std::{
-    collections::BTreeSet,
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
@@ -34,6 +37,7 @@ mod air_degree;
 #[path = "backend/air_expression.rs"]
 mod air_expression;
 #[path = "backend/air_quotient.rs"]
+#[cfg(any(test, feature = "dev-tools"))]
 mod air_quotient;
 #[cfg(test)]
 #[path = "backend/coefficient_masking.rs"]
@@ -53,13 +57,18 @@ mod polynomial_transform;
 mod quotient_pair_masking;
 #[path = "backend/secret_polynomial.rs"]
 mod secret_polynomial;
-pub use air_quotient::{AirQuotientDomain, AirQuotientWeights};
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
 #[path = "backend/joint_fri.rs"]
+#[cfg(any(test, feature = "dev-tools"))]
 mod joint_fri;
-pub use joint_fri::JointFriBatch;
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) use joint_fri::JointFriBatch;
 #[path = "backend/merkle_cache.rs"]
+#[cfg(any(test, feature = "dev-tools"))]
 mod merkle_cache;
-pub use merkle_cache::MerkleNodeCache;
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) use merkle_cache::MerkleNodeCache;
 #[cfg(test)]
 #[path = "backend/compact_axt_air.rs"]
 mod compact_axt_air;
@@ -136,6 +145,8 @@ mod deep_prover_plan;
 mod deep_relation;
 #[path = "backend/deep_striped_merkle.rs"]
 mod deep_striped_merkle;
+#[path = "backend/deep_trace_source.rs"]
+mod deep_trace_source;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;
@@ -146,6 +157,7 @@ mod fixed_schedule;
 #[path = "backend/fri_fold.rs"]
 mod fri_fold;
 #[path = "backend/fri_openings.rs"]
+#[cfg(any(test, feature = "dev-tools"))]
 mod fri_openings;
 #[path = "backend/merkle_multiproof.rs"]
 mod merkle_multiproof;
@@ -157,20 +169,31 @@ mod phased_trace;
 #[path = "backend/public_table.rs"]
 mod public_table;
 const FIELD_ONE: u64 = 1;
+#[cfg(any(test, feature = "dev-tools"))]
 const TRACE_COMMITMENT_ROLE_V1: &[u8] = b"trace-commitment";
+#[cfg(any(test, feature = "dev-tools"))]
 const LDE_COMMITMENT_ROLE_V1: &[u8] = b"lde-commitment";
+#[cfg(any(test, feature = "dev-tools"))]
 const AIR_TRACE_COMMITMENT_ROLE_V1: &[u8] = b"air-trace-commitment";
+#[cfg(any(test, feature = "dev-tools"))]
 const AIR_COMPOSITION_COMMITMENT_ROLE_V1: &[u8] = b"air-composition-commitment";
+#[cfg(any(test, feature = "dev-tools"))]
 const FRI_COMMITMENT_ROLE_V1: &[u8] = b"fri-commitment";
+#[cfg(any(test, feature = "dev-tools"))]
 const TRANSCRIPT_ROLE_V1: &[u8] = b"fiat-shamir-transcript";
+#[cfg(any(test, feature = "dev-tools"))]
 const MERKLE_LEAF_PHASE_V1: &[u8] = b"leaf";
+#[cfg(any(test, feature = "dev-tools"))]
 const MERKLE_NODE_PHASE_V1: &[u8] = b"node";
+#[cfg(any(test, feature = "dev-tools"))]
 const MERKLE_EMPTY_PHASE_V1: &[u8] = b"empty-root";
 /// Transcript domain for the permission lookup grand-product accumulator.
+#[cfg(any(test, feature = "dev-tools"))]
 pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 
 /// Typed native-STARK Merkle role; the role and FRI round are bound into every internal node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub enum MerkleTreeRoleV1 {
     /// Base trace column-commitment tree.
     Trace,
@@ -184,6 +207,7 @@ pub enum MerkleTreeRoleV1 {
     Fri(u32),
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 impl MerkleTreeRoleV1 {
     fn role(self) -> &'static [u8] {
         match self {
@@ -202,6 +226,7 @@ impl MerkleTreeRoleV1 {
         }
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 const FRI_FINAL_DOMAIN: &str = "fastpq:v1:fri:final";
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 static DEBUG_METAL_ENUM_ENV: OnceLock<bool> = OnceLock::new();
@@ -215,16 +240,26 @@ type ExecutionModeObserver =
     dyn Fn(ExecutionMode, ExecutionMode, Option<GpuBackend>) + Send + Sync + 'static;
 static EXECUTION_MODE_OBSERVER: OnceLock<RwLock<Option<Arc<ExecutionModeObserver>>>> =
     OnceLock::new();
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_TRACE_ROOT: &str = "fastpq:v1:trace_root";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_COLUMN_MIX_PREFIX: &str = "fastpq:v1:column_mix";
 /// Fiat–Shamir domain for the permission lookup challenge.
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_ALPHA_PREFIX: &str = "fastpq:v1:alpha";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
+#[cfg(any(test, feature = "dev-tools"))]
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
 const AIR_BOOLEAN_RESIDUE_COUNT: usize = 8;
 const AIR_RELATION_RESIDUE_COUNT: usize = 4;
@@ -241,6 +276,7 @@ const _: () = assert!(
     AIR_COMPOSITION_ALPHA_COUNT == fastpq_isi::resource_limits::FASTPQ_REPLAY_AIR_ALPHA_COUNT_V1
 );
 /// Conservative exclusive quotient degree bound as a multiple of the trace length.
+#[cfg(any(test, feature = "dev-tools"))]
 pub const AIR_QUOTIENT_DEGREE_EXPANSION_V1: usize =
     fastpq_isi::FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1 as usize;
 /// Configuration for the FASTPQ backend.
@@ -302,15 +338,14 @@ impl ExecutionMode {
     }
 }
 
-/// Check whether the complete final-V1 native proof pipeline can execute on GPU.
+/// Check GPU availability for the transparent batch-replay diagnostic only.
 ///
-/// The current six-lane commitment and proof FFT/LDE paths execute on CPU.
-/// Standalone scalar permutation or FFT kernel parity cannot qualify this
-/// pipeline. Callers requiring GPU proofs must reject admission when false.
+/// This fixture pipeline has no GPU dispatch. Canonical masked quantity artifacts
+/// use their own explicit digest policy and required-device preflight; this helper
+/// neither checks nor disables that implementation.
+#[cfg(any(test, feature = "dev-tools"))]
 #[must_use]
 pub const fn preflight_native_v1_gpu_backend() -> bool {
-    // TODO: enable only after lane-aware digest dispatch, complete proof
-    // integration, and fail-closed device parity checks are implemented.
     false
 }
 fn gpu_workload_mutex() -> &'static Mutex<()> {
@@ -1228,7 +1263,8 @@ fn metal_library_path() -> Option<String> {
 }
 /// Internal backend configuration used by the FASTPQ prover.
 #[derive(Debug, Clone, Copy)]
-pub struct BackendConfig {
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) struct BackendConfig {
     /// Canonical parameter set driving this backend instance.
     params: StarkParameterSet,
     /// Execution mode used for FFT/LDE computations.
@@ -1236,6 +1272,7 @@ pub struct BackendConfig {
     /// Poseidon pipeline override (defaults to [`ExecutionMode::Auto`]).
     poseidon_mode: PoseidonExecutionMode,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl BackendConfig {
     /// Construct a configuration from a canonical parameter set.
     pub(crate) fn new(params: StarkParameterSet) -> Self {
@@ -1289,7 +1326,8 @@ impl BackendConfig {
 /// This mirrors the minimal data the verifier needs to
 /// reconstruct the Fiat–Shamir transcript and query openings.
 #[derive(Debug, Clone)]
-pub struct BackendArtifact {
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) struct BackendArtifact {
     /// Canonical parameter set name.
     pub(crate) parameter: String,
     /// Canonical commitment over the parameterised trace.
@@ -1327,9 +1365,11 @@ pub struct BackendArtifact {
 }
 /// Concrete backend implementing the deterministic FASTPQ STARK pipeline.
 #[derive(Debug, Clone)]
-pub struct StarkBackend {
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) struct StarkBackend {
     config: BackendConfig,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl StarkBackend {
     /// Create a backend from a canonical configuration.
     pub(crate) fn new(config: BackendConfig) -> Self {
@@ -1351,6 +1391,7 @@ impl StarkBackend {
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn digest_domain_v1<'a>(
     role: &'a [u8],
     phase: &'a [u8],
@@ -1370,6 +1411,7 @@ fn digest_domain_v1<'a>(
     })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_bytes_v1(
     role: &[u8],
     phase: &[u8],
@@ -1389,19 +1431,20 @@ fn hash_bytes_v1(
     })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn digest_domain_prefix_v1<'a>(
     role: &'a [u8],
     phase: &'a [u8],
     level: usize,
     counter: u64,
 ) -> Result<GoldilocksDigest384DomainPrefixV1<'a>> {
-    GoldilocksDigest384DomainPrefixV1::new(digest_domain_v1(role, phase, level, 0, counter)?).ok_or(
-        Error::PayloadLengthOverflow {
+    GoldilocksDigest384DomainPrefixV1::new(digest_domain_v1(role, phase, level, 0, counter)?)
+        .ok_or_else(|| Error::PayloadLengthOverflow {
             length: role.len().saturating_add(phase.len()),
-        },
-    )
+        })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_at_prefix_v1(
     prefix: &GoldilocksDigest384DomainPrefixV1<'_>,
     index: usize,
@@ -1419,6 +1462,7 @@ fn hash_at_prefix_v1(
         })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_u64_values_v1(
     role: &[u8],
     phase: &[u8],
@@ -1493,12 +1537,14 @@ pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<GoldilocksDig
 ///
 /// # Errors
 /// Returns an error for a noncanonical coefficient or invalid digest framing.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn hash_lde_chunk_fp4(
     leaf_index: usize,
     values: &[GoldilocksFp4V1],
 ) -> Result<GoldilocksDigest384V1> {
     hash_fp4_values_v1(LDE_COMMITMENT_ROLE_V1, 0, leaf_index, values)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_fp4_values_v1(
     role: &[u8],
     level: usize,
@@ -1519,6 +1565,7 @@ fn hash_fp4_values_v1(
     }
     hash_bytes_v1(role, MERKLE_LEAF_PHASE_V1, level, index, 0, &[&bytes])
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_lde_leaves_fp4(
     evaluations: &[GoldilocksFp4V1],
     arity: u32,
@@ -1533,6 +1580,7 @@ fn hash_lde_leaves_fp4(
 ///
 /// # Errors
 /// Returns an error if the row index cannot be represented as a field limb.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn hash_air_trace_row(row_index: usize, values: &[u64]) -> Result<GoldilocksDigest384V1> {
     hash_u64_values_v1(
         AIR_TRACE_COMMITMENT_ROLE_V1,
@@ -1547,6 +1595,7 @@ pub fn hash_air_trace_row(row_index: usize, values: &[u64]) -> Result<Goldilocks
 ///
 /// # Errors
 /// Returns an error if the leaf index cannot be represented as a field limb.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn hash_air_composition_leaf(
     index: usize,
     value: GoldilocksFp4V1,
@@ -1557,10 +1606,14 @@ pub fn hash_air_composition_leaf(
 ///
 /// # Errors
 /// Returns a shape error before hashing, or the first failing row in index order.
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_air_trace_rows_with_mode(
     columns: &[Vec<u64>],
     mode: ExecutionMode,
 ) -> Result<Vec<GoldilocksDigest384V1>> {
+    // Keep fewer than two 16-row jobs sequential. This avoids scheduling tiny
+    // batches and reuses each job's canonical byte buffer across several hashes.
+    const ROWS_PER_JOB: usize = 16;
     // Digest384 remains CPU-only for every requested mode. The caller reports
     // the requested policy and actual CPU route before building these leaves.
     let _ = mode;
@@ -1593,9 +1646,6 @@ fn hash_air_trace_rows_with_mode(
         }
         hash_at_prefix_v1(&prefix, row_index, &[bytes.as_slice()])
     };
-    // Keep fewer than two 16-row jobs sequential. This avoids scheduling tiny
-    // batches and reuses each job's canonical byte buffer across several hashes.
-    const ROWS_PER_JOB: usize = 16;
     if row_count < 2 * ROWS_PER_JOB {
         let mut bytes = Vec::with_capacity(row_bytes);
         return (0..row_count)
@@ -1618,6 +1668,7 @@ fn hash_air_trace_rows_with_mode(
 ///
 /// # Errors
 /// Returns an error if leaf hashing fails.
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_air_composition_leaves_with_mode(
     values: &[GoldilocksFp4V1],
     mode: ExecutionMode,
@@ -1629,6 +1680,7 @@ fn hash_air_composition_leaves_with_mode(
 // One immutable typed prefix serves an entire natural-order oracle. Each leaf
 // still binds its full index and all four canonical coordinates. Stack payloads
 // avoid a tiny allocation per leaf; indexed jobs preserve deterministic errors.
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_fp4_single_leaves_with_role(
     role: &[u8],
     values: &[GoldilocksFp4V1],
@@ -1656,6 +1708,7 @@ fn hash_fp4_single_leaves_with_role(
 }
 
 #[derive(Debug)]
+#[cfg(any(test, feature = "dev-tools"))]
 struct AirColumnLayout {
     boolean_selectors: [usize; AIR_BOOLEAN_RESIDUE_COUNT],
     operation_selectors: [usize; 6],
@@ -1674,6 +1727,7 @@ struct AirColumnLayout {
     stable_columns: [usize; AIR_STABLE_RESIDUE_COUNT],
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 impl AirColumnLayout {
     fn from_names<S: AsRef<str>>(column_names: &[S]) -> Result<Self> {
         let required = |name: &str| -> Result<usize> {
@@ -1757,7 +1811,8 @@ impl AirColumnLayout {
 }
 
 /// Number of independent coefficients required by the canonical column schema.
-pub fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
     AIR_COMPOSITION_ALPHA_COUNT
         + contiguous_limb_columns(column_names, "value_old_limb_")
             .len()
@@ -1767,6 +1822,7 @@ pub fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
             .saturating_sub(2)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn contiguous_limb_columns<S: AsRef<str>>(column_names: &[S], prefix: &str) -> Vec<usize> {
     let mut columns = Vec::new();
     for limb in 0usize.. {
@@ -1782,6 +1838,7 @@ fn contiguous_limb_columns<S: AsRef<str>>(column_names: &[S], prefix: &str) -> V
     columns
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn packed_column_value_at<F>(columns: &[usize], value_at: &F) -> u64
 where
     F: Fn(usize) -> u64,
@@ -1796,6 +1853,7 @@ where
     value
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn air_constraint_residues_with_layout<C, N>(
     layout: &AirColumnLayout,
     current: C,
@@ -1885,6 +1943,7 @@ fn air_constraint_residues_with_layout<C, N>(
     debug_assert_eq!(residue_index, residues.len());
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn air_constraint_residues_for_rows(
     column_names: &[String],
     current: &[u64],
@@ -1907,7 +1966,8 @@ fn air_constraint_residues_for_rows(
 }
 
 /// Field operations needed to combine base-field AIR residues.
-pub trait AirCombinationField: Copy {
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) trait AirCombinationField: Copy {
     /// Additive identity.
     const ZERO: Self;
     /// Add one combined residue.
@@ -1915,6 +1975,7 @@ pub trait AirCombinationField: Copy {
     /// Scale by a base-field residue or zerofier weight.
     fn mul_base(self, rhs: u64) -> Self;
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl AirCombinationField for u64 {
     const ZERO: Self = 0;
     fn add(self, rhs: Self) -> Self {
@@ -1924,6 +1985,7 @@ impl AirCombinationField for u64 {
         mul_mod(self, rhs)
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl AirCombinationField for GoldilocksFp4V1 {
     const ZERO: Self = Self::ZERO;
     fn add(self, rhs: Self) -> Self {
@@ -1933,6 +1995,7 @@ impl AirCombinationField for GoldilocksFp4V1 {
         self.mul_base(rhs)
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_air_composition_alphas<F>(alphas: &[F], expected: usize) -> Result<()> {
     if alphas.len() != expected {
         return Err(Error::AirChallengeCountMismatch {
@@ -1953,6 +2016,7 @@ fn combine_air_constraint_residues<F: AirCombinationField>(alphas: &[F], residue
         })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn combine_air_quotients<F: AirCombinationField>(
     alphas: &[F],
     residues: &[u64],
@@ -1979,7 +2043,8 @@ fn combine_air_quotients<F: AirCombinationField>(
 }
 
 /// Evaluate the quotient relation at a sampled authenticated coset point.
-pub fn air_quotient_value_for_rows<F: AirCombinationField>(
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) fn air_quotient_value_for_rows<F: AirCombinationField>(
     column_names: &[String],
     current: &[u64],
     next: &[u64],
@@ -2021,6 +2086,7 @@ pub fn air_composition_values(
     air_values(column_names, columns, alphas, next_step, None)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn air_quotient_values<F: AirCombinationField>(
     params: &StarkParameterSet,
     column_names: &[String],
@@ -2034,6 +2100,7 @@ fn air_quotient_values<F: AirCombinationField>(
     air_values(column_names, columns, alphas, next_step, Some(&domain))
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn air_values<F: AirCombinationField>(
     column_names: &[String],
     columns: &[Vec<u64>],
@@ -2087,6 +2154,7 @@ fn air_values<F: AirCombinationField>(
     }
     Ok(values)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
     columns
         .iter()
@@ -2102,6 +2170,7 @@ fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
         .collect()
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
     if trace.padded_len == 0 {
         return Ok(());
@@ -2135,6 +2204,7 @@ fn ensure_base_trace_constraints(trace: &crate::trace::Trace) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error when any sampled index is outside the AIR domain.
+#[cfg(any(test, feature = "dev-tools"))]
 fn open_air_constraint_openings_with_mode(
     columns: &[Vec<u64>],
     air_trace_leaves: &[GoldilocksDigest384V1],
@@ -2217,6 +2287,7 @@ fn open_air_constraint_openings_with_mode(
 ///
 /// # Errors
 /// Returns an error if the leaf coordinates cannot be represented.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn hash_fri_chunk(
     round: usize,
     leaf_index: usize,
@@ -2239,11 +2310,13 @@ pub fn hash_fri_chunk(
 ///
 /// # Errors
 /// Returns [`Error::FriArity`] unless `arity` is the sole V1 binary-FRI arity.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn lde_chunk_size(arity: u32) -> Result<usize> {
     ensure_binary_fri_arity(arity)?;
     Ok(fastpq_isi::resource_limits::FASTPQ_LDE_CHUNK_VALUES_V1)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_binary_fri_arity(arity: u32) -> Result<()> {
     if arity == 2 {
         Ok(())
@@ -2252,6 +2325,7 @@ fn ensure_binary_fri_arity(arity: u32) -> Result<()> {
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn fri_chunk_size(arity: u32) -> Result<usize> {
     ensure_binary_fri_arity(arity)?;
     Ok(2)
@@ -2260,6 +2334,7 @@ fn fri_chunk_size(arity: u32) -> Result<usize> {
 ///
 /// # Errors
 /// Returns an error when any query index is outside the evaluation domain.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn open_query_chunks<F: Copy>(
     evaluations: &[F],
     query_indices: &[usize],
@@ -2303,6 +2378,7 @@ pub fn merkle_paths_for_queries(
         default_batch_execution_mode(),
     )
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_paths_for_queries_with_mode(
     leaves: &[GoldilocksDigest384V1],
     query_indices: &[usize],
@@ -2359,6 +2435,7 @@ fn merkle_paths_for_queries_with_mode(
     }
     Ok(paths)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_paths_for_leaf_indices(
     leaves: &[GoldilocksDigest384V1],
     leaf_indices: &[usize],
@@ -2455,6 +2532,7 @@ pub fn verify_merkle_path_for_role(
     // left/right branches and therefore accept the same path.
     Ok(index == 0 && current == root)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_digest_execution_v1(
     mode: ExecutionMode,
 ) -> Result<crate::digest_executor::DigestExecutionV1> {
@@ -2486,6 +2564,7 @@ fn merkle_digest_execution_v1(
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn build_merkle_levels_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
@@ -2494,6 +2573,7 @@ fn build_merkle_levels_with_mode(
     build_merkle_levels_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn build_merkle_levels_with_execution_v1(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
@@ -2514,6 +2594,7 @@ fn build_merkle_levels_with_execution_v1(
     Ok(levels)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn build_merkle_levels_with_executor_v1(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
@@ -2554,6 +2635,7 @@ fn build_merkle_levels_with_executor_v1(
     Ok(levels)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_root_with_mode(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
@@ -2562,13 +2644,16 @@ fn merkle_root_with_mode(
     merkle_root_with_execution_v1(leaves, role, merkle_digest_execution_v1(mode)?)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_root_with_execution_v1(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
     execution: crate::digest_executor::DigestExecutionV1,
 ) -> Result<GoldilocksDigest384V1> {
     let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
-    if let Some(root) = levels.last().and_then(|level| level.first()).copied() { Ok(root) } else {
+    if let Some(root) = levels.last().and_then(|level| level.first()).copied() {
+        Ok(root)
+    } else {
         let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
             digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
             &[],
@@ -2586,6 +2671,7 @@ pub fn merkle_root_for_role(
 ) -> Result<GoldilocksDigest384V1> {
     merkle_root_with_mode(leaves, role, ExecutionMode::Cpu)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_node_hash(
     role: MerkleTreeRoleV1,
     level: usize,
@@ -2622,6 +2708,7 @@ fn merkle_node_hash(
 /// Returns [`Error::LookupColumnLengthMismatch`] when the columns have
 /// different lengths, or [`Error::NonCanonicalGoldilocksElement`] when the
 /// challenge or an evaluation is outside the canonical field range.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn compute_lookup_grand_product(
     selector_values: &[u64],
     witness_values: &[u64],
@@ -2683,6 +2770,7 @@ pub fn fold_with_fri(
         transcript.append_fri_final(root);
         return Ok((vec![root], Vec::new()));
     }
+    let leaf_arity = arity;
     let arity = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations
@@ -2700,7 +2788,7 @@ pub fn fold_with_fri(
     {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
-        let leaves = hash_fri_leaves_with_mode(round, &current, arity as u32, ExecutionMode::Cpu)?;
+        let leaves = hash_fri_leaves_with_mode(round, &current, leaf_arity, ExecutionMode::Cpu)?;
         let root = merkle_root_with_mode(
             &leaves,
             MerkleTreeRoleV1::Fri(
@@ -2754,6 +2842,7 @@ pub fn fold_with_fri(
     layers.push(final_root);
     Ok((layers, betas))
 }
+#[cfg(any(test, feature = "dev-tools"))]
 struct FriOpeningLayers {
     layer_values: Vec<Vec<GoldilocksFp4V1>>,
     roots: Vec<GoldilocksDigest384V1>,
@@ -2761,6 +2850,7 @@ struct FriOpeningLayers {
     opening_trees: Option<fri_openings::FriOpeningTrees>,
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 impl FriOpeningLayers {
     /// Open this exact committed owner without rebuilding any FRI leaves or trees.
     fn open_query_chains(
@@ -2780,6 +2870,7 @@ impl FriOpeningLayers {
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn fold_with_fri_opening_layers(
     evaluations: &[GoldilocksFp4V1],
     params: &StarkParameterSet,
@@ -2879,6 +2970,7 @@ fn fold_with_fri_opening_layers(
         )?),
     })
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_fri_leaves_with_mode(
     round: usize,
     values: &[GoldilocksFp4V1],
@@ -2910,6 +3002,7 @@ fn hash_fri_leaves_with_mode(
 // The complete terminal domain is a single ordered leaf. Binary strided leaves
 // are only appropriate while another fold follows: a terminal subset would not
 // suffice to interpolate and check the final polynomial's degree.
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_fri_terminal_leaves(
     round: usize,
     values: &[GoldilocksFp4V1],
@@ -2924,6 +3017,7 @@ fn hash_fri_terminal_leaves(
     Ok(vec![hash_fri_chunk(round, 0, values)?])
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn open_fri_query_chains(
     layer_values: &[Vec<GoldilocksFp4V1>],
     query_indices: &[usize],
@@ -3017,6 +3111,7 @@ fn open_fri_query_chains(
     Ok(openings)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn open_fri_query_chains_with_trees(
     layer_values: &[Vec<GoldilocksFp4V1>],
     query_indices: &[usize],
@@ -3200,6 +3295,7 @@ impl FriDomain {
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> {
     if configured_arity != 2 {
         return Err(Error::FriArity(
@@ -3222,6 +3318,7 @@ pub fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> 
     Ok(round_arity)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn fold_fri_coset(
     values: &[GoldilocksFp4V1],
     challenge: GoldilocksFp4V1,
@@ -3242,6 +3339,7 @@ pub fn fold_fri_coset(
     Ok(even.add(challenge.mul(odd)))
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn fold_round(
     values: &[GoldilocksFp4V1],
     configured_arity: usize,
@@ -3269,7 +3367,9 @@ fn fold_round(
 }
 // Deterministic engineering work limits, not a completion-probability or
 // cryptographic-security claim. They must not vary with operator configuration.
+#[cfg(any(test, feature = "dev-tools"))]
 const QUERY_MIN_DIGEST_DRAWS: u32 = 64;
+#[cfg(any(test, feature = "dev-tools"))]
 const QUERY_DIGEST_DRAWS_PER_INDEX: u32 = 8;
 
 /// Sample sorted unique indices with a deterministic per-attempt draw budget.
@@ -3283,6 +3383,7 @@ const QUERY_DIGEST_DRAWS_PER_INDEX: u32 = 8;
 /// # Errors
 /// Returns an error for unsupported nonempty geometry, an unsupported requested
 /// cardinality, an exhausted transcript counter, or an exhausted draw budget.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn sample_queries(
     domain_size: usize,
     target: usize,
@@ -3299,6 +3400,7 @@ pub fn sample_queries(
     })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn sample_queries_from(
     domain_size: usize,
     target: usize,
@@ -3355,6 +3457,7 @@ fn sample_queries_from(
     })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn open_queries<F: Copy>(evaluations: &[F], indices: &[usize]) -> Result<Vec<(u32, F)>> {
     let mut openings = Vec::with_capacity(indices.len());
     for &index in indices {
@@ -3372,6 +3475,7 @@ pub fn open_queries<F: Copy>(evaluations: &[F], indices: &[usize]) -> Result<Vec
     Ok(openings)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 struct BatchPreparationContext<'a> {
     params: &'a StarkParameterSet,
     batch: &'a TransitionBatch,
@@ -3382,6 +3486,7 @@ struct BatchPreparationContext<'a> {
 }
 
 #[derive(Debug)]
+#[cfg(any(test, feature = "dev-tools"))]
 struct PreparedBatch {
     trace_commitment: WireGoldilocksDigest384V1,
     trace_root: GoldilocksDigest384V1,
@@ -3403,6 +3508,7 @@ struct PreparedBatch {
 
 /// Batch-derived commitments which a proof is required to advertise exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct BatchDerivedCommitments {
     /// Canonical commitment over the parameterised trace.
     pub trace_commitment: WireGoldilocksDigest384V1,
@@ -3422,6 +3528,7 @@ pub struct BatchDerivedCommitments {
     pub lookup_challenge: u64,
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn hash_trace_columns_v1(
     column_names: &[String],
     coefficients: &[Vec<u64>],
@@ -3458,6 +3565,7 @@ fn hash_trace_columns_v1(
         .collect()
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn combine_lde_columns_v1(
     columns: &[Vec<u64>],
     coefficients: &[GoldilocksFp4V1],
@@ -3486,6 +3594,7 @@ fn combine_lde_columns_v1(
 }
 
 #[allow(clippy::too_many_lines)]
+#[cfg(any(test, feature = "dev-tools"))]
 fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch> {
     let &BatchPreparationContext {
         params,
@@ -3612,6 +3721,7 @@ fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch>
 
 /// Recompute every proof-carried root and lookup value that is deterministic
 /// from the batch.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn derive_batch_commitments(
     params: &StarkParameterSet,
     batch: &TransitionBatch,
@@ -3638,6 +3748,7 @@ pub fn derive_batch_commitments(
     })
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 impl StarkBackend {
     pub(crate) fn prove(
         &self,
@@ -3765,10 +3876,12 @@ impl StarkBackend {
     }
 }
 #[derive(Debug, Clone)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct Transcript {
     state: GoldilocksDigest384V1,
     counter: u64,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl Transcript {
     pub fn initialise(
         public_io: &PublicIO,

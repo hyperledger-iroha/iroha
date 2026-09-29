@@ -134,7 +134,7 @@ where
     let view = ncore::from_bytes_view(&frame).expect("authentic malformed-field metadata");
     assert_eq!(view.as_bytes(), bytes);
     assert!(
-        view.decode_exact_with(ncore::decode_field_canonical::<T>)
+        view.decode_exact_with::<T, _, _>(ncore::decode_field_canonical::<T>)
             .is_err()
     );
     assert!(norito::decode_canonical::<T>(&frame).is_err());
@@ -153,7 +153,7 @@ where
         ncore::frame_bare_with_header_flags::<T>(bytes, ncore::default_encode_flags()).unwrap();
     let view = ncore::from_bytes_view(&frame).unwrap();
     assert!(
-        view.decode_exact_with(<T as ncore::DecodeFromSlice>::decode_from_slice)
+        view.decode_exact_with::<T, _, _>(<T as ncore::DecodeFromSlice>::decode_from_slice)
             .is_err()
     );
 }
@@ -169,7 +169,7 @@ where
     let view = ncore::from_bytes_view(&frame).unwrap();
     let expected = norito::json::to_json(value).unwrap();
     let decoded = view
-        .decode_exact_with(|bytes| {
+        .decode_exact_with::<T, _, _>(|bytes| {
             let (decoded, used) = <T as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
             assert_eq!(used, bytes.len(), "complete public owner slice consumption");
             Ok((decoded, used))
@@ -273,7 +273,9 @@ fn check_filter(tag: u32, value: &DataEventFilter) {
     assert_eq!(alternate_view.flags(), flags);
     assert_eq!(
         alternate_view
-            .decode_exact_with(ncore::decode_field_canonical::<DataEventFilter>)
+            .decode_exact_with::<DataEventFilter, _, _>(
+                ncore::decode_field_canonical::<DataEventFilter>
+            )
             .expect("alternate archive still reconstructs the complete filter"),
         *value
     );

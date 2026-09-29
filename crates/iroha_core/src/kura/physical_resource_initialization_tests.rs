@@ -45,7 +45,8 @@ fn physical_initialization_observes_current_owned_trees_and_all_six_families() {
     );
     drop(write);
     let delegated = kura
-        .sumeragi_v2_storage_root()
+        .store_root
+        .join("sumeragi")
         .join("wal/transactions.index");
     std::fs::create_dir_all(delegated.parent().unwrap()).unwrap();
     std::fs::write(&delegated, [12; 101]).unwrap();
@@ -170,7 +171,7 @@ fn physical_reaudit_rejects_busy_resident_owner_and_real_writer_generation_cross
 }
 
 #[test]
-fn physical_initialization_rejects_deferred_unauthenticated_poisoned_and_recovery_pending_states() {
+fn physical_initialization_rejects_deferred_poisoned_and_recovery_pending_states() {
     let mut kura = Kura::blank_kura_for_testing();
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
@@ -179,14 +180,6 @@ fn physical_initialization_rejects_deferred_unauthenticated_poisoned_and_recover
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
         .auxiliary_history_deferred = false;
-    *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(ProvisionalSnapshotBootstrap {
-            hash_only_prefix_height: 1,
-            bootstrap_lineage_hash: None,
-            hash_journal_digest: None,
-        });
-    assert!(kura.reconcile_physical_resource_inventory().is_err());
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
     kura.canonical_storage_poisoned
         .store(true, Ordering::Release);
     assert!(kura.reconcile_physical_resource_inventory().is_err());
@@ -268,11 +261,12 @@ fn physical_writer_scope_uses_same_owned_roots_and_rejects_delegated_or_new_root
     for path in [
         kura.store_root.clone(),
         kura.store_root.join(STORE_ROOT_LOCK_FILE_NAME),
-        kura.sumeragi_v2_storage_root()
+        kura.store_root
+            .join("sumeragi")
             .join("wal/transactions.index"),
         kura.store_root.join("future-owner/blocks.data"),
         kura.store_root.join("new-marker.norito"),
-        kura.store_root.join("blocks/../sumeragi_v2/foreign.data"),
+        kura.store_root.join("blocks/../sumeragi/foreign.data"),
         kura.store_root.join("autonomous_pending"),
         kura.store_root.join("merge_ledger/canonical.log"),
         kura.store_root.join("retired/merge_ledger/retained.log"),

@@ -632,6 +632,4 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Table { key: schema::<(iroha_data_model::bridge::SccpNetworkV1, u64)>(), value: schema::<iroha_data_model::sccp::light_client::SccpLcCheckpointV1>() }));
     sccp_light_client_stride_index: Storage<(iroha_data_model::bridge::SccpNetworkV1, u64), u64> => ("world.sccp_light_client_stride_index",
         Role::Canonical(Canonical::Table { key: schema::<(iroha_data_model::bridge::SccpNetworkV1, u64)>(), value: schema::<u64>() }));
-    sccp_light_client_checkpoint_expiry: Storage<(u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()> => ("world.sccp_light_client_checkpoint_expiry",
-        Role::Canonical(Canonical::Table { key: schema::<(u64, iroha_data_model::bridge::SccpNetworkV1, u64)>(), value: schema::<()>() }));
 });

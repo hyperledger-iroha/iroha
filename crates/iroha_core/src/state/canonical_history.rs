@@ -107,8 +107,8 @@ impl<'a> CanonicalHistorySource<'a> {
 
     fn load(self, height: NonZeroUsize) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
         let expected_hash = self.expected_hash(height)?;
-        if self.kura.is_hash_only_block_height(height) {
-            return Err(CanonicalHistoryError::HashOnlyBodyUnavailable {
+        if self.kura.is_canonical_body_missing(height) {
+            return Err(CanonicalHistoryError::BodyUnavailable {
                 height: u64::try_from(height.get())
                     .expect("supported target pointer widths fit a block height into u64"),
                 expected_hash,
@@ -203,9 +203,9 @@ impl<'a> CanonicalHistorySource<'a> {
                     "native execution parent contradicts State hash at {source_height}"
                 )));
             }
-            if self.kura.is_hash_only_block_height(index) {
+            if self.kura.is_canonical_body_missing(index) {
                 return Err(QueryExecutionFail::CanonicalHistory(
-                    CanonicalHistoryError::HashOnlyBodyUnavailable {
+                    CanonicalHistoryError::BodyUnavailable {
                         height: source_height,
                         expected_hash: expected_iroha,
                     },

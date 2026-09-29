@@ -3135,8 +3135,8 @@ pub mod prelude {
         DaManifestPolicy, DaManifestPolicyParseError, DataSpaceCatalog, DataSpaceCatalogError,
         DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig,
         LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEmergencyValidatorSet,
-        LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+        LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneStorageProfile,
+        LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
     };
 }
 

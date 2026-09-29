@@ -809,6 +809,46 @@ fn buffer_pool_recycles_aligned_page_vectors() {
     assert_eq!(pool.len_for_tests(), 0);
 }
 #[test]
+fn digest384_admission_covers_retained_pool_and_oversized_staging_reuse() {
+    let mut pool = BufferPool::default();
+    let pages_per_entry = MAX_BUFFER_POOL_CACHED_PAGES / MAX_BUFFER_POOL_BUFFERS;
+    for _ in 0..MAX_BUFFER_POOL_BUFFERS {
+        let mut pages = Vec::new();
+        pages.try_reserve_exact(pages_per_entry).unwrap();
+        pool.recycle(pages);
+    }
+    let cached_before = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+    assert_eq!(cached_before, MAX_BUFFER_POOL_CACHED_PAGES);
+    let jobs: usize = 1024;
+    let payload = jobs * 2408;
+    let sizes = [192 * jobs, 16 * jobs, payload, 48 * jobs];
+    let mut live = Vec::new();
+    for bytes in sizes {
+        let requested_pages = bytes.div_ceil(METAL_BUFFER_PAGE_BYTES);
+        let allocation = pool.take(requested_pages).unwrap();
+        assert!(allocation.capacity() > requested_pages);
+        live.push(allocation);
+    }
+    let live_and_idle_pages = live
+        .iter()
+        .chain(&pool.spare)
+        .map(Vec::capacity)
+        .sum::<usize>();
+    assert_eq!(live_and_idle_pages, cached_before);
+    let charged = crate::digest384_batch::last_fields_payload_charge(jobs, payload).unwrap();
+    assert!(charged >= live_and_idle_pages * METAL_BUFFER_PAGE_BYTES + jobs * 48);
+    assert!(
+        charged - crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+            < live_and_idle_pages * METAL_BUFFER_PAGE_BYTES,
+        "requested staging alone does not charge retained oversized pages"
+    );
+    for allocation in live {
+        pool.recycle(allocation);
+    }
+    assert!(pool.spare.iter().map(Vec::capacity).sum::<usize>() <= MAX_BUFFER_POOL_CACHED_PAGES);
+}
+
+#[test]
 fn buffer_pool_rejects_oversized_cached_allocations() {
     assert!(buffer_pool_capacity_is_cacheable(1));
     assert!(buffer_pool_capacity_is_cacheable(

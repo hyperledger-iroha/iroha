@@ -307,21 +307,6 @@ public sealed partial class ToriiClientTests
             Assert.Equal(0, declaredOversizeStream.BytesRead);
         }
 
-        using (var noncanonicalContent = new StreamContent(new MemoryStream([2], writable: false)))
-        {
-            Assert.True(
-                noncanonicalContent.Headers.TryAddWithoutValidation("Content-Length", "01"));
-            using var handler = new RecordingHandler(_ =>
-                HijiriQuoteResponse(noncanonicalContent, HttpStatusCode.OK));
-            using var client = HijiriQuoteClient(handler);
-            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-                client.PostValidationFeeHijiriQuoteAsync(
-                    new ValidationFeeHijiriQuoteRequestV1(CanonicalAccountId, 1),
-                    codec,
-                    TestContext.Current.CancellationToken));
-            Assert.Contains("noncanonical", error.Message, StringComparison.Ordinal);
-        }
-
         Assert.Equal(0, codec.VerifyCalls);
 
         var exactCodec = new FakeHijiriQuoteCodec(
@@ -338,6 +323,59 @@ public sealed partial class ToriiClientTests
             TestContext.Current.CancellationToken);
         Assert.Equal(1U, quote.QualifyingTransferCount);
         Assert.Equal(1, exactCodec.VerifyCalls);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("01")]
+    [InlineData("+1")]
+    [InlineData("-1")]
+    [InlineData(" 1")]
+    [InlineData("1 ")]
+    [InlineData("1, 1")]
+    [InlineData("9223372036854775808")]
+    public async Task HijiriQuoteRejectsNoncanonicalContentLength(string value)
+    {
+        var codec = new FakeHijiriQuoteCodec(
+            _ => [1],
+            (_, _) => throw new InvalidOperationException("verifier must not run"));
+        using var content = new StreamContent(new MemoryStream([2], writable: false));
+        Assert.True(content.Headers.TryAddWithoutValidation("Content-Length", value));
+        using var handler = new RecordingHandler(_ =>
+            HijiriQuoteResponse(content, HttpStatusCode.OK));
+        using var client = HijiriQuoteClient(handler);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.PostValidationFeeHijiriQuoteAsync(
+                new ValidationFeeHijiriQuoteRequestV1(CanonicalAccountId, 1),
+                codec,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("noncanonical", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, codec.VerifyCalls);
+    }
+
+    [Fact]
+    public async Task HijiriQuoteRejectsAmbiguousContentLength()
+    {
+        var codec = new FakeHijiriQuoteCodec(
+            _ => [1],
+            (_, _) => throw new InvalidOperationException("verifier must not run"));
+        using var content = new StreamContent(new MemoryStream([2], writable: false));
+        Assert.True(
+            content.Headers.TryAddWithoutValidation("Content-Length", new[] { "1", "1" }));
+        using var handler = new RecordingHandler(_ =>
+            HijiriQuoteResponse(content, HttpStatusCode.OK));
+        using var client = HijiriQuoteClient(handler);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.PostValidationFeeHijiriQuoteAsync(
+                new ValidationFeeHijiriQuoteRequestV1(CanonicalAccountId, 1),
+                codec,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("ambiguous", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, codec.VerifyCalls);
     }
 
     [Fact]

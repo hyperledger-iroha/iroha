@@ -38,7 +38,7 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -51,17 +51,14 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -73,7 +70,9 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -108,9 +107,14 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     let errors = valid_block
         .as_ref()
@@ -175,7 +179,7 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     )
     .build(&payer_id);
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, sink],
         [fee_asset_definition],
@@ -184,17 +188,14 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -206,7 +207,9 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
@@ -239,9 +242,14 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert!(
         valid_block
@@ -326,7 +334,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -339,17 +347,14 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -361,7 +366,9 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -396,9 +403,14 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -489,7 +501,7 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -502,17 +514,14 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
     let trigger_id: TriggerId = "fee_transfer_trigger_guard".parse().unwrap();
     let trigger = Trigger::new(
@@ -582,9 +591,14 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         .chain(1, Some(&setup_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert!(
         valid_block
@@ -655,7 +669,7 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
     .build(&payer_id);
     let payer_asset = AssetId::of(asset_definition_id.clone(), payer_id.clone());
     let recipient_asset = AssetId::of(asset_definition_id, recipient_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient],
         [asset_definition],
@@ -671,7 +685,6 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         LiveQueryStore::start_test(),
         chain_id,
     );
-    install_test_lane_manifests(&state);
     let mut pipeline = state.pipeline.clone();
     pipeline.parallel_apply = true;
     pipeline.parallel_overlay = true;
@@ -703,6 +716,8 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
     let make_accepted = |creation_time_ms: u64, instructions: Vec<InstructionBox>| {
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -745,16 +760,18 @@ fn same_block_data_trigger_registration_is_atomic_with_rejected_transfer() {
         header.set_height(nonzero!(1_u64));
     });
     let previous: SignedBlock = previous.into();
-    finalize_test_genesis_assets(&state, &previous);
+    let previous = state.view().latest_block().expect("original genesis");
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let block = BlockBuilder::new_with_time_source(vec![register, transfer], block_time_source)
         .chain(1, Some(&previous))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+            .expect("original writer-first component execution");
 
     let valid = block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     let results = valid
         .as_ref()
@@ -822,7 +839,6 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             LiveQueryStore::start_test(),
             chain_id,
         );
-        install_test_lane_manifests(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.parallel_apply = true;
         pipeline.parallel_overlay = true;
@@ -904,9 +920,11 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             .chain(1, Some(&setup_signed))
             .sign(keypair.private_key())
             .unpack(|_| {});
-        let mut state_block = state.block(block.header);
+        let (mut state_block, state_block_recorder) =
+            crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+                .expect("original writer-first component execution");
         let valid = block
-            .validate_and_record_transactions(&mut state_block)
+            .validate_and_record_transactions(&mut state_block, state_block_recorder)
             .unpack(|_| {});
         let result = valid
             .as_ref()
@@ -990,7 +1008,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1002,17 +1020,14 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1024,7 +1039,9 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1056,9 +1073,14 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -1135,7 +1157,7 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     .build(&payer_id);
     let payer_asset = AssetId::of(asset_definition_id.clone(), payer_id.clone());
     let recipient_asset = AssetId::of(asset_definition_id.clone(), recipient_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [asset_definition],
@@ -1147,17 +1169,14 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1169,7 +1188,9 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1201,9 +1222,14 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -1273,7 +1299,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1286,17 +1312,14 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1308,7 +1331,9 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1361,9 +1386,14 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
             .chain(1, Some(&latest_signed))
             .sign(payer_keypair.private_key())
             .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -1468,7 +1498,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1481,17 +1511,14 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1503,7 +1530,9 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1535,9 +1564,14 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -1649,7 +1683,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-    let mut world = test_world_with_assets(
+    let mut world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1666,17 +1700,14 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     world.tx_sequences.insert(payer_id.clone(), 5);
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1688,7 +1719,9 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("tx_sequence").expect("metadata key"),
@@ -1729,9 +1762,14 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -1834,7 +1872,7 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, sponsor, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1848,7 +1886,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -1944,7 +1981,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
     let sponsor_fee_asset = AssetId::of(fee_asset_definition_id.clone(), sponsor_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, sponsor, recipient, sink],
         [transfer_asset_definition, fee_asset_definition],
@@ -1957,17 +1994,14 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -2022,7 +2056,7 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
     );
 }
 #[test]
-fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
+fn invalid_fee_asset_is_rejected_before_runtime_or_balance_mutation() {
     let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -2049,7 +2083,7 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     let payer_transfer_asset = AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
     let recipient_transfer_asset =
         AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, recipient, sink],
         [transfer_asset_definition],
@@ -2061,108 +2095,56 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
-    let (max_clock_drift, tx_limits) = {
-        let state_view = state.world.view();
-        let params = state_view.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction())
-    };
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
-    let mut builder = TransactionBuilder::new(
-        state.network_id,
-        payer_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    );
-    builder.set_creation_time(Duration::from_millis(0));
-    let tx = builder
-        .with_instructions([Transfer::asset_quantity(
-            payer_transfer_asset.clone(),
-            1_u32,
-            recipient_id,
-        )])
-        .sign(payer_keypair.private_key());
-    let tx = accept_transaction_at_mock_time(
-        tx,
-        &state.network_id,
-        max_clock_drift,
-        tx_limits,
-        state.crypto().as_ref(),
-        Duration::from_millis(10),
-    )
-    .expect("transaction should pass stateless admission");
-    let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-    let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-        .chain(1, Some(&latest_signed))
-        .sign(payer_keypair.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
-    let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    assert_eq!(
-        valid_block
-            .as_ref()
-            .output_results()
-            .enumerate()
-            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
-            .next()
-            .map(|(idx, _)| idx),
-        Some(0),
-        "invalid configured fee asset must reject the transaction"
-    );
-    let snapshot = crate::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(
-        snapshot.pipeline_execution.detached_fallback_total, 0,
-        "invalid governed fee configuration must fail signed admission before execution"
-    );
-    let (_, rejection) = valid_block
-        .as_ref()
-        .output_results()
-        .enumerate()
-        .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
-        .next()
-        .expect("configuration rejection");
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id);
+    let original_config = state.nexus_snapshot();
+    let original_world = norito::json::to_json(&state.world).unwrap();
+    let error = state
+        .set_nexus_from_config(nexus)
+        .expect_err("invalid fee identity cannot enter runtime configuration");
     assert!(
-        matches!(
-            rejection,
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
-                if message == "invalid Nexus fee asset; expected a registered canonical asset definition"
-        ),
-        "the configured fee asset must be the precise rejection cause: {rejection:?}"
+        error.to_string().contains("fee"),
+        "precise fee policy rejection: {error}"
     );
-    let assets = state_block.world.assets();
+    assert_eq!(norito::json::to_json(&state.world).unwrap(), original_world);
+    let retained = state.nexus_snapshot().fees;
+    assert_eq!(retained.fee_asset_id, original_config.fees.fee_asset_id);
     assert_eq!(
-        assets
-            .get(&payer_transfer_asset)
-            .expect("payer rose after invalid fee asset rejection")
-            .0,
+        retained.fee_sink_account_id,
+        original_config.fees.fee_sink_account_id
+    );
+    assert_eq!(retained.base_fee, original_config.fees.base_fee);
+    assert_eq!(retained.per_byte_fee, original_config.fees.per_byte_fee);
+    assert_eq!(
+        retained.per_instruction_fee,
+        original_config.fees.per_instruction_fee
+    );
+    assert_eq!(
+        retained.per_gas_unit_fee,
+        original_config.fees.per_gas_unit_fee
+    );
+    assert_eq!(state.kura().blocks_count(), 0);
+    let view = state.view();
+    assert_eq!(
+        view.world.assets().get(&payer_transfer_asset).unwrap().0,
         Quantity::from(5_u32)
     );
     assert_eq!(
-        assets
+        view.world
+            .assets()
             .get(&recipient_transfer_asset)
-            .expect("recipient rose after invalid fee asset rejection")
+            .unwrap()
             .0,
         Quantity::zero()
     );
 }
+
 #[test]
 fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     let _guard = crate::status::nexus_fee_test_lock()
@@ -2193,7 +2175,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         AssetId::of(asset_definition_id.clone(), sink_id.clone()),
         Quantity::zero(),
     );
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, sink],
         [asset_definition],
@@ -2202,17 +2184,14 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     {
         let mut world = state.world.block();
         world
@@ -2233,7 +2212,9 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
     let flag_key: Name = "fee_trigger_flag".parse().unwrap();
     let event_key: Name = "fee_trigger_event".parse().unwrap();
@@ -2288,9 +2269,14 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -2350,7 +2336,8 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -2377,16 +2364,18 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         &time_source,
     )
     .expect("admission should accept transaction shape");
-    state
-        .seed_genesis_for_testing()
-        .expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert!(
         valid_block

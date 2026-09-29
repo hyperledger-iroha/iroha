@@ -30,19 +30,20 @@ fn plain_signed_block() -> SignedBlock {
 
 fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     let reference = block.canonical_resultless_proposal().encode_wire().unwrap();
+    assert_eq!(reference[0], block.version());
+    assert!(
+        block
+            .canonical_resultless_proposal()
+            .matches_resultless_proposal_wire(&reference)
+            .unwrap(),
+        "version, SignedBlock header and payload"
+    );
     let candidate = SignedBlockOutputCandidate {
         signatures: OutputFieldRef(&block.signatures),
         payload: OutputFieldRef(&block.payload),
         result: None,
         commit_certificate: None,
     };
-    let mut borrowed = vec![block.version()];
-    norito::core::write_canonical_to_writer(&candidate, &mut borrowed).unwrap();
-    assert_eq!(
-        borrowed, reference,
-        "version, SignedBlock header and payload"
-    );
-    assert_eq!(borrowed[0], block.version());
     let payload_len = {
         norito::core::reset_decode_state();
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -50,7 +51,7 @@ fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
     };
     assert_eq!(
         payload_len + norito::core::Header::SIZE + 1,
-        borrowed.len(),
+        reference.len(),
         "version + fixed header + counted payload define the custom wire size",
     );
     assert_eq!(
@@ -609,6 +610,7 @@ fn checked_resultless_comparison_binds_complete_native_lane_merge() {
 fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     use crate::consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
+        GlobalThresholdBeaconPulseContextV1,
     };
     let mut proposal = plain_signed_block();
     let original_header = proposal.hash();

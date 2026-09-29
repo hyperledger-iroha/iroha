@@ -89,7 +89,7 @@ from .canonical_transport import (
 )
 from .client_status_models import (
     _KAIGI_HEALTH_STATUSES,
-    SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
+    SUMERAGI_EVIDENCE_CLASSES,
     SUMERAGI_EVIDENCE_KIND,
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
@@ -125,7 +125,7 @@ from .client_status_models import (
     SumeragiLeaderSnapshot,
     SumeragiParamsSnapshot,
     SumeragiPrfContext,
-    SumeragiV2EquivocationEvidenceRecord,
+    SumeragiEvidenceOffender,
     parse_sumeragi_json_object,
 )
 from .election_tally import ElectionTally
@@ -150,20 +150,6 @@ from .parliament_api import ParliamentApiV1Mixin
 from .private_settlement_client import create_atomic_private_settlement_client_mixin
 from .governance_tally import GovernanceTally
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
-from .sccp import (
-    SccpCapabilities,
-    SccpRecentCursor,
-    SccpRecentMessages,
-    SccpRegistry,
-    SccpRegistryLimits,
-    SccpResourceLimits,
-    normalize_sccp_capabilities,
-    normalize_sccp_message_bundle,
-    normalize_sccp_proof_request,
-    normalize_sccp_recent_messages,
-    normalize_sccp_registry,
-    parse_sccp_json_object,
-)
 from .space_directory_client import ToriiLocalSigningContext, create_space_directory_client_mixin
 from .status_metrics import compute_status_metric_values as _compute_status_metric_values
 from .subscription_auth import normalize_subscription_status, signed_subscription_post
@@ -187,22 +173,10 @@ from .vpn_validation import (
     require_vpn_trust_digest as _vpn_require_trust_digest,
 )
 
-# SCCP response limits apply to bytes yielded by Requests after transfer
+# Bounded response reads count the bytes yielded by Requests after transfer
 # decoding. Content-Length remains an early rejection hint, never the sole
 # authority, because it may be missing, dishonest, or describe encoded bytes.
-_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024
-_SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
-_SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
-_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
-_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
-    _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
-)
-_KAIGI_RELAY_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
-_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
-_SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES = (
-    "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
-    "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
-)
+_KAIGI_RELAY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
 
 BASE58_ALPHABET = _account_id_codec.BASE58_ALPHABET
 BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
@@ -756,12 +730,6 @@ __all__ = [
     "NodeCurveCapabilities",
     "NodeCryptoCapabilities",
     "NodeCapabilities",
-    "SccpCapabilities",
-    "SccpRegistryLimits",
-    "SccpResourceLimits",
-    "SccpRegistry",
-    "SccpRecentCursor",
-    "SccpRecentMessages",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
     "RuntimeUpgradeEventCounters",
@@ -820,7 +788,7 @@ __all__ = [
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
     "SumeragiEvidenceCancelledPenaltyStatus",
-    "SumeragiV2EquivocationEvidenceRecord",
+    "SumeragiEvidenceOffender",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "KaigiRelaySummary",
@@ -1063,7 +1031,7 @@ def _format_error_body(text: str) -> str:
     return compact
 
 
-def _read_bounded_sccp_response_body(
+def _read_bounded_response_body(
     response: requests.Response,
     maximum_body_bytes: int,
     context: str,
@@ -4464,146 +4432,6 @@ class ToriiClient(
         mapping = self._ensure_mapping(payload, "network time status response")
         return NetworkTimeStatus.from_payload(mapping)
 
-    def get_sccp_capabilities(self) -> SccpCapabilities:
-        """Fetch exact SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
-
-        payload = self._get_sccp_json_object(
-            "/v1/sccp/capabilities",
-            context="sccp capabilities",
-            maximum_body_bytes=_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
-        )
-        return normalize_sccp_capabilities(payload)
-
-    def get_sccp_registry(self) -> SccpRegistry:
-        """Fetch the authoritative typed SCCP registry (`GET /v1/sccp/registry`)."""
-
-        payload = self._get_sccp_json_object(
-            "/v1/sccp/registry",
-            context="sccp registry",
-            maximum_body_bytes=_SCCP_JSON_RESPONSE_MAX_BYTES,
-        )
-        return normalize_sccp_registry(payload)
-
-    def get_sccp_message_bundle(
-        self, message_id: str, *, format: str = "json"
-    ) -> Union[Mapping[str, Any], bytes]:
-        """Fetch one state-derived message/finality bundle by canonical message id.
-
-        Native responses are preflighted as canonical uncompressed Norito frames bound to
-        ``TairaSccpMessageProofV1``. The frame remains opaque, so this lightweight client does
-        not independently bind the embedded message id to the request path.
-        """
-
-        return self._get_sccp_typed_object(
-            f"/v1/sccp/proofs/message/{self._sccp_message_id(message_id)}",
-            format=format,
-            context="sccp message bundle",
-            normalize=normalize_sccp_message_bundle,
-            maximum_norito_body_bytes=_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
-            expected_norito_type_names=(_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,),
-        )
-
-    def get_sccp_proof_request(
-        self, message_id: str, *, format: str = "json"
-    ) -> Union[Mapping[str, Any], bytes]:
-        """Fetch one query-free state-derived Groth16 request by canonical message id.
-
-        Native responses are preflighted as canonical uncompressed concrete Norito frames bound
-        to either ``SccpGroth16Bn254ProofRequestV1`` or
-        ``SccpTonGroth16Bls12381ProofRequestV1``. The frame remains opaque, so this lightweight
-        client does not independently bind the embedded message id to the request path.
-        """
-
-        return self._get_sccp_typed_object(
-            f"/v1/sccp/proof-requests/{self._sccp_message_id(message_id)}",
-            format=format,
-            context="sccp proof request",
-            normalize=normalize_sccp_proof_request,
-            maximum_norito_body_bytes=_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
-            expected_norito_type_names=_SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES,
-        )
-
-    def get_sccp_recent_messages(
-        self,
-        *,
-        from_height: Optional[int] = None,
-        after_index: Optional[int] = None,
-        limit: Optional[int] = None,
-    ) -> SccpRecentMessages:
-        """Fetch newest-first SCCP messages (`GET /v1/sccp/messages/recent`)."""
-
-        params_dict: Dict[str, str] = {}
-        if from_height is not None:
-            if (
-                isinstance(from_height, bool)
-                or not isinstance(from_height, int)
-                or not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF
-            ):
-                raise ValueError("SCCP recent-message from_height must be a positive u64")
-            params_dict["from"] = str(from_height)
-        if after_index is not None:
-            if from_height is None:
-                raise ValueError(
-                    "SCCP recent-message after_index requires the paired from_height"
-                )
-            if (
-                isinstance(after_index, bool)
-                or not isinstance(after_index, int)
-                or not 0 <= after_index <= 511
-            ):
-                raise ValueError("SCCP recent-message after_index must be an integer in 0..511")
-            params_dict["after_index"] = str(after_index)
-        if limit is not None:
-            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
-                raise ValueError("SCCP recent-message limit must be an integer in 1..50")
-            params_dict["limit"] = str(limit)
-        payload = self._get_sccp_json_object(
-            "/v1/sccp/messages/recent",
-            context="sccp recent messages",
-            params=params_dict or None,
-            maximum_body_bytes=_SCCP_RECENT_RESPONSE_MAX_BYTES,
-        )
-        return normalize_sccp_recent_messages(payload)
-
-    @staticmethod
-    def _sccp_message_id(value: Any) -> str:
-        if (
-            not isinstance(value, str)
-            or re.fullmatch(r"[0-9a-f]{64}", value) is None
-            or set(value) == {"0"}
-        ):
-            raise ValueError("SCCP message id must be canonical lowercase nonzero 32-byte hex")
-        return value
-
-    def _get_sccp_json_object(
-        self,
-        path: str,
-        *,
-        context: str,
-        params: Optional[Mapping[str, str]] = None,
-        maximum_body_bytes: int,
-        parser: Callable[[bytes, str], Mapping[str, Any]] = parse_sccp_json_object,
-    ) -> Mapping[str, Any]:
-        response = self._request(
-            "GET",
-            path,
-            params=params,
-            headers={"Accept": "application/json"},
-            stream=True,
-        )
-        self._expect_status(
-            response,
-            {200},
-            maximum_body_bytes=maximum_body_bytes,
-            context=context,
-        )
-        content_type = response.headers.get("Content-Type", "")
-        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
-            response.close()
-            raise TypeError(f"{context} response must use application/json content type")
-        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
-        return parser(body, context)
-
     def _get_sumeragi_operator_json_object(
         self,
         path: str,
@@ -4630,7 +4458,7 @@ class ToriiClient(
         ) is None:
             response.close()
             raise TypeError(f"{context} response must use application/json content type")
-        body = _read_bounded_sccp_response_body(
+        body = _read_bounded_response_body(
             response,
             maximum_body_bytes,
             context,
@@ -4662,7 +4490,7 @@ class ToriiClient(
             response.close()
             return None
         content_type = response.headers.get("Content-Type", "")
-        body = _read_bounded_sccp_response_body(
+        body = _read_bounded_response_body(
             response,
             _KAIGI_RELAY_RESPONSE_MAX_BYTES,
             context,
@@ -4676,64 +4504,6 @@ class ToriiClient(
         ) is None:
             raise TypeError(f"{context} response must use application/json content type")
         return parse_sumeragi_json_object(body, context)
-
-    def _get_sccp_typed_object(
-        self,
-        path: str,
-        *,
-        format: str,
-        context: str,
-        normalize: Callable[[Any], Mapping[str, Any]],
-        maximum_norito_body_bytes: int,
-        expected_norito_type_names: tuple[str, ...],
-    ) -> Union[Mapping[str, Any], bytes]:
-        if format not in {"json", "norito"}:
-            raise ValueError("SCCP response format must be exactly `json` or `norito`")
-        accept = "application/x-norito" if format == "norito" else "application/json"
-        maximum_body_bytes = (
-            maximum_norito_body_bytes
-            if format == "norito"
-            else _SCCP_JSON_RESPONSE_MAX_BYTES
-        )
-        response = self._request("GET", path, headers={"Accept": accept}, stream=True)
-        self._expect_status(
-            response,
-            {200},
-            maximum_body_bytes=maximum_body_bytes,
-            context=context,
-        )
-        content_type = response.headers.get("Content-Type", "")
-        if format == "norito":
-            if re.fullmatch(r"application/x-norito(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
-                response.close()
-                raise TypeError(f"{context} response must use application/x-norito content type")
-            body = _read_bounded_sccp_response_body(
-                response, maximum_body_bytes, context
-            )
-            matched_type_name = next(
-                (
-                    type_name
-                    for type_name in expected_norito_type_names
-                    if body[6:22] == schema_hash_for_type_name(type_name)
-                ),
-                None,
-            )
-            if matched_type_name is None:
-                raise ValueError(
-                    f"{context} response schema hash did not match the closed type set"
-                )
-            validate_norito_frame(
-                body,
-                context=f"{context} response",
-                expected_type_name=matched_type_name,
-                expected_padding_length=0,
-            )
-            return body
-        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
-            response.close()
-            raise TypeError(f"{context} response must use application/json content type")
-        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
-        return normalize(parse_sccp_json_object(body, context))
 
     def get_runtime_abi_hash(self) -> RuntimeAbiHash:
         """Fetch the canonical ABI hash (`GET /v1/runtime/abi/hash`)."""
@@ -5921,7 +5691,7 @@ class ToriiClient(
     # Sumeragi telemetry
     # ------------------------------------------------------------------
     def get_sumeragi_status(self) -> SumeragiStatus:
-        """Read the exact native protocol-8 observation; it is not finality authority."""
+        """Read the exact native protocol-1 observation; it is not finality authority."""
         payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/status", context="native sumeragi status",
             maximum_body_bytes=1024 * 1024, parser=parse_native_status_json,
@@ -6003,7 +5773,7 @@ class ToriiClient(
             literal = self._require_non_empty_string(kind, "sumeragi evidence kind")
             if literal != kind or literal != SUMERAGI_EVIDENCE_KIND:
                 raise RuntimeError(
-                    "sumeragi evidence kind must be SumeragiV2Equivocation"
+                    "sumeragi evidence kind must be NativeSumeragiEvidence"
                 )
             params["kind"] = literal
         payload = self._get_sumeragi_operator_json_object(
@@ -8020,7 +7790,7 @@ class ToriiClient(
         if maximum_body_bytes is None:
             message = _format_error_body(response.text)
         else:
-            body = _read_bounded_sccp_response_body(
+            body = _read_bounded_response_body(
                 response, maximum_body_bytes, f"{context} error"
             )
             try:
@@ -9638,7 +9408,7 @@ class ToriiClient(
     ) -> Optional[Mapping[str, Any]]:
         ToriiClient._require_application_json_media_type(response, context)
         try:
-            body = _read_bounded_sccp_response_body(
+            body = _read_bounded_response_body(
                 response,
                 maximum_body_bytes,
                 context,
@@ -11295,22 +11065,12 @@ class ToriiClient(
         kind = ToriiClient._require_non_empty_string(kind_value, f"{context}.kind")
         if kind != kind_value or kind != SUMERAGI_EVIDENCE_KIND:
             raise RuntimeError(
-                f"{context}.kind must be SumeragiV2Equivocation"
+                f"{context}.kind must be NativeSumeragiEvidence"
             )
         required_fields = {
-            "kind",
-            "class",
-            "height",
-            "view",
-            "epoch",
-            "signer",
-            "context_id",
-            "artifact_hash_1",
-            "artifact_hash_2",
-            "recorded_height",
-            "recorded_view",
-            "recorded_ms",
-            "consensus_admitted_height",
+            "kind", "class", "instance", "height", "epoch", "context_id",
+            "authority_generation", "offenders", "safety_violation", "native_frame_hash",
+            "recorded_height", "recorded_view", "recorded_ms", "consensus_admitted_height",
             "penalty_status",
         }
         actual_fields = set(record)
@@ -11357,13 +11117,34 @@ class ToriiClient(
             )
 
         evidence_class = exact_non_empty_string("class")
-        if evidence_class not in SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES:
-            allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES))
+        if evidence_class not in SUMERAGI_EVIDENCE_CLASSES:
+            allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_CLASSES))
             raise RuntimeError(f"{context}.class must be one of: {allowed}")
-        artifact_hash_1 = evidence_hash("artifact_hash_1")
-        artifact_hash_2 = evidence_hash("artifact_hash_2")
-        if artifact_hash_1 == artifact_hash_2:
-            raise RuntimeError(f"{context} artifact hashes must identify distinct artifacts")
+        raw_offenders = record["offenders"]
+        if not isinstance(raw_offenders, list) or not 1 <= len(raw_offenders) <= 1024:
+            raise RuntimeError(f"{context}.offenders must contain between 1 and 1024 entries")
+        offenders = []
+        peers = set()
+        previous_signer = -1
+        for index, offender in enumerate(raw_offenders):
+            offender_context = f"{context}.offenders[{index}]"
+            if not isinstance(offender, Mapping) or set(offender) != {"signer", "peer_id"}:
+                raise RuntimeError(f"{offender_context} must contain exactly signer and peer_id")
+            signer = offender["signer"]
+            if type(signer) is not int or not previous_signer < signer <= 1023:
+                raise RuntimeError(f"{offender_context}.signer must increase strictly within 0..1023")
+            peer_id = offender["peer_id"]
+            # Validate the canonical public-key shape; attribution is authenticated by the node.
+            if not isinstance(peer_id, str) or re.fullmatch(r"ea0130[0-9A-F]{96}", peer_id) is None:
+                raise RuntimeError(f"{offender_context}.peer_id must be a canonical BLS-normal public key")
+            if peer_id in peers:
+                raise RuntimeError(f"{offender_context}.peer_id must be unique")
+            peers.add(peer_id)
+            previous_signer = signer
+            offenders.append(SumeragiEvidenceOffender(signer, peer_id))
+        safety_violation = record["safety_violation"]
+        if not isinstance(safety_violation, bool):
+            raise RuntimeError(f"{context}.safety_violation must be a boolean")
         penalty = ToriiClient._ensure_mapping(
             record["penalty_status"], f"{context}.penalty_status"
         )
@@ -11428,18 +11209,19 @@ class ToriiClient(
             raise RuntimeError(
                 f"{context}.penalty_status.status must be pending, applied, or cancelled"
             )
-        return SumeragiV2EquivocationEvidenceRecord(
-            kind="SumeragiV2Equivocation",
+        return SumeragiEvidenceRecord(
+            kind="NativeSumeragiEvidence",
             class_=cast(
-                Literal["proposal", "phase_vote", "timeout_vote"], evidence_class
+                Literal["proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates"], evidence_class
             ),
             height=json_unsigned("height"),
-            view=json_unsigned("view"),
             epoch=json_unsigned("epoch"),
-            signer=json_unsigned("signer", maximum=0xFFFFFFFF),
             context_id=evidence_hash("context_id"),
-            artifact_hash_1=artifact_hash_1,
-            artifact_hash_2=artifact_hash_2,
+            instance=evidence_hash("instance"),
+            authority_generation=evidence_hash("authority_generation"),
+            offenders=tuple(offenders),
+            safety_violation=safety_violation,
+            native_frame_hash=evidence_hash("native_frame_hash"),
             recorded_height=json_unsigned("recorded_height"),
             recorded_view=json_unsigned("recorded_view"),
             recorded_ms=json_unsigned("recorded_ms"),

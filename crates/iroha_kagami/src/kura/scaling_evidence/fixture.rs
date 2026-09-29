@@ -7,7 +7,7 @@
 use super::*;
 use iroha_core::{
     query::native_context_archive::NativeContextArchive,
-    state::{AllocationBudget, NativeLaneStateProjectionV1},
+    state::{AllocationBudget, NativeExecutionProjectionV1},
     sumeragi::test_chain::CertifiedTestChain,
 };
 use iroha_crypto::{KeyPair, Signature};
@@ -45,13 +45,13 @@ impl Height {
         let committed = chain.committed(height);
         let block = committed.block().as_ref().clone();
         let archive = NativeContextArchive::open_read_only(
-            chain.kura().store_root(),
+            &chain.kura().store_root(),
             AllocationBudget::new(MAX_CONTEXT_BYTES),
             NonZeroUsize::new(MAX_CONTEXT_BYTES).unwrap(),
         )
         .unwrap();
         let original = archive.read_exact(height, block.hash()).unwrap();
-        let state: NativeLaneStateProjectionV1 = canonical(original.as_slice()).unwrap();
+        let state: NativeExecutionProjectionV1 = canonical(original.as_slice()).unwrap();
         assert_eq!(state.carrier_hash, block.hash());
         assert_eq!(state.carrier_height, height);
         assert!(

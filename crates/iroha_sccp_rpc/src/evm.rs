@@ -1,9 +1,9 @@
 //! EVM JSON-RPC client for Ethereum and BSC (spec §7.1, §7.2, §8).
 //!
 //! [`EvmClient`] issues the `eth_*` calls the builders and wallet flows need:
-//! chain id and head, blocks by number or hash (with transaction hashes or full
-//! transactions), receipts one by one or per block, EIP-1186 proofs, code,
-//! `eth_call`, nonces, fee data and raw transaction submission.
+//! chain id and head, blocks by number (with transaction hashes), receipts one
+//! by one or per block, EIP-1186 proofs, code, `eth_call`, nonces, the priority
+//! fee and raw transaction submission.
 //!
 //! Blocks come back with every header field needed to re-encode the RLP
 //! header, including the London, Shanghai, Cancun and Prague fields when the
@@ -25,11 +25,6 @@ use crate::http::{
     HttpTransport, JsonRpcCall, RpcError, expect_object, invalid_response, optional,
     optional_array, optional_str, required_array, required_str,
 };
-
-/// Most blocks one `eth_feeHistory` call may cover.
-pub const MAX_FEE_HISTORY_BLOCKS: u64 = 1024;
-/// Most reward percentiles one `eth_feeHistory` call may request.
-pub const MAX_FEE_HISTORY_PERCENTILES: usize = 100;
 
 /// Why a hex string was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,65 +396,18 @@ pub struct EvmHeader {
     pub requests_hash: Option<[u8; 32]>,
 }
 
-/// The transactions of a block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvmBlockTransactions {
-    /// Transaction hashes (`full = false`).
-    Hashes(Vec<[u8; 32]>),
-    /// Full transaction objects (`full = true`).
-    Full(Vec<EvmTransaction>),
-}
-
-impl EvmBlockTransactions {
-    /// Number of transactions.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Hashes(hashes) => hashes.len(),
-            Self::Full(transactions) => transactions.len(),
-        }
-    }
-
-    /// Whether the block has no transactions.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// A block returned by `eth_getBlockBy*`.
+/// A block returned by `eth_getBlockByNumber`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmBlock {
     /// Header fields.
     pub header: EvmHeader,
-    /// Transactions, as requested.
-    pub transactions: EvmBlockTransactions,
+    /// Transaction hashes.
+    pub transactions: Vec<[u8; 32]>,
     /// Ommer hashes.
     pub uncles: Vec<[u8; 32]>,
     /// `size`, when reported.
     pub size: Option<u64>,
     /// The block object as returned, for fields this type does not name.
-    pub raw: Value,
-}
-
-/// A transaction object of a full block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmTransaction {
-    /// Transaction hash.
-    pub hash: [u8; 32],
-    /// EIP-2718 type (`0` when absent).
-    pub tx_type: u8,
-    /// Position in the block.
-    pub transaction_index: Option<u64>,
-    /// Sender.
-    pub from: [u8; 20],
-    /// Recipient (`None` for contract creation).
-    pub to: Option<[u8; 20]>,
-    /// Sender nonce.
-    pub nonce: u64,
-    /// Transferred value.
-    pub value: U256,
-    /// Call data.
-    pub input: Vec<u8>,
-    /// The transaction object as returned (signature, fees, access lists, …).
     pub raw: Value,
 }
 
@@ -555,23 +503,6 @@ pub struct EvmAccountProof {
     pub storage_proof: Vec<EvmStorageProof>,
 }
 
-/// `eth_feeHistory` result.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EvmFeeHistory {
-    /// First block covered.
-    pub oldest_block: u64,
-    /// Base fee of every covered block and of the next one.
-    pub base_fee_per_gas: Vec<U256>,
-    /// Gas-used ratio of every covered block.
-    pub gas_used_ratio: Vec<f64>,
-    /// Priority-fee percentiles per block (empty without percentiles).
-    pub reward: Vec<Vec<U256>>,
-    /// Blob base fee per block (Cancun; empty when absent).
-    pub base_fee_per_blob_gas: Vec<U256>,
-    /// Blob gas-used ratio per block (Cancun; empty when absent).
-    pub blob_gas_used_ratio: Vec<f64>,
-}
-
 /// An `eth_call` / `eth_estimateGas` call object.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EvmCallRequest {
@@ -653,38 +584,12 @@ impl EvmClient {
     ///
     /// # Errors
     /// Any [`RpcError`].
-    pub fn block_by_number(
-        &self,
-        block: BlockTag,
-        full_transactions: bool,
-    ) -> Result<Option<EvmBlock>, RpcError> {
+    pub fn block_by_number(&self, block: BlockTag) -> Result<Option<EvmBlock>, RpcError> {
         let value = self.transport.json_rpc(
             "eth_getBlockByNumber",
-            vec![
-                Value::from(block.to_param()),
-                Value::from(full_transactions),
-            ],
+            vec![Value::from(block.to_param()), Value::from(false)],
         )?;
-        parse_block(value, full_transactions)
-    }
-
-    /// `eth_getBlockByHash`; `None` if the endpoint does not know the block.
-    ///
-    /// # Errors
-    /// Any [`RpcError`].
-    pub fn block_by_hash(
-        &self,
-        hash: &[u8; 32],
-        full_transactions: bool,
-    ) -> Result<Option<EvmBlock>, RpcError> {
-        let value = self.transport.json_rpc(
-            "eth_getBlockByHash",
-            vec![
-                Value::from(format_data(hash)),
-                Value::from(full_transactions),
-            ],
-        )?;
-        parse_block(value, full_transactions)
+        parse_block(value)
     }
 
     /// `eth_getBlockByNumber` for up to [`crate::http::MAX_JSON_RPC_BATCH`]
@@ -692,27 +597,20 @@ impl EvmClient {
     ///
     /// # Errors
     /// Any [`RpcError`]; one failed call fails the whole batch.
-    pub fn blocks_by_number(
-        &self,
-        numbers: &[u64],
-        full_transactions: bool,
-    ) -> Result<Vec<Option<EvmBlock>>, RpcError> {
+    pub fn blocks_by_number(&self, numbers: &[u64]) -> Result<Vec<Option<EvmBlock>>, RpcError> {
         let calls = numbers
             .iter()
             .map(|number| {
                 JsonRpcCall::new(
                     "eth_getBlockByNumber",
-                    vec![
-                        Value::from(format_quantity(*number)),
-                        Value::from(full_transactions),
-                    ],
+                    vec![Value::from(format_quantity(*number)), Value::from(false)],
                 )
             })
             .collect();
         self.transport
             .json_rpc_batch(calls)?
             .into_iter()
-            .map(|result| result.and_then(|value| parse_block(value, full_transactions)))
+            .map(|result| result.and_then(parse_block))
             .collect()
     }
 
@@ -843,48 +741,6 @@ impl EvmClient {
         value_hex(&value, "eth_getTransactionCount", parse_quantity_u64)
     }
 
-    /// `eth_feeHistory` of `block_count` (1..=1024) blocks up to `newest`, with
-    /// ascending reward percentiles in `0..=100`.
-    ///
-    /// # Errors
-    /// [`RpcError::InvalidRequest`] for out-of-range arguments, or any
-    /// [`RpcError`].
-    pub fn fee_history(
-        &self,
-        block_count: u64,
-        newest: BlockTag,
-        reward_percentiles: &[f64],
-    ) -> Result<EvmFeeHistory, RpcError> {
-        if !(1..=MAX_FEE_HISTORY_BLOCKS).contains(&block_count) {
-            return Err(RpcError::InvalidRequest(format!(
-                "eth_feeHistory covers 1..={MAX_FEE_HISTORY_BLOCKS} blocks"
-            )));
-        }
-        if reward_percentiles.len() > MAX_FEE_HISTORY_PERCENTILES
-            || reward_percentiles
-                .iter()
-                .any(|percentile| !(0.0..=100.0).contains(percentile))
-            || reward_percentiles.windows(2).any(|pair| pair[0] > pair[1])
-        {
-            return Err(RpcError::InvalidRequest(
-                "reward percentiles must ascend within 0..=100".to_owned(),
-            ));
-        }
-        let percentiles = reward_percentiles
-            .iter()
-            .map(|percentile| Value::from(*percentile))
-            .collect();
-        let value = self.transport.json_rpc(
-            "eth_feeHistory",
-            vec![
-                Value::from(format_quantity(block_count)),
-                Value::from(newest.to_param()),
-                Value::Array(percentiles),
-            ],
-        )?;
-        parse_fee_history(&value)
-    }
-
     /// `eth_maxPriorityFeePerGas`.
     ///
     /// # Errors
@@ -968,48 +824,26 @@ fn hex_list<T>(
         .collect()
 }
 
-fn ratio_list(values: &[Value], what: &str) -> Result<Vec<f64>, RpcError> {
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            value
-                .as_f64()
-                .filter(|ratio| ratio.is_finite())
-                .ok_or_else(|| invalid_response(format!("{what}[{index}] is not a number")))
-        })
-        .collect()
-}
-
 fn tx_type(map: &Map, what: &str) -> Result<u8, RpcError> {
     optional_hex_field(map, "type", what, parse_quantity_u64)?.map_or(Ok(0), |value| {
         u8::try_from(value).map_err(|_| invalid_response(format!("{what}.type exceeds one byte")))
     })
 }
 
-/// Parses an `eth_getBlockBy*` result (`null` for an unknown block).
-fn parse_block(value: Value, full_transactions: bool) -> Result<Option<EvmBlock>, RpcError> {
+/// Parses an `eth_getBlockByNumber` result with transaction hashes (`null`
+/// for an unknown block).
+fn parse_block(value: Value) -> Result<Option<EvmBlock>, RpcError> {
     if value.is_null() {
         return Ok(None);
     }
     let what = "block";
     let map = expect_object(&value, what)?;
     let header = parse_header(map)?;
-    let transactions = required_array(map, "transactions", what)?;
-    let transactions = if full_transactions {
-        EvmBlockTransactions::Full(
-            transactions
-                .iter()
-                .map(parse_transaction)
-                .collect::<Result<_, _>>()?,
-        )
-    } else {
-        EvmBlockTransactions::Hashes(hex_list(
-            transactions,
-            "block.transactions",
-            parse_data_array::<32>,
-        )?)
-    };
+    let transactions = hex_list(
+        required_array(map, "transactions", what)?,
+        "block.transactions",
+        parse_data_array::<32>,
+    )?;
     let uncles = hex_list(
         optional_array(map, "uncles", what)?,
         "block.uncles",
@@ -1055,22 +889,6 @@ fn parse_header(map: &Map) -> Result<EvmHeader, RpcError> {
             parse_data_array::<32>,
         )?,
         requests_hash: optional_hex_field(map, "requestsHash", what, parse_data_array::<32>)?,
-    })
-}
-
-fn parse_transaction(value: &Value) -> Result<EvmTransaction, RpcError> {
-    let what = "transaction";
-    let map = expect_object(value, what)?;
-    Ok(EvmTransaction {
-        hash: hex_field(map, "hash", what, parse_data_array::<32>)?,
-        tx_type: tx_type(map, what)?,
-        transaction_index: optional_hex_field(map, "transactionIndex", what, parse_quantity_u64)?,
-        from: hex_field(map, "from", what, parse_data_array::<20>)?,
-        to: optional_hex_field(map, "to", what, parse_data_array::<20>)?,
-        nonce: hex_field(map, "nonce", what, parse_quantity_u64)?,
-        value: hex_field(map, "value", what, parse_quantity_u256)?,
-        input: hex_field(map, "input", what, parse_data)?,
-        raw: value.clone(),
     })
 }
 
@@ -1174,43 +992,6 @@ fn parse_account_proof(value: &Value) -> Result<EvmAccountProof, RpcError> {
             parse_data,
         )?,
         storage_proof,
-    })
-}
-
-fn parse_fee_history(value: &Value) -> Result<EvmFeeHistory, RpcError> {
-    let what = "feeHistory";
-    let map = expect_object(value, what)?;
-    let reward = optional_array(map, "reward", what)?
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            let row = row.as_array().ok_or_else(|| {
-                invalid_response(format!("feeHistory.reward[{index}] is not an array"))
-            })?;
-            hex_list(row, "feeHistory.reward", parse_quantity_u256)
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(EvmFeeHistory {
-        oldest_block: hex_field(map, "oldestBlock", what, parse_quantity_u64)?,
-        base_fee_per_gas: hex_list(
-            required_array(map, "baseFeePerGas", what)?,
-            "feeHistory.baseFeePerGas",
-            parse_quantity_u256,
-        )?,
-        gas_used_ratio: ratio_list(
-            required_array(map, "gasUsedRatio", what)?,
-            "feeHistory.gasUsedRatio",
-        )?,
-        reward,
-        base_fee_per_blob_gas: hex_list(
-            optional_array(map, "baseFeePerBlobGas", what)?,
-            "feeHistory.baseFeePerBlobGas",
-            parse_quantity_u256,
-        )?,
-        blob_gas_used_ratio: ratio_list(
-            optional_array(map, "blobGasUsedRatio", what)?,
-            "feeHistory.blobGasUsedRatio",
-        )?,
     })
 }
 
@@ -1388,39 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn fee_history_parses_optional_blob_fields() {
-        let history = parse_fee_history(&parse(
-            r#"{"oldestBlock":"0x10","baseFeePerGas":["0x1","0x2"],"gasUsedRatio":[0.5],"reward":[["0x3","0x4"]]}"#,
-        ))
-        .expect("history");
-        assert_eq!(history.oldest_block, 16);
-        assert_eq!(
-            history.base_fee_per_gas,
-            vec![U256::from(1_u64), U256::from(2_u64)]
-        );
-        assert_eq!(history.gas_used_ratio, vec![0.5]);
-        assert_eq!(
-            history.reward,
-            vec![vec![U256::from(3_u64), U256::from(4_u64)]]
-        );
-        assert!(history.base_fee_per_blob_gas.is_empty());
-        assert!(history.blob_gas_used_ratio.is_empty());
-        assert!(
-            parse_fee_history(&parse(
-                r#"{"oldestBlock":"0x10","baseFeePerGas":["0x01"],"gasUsedRatio":[]}"#
-            ))
-            .is_err()
-        );
-        assert!(
-            parse_fee_history(&parse(
-                r#"{"oldestBlock":"0x10","baseFeePerGas":[],"gasUsedRatio":["0.5"]}"#
-            ))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn block_transactions_must_match_the_requested_shape() {
+    fn block_transactions_are_hashes() {
         let header = format!(
             r#""hash":"0x{h}","parentHash":"0x{h}","sha3Uncles":"0x{h}","miner":"0x{a}","stateRoot":"0x{h}","transactionsRoot":"0x{h}","receiptsRoot":"0x{h}","logsBloom":"0x{b}","difficulty":"0x0","number":"0x1","gasLimit":"0x1","gasUsed":"0x0","timestamp":"0x1","extraData":"0x","mixHash":"0x{h}","nonce":"0x0000000000000000","uncles":[]"#,
             h = "44".repeat(32),
@@ -1431,19 +1180,20 @@ mod tests {
             r#"{{{header},"transactions":["0x{}"]}}"#,
             "66".repeat(32)
         ));
-        let block = parse_block(hashes.clone(), false)
-            .expect("block")
-            .expect("known block");
-        assert_eq!(block.transactions.len(), 1);
-        assert!(!block.transactions.is_empty());
+        let block = parse_block(hashes).expect("block").expect("known block");
+        assert_eq!(block.transactions, vec![[0x66; 32]]);
         assert_eq!(block.header.base_fee_per_gas, None);
         assert_eq!(block.header.requests_hash, None);
-        assert!(parse_block(hashes, true).is_err());
-        assert_eq!(parse_block(Value::Null, false).expect("null"), None);
+        let objects = parse(&format!(
+            r#"{{{header},"transactions":[{{"hash":"0x{}"}}]}}"#,
+            "66".repeat(32)
+        ));
+        assert!(parse_block(objects).is_err());
+        assert_eq!(parse_block(Value::Null).expect("null"), None);
         let bad_nonce = parse(
             &format!(r#"{{{header},"transactions":[]}}"#)
                 .replace(r#""nonce":"0x0000000000000000""#, r#""nonce":"0x00""#),
         );
-        assert!(parse_block(bad_nonce, false).is_err());
+        assert!(parse_block(bad_nonce).is_err());
     }
 }

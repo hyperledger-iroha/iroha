@@ -4816,7 +4816,6 @@ mod run {
         pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
         pub outbound_post_byte_budgets: OutboundPostByteBudgets,
         pub inbound_frame_byte_budgets: InboundFrameByteBudgets,
-        #[allow(dead_code)]
         pub max_frame_bytes: usize,
         pub quic_datagrams_enabled: bool,
         pub quic_datagram_max_payload_bytes: usize,
@@ -12160,7 +12159,8 @@ mod state {
             *current_error = Some(error);
             Ok(())
         }
-        #[allow(unused_variables, clippy::too_many_lines, clippy::single_match_else)]
+        #[allow(clippy::too_many_lines, clippy::single_match_else)]
+        #[cfg_attr(not(feature = "quic"), allow(unused_variables))]
         pub(super) async fn connect_to(
             Self {
                 peer_addr,

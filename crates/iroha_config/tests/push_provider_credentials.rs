@@ -215,8 +215,14 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
             "hidden_program_hex".to_owned(),
             Value::String("0xnot-hex".to_owned()),
         );
-    let error = decode_ram_lfe_overlay(malformed)
-        .parse()
-        .expect_err("malformed hidden-program material must be a parse error");
-    assert!(format!("{error:?}").contains("hidden_program_hex"));
+    let error = base_reader()
+        .with_toml_source(TomlSource::inline(malformed))
+        .read_and_complete::<UserConfig>()
+        .expect_err("the hidden-program owner must reject malformed bytes during decoding");
+    let report = format!("{error:?}");
+    assert!(report.contains("hidden program requires bounded non-empty lowercase hex"));
+    assert!(
+        !report.contains("0xnot-hex"),
+        "private material stays redacted"
+    );
 }

@@ -558,24 +558,6 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
                 Some(ExecutionOutputPlanState::Poisoned)
             ));
         }
-        // The direct transaction boundary also returns the typed local refusal,
-        // so a caller cannot turn it into a serializable transaction rejection.
-        exec_witness::start_block();
-        {
-            let mut block = state.block(source.header());
-            let mut cache = IvmCache::with_prepared_contract_cache(
-                block.pipeline.cache_size,
-                cache_owner.clone(),
-            );
-            let accepted =
-                AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed.clone()));
-            assert_eq!(
-                block.validate_transaction(accepted, &mut cache),
-                Err(reason.into())
-            );
-            assert_eq!(block.gas_used_in_block, 0);
-            assert_eq!(balance(&block, &asset, &ALICE_ID), Quantity::from(10_u32));
-        }
         cache_owner.set_checkout_refusal_for_test(None);
         exec_witness::start_block();
         let mut retry = state.block(source.header());

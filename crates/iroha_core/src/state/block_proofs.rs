@@ -244,7 +244,7 @@ fn read_finalized_body(
     // from the common query owner; wire/work ceilings alone are not that reservation.
     if block
         .execution_context()
-        .is_some_and(|context| !context.has_current_version() || context.merge_entry.is_some())
+        .is_some_and(|context| !context.has_current_version())
     {
         return Err(invalid_outputs(
             block_height,

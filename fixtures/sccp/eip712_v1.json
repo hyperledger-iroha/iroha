@@ -171,7 +171,7 @@
       "v": 27
     }
   ],
-  "spec": "specs/sccp.md §0, §3.6, §3.8 (revision 3)",
+  "spec": "specs/sccp.md §0, §3.6, §3.8 (revision 4)",
   "taira_network_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
   "wrong_signer": {
     "digest": "0xcf441a1f68655f46a9451b25a7fd9aa17402efdbcb6b0da972ab7b2710aa8b79",

@@ -166,7 +166,9 @@ encoding:
   little-endian values whose upper 16 bytes must be zero; no `u64` tally layout
   or fallback decoder is admitted.
 - `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
-  length prefixes). Decoders reject per-element length-prefixed byte vectors.
+  length prefixes). Borrowed `&[u8]` payloads use the same layout and stream without
+  copying their backing bytes; their slice decoder also requires the fixed count.
+  Decoders reject per-element length-prefixed byte vectors.
 - Every other sequence element is `[len][payload]`, with `len` encoded per
   `COMPACT_LEN`.
 
@@ -548,12 +550,6 @@ hash and signatures; global CommitQC `ExecutionCommitment` authenticates the
 complete executed wire and state transition. State's private execution seals
 are not additional proposal claims or a second finality authority.
 
-The header still carries an SCCP commitment root. Existing Core SCCP staging is
-outcome-dependent and remains an unqualified proposal/metadata owner; the model's
-unchanged-header attachment test does not establish that path free of output/hash
-cycles. Native scratch currently rejects SCCP roots. Resolve the actual producer,
-validation and bridge proof boundary before enabling native SCCP delivery.
-
 The complete network-input projection comes from physical external inputs or
 native `groups`, with no synthetic Time inputs. Physical `external_*` APIs keep
 their named payload-field semantics. The header input Merkle root remains
@@ -779,6 +775,23 @@ complete already committed carrier within the selected frontier and forbids
 `replaced`. Repair records never infer that a missing or different carrier was
 uncommitted. Frames remain bounded at 4,096 bytes and require exact canonical
 decoding; layouts without the explicit origin are rejected.
+
+## Hidden RAM-FHE program encoding
+
+The private program tape uses the declared frame identity
+`iroha_crypto::ram_lfe::HiddenRamFheProgramV1` and the canonical default Norito
+flags. Its payload contains length-delimited version (`u8`, exactly 1), register
+count (`u16`, exactly 4), memory-lane count (`u16`, exactly 32), and tape fields.
+The tape is a byte sequence with a fixed `u64` byte count. Each instruction is six
+little-endian `u64` words: one opcode, its operands, and zero-filled unused words.
+The decoder rejects unknown opcodes, oversized indices, nonzero unused words,
+incorrect profile metadata, trailing bytes, and invalid program semantics before
+returning a program. The tape is limited to 256 instructions; the complete frame
+is bounded by `RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES`.
+
+Decoded instructions share one clearing allocation across program clones; the
+last owner clears its complete backing storage. Explicit encoded bytes use a
+clearing owner too. The previous instruction-vector layout is not decoded.
 
 ## Hardware Acceleration Validation
 

@@ -200,8 +200,8 @@ state-preserving rollout must verify that state and retain the exact genesis,
 qualify its exact artifact against the candidate node's ABI, data model, and
 admission rules; install an updated reviewed `.to` artifact when required through
 an authority already holding `CanUpgradeExecutor`. That capability cannot be
-created by an ordinary post-genesis grant. The native and default executor paths
-forward immutable artifact creation to Core; ordinary developers need neither
+created by an ordinary post-genesis grant. The native executor path forwards
+immutable artifact creation to Core; ordinary developers need neither
 executor-upgrade authority nor either global code-management capability.
 
 Qualification must cover retained-state restart and replay across the validator

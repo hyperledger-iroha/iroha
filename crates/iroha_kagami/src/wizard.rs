@@ -680,7 +680,13 @@ fn apply_overrides(
         TomlValue::String("observer".into()),
     );
     set_table(config, "sumeragi", sumeragi);
-    ensure_sumeragi_body_ingress(config, trusted_pops.len())?;
+    let remote_trusted_peer_count = wizard_remote_trusted_peer_count(config)?;
+    let reply_source_capacity = wizard_reply_source_capacity(config)?;
+    if remote_trusted_peer_count > reply_source_capacity {
+        return Err(eyre!(
+            "wizard trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+        ));
+    }
     let mut network = table(config, "network");
     let network_template = network
         .get("address")
@@ -845,129 +851,6 @@ fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
         .collect();
     TomlValue::Array(entries)
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the geometry verifier keeps all interdependent queue bounds and mutations in one auditable sequence"
-)]
-fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: usize) -> Result<()> {
-    let mut queues = table(config, "sumeragi.queues");
-    let command_capacity = sumeragi_queue_capacity(
-        &queues,
-        "commands",
-        defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(),
-    )?;
-    let authenticated_non_validator_sources = sumeragi_queue_capacity(
-        &queues,
-        "authenticated_non_validator_sources",
-        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
-    )?;
-    let body_source_bytes = sumeragi_queue_capacity(
-        &queues,
-        "body_source_bytes",
-        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
-    )?;
-    let configured_bodies = sumeragi_queue_capacity(
-        &queues,
-        "bodies",
-        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
-    )?;
-    let configured_body_bytes = sumeragi_queue_capacity(
-        &queues,
-        "body_bytes",
-        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-    )?;
-    let ingress_required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
-        validator_roster_len,
-        authenticated_non_validator_sources,
-    )
-    .ok_or_else(|| {
-        eyre!(
-            "wizard Sumeragi body-message capacity overflowed for {validator_roster_len} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
-        )
-    })?;
-    let reply_source_capacity = wizard_reply_source_capacity(config)?;
-    if authenticated_non_validator_sources > reply_source_capacity {
-        return Err(eyre!(
-            "wizard Sumeragi authenticated non-validator source capacity {authenticated_non_validator_sources} exceeds the effective network reply-source capacity {reply_source_capacity}"
-        ));
-    }
-    let remote_trusted_peer_count = wizard_remote_trusted_peer_count(config)?;
-    if remote_trusted_peer_count > reply_source_capacity {
-        return Err(eyre!(
-            "wizard trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
-        ));
-    }
-    let effect_work_capacity =
-        (command_capacity / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR).max(1);
-    let exact_output_required_ownership = reply_source_capacity
-        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
-        .ok_or_else(|| {
-            eyre!(
-                "wizard Sumeragi exact-output ownership capacity overflowed for {reply_source_capacity} reply sources"
-            )
-        })?;
-    let fixed_exact_output_ownership = effect_work_capacity
-        .checked_add(defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP)
-        .ok_or_else(|| eyre!("wizard Sumeragi exact-output fixed ownership capacity overflowed"))?;
-    let exact_output_required_bodies =
-        exact_output_required_ownership.saturating_sub(fixed_exact_output_ownership);
-    let required_bodies = ingress_required_bodies.max(exact_output_required_bodies);
-    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
-        validator_roster_len,
-        authenticated_non_validator_sources,
-        body_source_bytes,
-    )
-    .ok_or_else(|| {
-        eyre!(
-            "wizard Sumeragi body-byte capacity overflowed for {validator_roster_len} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
-        )
-    })?;
-    let effective_bodies = configured_bodies.max(required_bodies);
-    let shared_ownership = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-        effect_work_capacity,
-        effective_bodies,
-    )
-    .map_err(|error| eyre!("wizard Sumeragi exact-output geometry is invalid: {error}"))?;
-    actual::validate_sumeragi_v2_exact_output_geometry(shared_ownership, reply_source_capacity)
-        .map_err(|error| eyre!("wizard Sumeragi exact-output geometry is invalid: {error}"))?;
-    actual::sumeragi_v2_lifecycle_capacity_geometry(
-        validator_roster_len,
-        effect_work_capacity,
-        effective_bodies,
-        authenticated_non_validator_sources,
-    )
-    .map_err(|error| eyre!("wizard Sumeragi lifecycle capacity geometry is invalid: {error}"))?;
-    let bodies_changed = if required_bodies > configured_bodies {
-        queues.insert(
-            "bodies".into(),
-            TomlValue::Integer(i64::try_from(required_bodies).map_err(|_| {
-                eyre!(
-                    "wizard Sumeragi body-message capacity {required_bodies} exceeds the TOML integer range"
-                )
-            })?),
-        );
-        true
-    } else {
-        false
-    };
-    let body_bytes_changed = if required_body_bytes > configured_body_bytes {
-        queues.insert(
-            "body_bytes".into(),
-            TomlValue::Integer(i64::try_from(required_body_bytes).map_err(|_| {
-                eyre!(
-                    "wizard Sumeragi body-byte capacity {required_body_bytes} exceeds the TOML integer range"
-                )
-            })?),
-        );
-        true
-    } else {
-        false
-    };
-    if bodies_changed || body_bytes_changed {
-        set_table(config, "sumeragi.queues", queues);
-    }
-    Ok(())
-}
 fn wizard_reply_source_capacity(config: &TomlValue) -> Result<usize> {
     let network = table(config, "network");
     if let Some(value) = network.get("max_total_connections") {
@@ -1023,26 +906,6 @@ fn wizard_remote_trusted_peer_count(config: &TomlValue) -> Result<usize> {
                 .ok_or_else(|| eyre!("wizard trusted-peer remote connection count overflowed"))
         }
     })
-}
-fn sumeragi_queue_capacity(
-    queues: &TomlTable,
-    field: &'static str,
-    default: usize,
-) -> Result<usize> {
-    let Some(value) = queues.get(field) else {
-        return Ok(default);
-    };
-    let value = value
-        .as_integer()
-        .ok_or_else(|| eyre!("wizard template sumeragi.queues.{field} must be an integer"))?;
-    let value = usize::try_from(value)
-        .map_err(|_| eyre!("wizard template sumeragi.queues.{field} must be greater than zero"))?;
-    if value == 0 {
-        return Err(eyre!(
-            "wizard template sumeragi.queues.{field} must be greater than zero"
-        ));
-    }
-    Ok(value)
 }
 fn table(config: &TomlValue, path: &str) -> TomlTable {
     let mut table = TomlTable::new();
@@ -1490,166 +1353,6 @@ mod tests {
         assert!(rendered.contains("operator-authenticated validator roster"));
         assert!(rendered.contains("iroha3d --sora --config config.toml"));
         assert!(!rendered.contains("--genesis-manifest-json"));
-    }
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the geometry scenario proves both required scaling and preservation of larger authored capacities on one config"
-    )]
-    fn wizard_scales_body_ingress_for_seven_validators_without_shrinking_authored_capacity() {
-        let mut peers = Vec::new();
-        let mut pops = BTreeMap::new();
-        for index in 0_u8..7 {
-            let keypair =
-                KeyPair::try_from_seed(vec![0xa0_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
-                    .expect("derive deterministic wizard validator fixture");
-            let public_key = keypair.public_key().clone();
-            pops.insert(
-                public_key.clone(),
-                bls_normal_pop_prove(keypair.private_key()).expect("derive validator PoP"),
-            );
-            peers.push(format!(
-                "{public_key}@127.0.0.1:{}",
-                1337_u16 + u16::from(index)
-            ));
-        }
-        let keypair = checked_wizard_bls_keypair();
-        let transport_keypair = checked_wizard_transport_keypair();
-        let streaming_keypair = checked_wizard_streaming_keypair();
-        let answers = Answers {
-            p2p_host: "127.0.0.1".to_owned(),
-            p2p_port: 1337,
-            torii_port: 8080,
-            trusted_peers: peers,
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            output_dir: PathBuf::from("out"),
-        };
-        let mut config = load_config_template(&answers, &keypair, &pops)
-            .expect("load Nexus observer wizard config");
-        let authenticated_non_validator_sources = 5_usize;
-        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
-        let mut queues = TomlTable::new();
-        queues.insert(
-            "authenticated_non_validator_sources".into(),
-            TomlValue::Integer(
-                i64::try_from(authenticated_non_validator_sources).expect("fixture fits TOML"),
-            ),
-        );
-        queues.insert(
-            "body_source_bytes".into(),
-            TomlValue::Integer(i64::try_from(body_source_bytes).expect("fixture fits TOML")),
-        );
-        queues.insert("bodies".into(), TomlValue::Integer(1));
-        queues.insert("body_bytes".into(), TomlValue::Integer(1));
-        set_table(&mut config, "sumeragi.queues", queues);
-        apply_overrides(
-            &mut config,
-            &answers,
-            &keypair,
-            &transport_keypair,
-            &streaming_keypair,
-            &pops,
-        )
-        .expect("scale wizard queue capacity");
-        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
-            7,
-            authenticated_non_validator_sources,
-            body_source_bytes,
-        )
-        .expect("fixture capacity is representable");
-        let ingress_required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
-            7,
-            authenticated_non_validator_sources,
-        )
-        .expect("fixture message capacity is representable");
-        let reply_source_capacity = wizard_reply_source_capacity(&config)
-            .expect("fixture network reply-source capacity is representable");
-        let effect_work_capacity = (defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get()
-            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-            .max(1);
-        let exact_output_required_bodies = reply_source_capacity
-            .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
-            .and_then(|capacity| {
-                capacity
-                    .checked_sub(effect_work_capacity + defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP)
-            })
-            .expect("fixture exact-output capacity is representable");
-        let required_bodies = ingress_required_bodies.max(exact_output_required_bodies);
-        assert_eq!(
-            table(&config, "sumeragi.queues")
-                .get("bodies")
-                .and_then(TomlValue::as_integer),
-            Some(i64::try_from(required_bodies).expect("fixture fits TOML")),
-        );
-        assert_eq!(
-            table(&config, "sumeragi.queues")
-                .get("body_bytes")
-                .and_then(TomlValue::as_integer),
-            Some(i64::try_from(required).expect("fixture fits TOML")),
-        );
-        let shared_ownership = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-            effect_work_capacity,
-            required_bodies,
-        )
-        .expect("fixture shared ownership is representable");
-        actual::validate_sumeragi_v2_exact_output_geometry(shared_ownership, reply_source_capacity)
-            .expect("wizard output must satisfy exact-output geometry");
-        actual::sumeragi_v2_lifecycle_capacity_geometry(
-            7,
-            effect_work_capacity,
-            required_bodies,
-            authenticated_non_validator_sources,
-        )
-        .expect("wizard output must satisfy lifecycle geometry");
-        let authored = required + body_source_bytes;
-        let authored_bodies = required_bodies + 7;
-        let mut queues = table(&config, "sumeragi.queues");
-        queues.insert(
-            "bodies".into(),
-            TomlValue::Integer(i64::try_from(authored_bodies).expect("fixture fits TOML")),
-        );
-        queues.insert(
-            "body_bytes".into(),
-            TomlValue::Integer(i64::try_from(authored).expect("fixture fits TOML")),
-        );
-        set_table(&mut config, "sumeragi.queues", queues);
-        apply_overrides(
-            &mut config,
-            &answers,
-            &keypair,
-            &transport_keypair,
-            &streaming_keypair,
-            &pops,
-        )
-        .expect("preserve larger authored queue capacity");
-        assert_eq!(
-            table(&config, "sumeragi.queues")
-                .get("bodies")
-                .and_then(TomlValue::as_integer),
-            Some(i64::try_from(authored_bodies).expect("fixture fits TOML")),
-        );
-        assert_eq!(
-            table(&config, "sumeragi.queues")
-                .get("body_bytes")
-                .and_then(TomlValue::as_integer),
-            Some(i64::try_from(authored).expect("fixture fits TOML")),
-        );
-        let mut parse_table = config.as_table().expect("wizard config table").clone();
-        let genesis = parse_table
-            .get_mut("genesis")
-            .and_then(TomlValue::as_table_mut)
-            .expect("wizard genesis table");
-        genesis.remove("expected_hash_file");
-        genesis.insert(
-            "expected_hash".into(),
-            TomlValue::String(
-                "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                    .to_owned(),
-            ),
-        );
-        actual::Root::from_toml_source(TomlSource::inline(parse_table))
-            .expect("wizard queue scaling must pass canonical config admission");
     }
     #[test]
     #[expect(

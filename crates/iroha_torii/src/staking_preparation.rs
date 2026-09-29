@@ -20,7 +20,7 @@ pub(super) async fn handler_staking_preparation(
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
-        iroha_torii_shared::uri::NEXUS_STAKING_PREPARATION,
+        iroha_torii_shared::route_catalog::core::NEXUS_STAKING_PREPARATION_POST.path(),
         app.authenticated_api_token_principal(&headers),
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;

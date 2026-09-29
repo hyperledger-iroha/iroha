@@ -248,7 +248,7 @@ impl Signer for KeyPairSigner {
 mod tests {
     use iroha_crypto::bls_normal_pop_prove;
     use iroha_sumeragi::{
-        crypto::{NoAttestation, form_qc, form_tc, verify_qc, verify_tc},
+        crypto::{NoAttestation, form_qc, form_tc},
         message::{Qc, TimeoutVote, Vote, VoteKind},
         types::{Committee, EpochId, ValidatorIndex},
     };
@@ -447,39 +447,48 @@ mod tests {
             let chosen: Vec<&KeyPairSigner> = signers.iter().take(q).collect();
             let qc = qc(VoteKind::Commit, 3, &chosen, &committee);
             assert_eq!(
-                verify_qc(&crypto, &NoAttestation, &I, &EPOCH, &committee, &qc),
+                iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &EPOCH, &committee)
+                    .verify_qc(&NoAttestation, &qc),
                 Ok(())
             );
             let other_epoch = EpochId {
                 epoch: EPOCH.epoch + 1,
                 ..EPOCH
             };
-            assert!(verify_qc(&crypto, &NoAttestation, &I, &other_epoch, &committee, &qc).is_err());
+            assert!(
+                iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &other_epoch, &committee)
+                    .verify_qc(&NoAttestation, &qc)
+                    .is_err()
+            );
             let other_context = EpochId {
                 context: Hash32([0x52; 32]),
                 ..EPOCH
             };
             assert!(
-                verify_qc(&crypto, &NoAttestation, &I, &other_context, &committee, &qc).is_err()
+                iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &other_context, &committee)
+                    .verify_qc(&NoAttestation, &qc)
+                    .is_err()
             );
             let mut rebound = qc.clone();
             rebound.epoch = other_context;
             assert!(
-                verify_qc(
-                    &crypto,
-                    &NoAttestation,
-                    &I,
-                    &other_context,
-                    &committee,
-                    &rebound
-                )
-                .is_err()
+                iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &other_context, &committee)
+                    .verify_qc(&NoAttestation, &rebound)
+                    .is_err()
             );
             let mut tampered = qc.clone();
             tampered.result = Hash32([9; 32]);
-            assert!(verify_qc(&crypto, &NoAttestation, &I, &EPOCH, &committee, &tampered).is_err());
+            assert!(
+                iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &EPOCH, &committee)
+                    .verify_qc(&NoAttestation, &tampered)
+                    .is_err()
+            );
             let unadmitted = BlsCrypto::new();
-            assert!(verify_qc(&unadmitted, &NoAttestation, &I, &EPOCH, &committee, &qc).is_err());
+            assert!(
+                iroha_sumeragi::crypto::Verifier::new(&unadmitted, &I, &EPOCH, &committee)
+                    .verify_qc(&NoAttestation, &qc)
+                    .is_err()
+            );
         }
     }
 
@@ -512,24 +521,41 @@ mod tests {
         ];
         let refs: Vec<&TimeoutVote> = timeouts.iter().collect();
         let tc = form_tc(&crypto, committee.n(), &refs).unwrap();
-        assert_eq!(verify_tc(&crypto, &I, &EPOCH, &committee, &tc), Ok(()));
+        assert_eq!(
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &EPOCH, &committee).verify_tc(&tc),
+            Ok(())
+        );
         let other_context = EpochId {
             context: Hash32([0x52; 32]),
             ..EPOCH
         };
-        assert!(verify_tc(&crypto, &I, &other_context, &committee, &tc).is_err());
+        assert!(
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &other_context, &committee)
+                .verify_tc(&tc)
+                .is_err()
+        );
         let mut rebound = tc.clone();
         rebound.epoch = other_context;
-        assert!(verify_tc(&crypto, &I, &other_context, &committee, &rebound).is_err());
+        assert!(
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &other_context, &committee)
+                .verify_tc(&rebound)
+                .is_err()
+        );
         let mut tampered = tc.clone();
         tampered.view = 5;
-        assert!(verify_tc(&crypto, &I, &EPOCH, &committee, &tampered).is_err());
+        assert!(
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &EPOCH, &committee)
+                .verify_tc(&tampered)
+                .is_err()
+        );
         let mut regrouped = tc.clone();
         for entry in &mut regrouped.entries {
             entry.hq = Some(2);
         }
         assert!(
-            verify_tc(&crypto, &I, &EPOCH, &committee, &regrouped).is_err(),
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &I, &EPOCH, &committee)
+                .verify_tc(&regrouped)
+                .is_err(),
             "the signers' groups are bound"
         );
     }

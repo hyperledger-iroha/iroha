@@ -20,16 +20,16 @@ fn journal_image(store: &BlockStore) -> Vec<Vec<u8>> {
 fn strict_native_journal_audit_preserves_valid_original_bytes() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit(Vec::new());
+    // Resolve certified receipts before holding the storage mutex; the receipt
+    // reader acquires that same original journal owner.
+    let expected = vec![
+        chain.committed(1).block_hash(),
+        chain.committed(2).block_hash(),
+    ];
     let mut store = chain.kura().block_store.lock();
     let original = journal_image(&store);
     let validated = Kura::init_canonical_chain(&mut store, 2).unwrap();
-    assert_eq!(
-        validated.hashes,
-        vec![
-            chain.committed(1).block_hash(),
-            chain.committed(2).block_hash()
-        ]
-    );
+    assert_eq!(validated.hashes, expected);
     assert_eq!(journal_image(&store), original);
 }
 
@@ -64,7 +64,7 @@ fn strict_native_journal_audit_rejects_hash_mismatch_without_rewriting_hashes() 
     expected[1] = expected[0];
     let original = journal_image(&store);
     assert!(matches!(
-        Kura::validate_block_chain(&mut store, &slots, Some(&expected), 0),
+        Kura::validate_block_chain(&mut store, &slots, Some(&expected)),
         Err(Error::CanonicalBlockWireMismatch { height: 2 })
     ));
     assert_eq!(journal_image(&store), original);

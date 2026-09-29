@@ -10,7 +10,7 @@
 //! - [`schema`]: the `liteServer.*` requests and answers SCCP uses, with
 //!   proofs, blocks and transactions kept as raw bag-of-cells bytes;
 //! - [`peers`]: liteserver lists from `iroha_config` (`<ip>:<port>:<base64
-//!   key>` entries, or the compiled defaults) and from `global-config.json`;
+//!   key>` entries, or the compiled defaults);
 //! - [`liteclient`]: the query client with failover, timeouts and typed
 //!   `liteServer.error` answers.
 //!

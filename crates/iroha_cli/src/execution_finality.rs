@@ -624,7 +624,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
-        block::{builder::BlockBuilder, consensus::CommitCertificate},
+        block::{CommitCertificate, builder::BlockBuilder},
         execution_proofs::{ExecutionProofEnvelopeV1, ExecutionPublicInputsV1},
         game::GameOutcomeV1,
         testing::native_finality::NativeFinalityFixture,

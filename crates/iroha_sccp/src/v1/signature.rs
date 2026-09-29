@@ -127,14 +127,6 @@ pub fn address_of_secret(secret: &[u8; 32]) -> Result<[u8; 20], SignatureError> 
     Ok(EcdsaSecp256k1Sha256::evm_address(&key.public_key()))
 }
 
-/// Mask a 32-byte address word to its low 160 bits (TVM may set padding bytes).
-#[must_use]
-pub fn mask_address_word(word: &[u8; 32]) -> [u8; 20] {
-    let mut address = [0_u8; 20];
-    address.copy_from_slice(&word[12..]);
-    address
-}
-
 // ---------------------------------------------------------------------------------------------
 // Single signatures
 // ---------------------------------------------------------------------------------------------
@@ -823,9 +815,6 @@ mod tests {
 
     #[test]
     fn address_helpers() {
-        let mut word = [0x41_u8; 32];
-        word[12..].copy_from_slice(&[0x22; 20]);
-        assert_eq!(mask_address_word(&word), [0x22; 20]);
         assert_eq!(address_of(&[0; 33]), Err(SignatureError::InvalidPublicKey));
         assert_eq!(public_key_of(&[0; 32]), Err(SignatureError::InvalidSecret));
         // Known vector: secret 1 is the generator; its address is well known.

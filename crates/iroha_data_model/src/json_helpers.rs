@@ -61,7 +61,6 @@ fn write_i128_decimal_string(
     out.push('"')
 }
 /// Serialize a `Vec<u8>` as a base64 string and deserialize from base64.
-#[allow(dead_code)]
 pub mod base64_vec {
     use super::*;
     pub fn serialize(bytes: &[u8], out: &mut String) {
@@ -78,7 +77,6 @@ pub mod base64_vec {
         B64.decode(encoded.as_bytes())
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
-    #[allow(dead_code)]
     pub mod option {
         use super::*;
         #[allow(clippy::ref_option)] // Required by Norito serializer signature.
@@ -113,7 +111,6 @@ pub mod base64_vec {
     }
 }
 /// Serialize signed 128-bit integers as decimal strings to satisfy JSON codec expectations.
-#[allow(dead_code)]
 pub mod i128_string {
     use super::*;
     pub fn serialize(value: &i128, out: &mut String) {
@@ -134,7 +131,6 @@ pub mod i128_string {
 }
 /// Serialize unsigned 64-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-#[allow(dead_code)]
 pub mod u64_string {
     use super::*;
     fn parse_canonical(raw: &str) -> Result<u64, norito::json::Error> {
@@ -203,7 +199,6 @@ pub mod u64_string {
 }
 /// Serialize unsigned 128-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-#[allow(dead_code)]
 pub mod u128_string {
     use super::*;
     fn parse_canonical(raw: &str) -> Result<u128, norito::json::Error> {
@@ -233,7 +228,6 @@ pub mod u128_string {
     }
 }
 /// Helpers for fixed-size byte arrays (`[u8; N]`) and their container variants.
-#[allow(dead_code)]
 pub mod fixed_bytes {
     use super::*;
     pub fn serialize<const N: usize>(bytes: &[u8; N], out: &mut String) {
@@ -261,7 +255,6 @@ pub mod fixed_bytes {
         let values = Vec::<u8>::json_deserialize(parser)?;
         vec_to_array::<N>(&values)
     }
-    #[allow(dead_code)]
     pub mod option {
         use super::*;
         #[allow(clippy::ref_option)] // Norito serializer interface requires `&Option<T>` signature
@@ -294,7 +287,6 @@ pub mod fixed_bytes {
             super::deserialize(parser).map(Some)
         }
     }
-    #[allow(dead_code)]
     pub mod vec {
         use super::*;
         pub fn serialize<const N: usize>(value: &[[u8; N]], out: &mut String) {
@@ -329,7 +321,7 @@ pub mod fixed_bytes {
                 .collect()
         }
     }
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "http"))]
     pub mod option_vec {
         use super::*;
         #[allow(clippy::ref_option)] // Norito serializer interface requires `&Option<T>` signature
@@ -375,7 +367,6 @@ pub mod fixed_bytes {
     }
 }
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
-#[allow(dead_code)]
 pub mod fixed_bytes_hex {
     use super::*;
     pub fn serialize<const N: usize>(bytes: &[u8; N], out: &mut String) {
@@ -398,7 +389,6 @@ pub mod fixed_bytes_hex {
         let raw = parser.parse_string()?;
         parse_hex_bytes::<N>(&raw)
     }
-    #[allow(dead_code)]
     pub mod option {
         use super::*;
         #[allow(clippy::ref_option)] // Norito serializer interface requires `&Option<T>` signature
@@ -457,7 +447,6 @@ pub mod fixed_bytes_hex {
     }
 }
 /// Serialize and deserialize a `SoraNet` privacy collector ID as one canonical lowercase hex value.
-#[allow(dead_code)]
 pub mod soranet_privacy_collector_id {
     use super::*;
     const COLLECTOR_ID_BYTES: usize = 32;
@@ -491,7 +480,6 @@ pub mod soranet_privacy_collector_id {
     }
 }
 /// Serialize and deserialize [`SoranetPrivacyModeV1`] values as their label strings.
-#[allow(dead_code)]
 pub mod privacy_mode {
     use super::*;
     #[allow(clippy::trivially_copy_pass_by_ref)] // Norito interface requires `&T` signature.
@@ -518,31 +506,7 @@ pub mod privacy_mode {
         }
     }
 }
-/// Helper that strips sensitive strings from JSON serialization while retaining internal storage.
-#[allow(dead_code)]
-pub mod secret_string {
-    use super::*;
-    pub fn serialize(_value: &str, out: &mut String) {
-        JsonSerialize::json_serialize("", out);
-    }
-    pub fn serialize_bounded(
-        _value: &str,
-        out: &mut dyn JsonWriteSink,
-    ) -> Result<(), BoundedJsonError> {
-        out.push_str("\"\"")
-    }
-    pub fn deserialize(parser: &mut Parser<'_>) -> Result<String, json::Error> {
-        parser.skip_ws();
-        if parser.try_consume_null()? {
-            return Ok(String::new());
-        }
-        // Parse and discard the payload; consumers reconstruct empty message for external use.
-        let _ignored = String::json_deserialize(parser)?;
-        Ok(String::new())
-    }
-}
 /// Serialize a map keyed by [`AccountId`] into a string-keyed JSON object.
-#[allow(dead_code)]
 pub mod account_metadata_map {
     use super::*;
     use crate::account::AccountId;
@@ -620,78 +584,9 @@ pub mod account_metadata_map {
             .collect()
     }
 }
-/// Serialize Soracloud Inrou guest-image maps as string-keyed JSON objects.
-#[allow(dead_code)]
-pub mod sora_inrou_guest_images_map {
-    use super::*;
-    use crate::soracloud::{SoraInrouGuestImageV1, SoraInrouGuestIsaV1};
-    pub fn serialize(
-        value: &BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-        out: &mut String,
-    ) {
-        let string_keyed: BTreeMap<String, SoraInrouGuestImageV1> = value
-            .iter()
-            .map(|(guest_isa, image)| (guest_isa.as_str().to_owned(), image.clone()))
-            .collect();
-        JsonSerialize::json_serialize(&string_keyed, out);
-    }
-    pub fn serialize_bounded(
-        value: &BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-        out: &mut dyn JsonWriteSink,
-    ) -> Result<(), BoundedJsonError> {
-        out.begin_container()?;
-        out.push('{')?;
-        // Canonical JSON object keys sort `aarch64` before `x86_64`, unlike
-        // the enum's declaration order.
-        let mut wrote_entry = false;
-        for guest_isa in [SoraInrouGuestIsaV1::Aarch64, SoraInrouGuestIsaV1::X8664] {
-            let Some(image) = value.get(&guest_isa) else {
-                continue;
-            };
-            if wrote_entry {
-                out.push(',')?;
-            }
-            norito::json::write_json_string_to(guest_isa.as_str(), out)?;
-            out.push(':')?;
-            image.json_serialize_to(out)?;
-            wrote_entry = true;
-        }
-        out.push('}')?;
-        out.end_container();
-        Ok(())
-    }
-    pub fn deserialize(
-        parser: &mut Parser<'_>,
-    ) -> Result<BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>, norito::json::Error> {
-        let value = Value::json_deserialize(parser)?;
-        let object = match value {
-            Value::Object(map) => map,
-            other => {
-                return Err(norito::json::Error::Message(format!(
-                    "expected object for Soracloud Inrou guest image map, got {other:?}"
-                )));
-            }
-        };
-        object
-            .into_iter()
-            .map(|(key, value)| {
-                let guest_isa = SoraInrouGuestIsaV1::parse_key(&key).ok_or_else(|| {
-                    norito::json::Error::Message(format!(
-                        "unsupported Soracloud Inrou guest ISA key: {key}"
-                    ))
-                })?;
-                let image: SoraInrouGuestImageV1 = json::from_value(value)?;
-                Ok((guest_isa, image))
-            })
-            .collect()
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soracloud::{
-        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1,
-    };
     use norito::json;
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
@@ -764,11 +659,6 @@ mod tests {
             bounded_with = "crate::json_helpers::privacy_mode::serialize_bounded"
         )]
         mode: SoranetPrivacyModeV1,
-        #[norito(
-            with = "crate::json_helpers::secret_string",
-            bounded_with = "crate::json_helpers::secret_string::serialize_bounded"
-        )]
-        secret: String,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
@@ -861,14 +751,12 @@ mod tests {
             digest: [0x01, 0x23, 0xab, 0xcd],
             optional_digest: Some([0xef, 0x42]),
             mode: SoranetPrivacyModeV1::Entry,
-            secret: "must-not-escape".to_owned(),
         };
         let legacy = json::to_json(&wrapper).expect("legacy scalar-helper JSON");
         assert!(legacy.contains(r#""count":"18446744073709551615""#));
         assert!(legacy.contains(r#""total":"340282366920938463463374607431768211455""#));
         assert!(legacy.contains(r#""digest":"0123abcd""#));
         assert!(legacy.contains(r#""mode":"entry""#));
-        assert!(legacy.contains(r#""secret":"""#));
         assert_eq!(
             json::to_json_bounded(&wrapper, legacy.len()).expect("exact bounded scalar JSON"),
             legacy
@@ -919,73 +807,6 @@ mod tests {
         match err {
             norito::json::Error::Message(message) => assert!(
                 message.contains("invalid i128 string representation"),
-                "unexpected message: {message}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
-    struct InrouGuestImagesWrapper {
-        #[norito(json = "crate::json_helpers::sora_inrou_guest_images_map")]
-        guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-    }
-    #[test]
-    fn sora_inrou_guest_images_map_roundtrip_serialization() {
-        let published_artifact =
-            |seed: u8, content_cid: &str| SoraPublishedInrouGuestImageArtifactV1 {
-                manifest_digest_hex: hex::encode([seed; 32]),
-                content_cid: content_cid.to_owned(),
-            };
-        let wrapper = InrouGuestImagesWrapper {
-            guest_images: BTreeMap::from([
-                (
-                    SoraInrouGuestIsaV1::X8664,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        published_artifact: published_artifact(
-                            0x31,
-                            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge",
-                        ),
-                    },
-                ),
-                (
-                    SoraInrouGuestIsaV1::Aarch64,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
-                        initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
-                        published_artifact: published_artifact(
-                            0x32,
-                            "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi",
-                        ),
-                    },
-                ),
-            ]),
-        };
-        let json = json::to_json(&wrapper).expect("serialize to JSON");
-        assert_eq!(
-            json::to_json_bounded(&wrapper, json.len()).expect("serialize at exact JSON limit"),
-            json
-        );
-        assert_eq!(
-            json::to_json_bounded(&wrapper, json.len() - 1),
-            Err(norito::json::BoundedJsonError::BodyTooLarge)
-        );
-        assert!(json.contains("\"x86_64\""));
-        assert!(json.contains("\"aarch64\""));
-        let decoded: InrouGuestImagesWrapper = json::from_str(&json).expect("decode from JSON");
-        assert_eq!(decoded, wrapper);
-    }
-    #[test]
-    fn sora_inrou_guest_images_map_rejects_unknown_keys() {
-        let json = r#"{"guest_images":{"riscv64":{"kernel_image_path":"/inrou/riscv64/vmlinux","rootfs_image_path":"/inrou/riscv64/rootfs.ext4","initrd_image_path":null}}}"#;
-        let err = json::from_str::<InrouGuestImagesWrapper>(json)
-            .expect_err("unknown guest ISA must fail");
-        match err {
-            norito::json::Error::Message(message) => assert!(
-                message.contains("unsupported Soracloud Inrou guest ISA key"),
                 "unexpected message: {message}"
             ),
             other => panic!("unexpected error variant: {other:?}"),

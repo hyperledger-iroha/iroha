@@ -7,7 +7,7 @@ use iroha::client::{AccountTransactionDraft, Client, FeeQuoteRequest};
 use iroha_data_model::{
     Level,
     isi::{InstructionBox, Log},
-    transaction::{FeePaymentIntent, TransactionAdmissionIntent},
+    transaction::FeePaymentIntent,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::read_on_dedicated_thread;
@@ -46,17 +46,14 @@ pub(super) async fn submit_and_observe(
     builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
     let client = builder.build()?;
     let account = client.account_client()?;
-    let mut payload = account.prepare_transaction(
-        AccountTransactionDraft::new(
-            vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                format!("strict Taira public transaction {sequence}"),
-            ))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-    )?;
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            format!("strict Taira public transaction {sequence}"),
+        ))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;

@@ -1,33 +1,22 @@
-//! Test utilities for Torii integration tests.
-//!
-//! These helpers are intended for crate integration tests to avoid duplicating
-//! queue-drain and state-apply boilerplate when exercising app API endpoints.
-#[cfg(test)]
-#[path = "finality_test_support.rs"]
-mod finality;
-#[cfg(test)]
-pub(crate) use finality::{
-    torii_proof_finality_for_block, torii_proof_finality_for_block_with_context,
-};
+//! Test helpers for explicit execution and authenticated native history fixtures.
 
 use iroha_config::parameters::defaults::zk::fastpq;
 use iroha_core::{
-    block::{BlockBuilder, CommittedBlock},
-    governance::manifest::LaneManifestRegistry,
-    queue::{Queue, RouteLegRole, RoutingDecision, RoutingPlan},
-    state::{State, StateBlock, StateReadOnly, WorldReadOnly},
+    queue::Queue,
+    state::{State, StateReadOnly, WorldReadOnly},
+    sumeragi::certified_chain::CommittedBlock,
+    sumeragi::{
+        payload,
+        test_chain::{CertifiedTestChain, Signers},
+    },
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-#[cfg(test)]
 use iroha_data_model::block::SignedBlock;
 use iroha_data_model::{
     NetworkId, Registrable,
     account::AccountId,
-    block::{
-        BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
-        ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
-    },
+    block::BlockHeader,
     content::ContentAuthMode,
     isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
@@ -119,132 +108,79 @@ pub struct ContractViewOptions<'a> {
     /// Upper bound on gas consumption for the local view execution.
     pub gas_limit: u64,
 }
-/// Drain queued transactions and apply a single block at the given height.
+/// Execute the current pending inputs through their original native chain, then remove
+/// precisely the entrypoints whose global application completed.
 ///
-/// Returns the number of applied transactions. Panics if any transaction fails
-/// to apply (to keep tests concise and fail-fast).
-pub fn apply_queued_in_one_block(
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &ChainId,
-    expected_height: u64,
-) -> usize {
-    let max_txs_in_block = core::num::NonZeroUsize::new(1024).expect("nonzero");
-    let mut guards = Vec::new();
-    queue.get_transactions_for_block(&state.view(), max_txs_in_block, &mut guards);
-    if guards.is_empty() {
+/// The snapshot remains retained until genuine native certification and publication finish.
+///
+/// # Panics
+/// Panics if fixture work cannot assemble, execute, or publish successfully.
+pub fn apply_queued_in_one_block(chain: &mut CertifiedTestChain, queue: &Arc<Queue>) -> usize {
+    let limit = core::num::NonZeroUsize::new(1024).expect("nonzero");
+    let accepted = queue
+        .bounded_pending_snapshot_for_testing(&chain.state().view(), limit)
+        .expect("healthy native queue snapshot");
+    if accepted.is_empty() {
         return 0;
     }
-    let accepted: Vec<_> = guards
+    let count = accepted.len();
+    let hashes = accepted
         .iter()
-        .map(|guard| {
-            (
-                guard.clone_accepted(),
-                guard.routing(),
-                guard.routing_plan(),
-            )
-        })
-        .collect();
-    apply_accepted_fixture_block(state, chain_id, expected_height, accepted)
-}
-fn apply_accepted_fixture_block(
-    state: &Arc<State>,
-    chain_id: &ChainId,
-    expected_height: u64,
-    accepted: Vec<(AcceptedTransaction<'static>, RoutingDecision, RoutingPlan)>,
-) -> usize {
-    let applied = accepted.len();
-    // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
-    // every explicit test registry, including registries that intentionally omit lane zero, but
-    // bind the live Nexus catalog when the registry is entirely empty so execution-context
-    // validation exercises the same manifest gate as a running node.
-    if state.lane_manifests.read().statuses().is_empty() {
-        let nexus = state.nexus_snapshot();
-        let manifests =
-            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-        state.install_lane_manifests_for_testing(&manifests);
-    }
-    // Supplying a non-empty context bypasses Core's automatic single-height lane ownership
-    // fixture, which is unsuitable for this helper's multi-block synthetic chains. Preserve the
-    // queue order so every context remains aligned with the corresponding block entrypoint.
-    let execution_context = BlockExecutionContextBundle::new(
-        accepted
-            .iter()
-            .map(|(tx, routing, plan)| {
-                execution_context_for_routing_plan(tx.hash_as_entrypoint(), *routing, plan)
-            })
-            .collect(),
-    );
-    let latest_block = state.view().latest_block();
-    let leader = checked_random_keypair_with_algorithm(
-        iroha_crypto::Algorithm::BlsNormal,
-        "apply queued block leader fixture",
-    );
-    let new_block = BlockBuilder::new(accepted.into_iter().map(|(tx, _, _)| tx).collect())
-        .chain(0, latest_block.as_deref())
-        .with_execution_context(Some(execution_context))
-        .sign(leader.private_key())
-        .unpack(|_| {});
-    debug_assert_eq!(
-        new_block.header().height().get(),
-        expected_height,
-        "Unexpected block height when applying queued transactions",
-    );
-    let mut state_block = state.block(new_block.header());
-    // Ensure stateless validation uses the expected chain id for these tests.
-    state_block.chain_id = chain_id.clone();
-    let valid_block = new_block
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let block_ref = committed_block.as_ref();
-    for (hash, _, result) in crate::canonical_history::signed_calls(block_ref)
-        .expect("complete fixture output ownership")
+        .map(AcceptedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    let committed = commit_native_accepted_inputs(chain, accepted);
+    for (_, _, result) in crate::canonical_history::signed_calls(committed.block())
+        .expect("complete native output ownership")
     {
-        if let Err(error) = result.as_ref() {
-            panic!("transaction at height {expected_height} with hash {hash} rejected: {error:?}");
-        }
+        assert!(
+            result.is_ok(),
+            "native fixture transaction rejected: {result:?}"
+        );
     }
-    finalize_committed_block(state, state_block, committed_block);
-    applied
+    assert_eq!(queue.remove_committed_hashes_for_testing(hashes), count);
+    count
 }
-fn execution_context_for_routing_plan(
-    entrypoint_hash: iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
-    routing: RoutingDecision,
-    plan: &RoutingPlan,
-) -> ExternalExecutionContext {
-    debug_assert_eq!(routing, plan.coordinator_route());
-    let legs = plan
-        .legs()
-        .into_iter()
-        .map(|leg| {
-            let role = match leg.role {
-                RouteLegRole::Coordinator => ExternalExecutionRouteRole::Coordinator,
-                RouteLegRole::Participant => ExternalExecutionRouteRole::Participant,
-            };
-            ExternalExecutionRouteLeg::new(leg.route.lane_id, leg.route.dataspace_id, role)
-        })
-        .collect();
-    ExternalExecutionContext::with_routing_plan(
-        entrypoint_hash,
-        routing.lane_id,
-        routing.dataspace_id,
-        plan.digest(),
-        legs,
-    )
-}
-/// Publish an executed fixture block through genuine durable finality.
+
+/// Assemble and execute exact input envelopes through the original native chain.
+/// The returned output and certificate come from production execution.
 ///
-/// Core binds the original captured witness and result wire to the fixture
-/// certificate, persists it, and applies the same publication checks as runtime.
+/// # Panics
+/// Panics if no original parent or successor schedule exists, or execution refuses the proposal.
+pub fn commit_native_accepted_inputs(
+    chain: &mut CertifiedTestChain,
+    accepted: Vec<AcceptedTransaction<'static>>,
+) -> CommittedBlock {
+    let view = chain.state().view();
+    let parent = view.latest_block().expect("original applied genesis");
+    let schedule = view
+        .world()
+        .consensus_schedule()
+        .ready(chain.height() + 1)
+        .expect("authenticated successor schedule");
+    let proposal = payload::assemble(
+        chain.state(),
+        payload::Assembly {
+            parent: &parent,
+            view: 0,
+            cadence: Duration::from_millis(schedule.params.block_time_ms),
+        },
+        &accepted,
+    )
+    .expect("assemble original pending inputs");
+    drop(view);
+    finalize_committed_block(chain, proposal)
+}
+
+/// Execute, certify, persist and apply an original proposal owned by this native chain.
+/// This accepts no caller-supplied outputs or finality evidence.
+///
+/// # Panics
+/// Panics if original native execution or certification refuses the proposal.
 pub fn finalize_committed_block(
-    state: &Arc<State>,
-    state_block: StateBlock<'_>,
-    committed_block: CommittedBlock,
-) {
-    state
-        .commit_executed_block_for_testing(state_block, committed_block)
-        .expect("publish the exact executed fixture block with durable finality");
+    chain: &mut CertifiedTestChain,
+    proposal: SignedBlock,
+) -> CommittedBlock {
+    chain.commit_proposal(proposal, Signers::Quorum, Default::default())
 }
 /// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
@@ -999,14 +935,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             debug_output_new_blocks: false,
             fsync_mode: defaults::kura::FSYNC_MODE,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
-            lane_history_retention:
-                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+
             native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         sumeragi: A::Sumeragi::default(),
         block_sync: A::BlockSync {
@@ -1472,8 +1406,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 mod tests {
     use super::checked_random_keypair;
     use super::{
-        TestDataDirGuard, apply_queued_in_one_block, contract_code_hash_hex,
-        execution_context_for_routing_plan, minimal_ivm_program,
+        TestDataDirGuard, apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program,
     };
     use iroha_core::{
         kura::Kura,
@@ -1544,50 +1477,16 @@ mod tests {
         );
     }
     #[test]
-    fn fixture_execution_context_preserves_full_routing_plan() {
-        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20));
-        let participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(30));
-        let plan = RoutingPlan::native_amx(
-            coordinator,
-            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
-        );
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"torii fixture routed transaction",
-        ));
-        let context = execution_context_for_routing_plan(entrypoint_hash, coordinator, &plan);
-        assert_eq!(context.entrypoint_hash, entrypoint_hash);
-        assert_eq!(context.lane_id, coordinator.lane_id);
-        assert_eq!(context.dataspace_id, coordinator.dataspace_id);
-        assert_eq!(context.routing_plan_digest, plan.digest());
-        assert_eq!(context.routing_plan_legs.len(), 2);
-        assert_eq!(
-            context.routing_plan_legs[0].role,
-            ExternalExecutionRouteRole::Coordinator
-        );
-        assert_eq!(
-            context.routing_plan_legs[1].role,
-            ExternalExecutionRouteRole::Participant
-        );
-        assert_eq!(context.routing_plan_legs[1].lane_id, participant.lane_id);
-        assert_eq!(
-            context.routing_plan_legs[1].dataspace_id,
-            participant.dataspace_id
-        );
-    }
-    #[test]
-    fn apply_queued_in_one_block_overrides_chain_id() {
+    fn apply_queued_in_one_block_preserves_native_chain_and_indexes() {
         let keypair = checked_random_keypair("queued transaction signer fixture");
         let authority = AccountId::new(keypair.public_key().clone());
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let chain_id: ChainId = "chain".parse().expect("chain id");
-        let state = Arc::new(State::new_with_chain_for_testing(
-            world,
-            kura,
-            query,
-            chain_id.clone(),
-        ));
+        let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1);
+        config.chain_id = chain_id.clone();
+        let mut chain =
+            iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
+        let state = Arc::clone(chain.state());
         let network_id = *state.network_id_ref();
         assert_eq!(&state.chain_id, &chain_id);
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -1608,24 +1507,24 @@ mod tests {
         let first_entrypoint_hash = tx.hash_as_entrypoint();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
-        let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        let applied = apply_queued_in_one_block(&mut chain, &queue);
         assert_eq!(applied, 1);
         let view = state.view();
-        assert_eq!(view.height(), 1);
+        assert_eq!(view.height(), 2);
         let first_block = view
             .latest_block()
             .expect("committed test block remains readable from Kura");
         let first_block_hash = first_block.hash();
-        assert_eq!(first_block.header().height().get(), 1);
+        assert_eq!(first_block.header().height().get(), 2);
         assert_eq!(
             view.kura().get_block_height_by_hash(first_block_hash),
-            core::num::NonZeroUsize::new(1)
+            core::num::NonZeroUsize::new(2)
         );
         assert_eq!(
             view.kura()
                 .get_block_heights_by_entrypoint_hash(first_entrypoint_hash)
                 .expect("transaction index is complete"),
-            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+            [core::num::NonZeroUsize::new(2).expect("nonzero")]
                 .into_iter()
                 .collect()
         );
@@ -1647,27 +1546,27 @@ mod tests {
                 state.view(),
             )
             .expect("second queue push");
-        assert_eq!(apply_queued_in_one_block(&state, &queue, &chain_id, 2), 1);
+        assert_eq!(apply_queued_in_one_block(&mut chain, &queue), 1);
         let view = state.view();
-        assert_eq!(view.height(), 2);
+        assert_eq!(view.height(), 3);
         let second_block = view
             .latest_block()
             .expect("second committed test block remains readable from Kura");
-        assert_eq!(second_block.header().height().get(), 2);
+        assert_eq!(second_block.header().height().get(), 3);
         assert_eq!(
             second_block.header().prev_block_hash(),
             Some(first_block_hash),
-            "the synthetic test chain must preserve canonical parent linkage"
+            "the native test chain must preserve canonical parent linkage"
         );
         assert_eq!(
             view.kura().get_block_height_by_hash(second_block.hash()),
-            core::num::NonZeroUsize::new(2)
+            core::num::NonZeroUsize::new(3)
         );
         assert_eq!(
             view.kura()
                 .get_block_heights_by_entrypoint_hash(second_entrypoint_hash)
                 .expect("transaction index is complete"),
-            [core::num::NonZeroUsize::new(2).expect("nonzero")]
+            [core::num::NonZeroUsize::new(3).expect("nonzero")]
                 .into_iter()
                 .collect()
         );
@@ -1675,7 +1574,7 @@ mod tests {
             view.kura()
                 .get_block_heights_by_entrypoint_hash(first_entrypoint_hash)
                 .expect("transaction index remains complete"),
-            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+            [core::num::NonZeroUsize::new(2).expect("nonzero")]
                 .into_iter()
                 .collect(),
             "storing the successor must preserve the first transaction index"

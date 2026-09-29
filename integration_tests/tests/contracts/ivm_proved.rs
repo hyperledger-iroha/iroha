@@ -1,0 +1,534 @@
+//! Four-validator rejection of unqualified proof-backed execution.
+//!
+//! An ordinary authenticated contract call increments state. A genuine proof of
+//! another relation, corrupted proof bytes, or arbitrary supplied commitments
+//! cannot authorize IvmProved while its complete execution relation is unavailable.
+use super::{
+    contract_probe_call_intent, contract_state_json_value, deploy_contract_artifact,
+    wait_for_tx_applied,
+};
+use eyre::{Report, Result, ensure, eyre};
+use integration_tests::sandbox;
+use iroha::{
+    blocking::Client,
+    client::{AccountTransactionDraft, TransactionFinalityFailure},
+    query::QueryError,
+};
+use iroha_core::zk;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    Level, ValidationFail,
+    isi::{Grant, InstructionBox, Log},
+    permission::Permission,
+    proof::{ProofAttachment, ProofAttachmentList, ProofBox},
+    query::error::QueryExecutionFail,
+    smart_contract::{ContractAddress, ContractAlias},
+    transaction::{
+        Executable, FeePaymentIntent, IvmBytecode, IvmProved, SignedTransaction,
+        TransactionEntrypoint, error::TransactionRejectionReason,
+    },
+    zk::OpenVerifyEnvelope,
+};
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    governance::{CanEnactGovernance, CanManageVerifyingKeys},
+    smart_contract::CanManageSmartContractCode,
+};
+use iroha_model_base::{metadata::Metadata, topology::DataSpaceId};
+use iroha_test_network::{Network, NetworkBuilder, read_on_dedicated_thread};
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use std::{num::NonZeroU32, time::Duration};
+
+#[path = "../proof_fixtures.rs"]
+mod proof_fixtures;
+
+const TEST_NAME: &str = "four_validator_ivm_proved_rejects_unqualified_execution";
+const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(600);
+const EXECUTION_REJECTION: &str =
+    "zk_proof: IvmProved requires the complete native STARK execution relation";
+
+fn counter_artifact() -> Vec<u8> {
+    ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+        force_zk: true,
+        max_cycles: 4_096,
+        ..Default::default()
+    })
+    .compile_source(
+        r#"seiyaku ProvedCounter {
+  state StateMap<int, int> Counters;
+  kotoage fn bump() authorize("CanEnactGovernance") {
+    let current = Counters.get(7).unwrap_or(0);
+    Counters[7] = current + 1;
+  }
+}"#,
+    )
+    .expect("compile the real zero-argument counter with the ZK mode bit")
+}
+
+fn bounded_client(client: Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(&client, |configured| {
+        configured.transaction_status_timeout = OBSERVATION_TIMEOUT;
+        configured.torii_request_timeout = Duration::from_secs(90);
+        configured.transaction_ttl = Some(Duration::from_secs(660));
+    })
+}
+
+async fn transaction(
+    client: &Client,
+    proved: IvmProved,
+    attachment: ProofAttachment,
+    metadata: &Metadata,
+    fee_payment: &FeePaymentIntent,
+    nonce: u32,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(
+        AccountTransactionDraft::new(
+            Executable::IvmProved(proved),
+            fee_payment.clone(),
+            metadata.clone(),
+        )
+        .with_attachments(ProofAttachmentList::try_from(vec![attachment])?)
+        .with_time_to_live(Duration::from_secs(660)),
+    )?;
+    payload.nonce = Some(NonZeroU32::new(nonce).expect("nonzero test nonce"));
+    // Quote simulation also refuses IvmProved. The test network's zero-fee
+    // policy permits signing this explicit bound to test native ingress itself.
+    Ok(account.sign_transaction(payload)?)
+}
+
+async fn applied_everywhere(
+    network: &Network,
+    http: &reqwest::Client,
+    hash: HashOf<SignedTransaction>,
+    label: &str,
+) -> Result<()> {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        let hash = hex::encode(hash.as_ref());
+        let mut common_height = None;
+        for peer in network.peers() {
+            let height = wait_for_tx_applied(
+                http,
+                peer.client().client().endpoint(),
+                &hash,
+                OBSERVATION_TIMEOUT,
+                label,
+            )
+            .await?;
+            if let Some(expected) = common_height {
+                ensure!(height == expected, "validators disagree on Applied height");
+            }
+            common_height = Some(height);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| eyre!("{label}: all-peer Applied observations exceeded the shared deadline"))?
+}
+
+async fn counter_everywhere(
+    network: &Network,
+    http: &reqwest::Client,
+    address: &ContractAddress,
+    expected: &str,
+) -> Result<()> {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        for (index, peer) in network.peers().iter().enumerate() {
+            let value = contract_state_json_value(
+                http,
+                peer.client().client().endpoint(),
+                address,
+                "Counters/7",
+            )
+            .await?;
+            ensure!(
+                value == norito::json::Value::from(expected),
+                "validator {index} counter changed: {value:?}"
+            );
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| eyre!("all-peer counter observations exceeded the shared deadline"))?
+}
+
+fn require_exact_rejection(
+    result: Result<HashOf<SignedTransaction>>,
+    expected: &str,
+) -> Result<()> {
+    let error = result
+        .err()
+        .ok_or_else(|| eyre!("invalid proved transaction was Applied"))?;
+    let Some(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) =
+        error.downcast_ref::<TransactionRejectionReason>()
+    else {
+        return Err(eyre!(
+            "transport, timeout, fee or unrelated rejection cannot establish proof rejection: {error:?}"
+        ));
+    };
+    ensure!(
+        message == expected,
+        "wrong native rejection: {message:?}, expected {expected:?}"
+    );
+    Ok(())
+}
+
+async fn require_authenticated_rejection(
+    client: &Client,
+    transaction: &SignedTransaction,
+    result: Result<HashOf<SignedTransaction>>,
+    expected: &str,
+) -> Result<()> {
+    let error = result
+        .err()
+        .ok_or_else(|| eyre!("invalid proved transaction was Applied"))?;
+    if error.downcast_ref::<TransactionRejectionReason>().is_some() {
+        return require_exact_rejection(Err(error), expected);
+    }
+    let failure = error
+        .downcast_ref::<TransactionFinalityFailure>()
+        .ok_or_else(|| {
+            eyre!(
+                "proof rejection requires a typed native result, not transport failure: {error:?}"
+            )
+        })?;
+    failure.validate_for_hash(transaction.hash())?;
+    ensure!(
+        failure.response().status.kind == "Rejected",
+        "expiry is not proof rejection"
+    );
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        loop {
+            let details = read_on_dedicated_thread({
+                let client = client.clone();
+                move || {
+                    client
+                        .client()
+                        .get_transaction_details(entrypoint_hash)
+                        .map_err(Report::new)
+                }
+            })
+            .await;
+            let details = match details {
+                Ok(details) => details,
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<QueryError>(),
+                        Some(QueryError::Validation(ValidationFail::QueryFailed(
+                            QueryExecutionFail::NotFound | QueryExecutionFail::CapacityLimit
+                        )))
+                    ) =>
+                {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            // The normal signed details API already validates the canonical
+            // source/output binding. Also require the exact original signed
+            // payload, not merely another rejection at the requested height.
+            ensure!(
+                details.transaction.entrypoint_hash() == &entrypoint_hash,
+                "wrong details entrypoint"
+            );
+            let TransactionEntrypoint::External(committed) = details.transaction.entrypoint()
+            else {
+                return Err(eyre!(
+                    "rejection details must contain an external signed transaction"
+                ));
+            };
+            ensure!(
+                committed == transaction,
+                "rejection details changed the signed transaction"
+            );
+            let reason = details
+                .transaction
+                .result()
+                .0
+                .as_ref()
+                .err()
+                .ok_or_else(|| eyre!("rejection details contain a successful result"))?;
+            return require_exact_rejection(Err(eyre!(reason.clone())), expected);
+        }
+    })
+    .await
+    .map_err(|_| eyre!("authenticated rejection details exceeded the shared deadline"))?
+}
+
+async fn rejected_unchanged_everywhere(
+    network: &Network,
+    http: &reqwest::Client,
+    address: &ContractAddress,
+    metadata: &Metadata,
+    fee_payment: &FeePaymentIntent,
+    proved: &IvmProved,
+    attachment: &ProofAttachment,
+    case: u32,
+    label: &str,
+    expected: &str,
+) -> Result<()> {
+    // Fresh signed identities exercise each peer's ingress without reusing a
+    // prior request. Routing may forward admission to an authoritative peer;
+    // this does not establish which validator performed the local execution.
+    for (index, peer) in network.peers().iter().enumerate() {
+        let client = bounded_client(peer.client());
+        let transaction = transaction(
+            &client,
+            proved.clone(),
+            attachment.clone(),
+            metadata,
+            fee_payment,
+            100 + 4 * case + u32::try_from(index)?,
+        )
+        .await?;
+        let result = read_on_dedicated_thread({
+            let client = client.clone();
+            let transaction = transaction.clone();
+            move || client.submit_transaction_and_wait(&transaction)
+        })
+        .await;
+        require_authenticated_rejection(&client, &transaction, result, expected).await?;
+    }
+    // An independently Applied barrier rules out stalled validators. Its own
+    // ordinary log effect is unrelated to the counter under test.
+    let client = bounded_client(network.client());
+    let label_owned = label.to_owned();
+    let hash = read_on_dedicated_thread(move || {
+        client.submit(
+            Log::new(
+                Level::INFO,
+                format!("IvmProved rejection barrier {label_owned}"),
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await?;
+    applied_everywhere(network, http, hash, label).await?;
+    counter_everywhere(network, http, address, "1").await
+}
+
+fn relabel(proof: &ProofBox, circuit_id: &str) -> Result<ProofBox> {
+    let mut envelope: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes)?;
+    envelope.circuit_id = circuit_id.into();
+    Ok(ProofBox::new(
+        proof.backend.clone(),
+        norito::encode_canonical(&envelope)?,
+    ))
+}
+
+#[test]
+#[ignore = "requires same-candidate native daemon, four validators and real confidential proving"]
+fn four_validator_ivm_proved_rejects_unqualified_execution() -> Result<()> {
+    ensure!(
+        std::env::var("IROHA_TEST_REQUIRE_NETWORK").as_deref() == Ok("1"),
+        "this qualification requires IROHA_TEST_REQUIRE_NETWORK=1"
+    );
+    let worker = std::thread::Builder::new()
+        .name(TEST_NAME.into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()?
+                .block_on(run())
+        })?;
+    match worker.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn run() -> Result<()> {
+    let (genuine, registration) = proof_fixtures::confidential_attachment(
+        "ivm-unrelated-proof",
+        "ivm_unrelated_confidential_vk",
+    );
+    let alias = ContractAlias::from_components("proved_counter", None, "universal")?;
+    let alias_permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Alias(
+            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                alias.to_string().parse()?,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ),
+    };
+    let mut builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            layer
+                .write(["nexus", "fees", "base_fee"], "0")
+                .write(["nexus", "fees", "per_byte_fee"], "0")
+                .write(["nexus", "fees", "per_instruction_fee"], "0")
+                .write(["nexus", "fees", "per_gas_unit_fee"], "0");
+        });
+    for permission in [
+        Permission::from(CanManageSmartContractCode),
+        Permission::from(CanEnactGovernance),
+        Permission::from(alias_permission),
+    ] {
+        builder = builder
+            .with_genesis_instruction(Grant::account_permission(permission, ALICE_ID.clone()));
+    }
+    builder = builder
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageVerifyingKeys),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        ))
+        .with_genesis_instruction(registration);
+    let network = sandbox::start_network_async_or_skip(builder, TEST_NAME)
+        .await?
+        .ok_or_else(|| eyre!("required four-validator native network was skipped"))?;
+    ensure!(
+        network.peers().len() == 4,
+        "expected exactly four validators"
+    );
+    network.ensure_blocks(1).await?;
+    let client = bounded_client(network.client());
+    let http = integration_tests::http::client();
+    let artifact = counter_artifact();
+    let parsed = ivm::ProgramMetadata::parse(&artifact)?;
+    let gas_limit = iroha_core::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata)
+        .map_err(|error| eyre!("counter gas limit: {error:?}"))?;
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(gas_limit));
+    let (address, _, height) = deploy_contract_artifact(
+        &client,
+        &http,
+        &artifact,
+        "proved_counter",
+        "deploy ordinary counter",
+    )
+    .await?;
+    network.ensure_blocks(height).await?;
+    let intent = contract_probe_call_intent(&artifact, &address, &alias, "bump")?;
+    let response = client
+        .account_client()
+        .post_contract_call_json(
+            &ALICE_ID,
+            Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+            None,
+            Some(&alias),
+            "bump",
+            None,
+            None,
+            None,
+            None,
+            &fee_payment,
+            &intent,
+        )
+        .await?;
+    ensure!(
+        response
+            .get("submitted")
+            .and_then(norito::json::Value::as_bool)
+            == Some(true),
+        "ordinary counter call was not submitted"
+    );
+    let hash = response
+        .get("tx_hash_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("ordinary counter call omitted its exact hash"))?;
+    for peer in network.peers() {
+        wait_for_tx_applied(
+            &http,
+            peer.client().client().endpoint(),
+            hash,
+            OBSERVATION_TIMEOUT,
+            "ordinary counter call",
+        )
+        .await?;
+    }
+    counter_everywhere(&network, &http, &address, "1").await?;
+    let mut corrupt = genuine.clone();
+    corrupt.proof = proof_fixtures::corrupt_native_halo2_proof(&genuine.proof);
+    let mut relabelled = genuine.clone();
+    relabelled.proof = relabel(&genuine.proof, "halo2/pasta/ipa/ivm-replay-binding-v1")?;
+    let claimed = IvmProved {
+        bytecode: IvmBytecode::from_compiled(artifact),
+        overlay: Vec::<InstructionBox>::new().into(),
+        events_commitment: Hash::new(b"caller-supplied events"),
+        gas_policy_commitment: Hash::new(b"caller-supplied gas"),
+    };
+    for (case, (label, attachment)) in [
+        ("genuine-unrelated-relation", genuine.clone()),
+        ("corrupted-proof", corrupt),
+        ("retired-binding-label", relabelled),
+    ]
+    .iter()
+    .enumerate()
+    {
+        rejected_unchanged_everywhere(
+            &network,
+            &http,
+            &address,
+            &intent.metadata,
+            &fee_payment,
+            &claimed,
+            attachment,
+            u32::try_from(case)?,
+            label,
+            EXECUTION_REJECTION,
+        )
+        .await?;
+    }
+    let mut forged = claimed;
+    forged.overlay = vec![InstructionBox::from(Log::new(
+        Level::INFO,
+        "unproved overlay effect".to_owned(),
+    ))]
+    .into();
+    rejected_unchanged_everywhere(
+        &network,
+        &http,
+        &address,
+        &intent.metadata,
+        &fee_payment,
+        &forged,
+        &genuine,
+        3,
+        "caller-supplied-overlay",
+        EXECUTION_REJECTION,
+    )
+    .await?;
+    Ok(())
+}
+
+#[test]
+fn counter_fixture_uses_real_v1_interface_and_zk_mode() -> Result<()> {
+    let artifact = counter_artifact();
+    let parsed = ivm::ProgramMetadata::parse(&artifact)?;
+    ensure!(
+        parsed.metadata.mode & ivm::ivm_mode::ZK != 0,
+        "ZK mode missing"
+    );
+    let verified = ivm::verify_contract_artifact(&artifact).map_err(|error| eyre!("{error}"))?;
+    ensure!(
+        verified
+            .contract_interface
+            .entrypoints
+            .iter()
+            .any(|entry| entry.name == "bump" && entry.params.is_empty()),
+        "exact no-argument entrypoint missing"
+    );
+    Ok(())
+}
+
+#[test]
+fn execution_rejection_control_rejects_transport_and_unrelated_native_errors() {
+    let rejection = |message: &str| {
+        eyre!(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(message.to_owned())
+        ))
+    };
+    require_exact_rejection(Err(rejection(EXECUTION_REJECTION)), EXECUTION_REJECTION).unwrap();
+    assert!(
+        require_exact_rejection(
+            Err(eyre!("transport: {EXECUTION_REJECTION}")),
+            EXECUTION_REJECTION
+        )
+        .is_err()
+    );
+    assert!(require_exact_rejection(Err(rejection("fee refused")), EXECUTION_REJECTION).is_err());
+}

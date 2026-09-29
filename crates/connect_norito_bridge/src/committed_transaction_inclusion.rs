@@ -184,7 +184,7 @@ pub(crate) fn verify_committed_transaction_inclusion(
     // selective or full-row inclusion is examined. Rejected execution remains authentic.
     if !committed.verify_selective_in_authenticated_execution(
         &expected_network_id,
-        tip.header(),
+        &tip.header(),
         tip.execution(),
     ) || !committed.verify_inclusion_in_block(tip.block())
     {

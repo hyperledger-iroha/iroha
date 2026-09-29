@@ -212,9 +212,6 @@ macro_rules! impl_decode_key_record_instruction {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = consensus_key_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 let id = super::decode_aos_canonical_field::<crate::consensus::ConsensusKeyId>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -237,9 +234,6 @@ impl_decode_key_record_instruction!(RotateConsensusKey);
 impl<'a> norito::core::DecodeFromSlice<'a> for DisableConsensusKey {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = consensus_key_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let id = super::decode_aos_canonical_field::<crate::consensus::ConsensusKeyId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -255,9 +249,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DisableConsensusKey {
 impl<'a> norito::core::DecodeFromSlice<'a> for ApplyThresholdKeyLifecycleCertificateV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = consensus_key_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let certificate = super::decode_aos_canonical_field::<ThresholdKeyLifecycleCertificateV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,

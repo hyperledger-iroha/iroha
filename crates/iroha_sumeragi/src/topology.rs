@@ -170,6 +170,7 @@ impl Topology {
 
     /// Compute the topology of `height` for `committee = C_h` (§2.1): permutation from the
     /// authenticated epoch, committee and instance, `D_h` from the committed headers of the window.
+    #[allow(clippy::too_many_arguments, reason = "the §2.1 perm and `D_h` inputs")]
     pub fn compute(
         crypto: &dyn Crypto,
         instance: &Hash32,
@@ -182,20 +183,9 @@ impl Topology {
     ) -> Self {
         let perm = committee_permutation(crypto, instance, epoch, committee);
         let demoted = demoted_set(committee, height, genesis_height, window, headers);
-        // A permutation of 0..n with n ≥ 1 always yields a topology.
-        Self::from_parts(perm, &demoted, height).unwrap_or_else(|| Self::trivial(height))
-    }
-
-    fn trivial(height: u64) -> Self {
-        Self {
-            height,
-            perm: vec![0],
-            pos: vec![0],
-            demoted: Vec::new(),
-            is_demoted: vec![false],
-            nd: vec![0],
-            k0: 0,
-        }
+        // Committee construction proves n >= 1; shuffle preserves a permutation and
+        // demotion retains at most f < n members. No substitute committee is permissible.
+        Self::from_parts(perm, &demoted, height).expect("validated committee gives a topology")
     }
 
     /// Height `h`.
@@ -229,16 +219,6 @@ impl Topology {
             .get(usize_of(member))
             .copied()
             .unwrap_or(false)
-    }
-
-    /// `nd_h`: non-demoted members in permutation order.
-    pub fn non_demoted(&self) -> &[ValidatorIndex] {
-        &self.nd
-    }
-
-    /// `k0(h)`: index in `nd_h` of the view-0 leader.
-    pub fn k0(&self) -> usize {
-        self.k0
     }
 
     /// Leader `L(h, v) = nd_h[(k0(h) + v) mod a_h]`.
@@ -286,11 +266,7 @@ impl Topology {
             .filter(|member| !self.is_demoted(*member))
             .collect();
         order.extend(base.filter(|member| self.is_demoted(*member)));
-        Round {
-            view,
-            order,
-            q: self.q(),
-        }
+        Round { order, q: self.q() }
     }
 }
 
@@ -302,17 +278,11 @@ fn modulo(value: u64, n: usize) -> usize {
 /// The order of one round `(h, v)` and its roles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Round {
-    view: u64,
     order: Vec<ValidatorIndex>,
     q: usize,
 }
 
 impl Round {
-    /// The view.
-    pub fn view(&self) -> u64 {
-        self.view
-    }
-
     /// `order_{h,v}`: canonical indices by position.
     pub fn order(&self) -> &[ValidatorIndex] {
         &self.order
@@ -336,11 +306,6 @@ impl Round {
     /// Set B: `order[q .. n]` (empty if `f = 0`).
     pub fn set_b(&self) -> &[ValidatorIndex] {
         &self.order[self.q..]
-    }
-
-    /// Position of `member` in the order.
-    pub fn position(&self, member: ValidatorIndex) -> Option<usize> {
-        self.order.iter().position(|m| *m == member)
     }
 
     /// Whether `member` is in set A.
@@ -563,7 +528,7 @@ mod tests {
         assert_eq!(t.round(2).order(), &[5, 6, 0, 1, 2, 3, 4]);
         // |D| = 1 = f − 1, demoted slot at the anchor: slot 3 passes to 4.
         let t = Topology::from_parts(identity(7), &[3], 3).unwrap();
-        assert_eq!(t.non_demoted(), &[0, 1, 2, 4, 5, 6]);
+        assert_eq!(&t.nd, &[0, 1, 2, 4, 5, 6]);
         assert_eq!(t.round(0).order(), &[4, 5, 6, 0, 1, 2, 3]);
         assert_eq!(t.round(1).order(), &[5, 6, 0, 1, 2, 4, 3]);
         assert_eq!(t.round(2).order(), &[6, 0, 1, 2, 4, 5, 3]);
@@ -648,13 +613,12 @@ mod tests {
     fn roles() {
         let t = Topology::from_parts(identity(4), &[], 0).unwrap();
         let r = t.round(0);
-        assert_eq!(r.view(), 0);
         assert_eq!(r.leader(), 0);
         assert_eq!(r.set_a(), &[0, 1, 2]);
         assert_eq!(r.proxy_tail(), 2);
         assert_eq!(r.set_b(), &[3]);
-        assert_eq!(r.position(3), Some(3));
-        assert_eq!(r.position(9), None);
+        assert_eq!(r.order.iter().position(|member| *member == 3), Some(3));
+        assert_eq!(r.order.iter().position(|member| *member == 9), None);
         assert!(r.in_set_a(1) && !r.in_set_a(3));
         assert!(r.in_set_b(3) && !r.in_set_b(0));
         // q = 1: the leader is the proxy tail; set B empty.
@@ -666,7 +630,7 @@ mod tests {
         let t = Topology::from_parts(identity(3), &[1], 0).unwrap();
         assert!(t.demoted().is_empty());
         assert_eq!(t.round(0).set_a(), &[0, 1, 2]);
-        assert_eq!((t.height(), t.n(), t.q(), t.k0()), (0, 3, 3, 0));
+        assert_eq!((t.height(), t.n(), t.q(), t.k0), (0, 3, 3, 0));
         assert_eq!(t.permutation(), &[0, 1, 2]);
     }
 
@@ -736,7 +700,10 @@ mod tests {
                     // The failed leader of view v is at position a − 1 in view v + 1.
                     let next = t.round(view + 1);
                     if a > 1 {
-                        assert_eq!(next.position(r.leader()), Some(a - 1));
+                        assert_eq!(
+                            next.order.iter().position(|member| *member == r.leader()),
+                            Some(a - 1)
+                        );
                     }
                     // f + 1 consecutive views have f + 1 distinct leaders.
                     let mut leaders: Vec<u32> = (0..=u64::try_from(f).unwrap())

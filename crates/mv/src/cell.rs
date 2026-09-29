@@ -702,7 +702,7 @@ mod block {
             value
         }
         /// Borrow the exact undo image for canonical snapshot serialization.
-        pub(crate) fn original_undo(&self) -> &Option<V> {
+        pub fn original_undo(&self) -> &Option<V> {
             &self.writers.as_ref().revert
         }
         /// Read entry from the storage up to certain version non-inclusive
@@ -814,6 +814,18 @@ pub use block::{Block, Transaction};
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn original_undo_distinguishes_untouched_and_original_empty_value() {
+        let cell = Cell::new(None::<u64>);
+        let mut block = cell.block();
+        assert_eq!(block.original_undo(), &None);
+        *block.get_mut() = Some(7);
+        assert_eq!(block.original_undo(), &Some(None));
+        assert_eq!(block.get(), &Some(7));
+        block.commit();
+        assert_eq!(cell.view().get(), &Some(7));
+        assert_eq!(cell.predecessor_view().get(), &Some(None));
+    }
     #[test]
     fn get() {
         let cell = Cell::new(0_u64);

@@ -9221,52 +9221,35 @@ mod tests {
         .unwrap();
         insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_hash).unwrap();
 
-        for intent in [
-            TransactionAdmissionIntent::QueuePlanSynced,
-            TransactionAdmissionIntent::Ordinary,
-        ] {
-            let PreparedTransactionOperationV1::FinalCanary(mut operation) =
-                final_canary_envelope_fixture().operation
-            else {
-                unreachable!("final canary fixture")
-            };
-            let transaction = TransactionBuilder::new(
-                network_id,
-                AccountId::new(key_pair.public_key().clone()),
-                operation.fee_payment.clone(),
-            )
-            .with_executable(Executable::Instructions(
-                vec![InstructionBox::from(Log::new(
-                    LogLevel::INFO,
-                    message.clone(),
-                ))]
-                .into(),
-            ))
-            .with_metadata(metadata.clone())
-            .try_sign(key_pair.private_key())
-            .unwrap();
-            let wire = transaction.encode_wire_v1().unwrap();
-            operation.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
-            operation.signed_transaction_wire_hex = hex::encode(&wire);
-            operation.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
-            operation.semantic_hash_hex = semantic_hash.clone();
-            let value = json::to_value(&operation).unwrap();
-            let result = verify_final_canary_prepared_operation_v1(
-                &value,
-                &network_id,
-                transaction.authority(),
-            );
-            if intent == TransactionAdmissionIntent::Ordinary {
-                assert_eq!(result.unwrap(), transaction);
-            } else {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("Ordinary admission")
-                );
-            }
-        }
+        let PreparedTransactionOperationV1::FinalCanary(mut operation) =
+            final_canary_envelope_fixture().operation
+        else {
+            unreachable!("final canary fixture")
+        };
+        let transaction = TransactionBuilder::new(
+            network_id,
+            AccountId::new(key_pair.public_key().clone()),
+            operation.fee_payment.clone(),
+        )
+        .with_executable(Executable::Instructions(
+            vec![InstructionBox::from(Log::new(
+                LogLevel::INFO,
+                message.clone(),
+            ))]
+            .into(),
+        ))
+        .with_metadata(metadata.clone())
+        .try_sign(key_pair.private_key())
+        .unwrap();
+        let wire = transaction.encode_wire_v1().unwrap();
+        operation.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+        operation.signed_transaction_wire_hex = hex::encode(&wire);
+        operation.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+        operation.semantic_hash_hex = semantic_hash.clone();
+        let value = json::to_value(&operation).unwrap();
+        let result =
+            verify_final_canary_prepared_operation_v1(&value, &network_id, transaction.authority());
+        assert_eq!(result.unwrap(), transaction);
     }
 
     #[test]

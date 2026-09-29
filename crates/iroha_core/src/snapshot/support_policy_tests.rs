@@ -13,11 +13,11 @@ use iroha_config::{
         actual::{Kura as KuraConfig, LaneConfig},
         defaults::{
             self,
-            kura::{FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, REPLICA_ADVERT_POLICY},
+            kura::{FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES},
         },
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     Level, Registrable,
     account::{
@@ -240,207 +240,11 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
     expected.sort();
     assert_eq!(artifact_names, expected);
 }
-fn signed_complete_wire_finality_for_snapshot_blocks(
-    network_id: &NetworkId,
-    blocks: &[Arc<SignedBlock>],
-) -> Vec<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
-    use iroha_data_model::block::consensus_v2::{
-        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-        ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-        QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
-    };
-    let mut keypairs = (0_u8..4)
-        .map(|index| checked_seeded_keypair(0xB0_u8.saturating_add(index), Algorithm::BlsNormal))
-        .collect::<Vec<_>>();
-    keypairs.sort_by(|left, right| {
-        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-    });
-    let roster = keypairs
-        .iter()
-        .map(|keypair| ValidatorPower {
-            validator: PeerId::new(keypair.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let validator_set_pops = keypairs
-        .iter()
-        .map(|keypair| {
-            bls_normal_pop_prove(keypair.private_key())
-                .expect("derive snapshot-eviction validator PoP")
-        })
-        .collect::<Vec<_>>();
-    let execution_commitment_template =
-        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"snapshot eviction parent state"),
-            Hash::new(b"snapshot eviction post state"),
-            Hash::new(b"snapshot eviction ordinary writes"),
-            1,
-            Hash::new(b"snapshot eviction executed block wire placeholder"),
-        );
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-            *network_id,
-            100,
-            &roster,
-        );
-    let mut parent: Option<V2FinalityArtifact> = None;
-    let mut artifacts = Vec::with_capacity(blocks.len());
-    for block in blocks {
-        let height = block.header().height().get();
-        let context = HeightContext {
-            network_id: network_id.clone(),
-            protocol_version: PROTOCOL_VERSION,
-            height,
-            epoch: 0,
-            epoch_end_height: 100,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
-            roster: roster.clone(),
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
-            nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
-            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 512 * 1024,
-                max_chunk_count: 1024,
-            },
-            leader_seed: [0x42; 32],
-        };
-        let subject = BlockSubject {
-            parent_block_hash: block.header().prev_block_hash(),
-            block_hash: block.hash(),
-            payload_hash: block
-                .canonical_proposal_wire_hash()
-                .expect("canonical snapshot proposal wire"),
-        };
-        let mut execution_commitment = execution_commitment_template;
-        execution_commitment.executed_block_wire_len = u64::try_from(
-            block
-                .encode_wire()
-                .expect("canonical snapshot executed block wire")
-                .len(),
-        )
-        .expect("snapshot executed block wire length fits u64");
-        execution_commitment.executed_block_wire_hash = block
-            .executed_block_wire_hash()
-            .expect("canonical snapshot executed block wire");
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height,
-            view: block.header().view_change_index(),
-        };
-        let mut commit_qc = QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let preimage = commit_qc
-            .signer_preimage(&context, 0)
-            .expect("snapshot-eviction signer preimage");
-        let signatures = commit_qc
-            .signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(
-                    keypairs[usize::try_from(*index).expect("fixture signer index")].private_key(),
-                    &preimage,
-                )
-                .expect("sign snapshot-eviction finality vote")
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        commit_qc.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-                .expect("aggregate snapshot-eviction finality votes");
-        let artifact =
-            V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops.clone());
-        artifact
-            .verify()
-            .expect("snapshot-eviction finality fixture verifies");
-        parent = Some(artifact.clone());
-        artifacts.push(artifact);
-    }
-    artifacts
-}
-fn snapshot_gate_fixture() -> (
-    State,
-    Arc<Kura>,
-    Arc<SignedBlock>,
-    iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
-) {
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let block = signed_block_with_transaction(accepted_log_transaction("snapshot gate"));
-    store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let artifact = signed_complete_wire_finality_for_snapshot_blocks(
-        &state.network_id,
-        std::slice::from_ref(&block),
+fn native_snapshot_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
+    crate::sumeragi::test_chain::CertifiedTestChain::start(
+        crate::sumeragi::test_chain::TestChainConfig::new(crate::state::World::new(), 1_000),
     )
-    .into_iter()
-    .next()
-    .expect("one snapshot finality artifact");
-    (state, kura, block, artifact)
-}
-fn store_snapshot_checkpoint_and_manifest(
-    state: &State,
-    kura: &Kura,
-    block: &SignedBlock,
-    state_hash: Hash,
-    authority: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
-) {
-    let height = block.header().height().get();
-    kura.store_wsv_checkpoint(height, block.hash(), state_hash)
-        .expect("store snapshot gate WSV checkpoint");
-    let manifest =
-        crate::kura::CommitManifest::new(height, block.hash(), None, None, state_hash, None)
-            .with_authenticated_v2_commit_authority(authority);
-    kura.store_commit_manifest(manifest)
-        .expect("store checkpoint-bound snapshot gate manifest");
-    assert_eq!(state.committed_height(), usize::try_from(height).unwrap());
-}
-fn store_complete_snapshot_commit_evidence(
-    state: &State,
-    kura: &Kura,
-    block: &SignedBlock,
-    authority: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
-) {
-    let state_hash = canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    store_snapshot_checkpoint_and_manifest(state, kura, block, state_hash, authority);
-    let _ = kura
-        .store_v2_finality_artifact(authority)
-        .expect("persist complete-wire snapshot finality");
-}
-fn store_complete_snapshot_commit_evidence_for_blocks(
-    state: &State,
-    kura: &Kura,
-    blocks: &[Arc<SignedBlock>],
-) {
-    let artifacts = signed_complete_wire_finality_for_snapshot_blocks(&state.network_id, blocks);
-    let (terminal_artifact, historical_artifacts) = artifacts
-        .split_last()
-        .expect("snapshot commit evidence requires a terminal block");
-    for artifact in historical_artifacts {
-        let _ = kura
-            .store_v2_finality_artifact(artifact)
-            .expect("persist historical complete-wire snapshot finality");
-    }
-    let terminal_block = blocks
-        .last()
-        .expect("snapshot commit evidence requires a terminal block");
-    store_complete_snapshot_commit_evidence(state, kura, terminal_block, terminal_artifact);
+    .expect("original signed native genesis")
 }
 fn assert_snapshot_bundle_absent(store_dir: &Path) {
     assert!(
@@ -468,7 +272,6 @@ fn emergency_fast_manifest_decode_requires_canonical_v1_boundary() {
         committed_height: 1,
         tip_hash: Some(dummy_block_hash(0xA5)),
         sccp_policy_hash: [0x5A; 32],
-        has_snapshot_bootstrap_lineage: false,
     };
     let bytes = valid.encode();
     assert!(
@@ -591,171 +394,64 @@ async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
     );
 }
 #[tokio::test]
-async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
-    let (state, kura, _block, _artifact) = snapshot_gate_fixture();
-    let root = tempdir().expect("snapshot gate temp root");
-    let store_dir = root.path().join("snapshot");
-    let signing_key = checked_random_snapshot_keypair();
-    let error = try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
-        .expect_err("a durable body without its checkpoint must defer snapshot publication");
-    assert!(matches!(
-        error,
-        TryWriteError::CommitEvidenceDeferred { .. }
-    ));
-    assert_snapshot_bundle_absent(&store_dir);
-    assert!(
-        try_read_snapshot(
-            &mv::allocation::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES
-            ),
-            &store_dir,
-            &kura,
-            &state.lane_manifests.read().clone(),
-            &state.nexus_snapshot(),
-            LiveQueryStore::start_test,
-            BlockCount(1),
-            TEST_CHUNK_SIZE,
-            signing_key.public_key(),
-            &state.chain_id,
-            &state.network_id,
-            &state.zk_snapshot(),
-            #[cfg(feature = "telemetry")]
-            StateTelemetry::new(<_>::default(), true),
-            &snapshot_read_budget_for_testing(),
-            &crate::state::kagemusha_operation_indexes::default_budget(),
-        )
-        .is_err(),
-        "restart must not select a rejected unpublished generation"
-    );
-}
-#[tokio::test]
-async fn snapshot_publication_defers_bound_manifest_without_finality() {
-    let (state, kura, block, artifact) = snapshot_gate_fixture();
-    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
-    store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
-    let root = tempdir().expect("snapshot gate temp root");
-    let store_dir = root.path().join("snapshot");
+async fn snapshot_publication_rejects_body_without_original_execution() {
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = state_factory_with_kura(Arc::clone(&kura));
+    let block = signed_block_with_transaction(accepted_log_transaction("unexecuted body"));
+    store_block_and_mark_state_height(&mut state, &kura, block);
+    let root = tempdir().unwrap();
+    let store = root.path().join("snapshot");
     let error = try_write_snapshot(
         &state,
-        &store_dir,
+        &store,
         &checked_random_snapshot_keypair(),
         TEST_CHUNK_SIZE,
     )
-    .expect_err("checkpoint and manifest without finality must defer publication");
-    assert!(matches!(
-        error,
-        TryWriteError::CommitEvidenceDeferred { .. }
-    ));
-    assert_snapshot_bundle_absent(&store_dir);
-}
-#[tokio::test]
-async fn snapshot_publication_rejects_mismatched_state_hash() {
-    let (state, kura, block, artifact) = snapshot_gate_fixture();
-    let wrong_state_hash = Hash::new(b"adversarial snapshot state hash");
-    store_snapshot_checkpoint_and_manifest(&state, &kura, &block, wrong_state_hash, &artifact);
-    let _ = kura
-        .store_v2_finality_artifact(&artifact)
-        .expect("store exact finality artifact");
-    let root = tempdir().expect("snapshot gate temp root");
-    let store_dir = root.path().join("snapshot");
-    let error = try_write_snapshot(
-        &state,
-        &store_dir,
-        &checked_random_snapshot_keypair(),
-        TEST_CHUNK_SIZE,
-    )
-    .expect_err("a mismatched WSV checkpoint must fail snapshot publication");
+    .expect_err("a durable body cannot substitute for original native execution");
     assert!(matches!(error, TryWriteError::CommitEvidence { .. }));
-    assert_snapshot_bundle_absent(&store_dir);
+    assert_snapshot_bundle_absent(&store);
+    assert_eq!(kura.blocks_count(), 1);
 }
 #[tokio::test]
-async fn snapshot_publication_rejects_foreign_manifest_authority() {
-    let (state, kura, block, artifact) = snapshot_gate_fixture();
-    let foreign_block = signed_block_with_transaction(accepted_log_transaction("foreign"));
-    let foreign = signed_complete_wire_finality_for_snapshot_blocks(
-        &state.network_id,
-        std::slice::from_ref(&foreign_block),
-    )
-    .into_iter()
-    .next()
-    .expect("foreign authority artifact");
-    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
-    store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &foreign);
-    let _ = kura
-        .store_v2_finality_artifact(&artifact)
-        .expect("store exact finality artifact");
-    let root = tempdir().expect("snapshot gate temp root");
-    let store_dir = root.path().join("snapshot");
-    let error = try_write_snapshot(
-        &state,
-        &store_dir,
-        &checked_random_snapshot_keypair(),
-        TEST_CHUNK_SIZE,
-    )
-    .expect_err("a foreign manifest authority must fail snapshot publication");
-    assert!(matches!(error, TryWriteError::CommitEvidence { .. }));
-    assert_snapshot_bundle_absent(&store_dir);
+async fn snapshot_publication_rejects_foreign_captured_tip() {
+    let mut chain = native_snapshot_chain();
+    chain.commit_at(2_000, Vec::new());
+    let original = CapturedStateSnapshot::capture(chain.state()).unwrap();
+    let mut other = native_snapshot_chain();
+    other.commit_at(3_000, Vec::new());
+    let foreign = CapturedStateSnapshot::capture(other.state()).unwrap();
+    let checkpoint = geometry_checkpoint_from_snapshot(foreign.json.as_bytes()).unwrap();
+    assert!(matches!(
+        ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &original.identity),
+        Err(TryWriteError::CommitEvidence { .. })
+    ));
+    assert_ne!(original.identity.native_tip, foreign.identity.native_tip);
 }
 #[tokio::test]
-async fn snapshot_publication_accepts_complete_authenticated_tuple() {
-    let (mut state, kura, block, artifact) = snapshot_gate_fixture();
-    state.nexus.get_mut().autoscale.scale_out_window_blocks =
-        std::num::NonZeroU16::new(48).expect("non-zero scale-out window");
-    state.nexus.get_mut().autoscale.scale_in_window_blocks =
-        std::num::NonZeroU16::new(192).expect("non-zero scale-in window");
-    let state_hash = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
-    store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
-    let _ = kura
-        .store_v2_finality_artifact(&artifact)
-        .expect("store exact finality artifact");
-    let root = tempdir().expect("snapshot gate temp root");
-    let store_dir = root.path().join("snapshot");
-    let signing_key = checked_random_snapshot_keypair();
-    try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
-        .expect("complete authenticated commit tuple must permit publication");
-    assert_canonical_snapshot_generation(&store_dir);
-    SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
-    let restored = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
-            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-        ),
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(state.committed_height()),
-        TEST_CHUNK_SIZE,
-        signing_key.public_key(),
-        state.chain_id_ref(),
-        state.network_id_ref(),
-        &state.zk_snapshot(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    )
-    .expect("post-height snapshot must remain exactly restart-readable");
-    SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
-        assert_eq!(
-            passes.get(),
-            1,
-            "authenticated snapshot restart must reconcile the Kura prefix once"
-        );
-    });
+async fn snapshot_publication_preserves_native_cut_and_requires_original_replay() {
+    let mut chain = native_snapshot_chain();
+    chain.commit(Vec::new());
+    let state = chain.state();
+    let root = tempdir().unwrap();
+    let store = root.path().join("snapshot");
+    let key = checked_random_snapshot_keypair();
+    let before = exact_snapshot_payload_bytes(state);
+    try_write_snapshot(state, &store, &key, TEST_CHUNK_SIZE).unwrap();
+    assert_canonical_snapshot_generation(&store);
     assert_eq!(
-        restored.nexus_snapshot().autoscale.scale_out_window_blocks,
-        state.nexus_snapshot().autoscale.scale_out_window_blocks
+        std::fs::read(current_generation_artifact(&store, SNAPSHOT_FILE_NAME)).unwrap(),
+        before
     );
-    assert_eq!(
-        restored.nexus_snapshot().autoscale.scale_in_window_blocks,
-        state.nexus_snapshot().autoscale.scale_in_window_blocks
-    );
-    assert_eq!(
-        exact_snapshot_payload_bytes(&restored),
-        exact_snapshot_payload_bytes(&state),
-        "post-height publication must preserve the exact canonical restart payload"
-    );
+    let budget = snapshot_read_budget_for_testing();
+    assert!(matches!(
+        strict_snapshot_read_for_custody_test(&store, state, chain.kura(), &key, &budget, &|_| Ok(
+            ()
+        )),
+        Err(TryReadError::NativeExecutionReplayRequired)
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(exact_snapshot_payload_bytes(state), before);
+    assert_eq!(chain.kura().exact_durable_blocks_count().unwrap(), 2);
 }
 #[tokio::test]
 async fn snapshot_fixture_key_generation_preserves_algorithm() {
@@ -769,36 +465,6 @@ async fn snapshot_fixture_key_generation_preserves_algorithm() {
             .algorithm(),
         Algorithm::BlsNormal
     );
-}
-#[tokio::test]
-async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() {
-    let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
-    let policy = SnapshotBootstrapPolicy {
-        enabled: true,
-        audited_sha256: Some(digest.to_owned()),
-        audited_height: Some(42),
-    };
-    assert!(policy.validate().is_ok());
-    assert!(policy.authorizes(digest, 42));
-    assert!(!policy.authorizes(
-        "2a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd",
-        42
-    ));
-    assert!(!policy.authorizes(digest, 41));
-    let invalid_uppercase = SnapshotBootstrapPolicy {
-        audited_sha256: Some(digest.to_ascii_uppercase()),
-        ..policy.clone()
-    };
-    assert!(invalid_uppercase.validate().is_err());
-    let disabled = SnapshotBootstrapPolicy::default();
-    assert!(disabled.validate().is_ok());
-    assert!(!disabled.authorizes(digest, 42));
-    let disabled_with_authority = SnapshotBootstrapPolicy {
-        enabled: false,
-        audited_sha256: Some(digest.to_owned()),
-        audited_height: Some(42),
-    };
-    assert!(disabled_with_authority.validate().is_err());
 }
 fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
@@ -847,7 +513,6 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         store_dir: WithOrigin::inline(store_dir.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         debug_output_new_blocks: false,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
@@ -859,7 +524,6 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: REPLICA_ADVERT_POLICY,
     }
 }
 fn install_active_space_directory_manifest(
@@ -1388,7 +1052,6 @@ fn publish_test_snapshot_generation(
             committed_height: checkpoint.height,
             tip_hash: checkpoint.block_hash,
             sccp_policy_hash: checkpoint.sccp_policy_hash,
-            has_snapshot_bootstrap_lineage: checkpoint.snapshot_v2_bootstrap.is_some(),
         },
         Err(_) => EmergencyFastSnapshotManifestV1 {
             version: SNAPSHOT_FAST_MANIFEST_VERSION,
@@ -1398,7 +1061,6 @@ fn publish_test_snapshot_generation(
             committed_height: 0,
             tip_hash: None,
             sccp_policy_hash: [0; 32],
-            has_snapshot_bootstrap_lineage: false,
         },
     };
     let fast_manifest_bytes = fast_manifest.encode();

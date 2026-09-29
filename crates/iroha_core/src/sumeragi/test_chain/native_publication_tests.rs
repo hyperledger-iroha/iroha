@@ -173,7 +173,7 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         .unwrap()
         .insert(
             0,
-            norito::json::json!({"instructions": registration, "ivm_triggers": [], "topology": []}),
+            norito::json!({"instructions": registration, "ivm_triggers": [], "topology": []}),
         );
     let manifest: iroha_genesis::RawGenesisTransaction =
         norito::json::from_str(&norito::json::to_json(&value).unwrap()).unwrap();
@@ -200,6 +200,11 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         SumeragiConsensusMode::Permissioned,
         1000,
         &iroha_config::parameters::actual::Pipeline::default(),
+        &iroha_config::parameters::actual::FraudMonitoring::default(),
+        None,
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert!(

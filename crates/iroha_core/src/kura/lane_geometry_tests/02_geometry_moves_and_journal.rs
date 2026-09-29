@@ -707,7 +707,7 @@ fn transition_rejects_occupied_instance_before_intent_publication() {
         &BTreeSet::new(),
     )
     .expect_err("unowned instance collision must fail before publishing an intent");
-    assert!(!blocks.join(MARKER_FILE_NAME).exists());
+    assert!(!collision.join(MARKER_FILE_NAME).exists());
     assert_eq!(fs::read(sentinel).unwrap(), b"must not adopt or overwrite");
     assert_eq!(
         fs::read(kura.lane_geometry_journal_path()).unwrap(),

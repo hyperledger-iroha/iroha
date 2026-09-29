@@ -47,7 +47,7 @@ fn sccp_exempt_cap_is_judged_against_the_committed_parent_world() {
             "block-start writes are invisible to the parent view the cap is judged against"
         );
         ValidBlock::validate_sccp_exempt_cap(signed, &state_block)
-            .expect("the skeleton classifier finds no exempt transaction");
+            .expect("no transaction of the block is exempt-shaped");
     }
     sccp_call_site_parameters_committed(&state);
     let state_block = state.block(signed.header());
@@ -55,7 +55,7 @@ fn sccp_exempt_cap_is_judged_against_the_committed_parent_world() {
         &state_block.sccp_parent_world_view()
     ));
     ValidBlock::validate_sccp_exempt_cap(signed, &state_block)
-        .expect("the skeleton classifier finds no exempt transaction");
+        .expect("no transaction of the block is exempt-shaped");
 }
 
 #[test]

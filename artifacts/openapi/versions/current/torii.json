@@ -4151,7 +4151,7 @@
           "active_session_id": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+                "$ref": "#/components/schemas/Fixed32ByteArray"
               },
               {
                 "type": "null"
@@ -4320,6 +4320,11 @@
           "encrypted_input_mode": {
             "$ref": "#/components/schemas/BfvRamEncryptedInputMode"
           },
+          "initializer_descriptor_hash": {
+            "description": "Canonical hash binding the compiled secret commitment and bounded programmed-memory initializer.",
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": "string"
+          },
           "memory_lane_count": {
             "description": "Number of ciphertext memory lanes persisted across program steps.",
             "format": "uint16",
@@ -4347,7 +4352,8 @@
           "memory_lane_count",
           "ciphertext_mul_per_step",
           "encrypted_input_mode",
-          "min_ciphertext_modulus"
+          "min_ciphertext_modulus",
+          "initializer_descriptor_hash"
         ],
         "type": "object"
       },
@@ -5035,6 +5041,13 @@
         ],
         "type": "object"
       },
+      "BlsValidatorId": {
+        "description": "Canonical bare multihash string for a 48-byte BLS12-381 G1 (BLS-normal) validator public key.",
+        "maxLength": 102,
+        "minLength": 102,
+        "pattern": "^ea0130[0-9A-F]{96}$",
+        "type": "string"
+      },
       "BootleLanternIssuanceAuthorizationWireV1": {
         "contentMediaType": "application/x-norito",
         "description": "One exact canonical 320-byte ILA1 Bootle/Lantern issuance authorization.",
@@ -5086,7 +5099,7 @@
             "type": "integer"
           },
           "challenge": {
-            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+            "$ref": "#/components/schemas/Fixed32ByteArray"
           },
           "network_id": {
             "$ref": "#/components/schemas/Hash"
@@ -5460,7 +5473,7 @@
           "vk_set_hash": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+                "$ref": "#/components/schemas/Fixed32ByteArray"
               },
               {
                 "type": "null"
@@ -5470,7 +5483,7 @@
           "zk_policy_hash": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+                "$ref": "#/components/schemas/Fixed32ByteArray"
               },
               {
                 "type": "null"
@@ -10660,7 +10673,7 @@
         "description": "Unsigned request-bound failure; never authenticates readiness or finality. TipChanged requires tip_mismatch; every other reason requires null. All nested selectors must match the outer request and independently retained node/network. Carried only in ErrorEnvelope details.finality_attestation_failure under code bridge_finality_attestation_failure; other error details must be absent.",
         "properties": {
           "challenge": {
-            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+            "$ref": "#/components/schemas/Fixed32ByteArray"
           },
           "height": {
             "format": "uint64",
@@ -10726,6 +10739,17 @@
           "proof_of_possession"
         ],
         "type": "object"
+      },
+      "Fixed32ByteArray": {
+        "description": "Exact 32-byte value encoded as the canonical fixed-size Norito JSON byte array.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "type": "array"
       },
       "GameAccessV1": {
         "oneOf": [
@@ -14497,6 +14521,44 @@
           "artifacts"
         ]
       },
+      "GovernanceKagemushaReleasePurposeV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "production"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "testnet_experiment"
+              },
+              "value": {
+                "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          }
+        ]
+      },
       "GovernanceKagemushaReproducibleBuildV1": {
         "type": "object",
         "additionalProperties": false,
@@ -14515,6 +14577,33 @@
           "builder_id",
           "artifact_set_digest",
           "report"
+        ]
+      },
+      "GovernanceKagemushaTestnetExperimentScopeV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset_identity_digest": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "asset_incarnation": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          },
+          "asset_scale": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 28
+          },
+          "liability_pool_id": {
+            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+          }
+        },
+        "required": [
+          "asset_identity_digest",
+          "asset_incarnation",
+          "asset_scale",
+          "liability_pool_id"
         ]
       },
       "GovernanceKagemushaThermalQualificationV1": {
@@ -18653,7 +18742,7 @@
       },
       "GovernanceParliamentTimedOvnCastingProofResponseV1": {
         "additionalProperties": false,
-        "description": "One bounded checkpoint-promotion page. Casting material is absent on intermediate pages and present together only at the observed finalized tip. Native callers must pin NetworkId and the exact starting HeightContextId independently, verify the complete chain and witnesses, and replay the archive before accessing seed material.",
+        "description": "One bounded checkpoint-promotion page. Casting material is absent on intermediate pages and present together only at the observed finalized tip. Native callers pin the network identity and complete authenticated SumeragiFinalityCheckpoint independently, verify the complete chain and witnesses, and replay the archive before accessing seed material.",
         "properties": {
           "casting_context_archive": {
             "description": "Canonical framed Core casting archive, present only on a terminal page and bounded to 4 MiB.",
@@ -18718,7 +18807,7 @@
             "type": "integer"
           },
           "evaluated_context_id": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
+            "$ref": "#/components/schemas/Hash"
           },
           "finality_chain": {
             "items": {
@@ -22286,7 +22375,7 @@
             "type": "array"
           },
           "validator": {
-            "$ref": "#/components/schemas/SumeragiV2BlsValidatorId",
+            "$ref": "#/components/schemas/BlsValidatorId",
             "description": "Exact consensus identity occupying this roster position."
           }
         },
@@ -22336,7 +22425,7 @@
       },
       "KagemushaOperationResultV1": {
         "additionalProperties": false,
-        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
+        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and\u2014only for top-up\u2014the byte-identical mint credit.",
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/KagemushaOperationKindV1"
@@ -22696,46 +22785,6 @@
         ],
         "type": "object"
       },
-      "LaneFastpqProofMaterial": {
-        "additionalProperties": false,
-        "properties": {
-          "proof_digest": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "verified_at_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "proof_digest",
-          "verified_at_height"
-        ],
-        "type": "object"
-      },
-      "LaneLiquidityProfile": {
-        "additionalProperties": false,
-        "description": "Canonical externally tagged Norito JSON unit enum.",
-        "properties": {
-          "profile": {
-            "enum": [
-              "Tier1",
-              "Tier2",
-              "Tier3"
-            ],
-            "type": "string"
-          },
-          "state": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "profile",
-          "state"
-        ],
-        "type": "object"
-      },
       "LanePrivacyProof": {
         "additionalProperties": false,
         "properties": {
@@ -22823,267 +22872,6 @@
         "required": [
           "commitment_id",
           "witness"
-        ],
-        "type": "object"
-      },
-      "LaneRelayEnvelope": {
-        "additionalProperties": false,
-        "properties": {
-          "block_header": {
-            "$ref": "#/components/schemas/BlockHeader"
-          },
-          "block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "da_commitment_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "fastpq_proof": {
-            "$ref": "#/components/schemas/LaneFastpqProofMaterial"
-          },
-          "lane_block_descriptor_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "manifest_root": {
-            "description": "Canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "qc": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Qc"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rbc_bytes_total": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "settlement_commitment": {
-            "$ref": "#/components/schemas/LaneSettlementCommitment"
-          },
-          "settlement_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "lane_id",
-          "lane_incarnation",
-          "dataspace_id",
-          "block_height",
-          "block_header",
-          "qc",
-          "da_commitment_hash",
-          "settlement_commitment",
-          "settlement_hash",
-          "rbc_bytes_total"
-        ],
-        "type": "object"
-      },
-      "LaneSettlementCommitment": {
-        "additionalProperties": false,
-        "properties": {
-          "block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "native_amx_receipts": {
-            "items": {
-              "$ref": "#/components/schemas/NativeAmxReceipt"
-            },
-            "maxItems": 4096,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "nexus_fee_receipts": {
-            "description": "Versioned Nexus fee receipts with exact recomputation inputs.",
-            "items": {
-              "$ref": "#/components/schemas/NexusFeeReceipt"
-            },
-            "type": "array",
-            "uniqueItems": true
-          },
-          "receipts": {
-            "items": {
-              "$ref": "#/components/schemas/LaneSettlementReceipt"
-            },
-            "type": "array"
-          },
-          "swap_metadata": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LaneSwapMetadata"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "total_local_amount": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "total_xor_after_haircut": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "total_xor_due": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "total_xor_variance": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "tx_count": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "block_height",
-          "lane_id",
-          "lane_incarnation",
-          "dataspace_id",
-          "tx_count",
-          "total_local_amount",
-          "total_xor_due",
-          "total_xor_after_haircut",
-          "total_xor_variance",
-          "swap_metadata",
-          "receipts",
-          "nexus_fee_receipts",
-          "native_amx_receipts"
-        ],
-        "type": "object"
-      },
-      "LaneSettlementReceipt": {
-        "additionalProperties": false,
-        "properties": {
-          "local_amount": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "source_id": {
-            "description": "Transaction-linked settlement receipt source id as canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "timestamp_ms": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "xor_after_haircut": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "xor_due": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "xor_variance": {
-            "$ref": "#/components/schemas/Quantity"
-          }
-        },
-        "required": [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms"
-        ],
-        "type": "object"
-      },
-      "LaneSwapMetadata": {
-        "additionalProperties": false,
-        "properties": {
-          "epsilon_bps": {
-            "format": "uint16",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "liquidity_profile": {
-            "$ref": "#/components/schemas/LaneLiquidityProfile"
-          },
-          "twap_local_per_xor": {
-            "type": "string"
-          },
-          "twap_window_seconds": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "volatility_class": {
-            "$ref": "#/components/schemas/LaneVolatilityClass"
-          }
-        },
-        "required": [
-          "epsilon_bps",
-          "twap_window_seconds",
-          "liquidity_profile",
-          "twap_local_per_xor",
-          "volatility_class"
-        ],
-        "type": "object"
-      },
-      "LaneVolatilityClass": {
-        "additionalProperties": false,
-        "description": "Canonical externally tagged Norito JSON unit enum.",
-        "properties": {
-          "bucket": {
-            "enum": [
-              "Stable",
-              "Elevated",
-              "Dislocated"
-            ],
-            "type": "string"
-          },
-          "state": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "bucket",
-          "state"
         ],
         "type": "object"
       },
@@ -28491,638 +28279,6 @@
         ],
         "type": "object"
       },
-      "NativeAmxAttestationBody": {
-        "additionalProperties": false,
-        "properties": {
-          "authority_context_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "coordinator_dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "coordinator_lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "coordinator_lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "coordinator_lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "coordinator_proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "epoch": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/NetworkId"
-          },
-          "participant_dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "participant_lane_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "participant_lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "participant_lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "participant_lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "participant_min_quorum": {
-            "format": "uint32",
-            "maximum": 128,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "participant_previous_block_descriptor_hash": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "participant_previous_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "participant_proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "participant_settlement_commitment": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "participant_validator_count": {
-            "format": "uint32",
-            "maximum": 128,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "participant_validator_set_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/NativeAmxPhase"
-          },
-          "plan_digest": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "planned_coordinator_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "round": {
-            "additionalProperties": false,
-            "properties": {
-              "context_id": {
-                "$ref": "#/components/schemas/SumeragiV2HeightContextId"
-              },
-              "height": {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              "view": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "context_id",
-              "height",
-              "view"
-            ],
-            "type": "object"
-          },
-          "source_id": {
-            "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "tx_entrypoint_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "round",
-          "epoch",
-          "network_id",
-          "source_id",
-          "tx_entrypoint_hash",
-          "plan_digest",
-          "phase",
-          "coordinator_lane_id",
-          "coordinator_dataspace_id",
-          "coordinator_lane_incarnation",
-          "participant_lane_id",
-          "participant_dataspace_id",
-          "participant_lane_incarnation",
-          "participant_previous_block_height",
-          "participant_previous_block_descriptor_hash",
-          "participant_lane_block_height",
-          "participant_lane_block_view",
-          "participant_proposal_hash",
-          "participant_settlement_commitment",
-          "participant_validator_set_hash",
-          "participant_validator_count",
-          "participant_min_quorum",
-          "authority_context_height",
-          "coordinator_lane_block_view",
-          "coordinator_proposal_hash",
-          "planned_coordinator_block_height"
-        ],
-        "type": "object"
-      },
-      "NativeAmxAttestationQc": {
-        "additionalProperties": false,
-        "properties": {
-          "bls_aggregate_signature": {
-            "$ref": "#/components/schemas/SumeragiV2BlsProof"
-          },
-          "body": {
-            "$ref": "#/components/schemas/NativeAmxAttestationBody"
-          },
-          "signers_bitmap": {
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 16,
-            "minItems": 1,
-            "type": "array"
-          },
-          "validator_set": {
-            "description": "Ordered validator ids used to assemble the QC.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
-            },
-            "maxItems": 128,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "validator_set_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "validator_set_hash_version": {
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          },
-          "validator_set_pops": {
-            "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set.",
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2BlsProof"
-            },
-            "maxItems": 128,
-            "minItems": 1,
-            "type": "array"
-          }
-        },
-        "required": [
-          "body",
-          "validator_set_hash_version",
-          "validator_set_hash",
-          "validator_set",
-          "validator_set_pops",
-          "signers_bitmap",
-          "bls_aggregate_signature"
-        ],
-        "type": "object"
-      },
-      "NativeAmxLegRecord": {
-        "additionalProperties": false,
-        "properties": {
-          "commit_qc": {
-            "$ref": "#/components/schemas/NativeAmxAttestationQc"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "participant_proposal": {
-            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
-          },
-          "participant_settlement": {
-            "$ref": "#/components/schemas/NativeAmxParticipantSettlement"
-          },
-          "participant_settlement_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "prepare_qc": {
-            "$ref": "#/components/schemas/NativeAmxAttestationQc"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "participant_proposal",
-          "participant_settlement",
-          "participant_settlement_hash",
-          "prepare_qc",
-          "commit_qc"
-        ],
-        "type": "object"
-      },
-      "NativeAmxParticipantLaneBlockDescriptor": {
-        "additionalProperties": false,
-        "properties": {
-          "accepted_candidate_indices": {
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 4096,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "accepted_transaction_hashes": {
-            "items": {
-              "$ref": "#/components/schemas/Hash"
-            },
-            "maxItems": 4096,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "descriptor_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "min_quorum": {
-            "format": "uint32",
-            "maximum": 128,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "payload_ownership_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "previous_lane_block_descriptor_hash": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "previous_lane_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "qc_mode_tag": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "rbc_instance_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "subject_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "validator_count": {
-            "format": "uint32",
-            "maximum": 128,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "validator_set": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
-            },
-            "maxItems": 128,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "validator_set_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "validator_set_hash_version": {
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "proposal_height",
-          "lane_block_height",
-          "lane_block_view",
-          "subject_hash",
-          "payload_ownership_hash",
-          "rbc_instance_hash",
-          "accepted_candidate_indices",
-          "accepted_transaction_hashes",
-          "validator_set_hash_version",
-          "validator_set_hash",
-          "validator_set",
-          "validator_count",
-          "min_quorum",
-          "qc_mode_tag",
-          "descriptor_hash",
-          "previous_lane_block_height"
-        ],
-        "type": "object"
-      },
-      "NativeAmxParticipantLaneBlockProposal": {
-        "additionalProperties": false,
-        "description": "Exact non-empty control-only participant proposal. The canonical Norito JSON shape requires payload_block_hint to be present as null because the global transaction executes only once on the coordinator path.",
-        "properties": {
-          "descriptor": {
-            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockDescriptor"
-          },
-          "payload_block_hint": {
-            "type": "null"
-          },
-          "proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "descriptor",
-          "proposal_hash",
-          "payload_block_hint"
-        ],
-        "type": "object"
-      },
-      "NativeAmxParticipantSettlement": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "participant_lane_block_height": {
-                  "const": 1
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "previous_native_settlement_hash": {
-                  "type": "null"
-                }
-              }
-            }
-          }
-        ],
-        "description": "Nonrecursive Native AMX participant control commitment. Source IDs are unique and retain candidate order; this type has no economic or nested fields.",
-        "properties": {
-          "authority_context_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "not": {
-                  "pattern": "^hash:0{63}1#"
-                }
-              }
-            ]
-          },
-          "participant_lane_block_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "previous_native_settlement_hash": {
-            "description": "Required Native control history link; null for the first Native control. Ordinary lane blocks may interleave.",
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/Hash"
-                  },
-                  {
-                    "not": {
-                      "pattern": "^hash:0{63}1#"
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          "source_ids": {
-            "items": {
-              "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
-              "type": "string"
-            },
-            "maxItems": 4096,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "participant_lane_block_height",
-          "authority_context_height",
-          "previous_native_settlement_hash",
-          "source_ids"
-        ],
-        "type": "object"
-      },
-      "NativeAmxPhase": {
-        "additionalProperties": false,
-        "description": "Canonical externally tagged Norito JSON unit enum.",
-        "properties": {
-          "detail": {
-            "type": "null"
-          },
-          "phase": {
-            "enum": [
-              "prepare",
-              "commit"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "phase",
-          "detail"
-        ],
-        "type": "object"
-      },
-      "NativeAmxReceipt": {
-        "additionalProperties": false,
-        "properties": {
-          "authority_context_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "coordinator_proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/NativeAmxLegRecord"
-            },
-            "maxItems": 255,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/NetworkId"
-          },
-          "plan_digest": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "source_id": {
-            "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "version": {
-            "enum": [
-              2
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "source_id",
-          "network_id",
-          "plan_digest",
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "authority_context_height",
-          "lane_block_height",
-          "lane_block_view",
-          "coordinator_proposal_hash",
-          "legs"
-        ],
-        "type": "object"
-      },
       "NativeFinalityArtifact": {
         "additionalProperties": false,
         "description": "One bounded original SignedBlockWire. This untrusted transport is not an authority capability; signed genesis has no CommitQC.",
@@ -29145,112 +28301,6 @@
           }
         ],
         "description": "Exact genesis-header-derived deployment identity encoded as one canonical Norito JSON hash literal."
-      },
-      "NexusFeeReceipt": {
-        "additionalProperties": false,
-        "properties": {
-          "block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "fee_amount": {
-            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "type": "string"
-          },
-          "fee_asset_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "payer_account_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "schedule": {
-            "$ref": "#/components/schemas/NexusFeeScheduleInputs"
-          },
-          "source_id": {
-            "description": "Canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "version": {
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "source_id",
-          "dataspace_id",
-          "lane_id",
-          "block_height",
-          "payer_account_id",
-          "fee_asset_id",
-          "fee_amount",
-          "schedule"
-        ],
-        "type": "object"
-      },
-      "NexusFeeScheduleInputs": {
-        "additionalProperties": false,
-        "properties": {
-          "base_fee": {
-            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "type": "string"
-          },
-          "gas_used": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "instruction_count": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "per_byte_fee": {
-            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "type": "string"
-          },
-          "per_gas_unit_fee": {
-            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "type": "string"
-          },
-          "per_instruction_fee": {
-            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "type": "string"
-          },
-          "tx_bytes_len": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "tx_bytes_len",
-          "instruction_count",
-          "gas_used",
-          "base_fee",
-          "per_byte_fee",
-          "per_instruction_fee",
-          "per_gas_unit_fee"
-        ],
-        "type": "object"
       },
       "NexusLaneLifecycleIncarnationEntry": {
         "additionalProperties": false,
@@ -36361,135 +35411,6 @@
         ],
         "type": "object"
       },
-      "Qc": {
-        "additionalProperties": false,
-        "properties": {
-          "aggregate": {
-            "additionalProperties": false,
-            "properties": {
-              "bls_aggregate_signature": {
-                "description": "BLS aggregate signature (hex).",
-                "type": "string"
-              },
-              "signers_bitmap": {
-                "description": "Signer bitmap (hex, LSB-first).",
-                "type": "string"
-              }
-            },
-            "required": [
-              "signers_bitmap",
-              "bls_aggregate_signature"
-            ],
-            "type": "object"
-          },
-          "epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "height": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "highest_qc": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/QcRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Optional highest QC reference (advisory)."
-          },
-          "mode_tag": {
-            "description": "Consensus mode tag used for domain separation.",
-            "type": "string"
-          },
-          "parent_state_root": {
-            "description": "Parent state root bound into the QC (hex).",
-            "type": "string"
-          },
-          "phase": {
-            "description": "Certified phase.",
-            "type": "string"
-          },
-          "post_state_root": {
-            "description": "Post-state root bound into the QC (hex).",
-            "type": "string"
-          },
-          "subject_block_hash": {
-            "description": "Hash of the certified block (hex).",
-            "type": "string"
-          },
-          "validator_set": {
-            "description": "Ordered validator set used to assemble the certificate.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "validator_set_hash": {
-            "description": "Stable hash of the validator set.",
-            "type": "string"
-          },
-          "validator_set_hash_version": {
-            "format": "uint16",
-            "type": "integer"
-          },
-          "view": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "phase",
-          "subject_block_hash",
-          "parent_state_root",
-          "post_state_root",
-          "height",
-          "view",
-          "epoch",
-          "mode_tag",
-          "validator_set_hash",
-          "validator_set_hash_version",
-          "validator_set",
-          "aggregate"
-        ],
-        "type": "object"
-      },
-      "QcRef": {
-        "additionalProperties": false,
-        "properties": {
-          "epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "height": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "phase": {
-            "description": "Certified phase.",
-            "type": "string"
-          },
-          "subject_block_hash": {
-            "description": "Hash of the certified block (hex).",
-            "type": "string"
-          },
-          "view": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "height",
-          "view",
-          "epoch",
-          "subject_block_hash",
-          "phase"
-        ],
-        "type": "object"
-      },
       "Quantity": {
         "description": "Canonical non-negative exact decimal Quantity. The mantissa is bounded by the positive range of a signed 512-bit integer; JSON numbers, leading zeros, trailing fractional zeros, and more than 28 fractional digits are rejected.",
         "maxLength": 155,
@@ -37784,7 +36705,7 @@
             "$ref": "#/components/schemas/SccpFaultRefV1"
           },
           "peer": {
-            "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
+            "$ref": "#/components/schemas/BlsValidatorId"
           }
         },
         "required": [
@@ -38265,7 +37186,7 @@
             "additionalProperties": false,
             "properties": {
               "key": {
-                "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
+                "$ref": "#/components/schemas/BlsValidatorId"
               },
               "subject": {
                 "const": "bridge_key_fault"
@@ -49165,458 +48086,6 @@
         ],
         "type": "object"
       },
-      "SumeragiAutonomousLaneExecution": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "properties": {
-                  "descriptor_hash": {
-                    "$ref": "#/components/schemas/Hash"
-                  },
-                  "proposal_hash": {
-                    "$ref": "#/components/schemas/Hash"
-                  }
-                },
-                "required": [
-                  "proposal_hash",
-                  "descriptor_hash"
-                ]
-              },
-              {
-                "properties": {
-                  "descriptor_hash": {
-                    "type": "null"
-                  },
-                  "proposal_hash": {
-                    "type": "null"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "oneOf": [
-              {
-                "properties": {
-                  "application_block_hash": {
-                    "$ref": "#/components/schemas/Hash"
-                  },
-                  "application_block_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "application_block_height",
-                  "application_block_hash"
-                ]
-              },
-              {
-                "properties": {
-                  "application_block_hash": {
-                    "type": "null"
-                  },
-                  "application_block_height": {
-                    "type": "null"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "if": {
-              "properties": {
-                "highest_durable_stage": {
-                  "const": "reservations_durable"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "application_block_hash": {
-                  "type": "null"
-                },
-                "application_block_height": {
-                  "type": "null"
-                },
-                "descriptor_hash": {
-                  "type": "null"
-                },
-                "executable_payload_hash": {
-                  "type": "null"
-                },
-                "merge_entry_hash": {
-                  "type": "null"
-                },
-                "proposal_hash": {
-                  "type": "null"
-                },
-                "proposal_view": {
-                  "type": "null"
-                },
-                "source_bundle_hash": {
-                  "type": "null"
-                },
-                "stuck_reason": {
-                  "const": "awaiting_executable_payload"
-                }
-              },
-              "required": [
-                "stuck_reason"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "highest_durable_stage": {
-                  "enum": [
-                    "executable_payload_durable",
-                    "payload_availability_certified",
-                    "lane_certified",
-                    "certified_bundle_durable",
-                    "merge_candidate_durable",
-                    "global_carrier_committed",
-                    "kura_wsv_application_receipt_durable",
-                    "queue_finalized"
-                  ]
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "descriptor_hash": {
-                  "$ref": "#/components/schemas/Hash"
-                },
-                "proposal_hash": {
-                  "$ref": "#/components/schemas/Hash"
-                }
-              },
-              "required": [
-                "proposal_hash",
-                "descriptor_hash"
-              ]
-            }
-          }
-        ],
-        "description": "Bounded autonomous-lane durability evidence. Optional values may be omitted or null; after normalization proposal_hash and descriptor_hash form an exact pair. ReservationsDurable has no authenticated proposal view, finalized identity, executable payload, source bundle, merge entry, or carrier and requires equal reservation/transaction counts. Later non-conflict stages require the finalized identity pair and may carry an authenticated proposal view when the durable payload supplies one. Rows are strictly ordered by lane_id, dataspace_id, lane_incarnation, lane_block_height, lane_block_view, proposal_height, and proposal_identity_hash.",
-        "properties": {
-          "application_block_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "application_block_height": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "descriptor_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "executable_payload_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "highest_durable_stage": {
-            "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStage"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "merge_entry_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "proposal_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "proposal_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "proposal_identity_hash": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "not": {
-                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
-                }
-              }
-            ]
-          },
-          "proposal_view": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "reservation_count": {
-            "format": "uint64",
-            "maximum": 4096,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "reservation_group_hash": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "not": {
-                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
-                }
-              }
-            ]
-          },
-          "reservation_owner_hash": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "not": {
-                  "pattern": "^hash:0{64}#[0-9A-F]{4}$"
-                }
-              }
-            ]
-          },
-          "source_bundle_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "stuck_reason": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "transaction_count": {
-            "format": "uint64",
-            "maximum": 4096,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "lane_block_height",
-          "lane_block_view",
-          "proposal_height",
-          "reservation_owner_hash",
-          "proposal_identity_hash",
-          "reservation_group_hash",
-          "reservation_count",
-          "transaction_count",
-          "highest_durable_stage"
-        ],
-        "type": "object"
-      },
-      "SumeragiAutonomousLaneExecutionStage": {
-        "enum": [
-          "reservations_durable",
-          "executable_payload_durable",
-          "payload_availability_certified",
-          "lane_certified",
-          "certified_bundle_durable",
-          "merge_candidate_durable",
-          "global_carrier_committed",
-          "kura_wsv_application_receipt_durable",
-          "queue_finalized",
-          "conflict"
-        ],
-        "type": "string"
-      },
-      "SumeragiAutonomousLaneExecutionStuckReason": {
-        "enum": [
-          "awaiting_executable_payload",
-          "awaiting_payload_availability",
-          "awaiting_lane_certification",
-          "certified_bundle_unavailable",
-          "awaiting_merge_selection",
-          "awaiting_global_carrier",
-          "awaiting_application_receipt",
-          "queue_finalization_unverifiable",
-          "evidence_conflict"
-        ],
-        "type": "string"
-      },
-      "SumeragiCommittedLaneBlock": {
-        "additionalProperties": false,
-        "properties": {
-          "commit_qc_signer_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "descriptor_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "executable_payload_available": {
-            "type": "boolean"
-          },
-          "execution_status": {
-            "type": "string"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "min_quorum": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "payload_ownership_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "prepare_qc_signer_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "qc_mode_tag": {
-            "type": "string"
-          },
-          "rbc_instance_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "subject_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "validator_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "lane_block_height",
-          "lane_block_view",
-          "descriptor_hash",
-          "proposal_hash",
-          "execution_status",
-          "executable_payload_available",
-          "subject_hash",
-          "payload_ownership_hash",
-          "rbc_instance_hash",
-          "qc_mode_tag",
-          "validator_count",
-          "min_quorum",
-          "prepare_qc_signer_count",
-          "commit_qc_signer_count"
-        ],
-        "type": "object"
-      },
       "SumeragiDataspaceCommitment": {
         "additionalProperties": false,
         "properties": {
@@ -49675,28 +48144,9 @@
       "SumeragiDiagnosticsResponse": {
         "additionalProperties": false,
         "properties": {
-          "autonomous_lane_executions": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiAutonomousLaneExecution"
-            },
-            "maxItems": 128,
-            "type": "array"
-          },
-          "committed_lane_blocks": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiCommittedLaneBlock"
-            },
-            "type": "array"
-          },
           "dataspace_commitments": {
             "items": {
               "$ref": "#/components/schemas/SumeragiDataspaceCommitment"
-            },
-            "type": "array"
-          },
-          "lane_block_sessions": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiLaneBlockSessionStatus"
             },
             "type": "array"
           },
@@ -49722,31 +48172,6 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
-          },
-          "lane_payload_ownerships": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiLanePayloadOwnership"
-            },
-            "type": "array"
-          },
-          "lane_relay_envelopes": {
-            "items": {
-              "$ref": "#/components/schemas/LaneRelayEnvelope"
-            },
-            "type": "array"
-          },
-          "lane_settlement_commitments": {
-            "items": {
-              "$ref": "#/components/schemas/LaneSettlementCommitment"
-            },
-            "type": "array"
-          },
-          "native_amx_participant_applications": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplication"
-            },
-            "maxItems": 1024,
-            "type": "array"
           },
           "npos": {
             "$ref": "#/components/schemas/SumeragiNposDiagnostics"
@@ -49805,16 +48230,9 @@
           "tx_queue_oldest_queued_age_ms",
           "lane_commitments",
           "dataspace_commitments",
-          "lane_settlement_commitments",
-          "lane_relay_envelopes",
-          "lane_payload_ownerships",
-          "committed_lane_blocks",
-          "lane_block_sessions",
           "lane_governance_sealed_total",
           "lane_governance_sealed_aliases",
-          "lane_governance",
-          "native_amx_participant_applications",
-          "autonomous_lane_executions"
+          "lane_governance"
         ],
         "type": "object"
       },
@@ -50079,7 +48497,7 @@
             "$ref": "#/components/schemas/Hash"
           },
           "challenge": {
-            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+            "$ref": "#/components/schemas/Fixed32ByteArray"
           },
           "config_fingerprint": {
             "$ref": "#/components/schemas/Hash"
@@ -50363,95 +48781,6 @@
           }
         ]
       },
-      "SumeragiLaneBlockSessionStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "commit_vote_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "committed_session_drained": {
-            "type": "boolean"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "has_commit_qc": {
-            "type": "boolean"
-          },
-          "has_prepare_qc": {
-            "type": "boolean"
-          },
-          "has_proposal": {
-            "type": "boolean"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "min_quorum": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "pending_commit_vote_request": {
-            "type": "boolean"
-          },
-          "pending_committed_session_drain": {
-            "type": "boolean"
-          },
-          "prepare_vote_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "validator_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "lane_block_height",
-          "lane_block_view",
-          "proposal_hash",
-          "has_proposal",
-          "prepare_vote_count",
-          "commit_vote_count",
-          "has_prepare_qc",
-          "has_commit_qc",
-          "pending_commit_vote_request",
-          "pending_committed_session_drain",
-          "committed_session_drained",
-          "validator_count",
-          "min_quorum"
-        ],
-        "type": "object"
-      },
       "SumeragiLaneCommitment": {
         "additionalProperties": false,
         "properties": {
@@ -50578,307 +48907,6 @@
           "runtime_upgrade"
         ],
         "type": "object"
-      },
-      "SumeragiLanePayloadOwnership": {
-        "additionalProperties": false,
-        "properties": {
-          "accepted_candidate_indices": {
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "accepted_transaction_hashes": {
-            "items": {
-              "$ref": "#/components/schemas/Hash"
-            },
-            "type": "array"
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_descriptor_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "lane_block_descriptor_min_quorum": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_descriptor_validator_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_descriptor_validator_set": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "lane_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_block_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "payload_ownership_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "previous_lane_block_descriptor_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "previous_lane_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "qc_mode_tag": {
-            "type": "string"
-          },
-          "rbc_instance_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "subject_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "proposal_height",
-          "proposal_view",
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "lane_block_height",
-          "lane_block_view",
-          "subject_hash",
-          "qc_mode_tag",
-          "accepted_candidate_indices",
-          "accepted_transaction_hashes",
-          "previous_lane_block_height",
-          "previous_lane_block_descriptor_hash",
-          "lane_block_descriptor_hash",
-          "lane_block_descriptor_validator_set",
-          "lane_block_descriptor_validator_count",
-          "lane_block_descriptor_min_quorum",
-          "payload_ownership_hash",
-          "rbc_instance_hash"
-        ],
-        "type": "object"
-      },
-      "SumeragiNativeAmxParticipantApplication": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "properties": {
-              "application_block_hash": {
-                "type": "null"
-              },
-              "application_block_height": {
-                "type": "null"
-              },
-              "state": {
-                "const": "certified_pending_carrier"
-              }
-            }
-          },
-          {
-            "properties": {
-              "application_block_hash": {
-                "$ref": "#/components/schemas/Hash"
-              },
-              "application_block_height": {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              "state": {
-                "const": "committed_evidence_pending"
-              }
-            },
-            "required": [
-              "application_block_height",
-              "application_block_hash"
-            ]
-          },
-          {
-            "properties": {
-              "application_block_hash": {
-                "$ref": "#/components/schemas/Hash"
-              },
-              "application_block_height": {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              "state": {
-                "const": "durably_applied"
-              }
-            },
-            "required": [
-              "application_block_height",
-              "application_block_hash"
-            ]
-          },
-          {
-            "properties": {
-              "application_block_hash": {
-                "type": "null"
-              },
-              "application_block_height": {
-                "type": "null"
-              },
-              "state": {
-                "const": "conflict"
-              }
-            }
-          }
-        ],
-        "properties": {
-          "application_block_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "application_block_height": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "dataspace_id": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "descriptor_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lane_incarnation": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "participant_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "participant_view": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "predecessor_descriptor_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "predecessor_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "proposal_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "settlement_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "source_count": {
-            "format": "uint64",
-            "maximum": 4096,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "state": {
-            "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplicationState"
-          }
-        },
-        "required": [
-          "lane_id",
-          "dataspace_id",
-          "lane_incarnation",
-          "participant_height",
-          "participant_view",
-          "predecessor_height",
-          "descriptor_hash",
-          "proposal_hash",
-          "settlement_hash",
-          "source_count",
-          "state"
-        ],
-        "type": "object"
-      },
-      "SumeragiNativeAmxParticipantApplicationState": {
-        "enum": [
-          "certified_pending_carrier",
-          "committed_evidence_pending",
-          "durably_applied",
-          "conflict"
-        ],
-        "type": "string"
       },
       "SumeragiNposDiagnostics": {
         "additionalProperties": false,
@@ -51151,7 +49179,7 @@
             "type": "integer",
             "format": "uint16",
             "enum": [
-              8
+              1
             ]
           },
           "proxy_tail": {
@@ -51226,1169 +49254,6 @@
         ],
         "type": "object"
       },
-      "SumeragiV2BeaconHorizonStatus": {
-        "additionalProperties": false,
-        "description": "Local global-beacon horizon observed when the active height was activated. It is signed inside BridgeFinalityAttestationBodyV1 so operators can bound restarts against the next mandatory pulse; it never authorizes signing.",
-        "properties": {
-          "active_session_id": {
-            "$ref": "#/components/schemas/SumeragiV2Bytes32"
-          },
-          "epoch_length_blocks": {
-            "description": "Committed NPoS epoch length; zero in permissioned mode.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "local_provider_ready": {
-            "description": "This validator's partial-signer provider attested custody of its seat in the active session; false on observers.",
-            "type": "boolean"
-          },
-          "next_required_pulse_height": {
-            "description": "Earliest height at or after the active height whose finalized beacon pulse is consensus-mandatory.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "session_covers_next_pulse": {
-            "description": "The active session is authenticated for this network and roster and is live at next_required_pulse_height.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "epoch_length_blocks",
-          "session_covers_next_pulse",
-          "local_provider_ready"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2BlockSubject": {
-        "additionalProperties": false,
-        "description": "Exact parent/block/payload subject. parent_block_hash is null only for genesis.",
-        "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "parent_block_hash": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "payload_hash": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "parent_block_hash",
-          "block_hash",
-          "payload_hash"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2BlsProof": {
-        "description": "Exact 96-byte BLS-normal proof/signature in Norito JSON byte-array representation.",
-        "items": {
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maxItems": 96,
-        "minItems": 96,
-        "type": "array"
-      },
-      "SumeragiV2BlsValidatorId": {
-        "description": "Canonical bare multihash string for a 48-byte BLS12-381 G1 (BLS-normal) validator public key.",
-        "maxLength": 102,
-        "minLength": 102,
-        "pattern": "^ea0130[0-9A-F]{96}$",
-        "type": "string"
-      },
-      "SumeragiV2BodyState": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "state": {
-            "enum": [
-              "missing",
-              "reconstructing",
-              "stored",
-              "validated",
-              "pending_apply",
-              "applied"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "state",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2Bytes32": {
-        "description": "Exact 32-byte value in Norito JSON's canonical uppercase hexadecimal representation.",
-        "maxLength": 64,
-        "minLength": 64,
-        "pattern": "^[0-9A-F]{64}$",
-        "type": "string"
-      },
-      "SumeragiV2CommitPhase": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "phase": {
-            "enum": [
-              "commit"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "phase",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2CommitQcStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "certificate": {
-            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
-          },
-          "min_signers": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "signed_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "signer_count": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "total_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "validator_count": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "certificate",
-          "validator_count",
-          "signer_count",
-          "min_signers",
-          "signed_power",
-          "total_power"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ConsensusMode": {
-        "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of the unit-variant Sumeragi-v2 consensus mode.",
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "mode": {
-            "enum": [
-              "permissioned",
-              "npos"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "mode",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ConsensusRound": {
-        "additionalProperties": false,
-        "properties": {
-          "context_id": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
-          },
-          "height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "view": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "context_id",
-          "height",
-          "view"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2DataAvailabilityLayout": {
-        "additionalProperties": false,
-        "properties": {
-          "chunk_size_bytes": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 2,
-            "multipleOf": 2,
-            "type": "integer"
-          },
-          "data_shards": {
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "encoding": {
-            "$ref": "#/components/schemas/SumeragiV2PayloadEncoding"
-          },
-          "max_chunk_count": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "max_payload_size_bytes": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "parity_shards": {
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "encoding",
-          "chunk_size_bytes",
-          "data_shards",
-          "parity_shards",
-          "max_payload_size_bytes",
-          "max_chunk_count"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2DualQuorum": {
-        "additionalProperties": false,
-        "description": "Canonical 2f+1 equal-vote quorum derived from a bounded 3f+1 roster.",
-        "properties": {
-          "min_signers": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "total_power": {
-            "format": "uint64",
-            "maximum": 31,
-            "minimum": 4,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "min_signers",
-          "total_power"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ExecutionCommitment": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "properties": {
-                  "native_amx_application_manifest_count": {
-                    "const": 0
-                  },
-                  "native_amx_application_manifest_root": {
-                    "const": "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-                  }
-                }
-              },
-              {
-                "properties": {
-                  "native_amx_application_manifest_count": {
-                    "maximum": 1024,
-                    "minimum": 1
-                  },
-                  "native_amx_application_manifest_root": {
-                    "not": {
-                      "const": "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-                    }
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. The KAGEMUSHA top-up root slot is required and is null exactly when kagemusha_top_up_count is zero. The lane-finality manifest slot is required and is null exactly when the block emits no lane-finality statements. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root. merge_carrier is mandatory and is null for an ordinary block or an exact V1 merge-ledger entry commitment. executed_block_wire_len is the non-zero exact byte length paired with executed_block_wire_hash.",
-        "oneOf": [
-          {
-            "properties": {
-              "kagemusha_top_up_count": {
-                "const": 0
-              },
-              "kagemusha_top_up_root": {
-                "type": "null"
-              }
-            }
-          },
-          {
-            "properties": {
-              "kagemusha_top_up_count": {
-                "minimum": 1
-              },
-              "kagemusha_top_up_root": {
-                "$ref": "#/components/schemas/Hash"
-              }
-            }
-          }
-        ],
-        "properties": {
-          "executed_block_wire_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "executed_block_wire_len": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "kagemusha_top_up_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "kagemusha_top_up_root": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "lane_finality_manifest": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2LaneFinalityManifestCommitment"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "merge_carrier": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SumeragiV2MergeCarrierCommitment"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "native_amx_application_manifest_count": {
-            "format": "uint32",
-            "maximum": 1024,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "native_amx_application_manifest_root": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "native_amx_application_manifest_version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          },
-          "ordinary_writes_root": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "parent_state_root": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "post_state_root": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "parent_state_root",
-          "post_state_root",
-          "ordinary_writes_root",
-          "kagemusha_top_up_root",
-          "kagemusha_top_up_count",
-          "native_amx_application_manifest_version",
-          "native_amx_application_manifest_root",
-          "native_amx_application_manifest_count",
-          "lane_finality_manifest",
-          "merge_carrier",
-          "executed_block_wire_len",
-          "executed_block_wire_hash"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2Fixed32ByteArray": {
-        "description": "Exact 32-byte value using the historical fixed-bytes Norito JSON adapter.",
-        "items": {
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maxItems": 32,
-        "minItems": 32,
-        "type": "array"
-      },
-      "SumeragiV2GlobalPhase": {
-        "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of a global Sumeragi-v2 phase. Finality artifacts require commit.",
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "phase": {
-            "enum": [
-              "prepare",
-              "commit"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "phase",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2HeightContextId": {
-        "description": "Single-field tuple struct containing the typed hash of the complete immutable height context.",
-        "items": {
-          "$ref": "#/components/schemas/Hash"
-        },
-        "maxItems": 1,
-        "minItems": 1,
-        "type": "array"
-      },
-      "SumeragiV2HeightContextStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "epoch": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "epoch_end_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "epoch_seed": {
-            "description": "Canonical uppercase 32-byte Norito JSON hex.",
-            "pattern": "^[0-9A-F]{64}$",
-            "type": "string"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusMode"
-          },
-          "quorum": {
-            "$ref": "#/components/schemas/SumeragiV2DualQuorum"
-          },
-          "validator_count": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 4,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "epoch",
-          "epoch_end_height",
-          "mode",
-          "epoch_seed",
-          "validator_count",
-          "quorum"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2IgnoreCount": {
-        "additionalProperties": false,
-        "properties": {
-          "count": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/SumeragiV2IgnoreReason"
-          }
-        },
-        "required": [
-          "reason",
-          "count"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2IgnoreReason": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "reason": {
-            "enum": [
-              "wrong_height",
-              "wrong_view",
-              "stale_generation",
-              "busy",
-              "duplicate",
-              "no_matching_work",
-              "observer",
-              "view_closed",
-              "already_decided",
-              "recovery_pending",
-              "irrelevant_view",
-              "unsafe_proposal"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "reason",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2LaneFinalityManifestCommitment": {
-        "additionalProperties": false,
-        "description": "Exact root and non-zero leaf count of the canonical lane-finality statement tree.",
-        "properties": {
-          "leaf_count": {
-            "format": "uint64",
-            "maximum": 1024,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "root": {
-            "$ref": "#/components/schemas/Hash"
-          }
-        },
-        "required": [
-          "root",
-          "leaf_count"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2LivenessBlocker": {
-        "additionalProperties": false,
-        "properties": {
-          "blocker": {
-            "enum": [
-              "missing_proposal",
-              "body_unavailable",
-              "prepare_quorum_missing",
-              "commit_quorum_missing",
-              "timeout_certificate_missing",
-              "scheduler_starvation",
-              "application_pending",
-              "successor_activation_pending",
-              "local_control_pending"
-            ],
-            "type": "string"
-          },
-          "details": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "blocker",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2LivenessStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "blocker": {
-            "$ref": "#/components/schemas/SumeragiV2LivenessBlocker"
-          },
-          "commit_quorums": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2VoteQuorumStatus"
-            },
-            "maxItems": 32,
-            "type": "array"
-          },
-          "generation": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ignore_counts": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2IgnoreCount"
-            },
-            "maxItems": 12,
-            "type": "array"
-          },
-          "last_progress": {
-            "$ref": "#/components/schemas/SumeragiV2ProgressTransitionStatus"
-          },
-          "no_progress_age_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "outbound_intents": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2OutboundIntentStatus"
-            },
-            "maxItems": 7,
-            "type": "array"
-          },
-          "prepare_quorums": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2VoteQuorumStatus"
-            },
-            "maxItems": 31,
-            "type": "array"
-          },
-          "queues": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2QueueStatus"
-            },
-            "maxItems": 10,
-            "type": "array"
-          },
-          "timeout_quorums": {
-            "items": {
-              "$ref": "#/components/schemas/SumeragiV2TimeoutQuorumStatus"
-            },
-            "maxItems": 31,
-            "type": "array"
-          },
-          "work": {
-            "$ref": "#/components/schemas/SumeragiV2WorkStatus"
-          }
-        },
-        "required": [
-          "generation",
-          "prepare_quorums",
-          "commit_quorums",
-          "timeout_quorums",
-          "outbound_intents",
-          "work",
-          "queues",
-          "no_progress_age_ms",
-          "ignore_counts"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2LocalWorkStage": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "stage": {
-            "enum": [
-              "idle",
-              "queued",
-              "running",
-              "complete"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "stage",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2MergeCarrierCommitment": {
-        "additionalProperties": false,
-        "description": "Exact first-release merge-ledger entry identity authenticated by global finality.",
-        "properties": {
-          "entry_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "entry_hash"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2OutboundIntentKind": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "kind": {
-            "enum": [
-              "proposal",
-              "prepare_vote",
-              "commit_vote",
-              "prepare_qc",
-              "commit_qc",
-              "timeout_vote",
-              "timeout_certificate"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2OutboundIntentStage": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "stage": {
-            "enum": [
-              "pending_persistence",
-              "pending_signature",
-              "queued",
-              "sent"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "stage",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2OutboundIntentStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "execution_commitment": {
-            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/SumeragiV2OutboundIntentKind"
-          },
-          "proposal_round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "stage": {
-            "$ref": "#/components/schemas/SumeragiV2OutboundIntentStage"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          }
-        },
-        "required": [
-          "kind",
-          "round",
-          "stage"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2PayloadEncoding": {
-        "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of the unit-variant v2 payload encoding.",
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "encoding": {
-            "enum": [
-              "reed_solomon16"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "encoding",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ProgressTransition": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "transition": {
-            "enum": [
-              "proposal_admitted",
-              "body_available",
-              "body_stored",
-              "body_validated",
-              "prepare_vote_admitted",
-              "commit_vote_admitted",
-              "timeout_vote_admitted",
-              "prepare_quorum",
-              "lock_installed",
-              "commit_quorum",
-              "timeout_certificate_installed",
-              "decision_persisted",
-              "applied",
-              "successor_height_activated",
-              "recovery_replayed"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "transition",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2ProgressTransitionStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "age_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "generation": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "transition": {
-            "$ref": "#/components/schemas/SumeragiV2ProgressTransition"
-          }
-        },
-        "required": [
-          "generation",
-          "round",
-          "transition",
-          "age_ms"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2QueueKind": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "queue": {
-            "enum": [
-              "ingress",
-              "deferred_normal",
-              "deferred_progress",
-              "deferred_completion",
-              "runtime_normal",
-              "runtime_progress",
-              "runtime_completion",
-              "effect_completion",
-              "network_ingress",
-              "effect_dispatch"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "queue",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2QueueStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "capacity": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "depth": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "oldest_age_ms": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "queue": {
-            "$ref": "#/components/schemas/SumeragiV2QueueKind"
-          },
-          "service_debt": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "queue",
-          "depth",
-          "capacity",
-          "service_debt"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2QuorumCertificateRef": {
-        "additionalProperties": false,
-        "properties": {
-          "execution_commitment": {
-            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/SumeragiV2GlobalPhase"
-          },
-          "proposal_round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          }
-        },
-        "required": [
-          "round",
-          "proposal_round",
-          "phase",
-          "subject",
-          "execution_commitment"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2StatusPhase": {
-        "additionalProperties": false,
-        "properties": {
-          "details": {
-            "type": "null"
-          },
-          "phase": {
-            "enum": [
-              "awaiting_proposal",
-              "reconstructing_payload",
-              "validating_payload",
-              "prepare",
-              "commit",
-              "pending_apply"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "phase",
-          "details"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2TimeoutCertificateRef": {
-        "additionalProperties": false,
-        "properties": {
-          "certificate_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "highest_prepare_qc": {
-            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          }
-        },
-        "required": [
-          "round",
-          "certificate_hash"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2TimeoutQuorumStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "certificate_formed": {
-            "type": "boolean"
-          },
-          "min_signers": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "signed_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "signer_count": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "total_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "round",
-          "signer_count",
-          "signed_power",
-          "min_signers",
-          "total_power",
-          "certificate_formed"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2VoteQuorumStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "execution_commitment": {
-            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
-          },
-          "min_signers": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "proposal_round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "round": {
-            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
-          },
-          "signed_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "signer_count": {
-            "format": "uint32",
-            "maximum": 31,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
-          },
-          "total_power": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "round",
-          "proposal_round",
-          "subject",
-          "execution_commitment",
-          "signer_count",
-          "signed_power",
-          "min_signers",
-          "total_power"
-        ],
-        "type": "object"
-      },
-      "SumeragiV2WorkStatus": {
-        "additionalProperties": false,
-        "properties": {
-          "application": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          },
-          "body_recovery": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          },
-          "body_store": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          },
-          "successor_height": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          },
-          "validation": {
-            "$ref": "#/components/schemas/SumeragiV2LocalWorkStage"
-          }
-        },
-        "required": [
-          "candidate",
-          "body_recovery",
-          "body_store",
-          "validation",
-          "application",
-          "successor_height"
-        ],
-        "type": "object"
-      },
       "TimeHealth": {
         "additionalProperties": false,
         "properties": {
@@ -52421,7 +49286,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -52496,7 +49361,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -52986,42 +49851,6 @@
         ],
         "type": "object"
       },
-      "TransactionAdmissionIntent": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "intent": {
-                "const": "ordinary"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "intent",
-              "value"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "intent": {
-                "const": "queue_plan_synced"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "intent",
-              "value"
-            ],
-            "type": "object"
-          }
-        ]
-      },
       "TransactionDomain": {
         "oneOf": [
           {
@@ -53057,9 +49886,6 @@
       "TransactionPayload": {
         "additionalProperties": false,
         "properties": {
-          "admission_intent": {
-            "$ref": "#/components/schemas/TransactionAdmissionIntent"
-          },
           "attachments": {
             "contentEncoding": "base64",
             "description": "Optional canonical bounded ProofAttachmentList frame encoded as padded base64.",
@@ -53106,7 +49932,6 @@
           "instructions",
           "time_to_live_ms",
           "fee_payment",
-          "admission_intent",
           "metadata",
           "attachments"
         ],
@@ -53262,7 +50087,7 @@
             "type": "integer"
           },
           "evaluated_context_id": {
-            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
+            "$ref": "#/components/schemas/Hash"
           },
           "finality_chain": {
             "items": {
@@ -55466,71 +52291,6 @@
           "tally"
         ],
         "type": "object"
-      },
-      "GovernanceKagemushaTestnetExperimentScopeV1": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "asset_identity_digest": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "asset_incarnation": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          },
-          "asset_scale": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 28
-          },
-          "liability_pool_id": {
-            "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
-          }
-        },
-        "required": [
-          "asset_identity_digest",
-          "asset_incarnation",
-          "asset_scale",
-          "liability_pool_id"
-        ]
-      },
-      "GovernanceKagemushaReleasePurposeV1": {
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "production"
-              },
-              "value": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "kind",
-              "value"
-            ]
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "testnet_experiment"
-              },
-              "value": {
-                "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
-              }
-            },
-            "required": [
-              "kind",
-              "value"
-            ]
-          }
-        ]
       }
     },
     "securitySchemes": {
@@ -72455,7 +69215,7 @@
     },
     "/v1/gov/parliament/attempts/{governance_attempt_id}/plan": {
       "get": {
-        "description": "Returns the transitions the Parliament reducer accepts at the execution height of a transaction submitted now, the exact-height checkpoints, and the ballots waiting for a corpus relay or the combined TLE release (`specs/sccp.md` §4.14.5 item 4). The plan is advice for a driver; consensus rechecks every submitted transition.",
+        "description": "Returns the transitions the Parliament reducer accepts at the execution height of a transaction submitted now, the exact-height checkpoints, and the ballots waiting for a corpus relay or the combined TLE release (`specs/sccp.md` \u00a74.14.5 item 4). The plan is advice for a driver; consensus rechecks every submitted transition.",
         "operationId": "governanceParliamentAttemptPlanV1",
         "parameters": [
           {
@@ -77329,7 +74089,7 @@
     },
     "/v1/kagemusha/top-up": {
       "post": {
-        "description": "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
+        "description": "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
         "operationId": "kagemushaTopUp",
         "parameters": [
           {
@@ -120715,7 +117475,7 @@
       "name": "Applications"
     },
     {
-      "description": "SCCP v1 public read API under `/v1/sccp/*` (`specs/sccp.md` §6). Every peer serves identical bytes derived from committed state; readers verify every proof themselves.",
+      "description": "SCCP v1 public read API under `/v1/sccp/*` (`specs/sccp.md` \u00a76). Every peer serves identical bytes derived from committed state; readers verify every proof themselves.",
       "name": "SCCP"
     }
   ]

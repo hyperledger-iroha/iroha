@@ -2495,7 +2495,7 @@ impl ZkX509Rfc5280TraceV1 {
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn trace_bytes_v1(
+pub(super) fn trace_bytes_v1(
     trace: &ZkX509DerDocumentTraceV1,
 ) -> Result<PrivateTableV1<u8>, ZkX509DerAirErrorV1> {
     let mut bytes = PrivateTableV1::new(Vec::new(), zeroize_words_v1);

@@ -356,16 +356,11 @@ impl Kura {
         snapshots: &[&FastpqProofSnapshot],
     ) -> FastpqProofWriteResult {
         if let Err(error) = self.durable_mutation_authorized() {
-            let retry = matches!(&error, Error::SnapshotBootstrapAuthenticationPending);
             iroha_logger::warn!(
                 ?error,
                 "refusing FASTPQ proof sidecar mutation while Kura output is unauthorized"
             );
-            return if retry {
-                FastpqProofWriteResult::Retry
-            } else {
-                FastpqProofWriteResult::Drop
-            };
+            return FastpqProofWriteResult::Drop;
         }
         let Some(first_snapshot) = snapshots.first().copied() else {
             return FastpqProofWriteResult::Written;

@@ -186,6 +186,10 @@ pub fn apply_genesis(
                     state: std::ptr::from_ref(state) as usize,
                     tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                         height: GENESIS_HEIGHT,
+                        creation_time_ms: u64::try_from(
+                            committed.as_ref().header().creation_time().as_millis(),
+                        )
+                        .expect("block creation time fits u64"),
                         iroha_hash: committed.as_ref().hash(),
                         core_hash: block_hash.0,
                         result: result.0,

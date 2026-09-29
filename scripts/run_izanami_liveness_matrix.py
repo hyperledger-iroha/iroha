@@ -28,22 +28,20 @@ TIME_FMT = "%Y-%m-%dT%H:%M:%S.%f"
 class MatrixRow:
     name: str
     block_cap: int
-    scan_multiplier: int
     pipeline_ms: int
     latency_threshold_s: int = 3
 
 
 DEFAULT_ROWS = [
-    MatrixRow("cap1024_scan1_pipe300", 1024, 1, 300),
-    MatrixRow("cap1280_scan1_pipe300", 1280, 1, 300),
-    MatrixRow("cap1536_scan1_pipe300", 1536, 1, 300),
-    MatrixRow("cap1536_scan2_pipe300", 1536, 2, 300),
-    MatrixRow("cap1536_scan1_pipe400", 1536, 1, 400),
-    MatrixRow("cap2048_scan1_pipe400", 2048, 1, 400),
+    MatrixRow("cap1024_pipe300", 1024, 300),
+    MatrixRow("cap1280_pipe300", 1280, 300),
+    MatrixRow("cap1536_pipe300", 1536, 300),
+    MatrixRow("cap1536_pipe400", 1536, 400),
+    MatrixRow("cap2048_pipe400", 2048, 400),
 ]
 
 
-def is_revision4_committee_size(peers: int) -> bool:
+def is_admitted_committee_size(peers: int) -> bool:
     """Return whether ``peers`` is an admitted bounded ``3f + 1`` roster."""
 
     return 4 <= peers <= 31 and (peers - 1) % 3 == 0
@@ -55,12 +53,12 @@ def parse_rows(value: str | None) -> list[MatrixRow]:
     rows: list[MatrixRow] = []
     for raw in value.split(","):
         parts = raw.split(":")
-        if len(parts) != 4:
+        if len(parts) != 3:
             raise ValueError(
-                "revision-4 matrix rows must be name:cap:scan:pipeline_ms"
+                "native matrix rows must be name:cap:pipeline_ms"
             )
-        name, cap, scan, pipeline = parts
-        rows.append(MatrixRow(name, int(cap), int(scan), int(pipeline)))
+        name, cap, pipeline = parts
+        rows.append(MatrixRow(name, int(cap), int(pipeline)))
     return rows
 
 
@@ -197,7 +195,6 @@ def collect_result(
         "row_pass": row_pass,
         "duration_s": args.duration,
         "block_cap": row.block_cap,
-        "scan_multiplier": row.scan_multiplier,
         "pipeline_ms": row.pipeline_ms,
         "latency_threshold_s": row.latency_threshold_s,
         "progress_interval_s": args.progress_interval_s,
@@ -284,8 +281,6 @@ def run_row(args: argparse.Namespace, row: MatrixRow, output_root: Path) -> dict
         "stable",
         "--sumeragi-block-max-transactions",
         str(row.block_cap),
-        "--sumeragi-proposal-queue-scan-multiplier",
-        str(row.scan_multiplier),
         "--diagnostic-dir",
         str(run_dir),
     ]
@@ -313,18 +308,18 @@ def write_outputs(rows: list[dict[str, object]], output_root: Path) -> None:
     with md_path.open("w") as handle:
         handle.write("# Izanami Liveness Matrix\n\n")
         handle.write(
-            "| row | pass | exit | cap | scan | pipeline | accepted | strict height | "
+            "| row | pass | exit | cap | pipeline | accepted | strict height | "
             "approved | committed TPS | runner p95 | peer gap p95 | peer max | over 3s | DA ms | "
             "precommit ms | DA max | precommit max | pipeline max | conflict bps | detached merged | fallback | RBC payload | RBC READY | "
             "queue depth | view changes |\n"
         )
-        handle.write("| " + " | ".join(["---"] * 26) + " |\n")
+        handle.write("| " + " | ".join(["---"] * 25) + " |\n")
         for row in rows:
             runner_p95 = row["runner_strict_interval_p95_ms"]
             runner_p95_text = "" if runner_p95 == "" else f"{runner_p95}ms"
             handle.write(
                 f"| {row['name']} | {row['row_pass']} | {row['exit_code']} | {row['block_cap']} | "
-                f"{row['scan_multiplier']} | {row['pipeline_ms']} | "
+                f"{row['pipeline_ms']} | "
                 f"{row['ingress_accepted']} | {row['final_strict_min_height']} | "
                 f"{row['final_strict_min_txs_approved']} | {row['committed_tps']} | "
                 f"{runner_p95_text} | {float(row['gap_p95_s']):.3f}s | "
@@ -348,7 +343,7 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
         "--rows",
-        help="Comma-separated revision-4 rows: name:cap:scan:pipeline_ms",
+        help="Comma-separated revision-4 rows: name:cap:pipeline_ms",
     )
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--tps", type=int, default=20_000)
@@ -374,7 +369,7 @@ def main() -> int:
         help="Rebuild summary files from an existing output root without rerunning rows.",
     )
     args = parser.parse_args()
-    if not is_revision4_committee_size(args.peers):
+    if not is_admitted_committee_size(args.peers):
         parser.error("--peers must be an exact revision-4 3f+1 committee in 4..=31")
     args.repo = args.repo.resolve()
     args.izanami = (args.repo / args.izanami).resolve()

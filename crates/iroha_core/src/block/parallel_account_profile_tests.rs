@@ -178,7 +178,6 @@ struct AccountProfileValidationFixture {
     authority: AccountId,
     signer: KeyPair,
     targets: [AccountId; 2],
-    previous: SignedBlock,
 }
 
 impl AccountProfileValidationFixture {
@@ -194,7 +193,6 @@ impl AccountProfileValidationFixture {
             authority,
             signer,
             targets,
-            previous: crate::block::tests::previous_block_at_height(1),
         }
     }
 
@@ -247,18 +245,12 @@ impl AccountProfileValidationFixture {
         world
             .account_permissions_mut_for_testing()
             .insert(self.authority.clone(), Permissions::from_iter(permissions));
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            ChainId::from("fc56984b-2be7-431d-840e-21514d1883f0"),
-            deterministic_test_network_id(0x0B),
-        );
-        crate::block::tests::install_test_lane_manifests(&state);
-        let mut pipeline = state.pipeline.clone();
-        pipeline.workers = if worker_discriminant.is_some() { 2 } else { 1 };
-        state.set_pipeline(pipeline);
-        crate::block::tests::finalize_test_genesis_assets(&state, &self.previous);
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1);
+        config.chain_id = ChainId::from("fc56984b-2be7-431d-840e-21514d1883f0");
+        config.pipeline.workers = if worker_discriminant.is_some() { 2 } else { 1 };
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("original native genesis for account-profile validation");
+        let state = chain.state();
 
         let key: Name = "delegated_profile_marker".parse().expect("metadata key");
         let accepted = self
@@ -272,7 +264,7 @@ impl AccountProfileValidationFixture {
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 );
                 transaction.set_creation_time(Duration::from_millis(
-                    u64::try_from(index).expect("two transactions"),
+                    u64::try_from(index).expect("two transactions") + 2,
                 ));
                 let signed = transaction
                     .with_instructions([iroha_data_model::isi::SetKeyValue::account(
@@ -286,7 +278,7 @@ impl AccountProfileValidationFixture {
             .collect();
         let (_clock, time_source) = TimeSource::new_mock(Duration::from_millis(10));
         let block = BlockBuilder::new_with_time_source(accepted, time_source)
-            .chain(1, Some(&self.previous))
+            .chain(1, state.view().latest_block().as_deref())
             .sign(self.signer.private_key())
             .unpack(|_| {});
         let block: SignedBlock = block.into();
@@ -308,7 +300,6 @@ impl AccountProfileValidationFixture {
                 pipeline_parallelism: crate::state::PipelineParallelism::new(&pipeline_cfg),
                 pipeline_cfg,
                 aggregate_lane: view.nexus().routing_policy.default_lane,
-                queue_plan_stateless_validation_times: vec![None; 2],
             }
         };
         let pool_scope = worker_discriminant.map(|discriminant| {

@@ -141,10 +141,10 @@ fn proof_with_every_goldilocks_container() -> Proof {
 
 #[test]
 fn proof_roots_and_paths_use_canonical_digest_carriers() {
-    let proof = proof_with_every_goldilocks_container();
     fn assert_digest(_: GoldilocksDigest384V1) {}
     fn assert_digest_path(_: &[GoldilocksDigest384V1]) {}
 
+    let proof = proof_with_every_goldilocks_container();
     assert_digest(proof.trace_root);
     assert_digest(proof.air_trace_root);
     assert_digest(proof.air_composition_root);

@@ -1299,7 +1299,6 @@ impl Read for GatewayPayloadReaderV1 {
 }
 fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
     match error {
-        GatewayFetchError::RateLimited { .. } => retryable("MUSUBI_ARCHIVE_CHUNK_RETRYABLE"),
         GatewayFetchError::Request { .. } | GatewayFetchError::RequestBody { .. } => {
             retryable("MUSUBI_ARCHIVE_CHUNK_REQUEST_FAILED")
         }
@@ -1317,7 +1316,8 @@ fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRunti
             status: StatusCode::NOT_FOUND | StatusCode::GONE,
             ..
         } => unavailable("MUSUBI_ARCHIVE_CHUNK_UNAVAILABLE"),
-        GatewayFetchError::UnexpectedStatus {
+        GatewayFetchError::RateLimited { .. }
+        | GatewayFetchError::UnexpectedStatus {
             status:
                 StatusCode::REQUEST_TIMEOUT
                 | StatusCode::TOO_EARLY

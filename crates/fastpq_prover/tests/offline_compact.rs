@@ -575,19 +575,8 @@ fn axt_ingress_rejects_truncated_canonical_artifacts_and_wrong_schemas() {
     }
 }
 
-#[test]
-fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_trace() {
-    // One public producer test owns these serial negative requests. Concurrent
-    // producer calls intentionally return Busy, so parallel test cases would
-    // obscure the particular admission failure being asserted here.
-    let (statement, expected) = fixture();
-    let proving = ProvingLimits {
-        digest_execution: fastpq_prover::DigestExecutionV1::Cpu,
-        private_smt: TransferSmtBuildLimits::for_update_limit(4).unwrap(),
-        max_total_trace_cells: usize::MAX,
-        max_segment_charge_bytes: usize::MAX,
-        max_segment_work_units: usize::MAX,
-    };
+/// Verification policy with producer-sized transport, decoder and proof budgets.
+fn producer_policy() -> VerificationLimits {
     let mut verification = policy();
     verification.transport.max_wire_bytes = 20 * 1024 * 1024;
     verification.transport.max_bundle_frame_bytes = 16 * 1024 * 1024;
@@ -608,6 +597,16 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
     verification.bundle.max_wire_bytes = 16 * 1024 * 1024;
     verification.bundle.max_total_segment_bytes = 16 * 1024 * 1024;
     verification.bundle.segment.max_proof_bytes = 5 * 1024 * 1024;
+    verification
+}
+
+/// Each exhausted public, bundle or proving-work ceiling rejects before a trace.
+fn assert_producer_limits_reject(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    proving: ProvingLimits,
+    verification: &VerificationLimits,
+) {
     for name in [
         "max_public_transfer_rows",
         "max_public_transfer_transcripts",
@@ -622,7 +621,7 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         "max_compact_prover_segment_work_units",
         "max_compact_producer_statement_bytes",
     ] {
-        let mut limits = verification;
+        let mut limits = *verification;
         let mut work = proving;
         match name {
             "max_public_transfer_rows" => limits.public_statement.max_rows = 0,
@@ -641,17 +640,26 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         }
         assert!(
             matches!(
-                prove_quantity_ordinary_artifact(&statement, expected, work, limits),
+                prove_quantity_ordinary_artifact(statement, expected, work, limits),
                 Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, .. })) if limit == name
             ),
             "expected public producer limit {name}"
         );
     }
+}
+
+/// Each decoder budget below the mandatory row payload rejects before a trace.
+fn assert_producer_decode_limits_reject(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    proving: ProvingLimits,
+    verification: &VerificationLimits,
+) {
     for name in [
         "max_compact_producer_segment_decode_allocation_charges",
         "max_compact_producer_bundle_decode_allocation_charges",
     ] {
-        let mut limited = verification;
+        let mut limited = *verification;
         if name == "max_compact_producer_segment_decode_allocation_charges" {
             limited.max_segment_decode_allocation_charges = 0;
         } else {
@@ -659,7 +667,7 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         }
         assert!(
             matches!(
-                prove_quantity_ordinary_artifact(&statement, expected, proving, limited),
+                prove_quantity_ordinary_artifact(statement, expected, proving, limited),
                 Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, max: 0, .. }))
                     if limit == name
             ),
@@ -689,7 +697,7 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         ),
     ] {
         for (dimension, name) in names.into_iter().enumerate() {
-            let mut limited = verification;
+            let mut limited = *verification;
             let original = if total {
                 limited.total_decode
             } else {
@@ -711,7 +719,7 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
             }
             assert!(
                 matches!(
-                    prove_quantity_ordinary_artifact(&statement, expected, proving, limited),
+                    prove_quantity_ordinary_artifact(statement, expected, proving, limited),
                     Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, max: 0, .. }))
                         if limit == name
                 ),
@@ -719,6 +727,84 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
             );
         }
     }
+}
+
+/// Opaque AXT routes and mismatched source commitments reject before a trace.
+fn assert_producer_axt_context_rejects(
+    statement: &FastpqPublicTransferStatementV1,
+    expected: ExpectedStatement,
+    proving: ProvingLimits,
+    verification: &VerificationLimits,
+) {
+    let binding = binding();
+    let metadata = metadata();
+    let rejected = prove_quantity_axt_artifact(
+        statement,
+        expected,
+        ExpectedAxtContext {
+            binding: &binding,
+            metadata: &metadata,
+            mirrors: mirrors(),
+            remote_spend_claims: None,
+        },
+        proving,
+        *verification,
+    );
+    assert!(
+        matches!(&rejected,
+            Err(ProvingError::Prove(Error::InvalidProofSemantics { profile, details }))
+                if *profile == "axt_opaque_effect"
+                    && details == "generic AXT consumers require a witnessed transfer claim; opaque effect carriers require independent authenticated-effect validation"
+        ),
+        "opaque AXT producer returned {rejected:?}"
+    );
+    // The earlier fixture selects the opaque route. Select a canonical transfer
+    // binding here, retaining an intentionally different source commitment, so
+    // the next rejection specifically exercises original transcript linkage.
+    let mut transfer_binding = binding;
+    transfer_binding.claim_type = "tx_predicate".into();
+    fastpq_prover::validate_axt_transfer_claim_binding(&transfer_binding).unwrap();
+    assert_ne!(
+        statement.transcripts[0].batch_hash.as_ref(),
+        metadata.entry_hash.as_slice()
+    );
+    let rejected = prove_quantity_axt_artifact(
+        statement,
+        expected,
+        ExpectedAxtContext {
+            binding: &transfer_binding,
+            metadata: &metadata,
+            mirrors: mirrors(),
+            remote_spend_claims: None,
+        },
+        proving,
+        *verification,
+    );
+    assert!(
+        matches!(&rejected,
+            Err(ProvingError::Prove(Error::InvalidAxtBinding { details }))
+                if details == "transfer transcript batch_hash does not match source_tx_commitment"
+        ),
+        "mismatched AXT source commitment returned {rejected:?}"
+    );
+}
+
+#[test]
+fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_trace() {
+    // One public producer test owns these serial negative requests. Concurrent
+    // producer calls intentionally return Busy, so parallel test cases would
+    // obscure the particular admission failure being asserted here.
+    let (statement, expected) = fixture();
+    let proving = ProvingLimits {
+        digest_execution: fastpq_prover::DigestExecutionV1::Cpu,
+        private_smt: TransferSmtBuildLimits::for_update_limit(4).unwrap(),
+        max_total_trace_cells: usize::MAX,
+        max_segment_charge_bytes: usize::MAX,
+        max_segment_work_units: usize::MAX,
+    };
+    let verification = producer_policy();
+    assert_producer_limits_reject(&statement, expected, proving, &verification);
+    assert_producer_decode_limits_reject(&statement, expected, proving, &verification);
     for index in 0..7 {
         let mut wrong = expected;
         match index {
@@ -752,57 +838,9 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         Err(ProvingError::Prove(Error::TransferInvariant { details }))
             if details.contains("derived transfer SMT roots differ from public inputs")
     ));
-    let binding = binding();
-    let metadata = metadata();
-    let rejected = prove_quantity_axt_artifact(
-        &statement,
-        expected,
-        ExpectedAxtContext {
-            binding: &binding,
-            metadata: &metadata,
-            mirrors: mirrors(),
-            remote_spend_claims: None,
-        },
-        proving,
-        verification,
-    );
-    assert!(
-        matches!(&rejected,
-            Err(ProvingError::Prove(Error::InvalidProofSemantics { profile, details }))
-                if *profile == "axt_opaque_effect"
-                    && details == "generic AXT consumers require a witnessed transfer claim; opaque effect carriers require independent authenticated-effect validation"
-        ),
-        "opaque AXT producer returned {rejected:?}"
-    );
-    // The earlier fixture selects the opaque route. Select a canonical transfer
-    // binding here, retaining an intentionally different source commitment, so
-    // the next rejection specifically exercises original transcript linkage.
-    let mut transfer_binding = binding;
-    transfer_binding.claim_type = "tx_predicate".into();
-    fastpq_prover::validate_axt_transfer_claim_binding(&transfer_binding).unwrap();
-    assert_ne!(
-        statement.transcripts[0].batch_hash.as_ref(),
-        metadata.entry_hash.as_slice()
-    );
-    let rejected = prove_quantity_axt_artifact(
-        &statement,
-        expected,
-        ExpectedAxtContext {
-            binding: &transfer_binding,
-            metadata: &metadata,
-            mirrors: mirrors(),
-            remote_spend_claims: None,
-        },
-        proving,
-        verification,
-    );
-    assert!(
-        matches!(&rejected,
-            Err(ProvingError::Prove(Error::InvalidAxtBinding { details }))
-                if details == "transfer transcript batch_hash does not match source_tx_commitment"
-        ),
-        "mismatched AXT source commitment returned {rejected:?}"
-    );
+    assert_producer_axt_context_rejects(&statement, expected, proving, &verification);
+    // Keep public-producer admission negatives under this single serial owner.
+    maximum::assert_maximum_context_preflight();
 }
 
 #[path = "support/offline_compact_capture.rs"]
@@ -810,6 +848,12 @@ mod capture;
 
 #[path = "support/offline_compact_single.rs"]
 mod single;
+
+#[path = "support/offline_compact_two.rs"]
+mod two;
+
+#[path = "support/offline_compact_maximum.rs"]
+mod maximum;
 
 #[test]
 #[ignore = "requires fresh FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
@@ -879,4 +923,26 @@ fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() 
             ));
         }
     }
+}
+
+#[test]
+fn canonical_axt_batch_producer_preflights_without_a_replay_prover() {
+    let binding = binding();
+    let mut batch = fastpq_prover::TransitionBatch::new("unknown-profile", PublicInputs::default());
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        Err(Error::ParameterMismatch { expected, actual })
+            if expected == AXT_DEFAULT_PARAMETER && actual == "unknown-profile"
+    ));
+    batch.parameter = AXT_DEFAULT_PARAMETER.into();
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        Err(Error::InvalidProofSemantics { .. })
+    ));
+    let mut noncanonical = binding;
+    noncanonical.parameter = format!(" {AXT_DEFAULT_PARAMETER} ");
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &noncanonical),
+        Err(Error::InvalidAxtBinding { .. })
+    ));
 }

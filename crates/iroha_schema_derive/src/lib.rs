@@ -287,7 +287,6 @@ enum NoritoFieldFlag {
     BoundedWith,
     Json,
     Flatten,
-    NeedsSize,
 }
 #[derive(Default)]
 struct NoritoFieldAttrParser {
@@ -336,8 +335,6 @@ impl NoritoFieldAttrParser {
             self.seen.push(NoritoFieldFlag::Json);
         } else if meta.path.is_ident("flatten") {
             self.parse_bare_flag(meta, NoritoFieldFlag::Flatten, "flatten")?;
-        } else if meta.path.is_ident("needs_size") {
-            self.parse_bare_flag(meta, NoritoFieldFlag::NeedsSize, "needs_size")?;
         } else {
             return Err(meta.error("unknown `norito` field attribute"));
         }
@@ -963,6 +960,20 @@ mod tests {
             .expect_err("unknown field key must reject");
         assert!(
             field_error
+                .to_string()
+                .contains("unknown `norito` field attribute")
+        );
+    }
+    #[test]
+    fn retired_needs_size_field_meta_is_rejected() {
+        let field: syn::Field = parse_quote! {
+            #[norito(needs_size)]
+            value: u32
+        };
+        let error = NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect_err("retired packed-layout hint must reject");
+        assert!(
+            error
                 .to_string()
                 .contains("unknown `norito` field attribute")
         );

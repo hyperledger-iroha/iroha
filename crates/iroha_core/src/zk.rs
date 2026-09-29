@@ -1470,6 +1470,49 @@ pub mod test_utils {
             self.vk_box(backend).map(|vk| super::hash_vk(&vk))
         }
     }
+    /// Build a native public-input binding proof for relation-confusion tests.
+    #[cfg(feature = "zk-stark")]
+    #[must_use]
+    pub fn stark_public_binding_fixture_envelope() -> FixtureEnvelope {
+        use crate::zk_stark::{
+            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            STARK_FRI_CONSENSUS_MIN_QUERIES, StarkFriVerifyingKeyV1,
+        };
+
+        static FIXTURE: std::sync::OnceLock<FixtureEnvelope> = std::sync::OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let backend = super::ZK_BACKEND_STARK_FRI_V1;
+                let circuit_id = format!("{backend}:public-binding-demo");
+                let vk = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    merkle_arity: 2,
+                };
+                let vk_bytes = norito::encode_canonical(&vk).expect("canonical fixture key");
+                let key = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
+                let public_inputs = b"public-binding-demo:schema:v1".to_vec();
+                let proof = super::prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &key,
+                    &public_inputs,
+                    vec![vec![[0x11; 32]]],
+                )
+                .expect("native public binding proof");
+                FixtureEnvelope {
+                    proof_bytes: proof.bytes,
+                    schema_hash: CryptoHash::new(&public_inputs).into(),
+                    public_inputs,
+                    vk_bytes: Some(vk_bytes),
+                }
+            })
+            .clone()
+    }
     /// Build a deterministic Halo2 IPA envelope fixture for the provided circuit identifier.
     ///
     /// When the circuit identifier resolves to a supported fixture circuit (currently
@@ -1783,8 +1826,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1793,8 +1836,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1804,8 +1847,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1815,8 +1858,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_2rows() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());

@@ -53,7 +53,7 @@ from check_sorafs_production_readiness import (  # noqa: E402
     validate_foundational_exact_fields,
     validate_foundational_prerequisite_summary,
 )
-from sccp_release_common import verify_ed25519  # noqa: E402
+from release_evidence_crypto import verify_ed25519  # noqa: E402
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
     emit_checker_exception,

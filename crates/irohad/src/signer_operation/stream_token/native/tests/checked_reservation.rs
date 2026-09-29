@@ -83,15 +83,8 @@ struct NativeAttempt {
 
 fn attempt_reservation(substitute_local_record: bool) -> NativeAttempt {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
-    let (directory, _) = config(&fixture);
+    let (_directory, _) = config(&fixture);
     let queue = queue();
-    queue
-        .install_plan_journal(
-            directory.path().join("reservation-queue.to"),
-            1024 * 1024,
-            true,
-        )
-        .unwrap();
     let mut source = source_with_timeout(&fixture, queue.clone(), Duration::from_secs(10));
     let review = PreparedReview::new(&source);
     if substitute_local_record {

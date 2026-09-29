@@ -27,8 +27,8 @@ fn redeem_accepts_only_the_typed_v1_terminal_voucher() {
         .expect("operation status follows redemption")
         .0;
     assert!(redemption_handler.contains("accept: Option<crate::utils::extractors::ExtractAccept>"));
-    assert!(redemption_handler.contains("TransactionAdmissionIntent::QueuePlanSynced"));
-    assert!(redemption_handler.contains("submit_signed_transaction_for_ingress_strict_durable"));
+    assert!(!redemption_handler.contains("TransactionAdmissionIntent"));
+    assert!(redemption_handler.contains("submit_signed_transaction_for_ingress"));
     assert!(redemption_handler.contains("response.status() != StatusCode::ACCEPTED"));
     assert!(!redemption_handler.contains("routing::handle_transaction_with_metrics"));
 }

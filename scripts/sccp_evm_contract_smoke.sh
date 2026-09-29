@@ -36,25 +36,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The retired Groth16/replay-forest contracts and per-chain wrappers stay deleted (§10).
-for retired in \
-  contracts/evm/sccp/SccpGroth16Bn254MessageVerifier.sol \
-  contracts/evm/sccp/SccpSha256ReplayForest.sol \
-  contracts/evm/sccp/ISccpMessageVerifier.sol \
-  contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol \
-  contracts/evm/sccp/TairaXorEvmToken.sol \
-  contracts/evm/sccp/SccpExactTransferCodec.sol \
-  contracts/evm/sccp/test/sccp_message_bridge_smoke.js \
-  contracts/evm/sccp/test/sccp_replay_forest_smoke.js \
-  contracts/ethereum/sccp \
-  contracts/bsc/sccp \
-  contracts/tron/sccp
-do
-  if [[ -e "$retired" ]]; then
-    echo "retired SCCP contract path must remain deleted: $retired" >&2
-    exit 1
-  fi
-done
 shopt -s nullglob
 sources=(contracts/evm/sccp/*.sol)
 shopt -u nullglob

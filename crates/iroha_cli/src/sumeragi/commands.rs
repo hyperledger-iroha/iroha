@@ -43,15 +43,15 @@ pub struct EvidenceListArgs {
 pub struct EvidenceCountArgs {}
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum EvidenceKindArg {
-    #[value(name = "SumeragiV2Equivocation")]
-    SumeragiV2Equivocation,
+    #[value(name = "NativeSumeragiEvidence")]
+    NativeSumeragiEvidence,
 }
 impl EvidenceKindArg {
     /// Convert the CLI literal into the closed client query enum.
     pub const fn into_client(self) -> iroha::client::SumeragiEvidenceKind {
         match self {
-            EvidenceKindArg::SumeragiV2Equivocation => {
-                iroha::client::SumeragiEvidenceKind::SumeragiV2Equivocation
+            EvidenceKindArg::NativeSumeragiEvidence => {
+                iroha::client::SumeragiEvidenceKind::NativeSumeragiEvidence
             }
         }
     }
@@ -99,8 +99,8 @@ mod tests {
     #[test]
     fn evidence_kind_filter_maps_to_the_current_wire_name() {
         let cases = [(
-            EvidenceKindArg::SumeragiV2Equivocation,
-            "SumeragiV2Equivocation",
+            EvidenceKindArg::NativeSumeragiEvidence,
+            "NativeSumeragiEvidence",
         )];
         for (kind, expected) in cases {
             assert_eq!(kind.into_client().as_str(), expected);

@@ -318,15 +318,17 @@ impl SyntheticTronChainV1 {
         let producer_period = self.period(height - 1);
         let members = self.members(producer_period);
         let producer = members[usize::try_from(height % 27).expect("small")];
-        let tx_root = match self.transaction_leaves(height) {
-            Some(leaves) => merkle_root_and_branch(&leaves, 0).expect("leaves").0,
-            None => seeded(&[
-                &self.seed,
-                b"transactions",
-                &height.to_be_bytes(),
-                &self.salts.get(&height).copied().unwrap_or_default(),
-            ]),
-        };
+        let tx_root = self.transaction_leaves(height).map_or_else(
+            || {
+                seeded(&[
+                    &self.seed,
+                    b"transactions",
+                    &height.to_be_bytes(),
+                    &self.salts.get(&height).copied().unwrap_or_default(),
+                ])
+            },
+            |leaves| merkle_root_and_branch(&leaves, 0).expect("leaves").0,
+        );
         let time_ms = self.time_ms(height);
         let mut raw = Vec::new();
         push_uint(&mut raw, 1, time_ms);

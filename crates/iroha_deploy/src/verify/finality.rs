@@ -26,12 +26,8 @@ use std::{cmp::Reverse, collections::BTreeMap, num::NonZeroU64};
 /// Smallest committee: `f = 1`.
 pub const MIN_COMMITTEE_MEMBERS: usize = 4;
 
-/// Largest committee the deployment tooling accepts (spec §10.7).
-///
-/// The global validator roster is further capped by the protocol
-/// (`consensus_v2::MAX_VALIDATORS_PER_HEIGHT`); data-model validation of every
-/// proof enforces that bound.
-pub const MAX_COMMITTEE_MEMBERS: usize = 128;
+/// Largest committee permitted by the Sumeragi protocol (`f = 10`).
+pub const MAX_COMMITTEE_MEMBERS: usize = iroha_data_model::sumeragi::epoch::MAX_VALIDATORS;
 
 /// Size of an exact `3f + 1` committee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -66,7 +62,7 @@ impl CommitteeSize {
 
     /// Exact certificate and minimum attestation quorum, `2f + 1`.
     pub const fn quorum(self) -> usize {
-        2 * self.faults() + 1
+        self.members() - self.faults()
     }
 }
 

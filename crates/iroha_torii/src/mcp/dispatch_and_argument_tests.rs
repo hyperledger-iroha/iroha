@@ -55,8 +55,8 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(!tools.is_empty(), "tool registry must not be empty");
     assert!(tools.iter().all(|tool| match tool.route_backing() {
         Some((_, _, path_template)) => {
-            path_template != iroha_torii_shared::uri::SUBSCRIPTION
-                && path_template != iroha_torii_shared::uri::BLOCKS_STREAM
+            path_template != iroha_torii_shared::route_catalog::streaming::SUBSCRIPTION_WS.path()
+                && path_template != iroha_torii_shared::route_catalog::streaming::BLOCKS_WS.path()
                 && !path_template.ends_with("/sse")
         }
         None => true,
@@ -831,7 +831,10 @@ fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
     let (_, method, path_template) = tool
         .route_backing()
         .expect("transaction submit tool must be route-backed");
-    assert_eq!(path_template, iroha_torii_shared::uri::TRANSACTION);
+    assert_eq!(
+        path_template,
+        iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path()
+    );
     assert_eq!(method, &Method::POST);
 }
 #[tokio::test]
@@ -847,7 +850,7 @@ async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_che
         &app,
         &inbound_headers,
         Method::GET,
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         None,
         Vec::new(),
         None,
@@ -1218,7 +1221,7 @@ async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
         &app,
         &HeaderMap::new(),
         Method::GET,
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         Some(&extra_headers),
         Vec::new(),
         None,
@@ -1250,7 +1253,7 @@ async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured()
         &app,
         &HeaderMap::new(),
         Method::GET,
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         None,
         Vec::new(),
         None,
@@ -1271,7 +1274,7 @@ async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
         &app,
         &HeaderMap::new(),
         Method::GET,
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         Some(&extra_headers),
         Vec::new(),
         None,
@@ -1289,7 +1292,7 @@ async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
         &app,
         &inbound,
         Method::GET,
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         None,
         Vec::new(),
         None,

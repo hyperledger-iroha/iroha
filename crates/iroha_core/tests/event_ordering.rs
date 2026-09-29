@@ -29,19 +29,12 @@ fn data_events_follow_instruction_order_in_tx() {
     )
     .build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let chain_id = ChainId::from("chain");
-    let state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
-    let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
+    let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 0),
+    )
+    .expect("native genesis");
+    let network_id = chain.network_id();
+    chain.take_events().unwrap();
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -70,18 +63,10 @@ fn data_events_follow_instruction_order_in_tx() {
     )
     .with_instructions(instrs)
     .sign(kp.private_key());
-    // Build and validate block with one tx
-    let acc = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let new_block = BlockBuilder::new(vec![acc])
-        .chain(0, Some(&genesis))
-        .sign(kp.private_key())
-        .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish ordered effects");
+    chain.commit(vec![tx]);
+    let committed = chain.committed(chain.height());
+    assert!(committed.block().output_error(0).is_none());
+    let events = chain.take_events().expect("native publication events");
     // Extract Data events in emission order
     let data_events: Vec<_> = events
         .into_iter()

@@ -291,7 +291,7 @@ pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
     verify_axt_transfer_bundle_with(
         prepared,
         expected,
-        context,
+        &context,
         bytes,
         limits,
         DeepVerifier {
@@ -303,7 +303,7 @@ pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
 fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
-    context: AxtVerificationContext<'_>,
+    context: &AxtVerificationContext<'_>,
     bytes: &[u8],
     limits: BundleLimits,
     verifier: DeepVerifier,
@@ -342,7 +342,7 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
                 prepared,
                 expected,
                 &wire.intermediate_roots,
-                context,
+                *context,
                 BatchContextLimits {
                     max_segments: limits.max_segments,
                     max_total_statement_bytes: limits.max_total_statement_bytes,
@@ -409,7 +409,7 @@ pub(super) fn verify_axt_transfer_bundle_with_allocation<V: CompactTransferValue
     verify_axt_transfer_bundle_with(
         prepared,
         expected,
-        context,
+        &context,
         bytes,
         limits,
         DeepVerifier {
@@ -742,13 +742,16 @@ mod tests {
             version: VERSION,
             intermediate_roots: (1..count)
                 .map(|index| {
-                    let mut root = [index as u8; 32];
+                    let mut root = [u8::try_from(index).expect("fixture root index fits u8"); 32];
                     root[31] |= 1;
                     root
                 })
                 .collect(),
             segments: (0..count)
-                .map(|index| vec![index as u8 + 1; 37 + index])
+                .map(|index| {
+                    let fill = u8::try_from(index).expect("fixture segment index fits u8") + 1;
+                    vec![fill; 37 + index]
+                })
                 .collect(),
         }
     }
@@ -1503,10 +1506,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn final_bundle_headers_are_nominal_and_reject_every_retired_carrier() {
+    /// Encode `ordinary` under every retired carrier schema, in declaration order.
+    fn retired_carrier_encodings(ordinary: &BundleWire) -> [Vec<u8>; 4] {
         macro_rules! retired_carrier {
-            ($name:ident,$schema:literal) => {
+            ($name:ident, $schema:literal) => {{
                 #[derive(NoritoSerialize, norito::NoritoSchema)]
                 #[norito_schema(name = $schema)]
                 struct $name {
@@ -1514,24 +1517,36 @@ mod tests {
                     intermediate_roots: Vec<[u8; 32]>,
                     segments: Vec<Vec<u8>>,
                 }
-            };
+                norito::encode_canonical(&$name {
+                    version: ordinary.version,
+                    intermediate_roots: ordinary.intermediate_roots.clone(),
+                    segments: ordinary.segments.clone(),
+                })
+                .unwrap()
+            }};
         }
-        retired_carrier!(
-            OldOrdinary,
-            "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1"
-        );
-        retired_carrier!(
-            OldAxt,
-            "fastpq_prover::compact_prototype::AxtTransferBundleV1"
-        );
-        retired_carrier!(
-            OldShakeOrdinary,
-            "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1"
-        );
-        retired_carrier!(
-            OldShakeAxt,
-            "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1"
-        );
+        [
+            retired_carrier!(
+                OldOrdinary,
+                "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1"
+            ),
+            retired_carrier!(
+                OldAxt,
+                "fastpq_prover::compact_prototype::AxtTransferBundleV1"
+            ),
+            retired_carrier!(
+                OldShakeOrdinary,
+                "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1"
+            ),
+            retired_carrier!(
+                OldShakeAxt,
+                "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1"
+            ),
+        ]
+    }
+
+    #[test]
+    fn final_bundle_headers_are_nominal_and_reject_every_retired_carrier() {
         for count in 1..=3 {
             let ordinary = wire(count);
             let axt = AxtBundleWire {
@@ -1565,22 +1580,7 @@ mod tests {
                 decode_axt_wire_with_policy(&bytes, count, final_limits(count), final_verifier())
                     .is_err()
             );
-            macro_rules! old_bytes {
-                ($name:ident) => {
-                    norito::encode_canonical(&$name {
-                        version: ordinary.version,
-                        intermediate_roots: ordinary.intermediate_roots.clone(),
-                        segments: ordinary.segments.clone(),
-                    })
-                    .unwrap()
-                };
-            }
-            for retired in [
-                old_bytes!(OldOrdinary),
-                old_bytes!(OldAxt),
-                old_bytes!(OldShakeOrdinary),
-                old_bytes!(OldShakeAxt),
-            ] {
+            for retired in retired_carrier_encodings(&ordinary) {
                 assert_eq!(retired.len(), bytes.len());
                 assert!(
                     decode_wire_with_policy(&retired, count, final_limits(count), final_verifier())

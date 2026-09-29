@@ -1,12 +1,12 @@
 # Iroha Torii client
 
 Anonymous HTTP operations do not require a native extension. Account construction,
-parsing, governance identity checks, and SCCP Sora-account principals require the
-matching `iroha-native` wheel on Python 3.10 or newer. Install
-`iroha-torii-client[native]` for those operations. The Rust owner validates all
-eleven key algorithms, complete weighted multisig policies, exact I105 literals,
-and canonical SCCP AccountId bytes. Missing native support is an explicit error;
-there is no structural identity fallback or dependency on the full Python SDK.
+parsing, and governance identity checks require the matching `iroha-native` wheel
+on Python 3.10 or newer. Install `iroha-torii-client[native]` for those
+operations. The Rust owner validates all eleven key algorithms, complete weighted
+multisig policies, and exact I105 literals. Missing native support is an explicit
+error; there is no structural identity fallback or dependency on the full Python
+SDK.
 
 `get_governance_tally(referendum_id, canonical_auth=...)` returns the shared
 `GovernanceTally` model, or `None` for a missing referendum. The six-field
@@ -34,7 +34,7 @@ client = ToriiClient(
 )
 ```
 
-The lightweight client validates native protocol-8 observations from
+The lightweight client validates native protocol-1 observations from
 `GET /v1/sumeragi/status`. Configure an exact-network operator signing context
 before using the authenticated reader:
 
@@ -53,7 +53,7 @@ capture parity and actual cross-dataspace settlement qualification remain open.
 
 Committed Sumeragi evidence is exposed through the authenticated
 `list_sumeragi_evidence()` and `get_sumeragi_evidence_count()` reads. The
-first-release JSON contract accepts only `SumeragiV2Equivocation` records,
+first-release JSON contract accepts only `NativeSumeragiEvidence` records,
 requires a non-null consensus admission height, and models the penalty state
 as the closed `pending`, `applied`, or `cancelled` union. Missing, extra, and
 retired fields fail closed. Both evidence responses require JSON media types;

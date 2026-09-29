@@ -4,7 +4,6 @@ use super::*;
 impl Kura {
     /// Finish only journal-admitted empty creations before any auxiliary inventory reads.
     /// This does not publish an active catalog or derive an identity from configuration.
-    /// Provisional snapshot imports are rejected until their bootstrap is authenticated.
     pub(in crate::kura) fn recover_journal_owned_lane_instances_on_startup(&self) -> Result<()> {
         self.durable_mutation_authorized()?;
         let _prune_guard = self.prune_lock.lock();

@@ -34,9 +34,15 @@ fn native_storage_generator_retains_original_execution_and_never_resigns_outputs
     let mut blocks = NativeBlocks::new();
     let originals = (0..3).map(|_| blocks.next()).collect::<Vec<_>>();
     for (index, original) in originals.iter().enumerate() {
-        assert!(Arc::ptr_eq(original, &blocks.get(index).unwrap()));
+        // Reopening a certified receipt may decode into a new allocation. Its
+        // exact original frame and certificate, rather than an Arc address,
+        // establish that no fixture signing or result rewriting occurred.
+        assert_eq!(
+            original.encode_wire().unwrap(),
+            blocks.get(index).unwrap().encode_wire().unwrap()
+        );
         let receipt = blocks.chain.committed(index as u64 + 1);
-        assert!(Arc::ptr_eq(original, receipt.block()));
+        assert_eq!(original.hash(), receipt.block_hash());
         assert_eq!(
             original.commit_certificate(),
             receipt.block().commit_certificate()
@@ -56,9 +62,11 @@ fn native_storage_generator_retains_original_execution_and_never_resigns_outputs
 
 #[test]
 fn deep_history_get_block_uses_cached_bytes() {
-    const BLOCK_COUNT: usize = 192;
+    // Five cache windows force historical reads and eviction with real native
+    // execution and certificates; fixture size is independent of the cache bound.
+    const BLOCK_COUNT: usize = 20;
     let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
+    let config = kura_config_for_dir(&temp_dir, nonzero!(4_usize));
     let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     drop(kura);
     let mut store = new_block_store(&temp_dir);
@@ -418,4 +426,21 @@ fn populate_strict_kura_store(dir: &TempDir, count: usize) {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     let _ = store_dummy_blocks(&kura, count);
+}
+
+pub(super) fn pending_native_capacity_fixture() -> (TempDir, Arc<Kura>, u64) {
+    let (directory, mut config) = unwrapped_kura_storage_fixture(BLOCKS_IN_MEMORY);
+    // Pending accounting is deliberately disabled for an unlimited disk budget.
+    // This fixture exercises the actual bounded publication path.
+    config.max_disk_usage_bytes = iroha_config::base::util::Bytes(u64::MAX / 4);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
+    let block = NativeBlocks::new().next();
+    let expected = u64::try_from(block.encode_wire().unwrap().len()).unwrap()
+        + BlockIndex::SIZE
+        + SIZE_OF_BLOCK_HASH;
+    kura.append_pending_block_for_bench(block);
+    assert!(expected > BlockIndex::SIZE + SIZE_OF_BLOCK_HASH);
+    (directory, kura, expected)
 }

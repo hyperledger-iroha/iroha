@@ -999,7 +999,7 @@ mod tests {
                     OperationKind::Transfer,
                 ));
             }
-            let batch_hash = Hash::new([ordinal as u8]);
+            let batch_hash = Hash::new([u8::try_from(ordinal).expect("fixture ordinal fits u8")]);
             let poseidon_preimage_digest = Some(single_delta_digest(&delta, &batch_hash));
             fixture.claims.push(PublicTransferTranscript {
                 batch_hash,
@@ -1046,6 +1046,71 @@ mod tests {
         assert!(isolated.rows().iter().all(|row| row.asset_scale == 0));
         assert_ne!(batch.statements()[0].updates, isolated.pairs()[0].updates);
         assert_eq!(batch.statements().len(), 2);
+    }
+
+    /// A changed claim authority keeps every statement but rebinds every segment root.
+    fn assert_quantity_claim_change_rebinds(
+        rows: &[StateTransition],
+        claims: &[PublicTransferTranscript],
+        inputs: PublicInputs,
+        root_chain: &[[u8; 32]],
+        original: &PublicTransferBatch,
+        roots: &[fastpq_isi::GoldilocksDigest384V1],
+    ) {
+        use crate::backend::deep_relation::tests as deep;
+        use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
+
+        let mut changed_claims = claims.to_vec();
+        changed_claims[0].authority_digest = Hash::new(b"other complete quantity authority claim");
+        let changed_prepared = prepare_quantity_public_transfers(
+            rows,
+            &changed_claims,
+            inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let changed = PublicTransferBatch::new(
+            &changed_prepared,
+            &deep::expected(&changed_prepared),
+            root_chain,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        for (ordinal, root) in roots.iter().enumerate() {
+            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
+        }
+    }
+
+    /// A shorter bundle shares the first statement but binds its own count.
+    fn assert_shorter_quantity_bundle_rebinds(
+        root_chain: &[[u8; 32]],
+        original: &PublicTransferBatch,
+        roots: &[fastpq_isi::GoldilocksDigest384V1],
+    ) {
+        use crate::backend::deep_relation::tests as deep;
+        use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
+
+        let smaller = PublicFixture::with_amount(2, false, 0);
+        let (small_rows, small_claims, small_inputs) = deep::quantity_copy(&smaller.prepare());
+        let small = prepare_quantity_public_transfers(
+            &small_rows,
+            &small_claims,
+            small_inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let small = PublicTransferBatch::new(
+            &small,
+            &deep::expected(&small),
+            &root_chain[..1],
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], small.statements()[0]);
+        assert_ne!(roots[0], deep::bound_root(&small.segment(0).unwrap()));
     }
 
     #[test]
@@ -1114,46 +1179,15 @@ mod tests {
         .unwrap();
         assert_eq!(original.statements()[0], changed.statements()[0]);
         assert_ne!(roots[0], deep::bound_root(&changed.segment(0).unwrap()));
-        let mut changed_claims = claims.clone();
-        changed_claims[0].authority_digest = Hash::new(b"other complete quantity authority claim");
-        let changed_prepared = prepare_quantity_public_transfers(
+        assert_quantity_claim_change_rebinds(
             &rows,
-            &changed_claims,
+            &claims,
             inputs,
-            ProofSemantics::StateTransition,
-            PublicTransferLimits::default(),
-        )
-        .unwrap();
-        let changed = PublicTransferBatch::new(
-            &changed_prepared,
-            &deep::expected(&changed_prepared),
             &root_chain,
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(original.statements(), changed.statements());
-        for (ordinal, root) in roots.iter().enumerate() {
-            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
-        }
-        let smaller = PublicFixture::with_amount(2, false, 0);
-        let (small_rows, small_claims, small_inputs) = deep::quantity_copy(&smaller.prepare());
-        let small = prepare_quantity_public_transfers(
-            &small_rows,
-            &small_claims,
-            small_inputs,
-            ProofSemantics::StateTransition,
-            PublicTransferLimits::default(),
-        )
-        .unwrap();
-        let small = PublicTransferBatch::new(
-            &small,
-            &deep::expected(&small),
-            &root_chain[..1],
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(original.statements()[0], small.statements()[0]);
-        assert_ne!(roots[0], deep::bound_root(&small.segment(0).unwrap()));
+            &original,
+            &roots,
+        );
+        assert_shorter_quantity_bundle_rebinds(&root_chain, &original, &roots);
         let narrow = PublicTransferBatch::new(
             &narrow,
             &deep::expected(&narrow),

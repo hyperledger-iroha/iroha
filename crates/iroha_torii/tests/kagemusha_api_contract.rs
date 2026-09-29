@@ -1,16 +1,15 @@
 //! Catalog guards for the first-release KAGEMUSHA API.
 #![cfg(feature = "app_api")]
-use iroha_torii_shared::{
-    route_catalog::{CatalogProjection, EnabledFeatures, HttpMethod, RouteCatalog, kagemusha},
-    uri,
+use iroha_torii_shared::route_catalog::{
+    CatalogProjection, EnabledFeatures, HttpMethod, RouteCatalog, kagemusha,
 };
 #[test]
 fn kagemusha_catalog_exposes_only_the_first_release_routes() {
-    assert_eq!(uri::KAGEMUSHA_READINESS, "/v1/kagemusha/readiness");
-    assert_eq!(uri::KAGEMUSHA_TOP_UP, "/v1/kagemusha/top-up");
-    assert_eq!(uri::KAGEMUSHA_REDEEM, "/v1/kagemusha/redeem");
+    assert_eq!(kagemusha::READINESS_PATH, "/v1/kagemusha/readiness");
+    assert_eq!(kagemusha::TOP_UP_PATH, "/v1/kagemusha/top-up");
+    assert_eq!(kagemusha::REDEEM_PATH, "/v1/kagemusha/redeem");
     assert_eq!(
-        uri::KAGEMUSHA_OPERATION,
+        kagemusha::OPERATION_PATH,
         "/v1/kagemusha/operations/{operation_id}"
     );
     let catalog = RouteCatalog::new(kagemusha::ROUTES);
@@ -28,10 +27,10 @@ fn kagemusha_catalog_exposes_only_the_first_release_routes() {
     assert_eq!(
         actual,
         vec![
-            (HttpMethod::Get, uri::KAGEMUSHA_READINESS),
-            (HttpMethod::Post, uri::KAGEMUSHA_TOP_UP),
-            (HttpMethod::Post, uri::KAGEMUSHA_REDEEM),
-            (HttpMethod::Get, uri::KAGEMUSHA_OPERATION),
+            (HttpMethod::Get, kagemusha::READINESS_PATH),
+            (HttpMethod::Post, kagemusha::TOP_UP_PATH),
+            (HttpMethod::Post, kagemusha::REDEEM_PATH),
+            (HttpMethod::Get, kagemusha::OPERATION_PATH),
         ]
     );
 }

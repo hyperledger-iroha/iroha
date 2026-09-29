@@ -1,4 +1,4 @@
-use super::require_v2_wire_protocol_only;
+use super::require_native_wire_protocol;
 use crate::{
     Outcome, RunArgs,
     genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id, reject_retired_public_chain_id},
@@ -17,7 +17,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::isi::Registrable as _,
-    state::{State, World},
+    state::{State, World, WorldReadOnly as _},
     sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
@@ -1450,8 +1450,6 @@ fn staged_default_kura() -> actual::Kura {
         store_dir: iroha_config::base::WithOrigin::inline(PathBuf::from(defaults::kura::STORE_DIR)),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
         native_context_archive_max_bytes:
             iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
@@ -1558,7 +1556,7 @@ pub(super) fn prepare_genesis_for_signing(
     if let Some(config) = config {
         ensure_peer_config_matches_manifest(config, &genesis)?;
     }
-    require_v2_wire_protocol_only(&genesis)?;
+    require_native_wire_protocol(&genesis)?;
     if topology_override.is_some() {
         genesis = genesis.clear_topology();
     }
@@ -2049,7 +2047,7 @@ pub(crate) mod tests {
             fixed: (1..lane_count)
                 .map(|lane| SumeragiFixedLane {
                     lane: LaneId::new(lane),
-                    dataspace: DataSpaceId::UNIVERSAL,
+                    dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     committee: committee.clone(),
                 })
                 .collect(),
@@ -3157,7 +3155,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         }
     }
     #[test]
-    fn signing_rejects_protocol_downgrades_and_unknown_future_versions() {
+    fn signing_rejects_every_non_v1_protocol_tag() {
         let current_args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -3173,8 +3171,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         };
         current_args
             .run(&mut BufWriter::new(Vec::new()))
-            .expect("current scalar protocol version 4 must be accepted before signing");
-        for version in [0_u32, 1, 2, 3, u32::MAX] {
+            .expect("first-release scalar protocol version 1 must be accepted before signing");
+        for version in [0_u32, 2, 3, 4, 8, u32::MAX] {
             let genesis_file = minimal_genesis_file();
             replace_manifest_wire_protocol_version(
                 &genesis_file,
@@ -3199,7 +3197,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert!(
                 error
                     .to_string()
-                    .contains("fresh genesis must advertise wire_protocol_version = 8"),
+                    .contains("fresh genesis must advertise wire_protocol_version = 1"),
                 "unexpected error for protocol version {version}: {error}"
             );
         }

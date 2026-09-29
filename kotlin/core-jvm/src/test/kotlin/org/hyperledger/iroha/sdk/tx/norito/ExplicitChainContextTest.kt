@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
@@ -19,7 +20,6 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
-import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -354,7 +354,7 @@ class ExplicitChainContextTest {
     }
 
     private companion object {
-        const val TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1
+        const val TAIRA = TairaTestnetProfile.I105_DISCRIMINANT
         const val OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT
         // Low-level codecs receive the exact typed ID resolved from the app's `ds#boi.is` selector.
         const val DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"

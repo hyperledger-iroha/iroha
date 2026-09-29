@@ -163,81 +163,15 @@ fn exercise(relation: &impl FixedAir) -> Capture {
     assert_eq!(geometry.lde_rows, 524_288);
     assert_eq!(geometry.fri_lengths.len(), 18);
     let ((), captured) = capture(|| {
-        let row: Vec<_> = (0..342)
+        let row: Vec<_> = (0_u64..342)
             .map(|column| match column % 4 {
                 0 => 0,
                 1 => GOLDILOCKS_MODULUS - 1,
                 2 => 0x1234_5678_9abc_def0,
-                _ => column as u64,
+                _ => column,
             })
             .collect();
-        let mut leaf_count = 0;
-        let mut parent_count = 0;
-        let mut coverage = BTreeSet::new();
-        let mut roots = Vec::new();
-        for oracle in 0..21 {
-            let (role, round, leaves) = match oracle {
-                0 => (MerkleTreeRoleV1::AirTrace, 0, geometry.lde_rows),
-                1 => (MerkleTreeRoleV1::Lde, 0, geometry.lde_rows),
-                2 => (MerkleTreeRoleV1::AirComposition, 0, geometry.lde_rows),
-                _ => {
-                    let round = oracle - 3;
-                    (
-                        MerkleTreeRoleV1::Fri(round as u32),
-                        round as u8,
-                        if round == 17 {
-                            1
-                        } else {
-                            geometry.lde_rows >> (round + 1)
-                        },
-                    )
-                }
-            };
-            let mut terminal = None;
-            for index in positions(leaves) {
-                let digest = one_hash(round, 0, index, || match oracle {
-                    0 => binding.row(index, &row),
-                    1 => binding.mixed(index, extension(index)),
-                    2 => binding.quotient(index, extension(index)),
-                    _ => binding.fri(
-                        round as usize,
-                        index,
-                        &(0..if round == 17 { 4 } else { 2 })
-                            .map(|lane| extension(index + lane))
-                            .collect::<Vec<_>>(),
-                    ),
-                });
-                assert!(coverage.insert((oracle, 0, index)));
-                terminal = Some(digest);
-                leaf_count += 1;
-            }
-            let depth = leaves.ilog2().max(1) as usize;
-            let mut root = None;
-            for level in 1..=depth {
-                for index in positions((leaves >> level).max(1)) {
-                    // These bounded parent payloads exercise exact coordinates;
-                    // they do not claim to reconstruct a full committed tree.
-                    let left = if leaves == 1 {
-                        terminal.unwrap()
-                    } else {
-                        child(index)
-                    };
-                    let right = if leaves == 1 { left } else { child(index + 1) };
-                    root = Some(one_hash(round, level, index, || {
-                        binding.parent(role, level, index, left, right)
-                    }));
-                    assert!(coverage.insert((oracle, level, index)));
-                    parent_count += 1;
-                }
-            }
-            assert!(root.is_some());
-            roots.push(root.unwrap());
-        }
-        assert_eq!(leaf_count, 61);
-        assert_eq!(parent_count, 622);
-        assert_eq!(coverage.len(), 683);
-        assert_eq!(count(), 683);
-        assert_eq!(roots.len(), 21);
+        let roots = hash_bounded_oracle_positions(&geometry, &binding, &row);
 
         // Invalid typed geometry must stop before the observer sees a hash.
         assert!(binding.row(geometry.lde_rows, &row).is_err());
@@ -288,6 +222,88 @@ fn exercise(relation: &impl FixedAir) -> Capture {
         assert!(transcript.columns().is_err());
         assert_eq!(count(), completed_count);
     });
+    assert_captured_schedule(relation, &captured);
+    captured
+}
+
+/// Hash bounded leaf and parent positions of all 21 oracle trees; return their roots.
+fn hash_bounded_oracle_positions(
+    geometry: &Geometry,
+    binding: &Binding,
+    row: &[u64],
+) -> Vec<Digest> {
+    let mut leaf_count = 0;
+    let mut parent_count = 0;
+    let mut coverage = BTreeSet::new();
+    let mut roots = Vec::new();
+    for oracle in 0_u8..21 {
+        let (role, round, leaves) = match oracle {
+            0 => (MerkleTreeRoleV1::AirTrace, 0, geometry.lde_rows),
+            1 => (MerkleTreeRoleV1::Lde, 0, geometry.lde_rows),
+            2 => (MerkleTreeRoleV1::AirComposition, 0, geometry.lde_rows),
+            _ => {
+                let round = oracle - 3;
+                (
+                    MerkleTreeRoleV1::Fri(u32::from(round)),
+                    round,
+                    if round == 17 {
+                        1
+                    } else {
+                        geometry.lde_rows >> (round + 1)
+                    },
+                )
+            }
+        };
+        let mut terminal = None;
+        for index in positions(leaves) {
+            let digest = one_hash(round, 0, index, || match oracle {
+                0 => binding.row(index, row),
+                1 => binding.mixed(index, extension(index)),
+                2 => binding.quotient(index, extension(index)),
+                _ => binding.fri(
+                    usize::from(round),
+                    index,
+                    &(0..if round == 17 { 4 } else { 2 })
+                        .map(|lane| extension(index + lane))
+                        .collect::<Vec<_>>(),
+                ),
+            });
+            assert!(coverage.insert((oracle, 0, index)));
+            terminal = Some(digest);
+            leaf_count += 1;
+        }
+        let depth = leaves.ilog2().max(1) as usize;
+        let mut root = None;
+        for level in 1..=depth {
+            for index in positions((leaves >> level).max(1)) {
+                // These bounded parent payloads exercise exact coordinates;
+                // they do not claim to reconstruct a full committed tree.
+                let left = if leaves == 1 {
+                    terminal.unwrap()
+                } else {
+                    child(index)
+                };
+                let right = if leaves == 1 { left } else { child(index + 1) };
+                root = Some(one_hash(round, level, index, || {
+                    binding.parent(role, level, index, left, right)
+                }));
+                assert!(coverage.insert((oracle, level, index)));
+                parent_count += 1;
+            }
+        }
+        assert!(root.is_some());
+        roots.push(root.unwrap());
+    }
+    assert_eq!(leaf_count, 61);
+    assert_eq!(parent_count, 622);
+    assert_eq!(coverage.len(), 683);
+    assert_eq!(count(), 683);
+    assert_eq!(roots.len(), 21);
+    roots
+}
+
+/// Check the whole captured transcript tape and commitment schedule.
+fn assert_captured_schedule(relation: &impl FixedAir, captured: &Capture) {
     assert_eq!(captured.jobs.len(), 1635);
     let mut transcript_blocks = 0;
     for ordinal in 1..=22 {
@@ -335,10 +351,9 @@ fn exercise(relation: &impl FixedAir) -> Capture {
             captured.jobs[0].prefix.domain().profile
         );
     }
-    captured
 }
 
-fn execute_metal(label: &str, captured: Capture) {
+fn execute_metal(label: &str, captured: &Capture) {
     assert_eq!(captured.jobs.len(), 1635);
     let profile_sha256 = hex::encode(Sha256::digest(captured.jobs[0].prefix.domain().profile));
     let mut completed = 0usize;
@@ -403,7 +418,7 @@ fn final_full_domain_ordinary_context_metal_matches_every_canonical_hash() {
         relation.schema().identity,
         FastpqQuantityUnits::TRANSFER_IDENTITY
     );
-    execute_metal("ordinary", exercise(&relation));
+    execute_metal("ordinary", &exercise(&relation));
 }
 
 #[test]
@@ -427,7 +442,7 @@ fn final_full_domain_axt_context_metal_matches_every_canonical_hash() {
         relation.schema().identity,
         FastpqQuantityUnits::AXT_IDENTITY
     );
-    execute_metal("axt", exercise(&relation));
+    execute_metal("axt", &exercise(&relation));
 }
 
 #[test]

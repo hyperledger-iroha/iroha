@@ -18,9 +18,10 @@ fn reference_source_blinding_bytes_v1(seed: [u8; 32], group: u16) -> [u8; 32] {
         hash.update(&(attempt as u16).to_be_bytes());
         hash.finalize_into(&mut encoded);
         if let Ok(scalar) = Scalar::from_be_bytes_exact_ref(&encoded)
-            && !scalar.is_zero() {
-                return encoded;
-            }
+            && !scalar.is_zero()
+        {
+            return encoded;
+        }
     }
     panic!("independent deterministic source fixture exhausted rejection bound");
 }

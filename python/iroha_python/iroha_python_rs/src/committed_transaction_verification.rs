@@ -89,7 +89,7 @@ pub(super) fn authenticate_committed_transaction(
     // well as the selective commitments authenticated by this native capability.
     if !committed.verify_selective_in_authenticated_execution(
         &expected_network_id,
-        tip.header(),
+        &tip.header(),
         tip.execution(),
     ) || !committed.verify_inclusion_in_block(tip.block())
     {

@@ -280,6 +280,8 @@ pub trait Observer: Send + Sync {
     /// A thread of the instance stopped, or a worker could not be reached: the instance
     /// stopped with it (a restart recovers).
     fn stopped(&self, _worker: Worker) {}
+    /// The event loop completed an explicit orderly shutdown without worker failure.
+    fn finished(&self) {}
     /// A committed configuration outgrows the transport's frame limit (O10).
     fn frame_limit(&self, _exceeded: &FrameLimitExceeded) {}
 }

@@ -80,7 +80,7 @@ class-byte identity do not establish Kotlin compiler build provenance.
 Focused controls:
 
 ```text
-python3 -m pytest -q scripts/tests/sorafs_java_consumer_artifact_test.py scripts/tests/check_kotlin_jni_test.py scripts/tests/check_sccp_java_consumer_contract_test.py
+python3 -m pytest -q scripts/tests/sorafs_java_consumer_artifact_test.py scripts/tests/check_kotlin_jni_test.py
 ```
 
 The process-injection unit tests deliberately substitute compiler/native services

@@ -501,140 +501,6 @@ public final class HttpClientTransport implements IrohaClient {
                     protocolId));
   }
 
-  /** Fetch and strictly decode exact-lane SCCP capability discovery. */
-  public CompletableFuture<SccpModels.Capabilities> getSccpCapabilities() {
-    return fetchSccpJson(
-        buildJsonGetRequest(
-            "/v1/sccp/capabilities",
-            Collections.emptyMap(),
-            SCCP_CAPABILITIES_RESPONSE_MAX_BYTES),
-        SccpJsonParser::parseCapabilities,
-        "SCCP capabilities");
-  }
-
-  /** Fetch and strictly decode the authoritative typed SCCP route registry. */
-  public CompletableFuture<SccpModels.RegistryV1> getSccpRegistry() {
-    return fetchSccpJson(
-        buildJsonGetRequest(
-            "/v1/sccp/registry",
-            Collections.emptyMap(),
-            SCCP_JSON_RESPONSE_MAX_BYTES),
-        SccpJsonParser::parseRegistry,
-        "SCCP registry");
-  }
-
-  /** Fetch one query-free finalized SCCP message bundle by canonical message id. */
-  public CompletableFuture<SccpModels.MessageBundleV1> getSccpMessageBundle(
-      final String messageIdHex) {
-    final String messageId =
-        normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32);
-    return fetchSccpJson(
-        buildJsonGetRequest(
-            "/v1/sccp/proofs/message/" + encodePathSegment(messageId),
-            Collections.emptyMap(),
-            SCCP_JSON_RESPONSE_MAX_BYTES),
-        bytes -> {
-          final SccpModels.MessageBundleV1 result = SccpJsonParser.parseMessageBundle(bytes);
-          if (!messageId.equals(result.messageIdHex)) {
-            throw new IllegalArgumentException(
-                "SCCP bundle message id does not match the requested id");
-          }
-          return result;
-        },
-        "SCCP message bundle");
-  }
-
-  /** Fetch one query-free state-derived Groth16 request by canonical message id. */
-  public CompletableFuture<SccpModels.Groth16ProofRequestV1> getSccpProofRequest(
-      final String messageIdHex) {
-    final String messageId =
-        normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32);
-    return fetchSccpJson(
-        buildJsonGetRequest(
-            "/v1/sccp/proof-requests/" + encodePathSegment(messageId),
-            Collections.emptyMap(),
-            SCCP_JSON_RESPONSE_MAX_BYTES),
-        bytes -> {
-          final SccpModels.Groth16ProofRequestV1 result =
-              SccpJsonParser.parseProofRequest(bytes);
-          if (!messageId.equals(result.messageIdHex)) {
-            throw new IllegalArgumentException(
-                "SCCP proof request message id does not match the requested id");
-          }
-          return result;
-        },
-        "SCCP proof request");
-  }
-
-  /** Fetch one concrete BN254 or TON BLS12-381 SCCP proof request as canonical Norito bytes. */
-  public CompletableFuture<byte[]> getSccpProofRequestNorito(final String messageIdHex) {
-    final String messageId =
-        normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32);
-    final TransportRequest request =
-        buildExactNoritoGetRequest(
-            "/v1/sccp/proof-requests/" + encodePathSegment(messageId),
-            SccpSubmitEncoding.MAX_GROTH16_ARTIFACT_BYTES);
-    return fetchExactNoritoBytes(request, "SCCP proof request")
-        .thenApply(
-            body ->
-                SccpSubmitEncoding.validateCanonicalProofRequestNorito(
-                    body, "SCCP proof request"));
-  }
-
-  /** Fetch newest-first exact-context SCCP outbound messages. */
-  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages() {
-    return getSccpRecentMessages(null, null, null);
-  }
-
-  /** Fetch newest-first exact-context SCCP outbound messages using an explicit compound window. */
-  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
-      final BigInteger from, final Integer afterIndex, final Integer limit) {
-    if (from != null && (from.signum() <= 0 || from.bitLength() > 64)) {
-      throw new IllegalArgumentException("from must be a positive u64 height");
-    }
-    if (afterIndex != null && from == null) {
-      throw new IllegalArgumentException("afterIndex requires the paired from height");
-    }
-    if (afterIndex != null
-        && (afterIndex.intValue() < 0
-            || afterIndex.intValue()
-                >= SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)) {
-      throw new IllegalArgumentException(
-          "afterIndex must be between 0 and "
-              + (SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1));
-    }
-    if (limit != null && (limit.intValue() < 1 || limit.intValue() > 50)) {
-      throw new IllegalArgumentException("limit must be between 1 and 50");
-    }
-    final Map<String, String> query = new LinkedHashMap<>();
-    if (from != null) query.put("from", from.toString());
-    if (afterIndex != null) {
-      query.put("after_index", Integer.toString(afterIndex.intValue()));
-    }
-    if (limit != null) query.put("limit", Integer.toString(limit.intValue()));
-    return fetchSccpJson(
-        buildJsonGetRequest(
-            "/v1/sccp/messages/recent", query, SCCP_RECENT_RESPONSE_MAX_BYTES),
-        SccpJsonParser::parseRecentMessages,
-        "SCCP recent messages");
-  }
-
-  /** Continue newest-first SCCP discovery from an exact server-issued cursor. */
-  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
-      final SccpModels.RecentCursor cursor) {
-    return getSccpRecentMessages(cursor, null);
-  }
-
-  /** Continue newest-first SCCP discovery from a cursor with an optional page limit. */
-  public CompletableFuture<SccpModels.RecentMessages> getSccpRecentMessages(
-      final SccpModels.RecentCursor cursor, final Integer limit) {
-    if (cursor == null) {
-      throw new IllegalArgumentException("cursor must not be null");
-    }
-    return getSccpRecentMessages(
-        cursor.from, Integer.valueOf(cursor.afterIndex), limit);
-  }
-
   /** Fetches a persisted identifier claim by its deterministic receipt hash. */
   public CompletableFuture<Optional<IdentifierClaimRecord>> getIdentifierClaimByReceiptHash(
       final String receiptHash) {
@@ -2888,44 +2754,6 @@ public final class HttpClientTransport implements IrohaClient {
     return future;
   }
 
-  private <T> CompletableFuture<T> fetchSccpJson(
-      final TransportRequest request,
-      final Function<byte[], T> parser,
-      final String errorContext) {
-    notifyRequest(request);
-    final CompletableFuture<T> future = new CompletableFuture<>();
-    executor
-        .execute(request)
-        .whenComplete(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                future.completeExceptionally(
-                    new RuntimeException(errorContext + " request failed", cause));
-                return;
-              }
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      null,
-                      extractRejectCode(response));
-              try {
-                requireExactSccpJsonResponse(response, errorContext);
-                final T parsed = parser.apply(response.body());
-                notifyResponse(request, clientResponse);
-                future.complete(parsed);
-              } catch (final RuntimeException ex) {
-                notifyFailure(request, ex);
-                future.completeExceptionally(ex);
-              }
-            });
-    return future;
-  }
-
   private <T> CompletableFuture<T> fetchExactJson(
       final TransportRequest request,
       final Function<byte[], T> parser,
@@ -3382,15 +3210,6 @@ public final class HttpClientTransport implements IrohaClient {
           errorContext + " response exceeds " + maximumResponseBytes + " bytes");
     }
     requireExactOptionalContentLength(response.headers(), body.length, errorContext);
-  }
-
-  private static void requireExactSccpJsonResponse(
-      final TransportResponse response, final String errorContext) {
-    if (response.statusCode() != 200) {
-      throw new RuntimeException(
-          errorContext + " request failed with status " + response.statusCode());
-    }
-    requireUnambiguousApplicationJsonHeader(response.headers(), errorContext);
   }
 
   private static void requireUnambiguousApplicationJsonHeader(
@@ -4455,40 +4274,6 @@ public final class HttpClientTransport implements IrohaClient {
     return normalizeEvenLengthHex(value, field);
   }
 
-  static String normalizeNonZeroEvenLengthHex(final String value, final String field) {
-    return normalizeNonZeroEvenLengthHex(value, field, -1);
-  }
-
-  static String normalizeNonZeroEvenLengthHex(
-      final String value, final String field, final int expectedByteLength) {
-    final String normalized = normalizeEvenLengthHex(value, field);
-    for (int i = 0; i < normalized.length(); i++) {
-      if (normalized.charAt(i) != '0') {
-        if (expectedByteLength >= 0 && normalized.length() != expectedByteLength * 2) {
-          throw new IllegalArgumentException(
-              field + " must be a " + expectedByteLength + "-byte hex string");
-        }
-        return normalized;
-      }
-    }
-    throw new IllegalArgumentException(field + " must not be all zero");
-  }
-
-  static String normalizeExactNonZeroEvenLengthHex(
-      final String value, final String field, final int expectedByteLength) {
-    final String normalized = normalizeExactEvenLengthHex(value, field);
-    for (int i = 0; i < normalized.length(); i++) {
-      if (normalized.charAt(i) != '0') {
-        if (expectedByteLength >= 0 && normalized.length() != expectedByteLength * 2) {
-          throw new IllegalArgumentException(
-              field + " must be a " + expectedByteLength + "-byte hex string");
-        }
-        return normalized;
-      }
-    }
-    throw new IllegalArgumentException(field + " must not be all zero");
-  }
-
   static String normalizeHexBytes(
       final String value, final String field, final int expectedByteLength) {
     final String normalized = normalizeEvenLengthHex(value, field);
@@ -4562,61 +4347,6 @@ public final class HttpClientTransport implements IrohaClient {
     } catch (final NoSuchAlgorithmException ex) {
       throw new IllegalStateException("SHA-256 is unavailable", ex);
     }
-  }
-
-  static void preflightSccpBridgeSubmitJson(final byte[] body, final String path) {
-    final byte[] exactBody = Objects.requireNonNull(body, "body");
-    final String bodyText = new String(exactBody, StandardCharsets.UTF_8);
-    if (!java.util.Arrays.equals(exactBody, bodyText.getBytes(StandardCharsets.UTF_8))) {
-      throw new IllegalArgumentException("SCCP bridge submit payload must be UTF-8 JSON");
-    }
-    final Object parsed;
-    try {
-      parsed = JsonParser.parse(bodyText);
-    } catch (final RuntimeException ex) {
-      throw new IllegalArgumentException("bridge submit payload must be valid JSON", ex);
-    }
-    if (!(parsed instanceof Map<?, ?>)) {
-      throw new IllegalArgumentException("bridge submit payload must be a JSON object");
-    }
-    final Map<?, ?> fields = (Map<?, ?>) parsed;
-    final java.util.Set<String> allowed;
-    if ("/v1/bridge/proofs/submit".equals(path)) {
-      allowed = SCCP_PROOF_SUBMIT_FIELDS;
-    } else if ("/v1/bridge/messages".equals(path)) {
-      allowed = SCCP_MESSAGE_SUBMIT_FIELDS;
-    } else {
-      throw new IllegalArgumentException("unsupported SCCP bridge submit path");
-    }
-    for (final Object key : fields.keySet()) {
-      if (!(key instanceof String) || !allowed.contains((String) key)) {
-        throw new IllegalArgumentException("unknown or retired bridge submit field `" + key + "`");
-      }
-    }
-    if (!(fields.get("authority") instanceof String)) {
-      throw new IllegalArgumentException("authority is required and must be canonical");
-    }
-    SccpSubmitEncoding.requireCanonicalAuthority((String) fields.get("authority"), "authority");
-    FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
-    if ("/v1/bridge/messages".equals(path)) {
-      final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
-      SccpSubmitEncoding.validateCanonicalNoritoBase64(
-          nativeProof,
-          "native_proof_b64",
-          SccpSubmitEncoding.MAX_NATIVE_PROOF_BYTES,
-          SccpSubmitEncoding.NATIVE_INBOUND_PROOF_SCHEMA_NAME);
-      final String replayWitness = requiredSccpArtifact(fields, "replay_witness_b64");
-      SccpSubmitEncoding.validateCanonicalReplayWitnessBase64(
-          replayWitness,
-          "replay_witness_b64");
-      return;
-    }
-    final String destinationProof = requiredSccpArtifact(fields, "destination_proof_b64");
-    SccpSubmitEncoding.validateCanonicalNoritoBase64(
-        destinationProof,
-        "destination_proof_b64",
-        SccpSubmitEncoding.MAX_DESTINATION_ARTIFACT_BYTES,
-        SccpSubmitEncoding.DESTINATION_ARTIFACT_SCHEMA_NAME);
   }
 
   static String normalizeHex32(final String value, final String field) {
@@ -4864,33 +4594,11 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
-  private static final java.util.Set<String> SCCP_PROOF_SUBMIT_FIELDS =
-      java.util.Set.of(
-          "authority",
-          "fee_payment",
-          "destination_proof_b64");
-  private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
-      java.util.Set.of(
-          "authority",
-          "fee_payment",
-          "native_proof_b64",
-          "replay_witness_b64");
   private static final long FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L;
-  private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
-  private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
-  private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
   private static final long EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L;
   private static final long ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L;
   private static final String APPLICATION_JSON = "application/json";
   private static final String APPLICATION_NORITO = "application/x-norito";
-
-  private static String requiredSccpArtifact(final Map<?, ?> fields, final String field) {
-    final Object value = fields.get(field);
-    if (!(value instanceof String)) {
-      throw new IllegalArgumentException(field + " must be a canonical padded base64 string");
-    }
-    return (String) value;
-  }
 }

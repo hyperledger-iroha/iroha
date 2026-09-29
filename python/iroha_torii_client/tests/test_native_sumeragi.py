@@ -1,11 +1,11 @@
-"""Protocol-8 JSON codec controls, not generated finality or execution captures."""
+"""Protocol-1 JSON codec controls, not generated finality or execution captures."""
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import json
 import pytest
 from iroha_torii_client.native_sumeragi import SumeragiStatus, parse_native_status_json
 
-BASE = {'protocol_version': 8, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 1, 'view': 0, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 0, 'applied_height': 0, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
+BASE = {'protocol_version': 1, 'config_fingerprint': 'hash:0101010101010101010101010101010101010101010101010101010101010101#B86C', 'beacon_horizon': None, 'instance': '0000000000000000000000000000000000000000000000000000000000000000', 'height': 1, 'view': 0, 'stage': 0, 'leader': None, 'proxy_tail': None, 'high_qc_view': None, 'level': 0, 'start_level': 0, 't_retx_ms': 1, 'committed_height': 0, 'applied_height': 0, 'awaiting': False, 'signer': None, 'unanchored': True, 'abstaining': True, 'halted': None, 'footprint': {'votes': 0, 'timeouts': 0, 'blocks': 0, 'exec_entries': 0, 'wants': 0, 'pending_apply': 0, 'sync_entries': 0, 'sync_bytes': 0, 'peers': 0, 'recent_headers': 0, 'configs': 0, 'cert_cache': 0, 'evidence_keys': 0, 'probe': 0}}
 
 def parse(value):
     return SumeragiStatus.from_payload(parse_native_status_json(json.dumps(value).encode()))
@@ -14,7 +14,7 @@ def test_exact_observer_and_owned_native_values():
     value=deepcopy(BASE)
     status=parse(value)
     value["footprint"]["votes"]=123
-    assert status.protocol_version==8 and status.leader is None
+    assert status.protocol_version==1 and status.leader is None
     assert status.footprint.votes==0
     with pytest.raises(FrozenInstanceError): status.height=9
 
@@ -102,7 +102,7 @@ def test_native_status_transport_is_signed_bounded_and_closes_every_response():
     client = ToriiClient("https://node.test", session=session, operator_signing_context=context)
     response = StubResponse(payload=BASE)
     session.queue(response)
-    assert client.get_sumeragi_status().protocol_version == 8
+    assert client.get_sumeragi_status().protocol_version == 1
     assert response.was_closed
     call = session.calls[-1]
     assert call["method"] == "GET" and call["url"] == "https://node.test/v1/sumeragi/status"
@@ -122,3 +122,11 @@ def test_native_status_transport_is_signed_bounded_and_closes_every_response():
         with pytest.raises((ValueError, TypeError, RuntimeError)):
             client.get_sumeragi_status()
         assert response.was_closed
+
+
+@pytest.mark.parametrize("version", [0, 2, 4, 8])
+def test_first_release_status_rejects_other_protocol_versions(version):
+    value = deepcopy(BASE)
+    value["protocol_version"] = version
+    with pytest.raises(ValueError):
+        SumeragiStatus.from_payload(value)

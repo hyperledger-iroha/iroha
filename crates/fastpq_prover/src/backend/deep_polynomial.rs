@@ -48,10 +48,20 @@ enum TraceCoefficients<'a> {
     VanishingReplay(&'a MaskedTraceReplay),
 }
 impl TraceCoefficients<'_> {
-    fn extent(self, _column: usize) -> usize {
+    fn extent(
+        self,
+        #[cfg_attr(
+            not(test),
+            allow(
+                unused_variables,
+                reason = "only the test-only dense source has per-column extents"
+            )
+        )]
+        column: usize,
+    ) -> usize {
         match self {
             #[cfg(test)]
-            Self::Dense(columns) => columns[_column].len(),
+            Self::Dense(columns) => columns[column].len(),
             Self::VanishingReplay(replay) => replay.coefficient_extent(),
         }
     }

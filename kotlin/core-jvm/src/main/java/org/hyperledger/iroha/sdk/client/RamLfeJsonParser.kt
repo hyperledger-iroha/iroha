@@ -39,6 +39,9 @@ object RamLfeJsonParser {
                         item["output_opening_public_key"],
                         "ram-lfe program policy list.items[$i].output_opening_public_key",
                     ),
+                    ramFheProfile = RamFheProfileJsonParser.parseOptional(
+                        item["ram_fhe_profile"], "ram-lfe program policy list.items[$i].ram_fhe_profile",
+                    ),
                 )
             )
         }

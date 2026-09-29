@@ -473,6 +473,7 @@ fn panicking_backends_are_retried() {
     drop(work);
     node.running.shutdown();
     assert!(!handle.ready(), "a shut-down instance is not ready");
+    assert_eq!(*node.fakes.observer.finished.lock(), 1);
 }
 
 /// A worker thread that ends stops the instance: the loop stops, the observer is told, the
@@ -495,6 +496,11 @@ fn a_stopped_worker_stops_the_instance() {
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(node.committed(), height, "the instance no longer runs");
     node.running.shutdown();
+    assert_eq!(
+        *node.fakes.observer.finished.lock(),
+        0,
+        "worker failure is not orderly completion"
+    );
 }
 
 /// A worker thread that ends announces it (however it ends), and a worker that cannot be

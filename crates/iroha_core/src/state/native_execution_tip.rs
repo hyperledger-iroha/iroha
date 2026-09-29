@@ -19,6 +19,7 @@ pub struct NativeExecutionTip(NativeExecutionTipRecord);
 )]
 pub(crate) struct NativeExecutionTipRecord {
     pub(crate) height: u64,
+    pub(crate) creation_time_ms: u64,
     pub(crate) iroha_hash: HashOf<BlockHeader>,
     pub(crate) core_hash: [u8; 32],
     pub(crate) result: [u8; 32],
@@ -35,6 +36,11 @@ impl NativeExecutionTip {
     #[must_use]
     pub const fn height(self) -> u64 {
         self.0.height
+    }
+    /// Ledger time from the exact original authenticated carrier.
+    #[must_use]
+    pub const fn creation_time_ms(self) -> u64 {
+        self.0.creation_time_ms
     }
     /// Exact Iroha header identity whose outputs were sealed.
     #[must_use]
@@ -56,8 +62,15 @@ impl NativeExecutionTip {
 /// Complete fixed current/undo snapshot projection, still unauthenticated.
 #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 pub(crate) struct NativeExecutionTipSnapshot {
-    revert: Option<Option<NativeExecutionTipRecord>>,
+    revert: Option<NativeExecutionTipUndo>,
     blocks: Option<NativeExecutionTipRecord>,
+}
+
+/// Explicit undo wrapper preserves `Some(None)` for the genesis predecessor.
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct NativeExecutionTipUndo {
+    value: Option<NativeExecutionTipRecord>,
 }
 
 pub(crate) type TipCell = Cell<Option<NativeExecutionTip>, AllocationCharge>;
@@ -109,6 +122,19 @@ impl From<&str> for TipRestoreError {
 }
 
 impl NativeExecutionTipSnapshot {
+    /// Capture the exact original current and undo values without losing nested absence.
+    pub(crate) fn from_original(
+        current: Option<NativeExecutionTip>,
+        previous: Option<Option<NativeExecutionTip>>,
+    ) -> Self {
+        Self {
+            blocks: current.map(|tip| tip.0),
+            revert: previous.map(|tip| NativeExecutionTipUndo {
+                value: tip.map(|tip| tip.0),
+            }),
+        }
+    }
+
     /// Compare serialized claims with the exact originals captured alongside the World.
     /// This grants no restore authority and never constructs an execution owner.
     pub(crate) fn matches_original(
@@ -117,7 +143,8 @@ impl NativeExecutionTipSnapshot {
         previous: Option<Option<NativeExecutionTip>>,
     ) -> bool {
         self.blocks == current.map(|tip| tip.0)
-            && self.revert == previous.map(|tip| tip.map(|tip| tip.0))
+            && self.revert.as_ref().map(|undo| undo.value)
+                == previous.map(|tip| tip.map(|tip| tip.0))
     }
 
     /// Restore authority by checking original native history, never by trusting
@@ -140,8 +167,8 @@ impl NativeExecutionTipSnapshot {
         if height == 1 {
             // Strict daemon startup classifies this separately and constructs
             // fresh State before node::prepare replays the stored signed genesis.
-            // TODO(S7): qualify that complete restart path; decoded H1 R never
-            // authorizes a nonempty snapshot or bypasses original replay.
+            // A decoded H1 result never authorizes World or bypasses original replay.
+            // Nonempty export recovery remains disabled until S9 authenticates full World.
             return Err(TipRestoreError::GenesisReplayRequired);
         }
         let chain = CertifiedChain::from_pinned(chain_id, network, hashes, kura)
@@ -154,7 +181,9 @@ impl NativeExecutionTipSnapshot {
             .map_err(|error| error.to_string())?;
         let current = record(current.committed());
         let previous = record(previous.committed());
-        if self.blocks != Some(current) || self.revert != Some(Some(previous)) {
+        if self.blocks != Some(current)
+            || self.revert.as_ref().map(|undo| undo.value) != Some(Some(previous))
+        {
             return Err(
                 "snapshot native execution tip/undo differs from verified native prefix".into(),
             );
@@ -171,6 +200,8 @@ impl NativeExecutionTipSnapshot {
 fn record(block: &CommittedBlock) -> NativeExecutionTipRecord {
     NativeExecutionTipRecord {
         height: block.height(),
+        creation_time_ms: u64::try_from(block.block().header().creation_time().as_millis())
+            .expect("block creation time is a u64 millisecond value"),
         iroha_hash: block.block_hash(),
         core_hash: block.core_hash().0,
         result: block.result().0,
@@ -188,6 +219,7 @@ impl StateBlock<'_> {
         let (next, parent) = authorization.for_state(self.state_ref)?;
         let iroha = block.as_ref();
         if next.height != iroha.header().height().get()
+            || u128::from(next.creation_time_ms) != iroha.header().creation_time().as_millis()
             || next.iroha_hash != iroha.hash()
             || next.result
                 != crate::sumeragi::commitment::result_of_preimage(certificate.result_preimage()).0

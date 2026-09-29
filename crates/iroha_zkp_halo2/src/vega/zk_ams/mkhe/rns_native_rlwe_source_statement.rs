@@ -1790,10 +1790,10 @@ fn derive_aggregation_challenges_v1(
     let mut challenges = [[empty; REPETITION_COUNT_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1];
     let mut prior_pairs = [(0_u64, 0_u64); ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITION_COUNT_V1];
     let mut prior_pair_count = 0_usize;
-    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+    for (limb, limb_challenges) in challenges.iter_mut().enumerate() {
         let mut used = [0_u64; ROWS_PER_LIMB_V1];
         let mut used_len = 0_usize;
-        for (repetition, challenge) in challenges[limb].iter_mut().enumerate() {
+        for (repetition, challenge) in limb_challenges.iter_mut().enumerate() {
             let gamma = sampler
                 .derive(limb, repetition, 0, &used[..used_len])
                 .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidChallenge)?;

@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Public contract preparation and strict admission failure, plus exact-payload Core execution.
-//! The synthetic ledger has no certified coordinator: execution overlays exercise contract
-//! semantics without claiming QueuePlan acceptance or canonical Applied status.
+//! A certified genesis and deployment anchor contract state; isolated call overlays exercise
+//! contract semantics without publishing an execution receipt.
 #![cfg(feature = "app_api")]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 #[path = "fixtures.rs"]
@@ -51,10 +51,10 @@ fn can_burn_asset_definition(
     .into()
 }
 fn commit_contract_operator_genesis(
-    state: &Arc<State>,
+    world: iroha_core::state::World,
     authority: &iroha_data_model::account::AccountId,
     signer: &iroha_crypto::KeyPair,
-) {
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
     use iroha_data_model::prelude::Grant;
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
@@ -63,8 +63,8 @@ fn commit_contract_operator_genesis(
     };
 
     fixtures::commit_genesis_fixture(
-        state,
-        authority,
+        world,
+        "chain".into(),
         signer,
         vec![
             Grant::account_permission(CanManageSmartContractCode, authority.clone()).into(),
@@ -79,8 +79,9 @@ fn commit_contract_operator_genesis(
             )
             .into(),
         ],
+        None,
         iroha_primitives::time::TimeSource::new_system(),
-    );
+    )
 }
 fn contract_call_noop_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/noop.ko");
@@ -359,22 +360,14 @@ fn contract_test_state() -> (
     iroha_torii::test_utils::AuthorityCreds,
     Arc<State>,
     Arc<Kura>,
+    iroha_core::sumeragi::test_chain::CertifiedTestChain,
 ) {
     let creds = iroha_torii::test_utils::random_authority();
     let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query,
-        "chain".parse().expect("chain ID"),
-        iroha_torii::test_utils::signed_query_network_id(),
-    ));
     let signer = iroha_crypto::KeyPair::from_private_key(creds.private_key.0.clone())
         .expect("contract genesis signer");
-    commit_contract_operator_genesis(&state, &creds.account, &signer);
-    (creds, state, kura)
+    let chain = commit_contract_operator_genesis(world, &creds.account, &signer);
+    (creds, chain.state().clone(), chain.kura().clone(), chain)
 }
 fn contract_test_queue_and_app(
     state: &Arc<State>,
@@ -492,10 +485,6 @@ async fn prepare_contract_execution(
         payload,
         "unsigned payload round-trip"
     );
-    assert_eq!(
-        builder.payload().admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    );
     let signing_b64 = response
         .get("signing_message_b64")
         .and_then(json::Value::as_str)
@@ -510,7 +499,7 @@ async fn prepare_contract_execution(
     assert_eq!(
         signing,
         builder.payload_hash_bytes(),
-        "signature binds exact quoted QP payload"
+        "signature binds exact quoted payload"
     );
     let receipt = response
         .get("operation_receipt")
@@ -586,10 +575,7 @@ async fn prepare_contract_execution(
     );
     let error: iroha_torii_shared::ErrorEnvelope =
         norito::decode_from_bytes(&bytes).expect("strict ingress Norito error envelope");
-    #[cfg(feature = "connect")]
-    let expected_code = "queue_plan_journal_unavailable";
-    #[cfg(not(feature = "connect"))]
-    let expected_code = "queue_plan_synced_transport_unavailable";
+    let expected_code = "route_unavailable";
     assert_eq!(error.code(), expected_code, "{error:?}");
     assert_eq!(
         app.queue.active_len(),
@@ -614,10 +600,6 @@ fn execute_prepared_contract_in_test_overlay(
         .transaction
         .verify_signature()
         .expect("exact signed fixture");
-    assert_eq!(
-        prepared.transaction.admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
-    );
     let committed_height = state.committed_height();
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(execution_height).expect("positive execution height"),
@@ -628,16 +610,16 @@ fn execute_prepared_contract_in_test_overlay(
     );
     let mut block = state.block(header);
     let mut cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let (entrypoint, result) = block
-        .validate_transaction(
-            iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
-                &prepared.transaction,
-            )),
-            &mut cache,
-        )
-        .expect("local execution completes");
-    assert_eq!(entrypoint, prepared.transaction.hash_as_entrypoint());
-    result.expect("prepared contract executes exactly once in test overlay");
+    let entrypoint = prepared.transaction.hash_as_entrypoint();
+    iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
+            &prepared.transaction,
+        )),
+        &mut cache,
+        None,
+    )
+    .expect("prepared contract executes exactly once in test overlay");
     block
         .commit_world_overlay_for_testing()
         .expect("publish only contract fixture world effects");
@@ -652,10 +634,11 @@ fn execute_prepared_contract_in_test_overlay(
         "fixture does not claim block finality"
     );
     assert!(
-        !state
-            .queue_plan_admission_registry_entrypoint_present(entrypoint)
-            .expect("query exact QP membership"),
-        "fixture does not invent certified admission"
+        !iroha_core::state::StateReadOnlyWithTransactions::has_entrypoint(
+            &state.view(),
+            entrypoint
+        ),
+        "component execution does not invent committed input membership"
     );
 }
 async fn run_contract_view_in_test_overlay(
@@ -725,7 +708,7 @@ async fn run_contract_hajimari_in_test_overlay(
 }
 #[tokio::test]
 async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_noop_program();
     let (contract_address, code_hash_hex, abi_hash_hex) =
@@ -738,7 +721,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("entrypoint", "main"),
@@ -911,7 +894,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
 }
 #[tokio::test]
 async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
@@ -925,7 +908,7 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let (status, value) = run_contract_view_response_in_test_overlay(
         &app,
@@ -953,7 +936,7 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
 }
 #[tokio::test]
 async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_bytes_program();
     let (contract_address, _, _) =
@@ -966,7 +949,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let asset_definition_id = "6qLb5RYJbzychndCXgFa9aZzjWyx"
         .parse::<AssetDefinitionId>()
@@ -1032,7 +1015,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
 }
 #[tokio::test]
 async fn contracts_call_honors_requested_entrypoint_and_payload() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_dispatch_program();
     let (contract_address, _, _) =
@@ -1045,7 +1028,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -1117,7 +1100,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
 }
 #[tokio::test]
 async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_account_id_program();
     let (contract_address, _, _) =
@@ -1131,7 +1114,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     let initial_account = contract_address.subject_id().to_string();
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "account_id",
@@ -1201,7 +1184,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
 }
 #[tokio::test]
 async fn contracts_call_configure_roundtrips_account_id_map_state() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_configure_account_map_program();
     let (contract_address, _, _) =
@@ -1214,7 +1197,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1, "expected locally signed deployment");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1277,7 +1260,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_fields_across_calls() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_program();
     let (contract_address, _, _) =
@@ -1290,7 +1273,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -1354,7 +1337,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_emitting_isi() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_with_isi_program();
     let (contract_address, _, _) =
@@ -1368,7 +1351,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
@@ -1403,7 +1386,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_mint_asset() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "minted".parse().expect("asset definition name"),
@@ -1443,7 +1426,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
@@ -1482,7 +1465,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
 }
 #[tokio::test]
 async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_like".parse().expect("asset definition name"),
@@ -1522,7 +1505,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
@@ -1576,7 +1559,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
 }
 #[tokio::test]
 async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
-    let (creds, state, kura) = contract_test_state();
+    let (creds, state, kura, mut native_chain) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_burn".parse().expect("asset definition name"),
@@ -1619,7 +1602,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
     run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;

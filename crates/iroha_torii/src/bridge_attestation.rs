@@ -420,6 +420,9 @@ mod tests {
     fn initialized_status() -> SumeragiStatus {
         use iroha_data_model::sumeragi::SumeragiFootprint;
         SumeragiStatus {
+            protocol_version: 1,
+            config_fingerprint: iroha_crypto::Hash::new(b"bridge attestation test config"),
+            beacon_horizon: None,
             instance: [7; 32],
             height: 2,
             view: 0,

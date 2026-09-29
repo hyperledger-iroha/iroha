@@ -5362,7 +5362,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 8
+        assert payload["protocol_version"] == 1
         assert payload["leader"] is None
         assert payload["height"] == 10
         assert payload["view"] == 2
@@ -5382,7 +5382,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 8, "height": 42},
+            "status": {"protocol_version": 1, "height": 42},
             "leader": {"leader_index": 2},
         }
         response = requests.post(
@@ -6570,19 +6570,20 @@ def test_get_sumeragi_evidence_count_rejects_noncanonical_envelope(
         client.get_sumeragi_evidence_count()
 
 
-def _sumeragi_v2_equivocation_record(
+def _sumeragi_native_evidence_record(
     *, evidence_class: str = "phase_vote", penalty_status: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     return {
-        "kind": "SumeragiV2Equivocation",
+        "kind": "NativeSumeragiEvidence",
         "class": evidence_class,
         "height": 31,
-        "view": 4,
         "epoch": 2,
-        "signer": 3,
         "context_id": "11" * 32,
-        "artifact_hash_1": "22" * 32,
-        "artifact_hash_2": "33" * 32,
+        "instance": "22" * 32,
+        "authority_generation": "33" * 32,
+        "offenders": [{"signer": 3, "peer_id": "ea0130" + "22" * 48}],
+        "safety_violation": False,
+        "native_frame_hash": "44" * 32,
         "recorded_height": 40,
         "recorded_view": 2,
         "recorded_ms": 1_700_000_000_000,
@@ -6593,14 +6594,14 @@ def _sumeragi_v2_equivocation_record(
     }
 
 
-@pytest.mark.parametrize("evidence_class", ["proposal", "phase_vote", "timeout_vote"])
-def test_sumeragi_v2_equivocation_accepts_exact_classes(evidence_class: str) -> None:
+@pytest.mark.parametrize("evidence_class", ["proposal", "phase_vote", "timeout_vote", "invalid_proposal", "conflicting_certificates"])
+def test_sumeragi_native_evidence_accepts_exact_classes(evidence_class: str) -> None:
     parsed = ToriiClient._parse_sumeragi_evidence_record(
-        _sumeragi_v2_equivocation_record(evidence_class=evidence_class),
+        _sumeragi_native_evidence_record(evidence_class=evidence_class),
         context="evidence",
     )
 
-    assert isinstance(parsed, client_module.SumeragiV2EquivocationEvidenceRecord)
+    assert isinstance(parsed, client_module.SumeragiEvidenceRecord)
     assert parsed.class_ == evidence_class
 
 
@@ -6615,7 +6616,7 @@ def test_sumeragi_evidence_accepts_committed_penalty_statuses(
     status: str, status_type: type
 ) -> None:
     parsed = ToriiClient._parse_sumeragi_evidence_record(
-        _sumeragi_v2_equivocation_record(
+        _sumeragi_native_evidence_record(
             penalty_status={"status": status, "details": {"height": 44}}
         ),
         context="evidence",
@@ -6626,10 +6627,10 @@ def test_sumeragi_evidence_accepts_committed_penalty_statuses(
 
 
 def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
-    record = _sumeragi_v2_equivocation_record()
+    record = _sumeragi_native_evidence_record()
     record["kind"] = "DoublePrepare"
 
-    with pytest.raises(RuntimeError, match=r"kind must be SumeragiV2Equivocation"):
+    with pytest.raises(RuntimeError, match=r"kind must be NativeSumeragiEvidence"):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
@@ -6650,7 +6651,7 @@ def test_sumeragi_evidence_page_rejects_noncanonical_envelope(
 
 
 def test_sumeragi_evidence_page_rejects_impossible_or_oversized_results() -> None:
-    record = _sumeragi_v2_equivocation_record()
+    record = _sumeragi_native_evidence_record()
     with pytest.raises(RuntimeError, match="at most 50"):
         ToriiClient._parse_sumeragi_evidence_page(
             {"total": 51, "items": [record] * 51},
@@ -6676,7 +6677,7 @@ def test_sumeragi_evidence_page_accepts_empty_page_beyond_total() -> None:
 
 
 def test_sumeragi_evidence_rejects_retired_fields() -> None:
-    record = _sumeragi_v2_equivocation_record()
+    record = _sumeragi_native_evidence_record()
     record["penalty_applied"] = False
 
     with pytest.raises(RuntimeError, match=r"unexpected penalty_applied"):
@@ -6687,28 +6688,33 @@ def test_sumeragi_evidence_rejects_retired_fields() -> None:
     ("field", "value", "match"),
     [
         ("class", "Prepare", r"class must be one of"),
-        ("signer", "3", r"signer must be a non-negative JSON integer"),
-        ("signer", True, r"signer must be a non-negative JSON integer"),
-        ("signer", 0x1_0000_0000, r"signer must be <= 4294967295"),
+        ("offender_signer", "3", r"signer must increase strictly"),
+        ("offender_signer", True, r"signer must increase strictly"),
+        ("offender_signer", 1024, r"signer must increase strictly"),
         ("context_id", "AA" * 32, r"exact lowercase 32-byte hex"),
-        ("artifact_hash_2", "22" * 32, r"distinct artifacts"),
+        ("native_frame_hash", "AA" * 32, r"exact lowercase 32-byte hex"),
+        ("safety_violation", 1, r"must be a boolean"),
+        ("offenders", [], r"between 1 and 1024"),
     ],
 )
-def test_sumeragi_v2_equivocation_rejects_noncanonical_fields(
+def test_sumeragi_native_evidence_rejects_noncanonical_fields(
     field: str, value: Any, match: str
 ) -> None:
-    record = _sumeragi_v2_equivocation_record()
-    record[field] = value
+    record = _sumeragi_native_evidence_record()
+    if field == "offender_signer":
+        record["offenders"][0]["signer"] = value
+    else:
+        record[field] = value
 
     with pytest.raises(RuntimeError, match=match):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
-@pytest.mark.parametrize(("field", "match"), [("context_id", "missing context_id")])
-def test_sumeragi_v2_equivocation_rejects_missing_fields(
+@pytest.mark.parametrize(("field", "match"), [(field, f"missing {field}") for field in _sumeragi_native_evidence_record() if field != "kind"])
+def test_sumeragi_native_evidence_rejects_missing_fields(
     field: str, match: str
 ) -> None:
-    record = _sumeragi_v2_equivocation_record()
+    record = _sumeragi_native_evidence_record()
     del record[field]
 
     with pytest.raises(RuntimeError, match=match):
@@ -6730,7 +6736,7 @@ def test_sumeragi_v2_equivocation_rejects_missing_fields(
 def test_sumeragi_evidence_rejects_invalid_penalty_status(
     penalty_status: Dict[str, Any], match: str
 ) -> None:
-    record = _sumeragi_v2_equivocation_record(penalty_status=penalty_status)
+    record = _sumeragi_native_evidence_record(penalty_status=penalty_status)
 
     with pytest.raises(RuntimeError, match=match):
         ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
@@ -6752,7 +6758,7 @@ def test_list_sumeragi_evidence_validates_offset_and_kind() -> None:
 
     with pytest.raises(RuntimeError, match="offset must be in 0..=10000"):
         client.list_sumeragi_evidence(offset=10_001)
-    with pytest.raises(RuntimeError, match="kind must be SumeragiV2Equivocation"):
+    with pytest.raises(RuntimeError, match="kind must be NativeSumeragiEvidence"):
         client.list_sumeragi_evidence(kind="DoublePrepare")
     with pytest.raises(RuntimeError, match="limit must be an integer"):
         client.list_sumeragi_evidence(limit="1")
@@ -7545,3 +7551,21 @@ def test_unsigned_canonical_layout_rejects_every_retired_admission_slot(
             client_module._transaction_payload_bindings(rejected), **kwargs,
         )
     assert accepted != rejected
+
+
+@pytest.mark.parametrize("mutation", ["order", "peer_duplicate", "peer_literal", "extra", "oversize"])
+def test_sumeragi_native_evidence_rejects_invalid_offender_attribution(mutation: str) -> None:
+    record = _sumeragi_native_evidence_record()
+    first = record["offenders"][0]
+    if mutation == "order":
+        record["offenders"].append({"signer": 3, "peer_id": "ea0130" + "33" * 48})
+    elif mutation == "peer_duplicate":
+        record["offenders"].append({"signer": 4, "peer_id": first["peer_id"]})
+    elif mutation == "peer_literal":
+        first["peer_id"] = "alice@test"
+    elif mutation == "extra":
+        first["authority"] = "unexpected"
+    else:
+        record["offenders"] *= 1025
+    with pytest.raises(RuntimeError):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")

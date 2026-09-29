@@ -144,6 +144,18 @@ public sealed class KagemushaReleaseGovernanceV1Tests
     public void InstallRejectsUnknownAndMissingNestedFieldsAndUnsafeNumbers()
     {
         var name = "kagemusha_verifier_release_install_v1.json";
+        var noNetwork = MutableFixture(name);
+        noNetwork["payload"]!["manifest"]!.AsObject().Remove("network_id");
+        Reject(noNetwork);
+
+        var noPurpose = MutableFixture(name);
+        noPurpose["payload"]!["manifest"]!.AsObject().Remove("purpose");
+        Reject(noPurpose);
+
+        var invalidPurpose = MutableFixture(name);
+        invalidPurpose["payload"]!["manifest"]!["purpose"]!["kind"] = "unknown";
+        Reject(invalidPurpose);
+
         var extra = MutableFixture(name);
         extra["payload"]!["manifest"]!["enabled_profiles"]![0]!["hardware_profile"]!["unrecognized"] = true;
         Reject(extra);

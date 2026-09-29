@@ -221,52 +221,6 @@ fn raw_geometry_abandoned_partial_operation_refuses_replacement() {
     });
 }
 
-#[test]
-fn raw_geometry_namespace_retry_retains_original_descriptor_and_refuses_uncaptured_creation() {
-    with_raw_geometry_fixture(|kura, request| {
-        let binding = kura
-            .geometry_bindings(
-                request.previous,
-                request.previous_incarnations,
-                request.previous_activation_heights,
-            )
-            .unwrap()
-            .remove(0);
-        let blocks = kura.binding_blocks_path(&binding);
-        let path = Kura::lane_artifact_dir(&blocks);
-        fs::remove_dir(&path).unwrap();
-        let mut receipts = Vec::new();
-        kura.ensure_authoritative_lane_artifact_namespace(&binding, &blocks, Some(&mut receipts))
-            .unwrap();
-        assert_eq!(receipts.len(), 1);
-        let original =
-            secure_file_metadata::from_file(&receipts[0].held.as_ref().unwrap().file).unwrap();
-        receipts[0].inventory = None;
-        kura.ensure_authoritative_lane_artifact_namespace(&binding, &blocks, Some(&mut receipts))
-            .unwrap();
-        assert!(Kura::sidecar_metadata_same_object(
-            &original,
-            &secure_file_metadata::from_file(&receipts[0].held.as_ref().unwrap().file).unwrap()
-        ));
-        assert!(receipts[0].inventory.is_some());
-        // Model the retained native mkdir result whose immediate descriptor open failed.
-        // The existing pathname must never be promoted to creation authority on retry.
-        receipts[0].held = None;
-        let before = secure_file_metadata::from_path(&path).unwrap();
-        assert!(
-            kura.ensure_authoritative_lane_artifact_namespace(
-                &binding,
-                &blocks,
-                Some(&mut receipts)
-            )
-            .is_err()
-        );
-        assert!(Kura::sidecar_metadata_same_object(
-            &before,
-            &secure_file_metadata::from_path(&path).unwrap()
-        ));
-    });
-}
 
 #[test]
 fn raw_geometry_in_memory_map_change_keeps_abandonment_fence() {

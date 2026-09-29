@@ -62,12 +62,6 @@ pub mod execution_output;
 pub mod header;
 /// Canonical routing and QueuePlan admission input values.
 pub mod lane_admission;
-/// Native lane consensus messages and immutable frozen authority values.
-pub mod lane_consensus;
-/// Ordered native Decision sources and their exact applying pre-State.
-pub mod lane_decision_batch;
-/// Immutable complete admitted inputs and exact distinct route slots.
-pub mod lane_input;
 mod native_results;
 /// Explicit applying output policy and bounded reservation arithmetic.
 pub mod output_budget;
@@ -82,11 +76,8 @@ pub use commit_certificate::{
     CertificateAdmissionError, ChargedCertificateParts, CommitCertificate,
 };
 pub use execution_context::{
-    AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
-    CertifiedMergeLedgerReference, ExternalExecutionContext, ExternalExecutionRouteLeg,
-    ExternalExecutionRouteRole, MAX_QUEUE_PLAN_ADMISSION_BYTES, MAX_QUEUE_PLAN_ADMISSIONS_BYTES,
-    MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK, queue_plan_admissions_within_limits,
+    ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
@@ -703,7 +694,7 @@ impl SignedBlock {
         self.commit_certificate = certificate;
         self
     }
-    /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
+    /// Hash the canonical resultless proposal wire.
     ///
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
@@ -1751,7 +1742,6 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
     use crate::{
-        block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             ingest::{
@@ -1761,12 +1751,10 @@ mod tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
-        merge::{MergeLedgerEntry, MergeQuorumCertificate},
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
         transaction::{TransactionBuilder, signed::TransactionEntrypoint},
     };
-    use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
@@ -2138,115 +2126,6 @@ mod tests {
         let block = block_with_execution_context(BlockExecutionContextBundle::default());
         assert!(block.is_empty());
     }
-    #[test]
-    fn signed_block_with_only_certified_merge_reference_is_not_empty() {
-        let validators = Vec::<PeerId>::new();
-        let entry = MergeLedgerEntry {
-            version: MergeLedgerEntry::VERSION,
-            epoch_id: 1,
-            lane_catalog_hash: Hash::new(b"merge-only-catalog"),
-            active_lanes: Vec::new(),
-            lane_authority_catalog: crate::merge::MergeLaneAuthorityCatalogV1::default(),
-            incarnation_root: Hash::new(b"merge-only-incarnations"),
-            activation_root: Hash::new(b"merge-only-activations"),
-            lane_snapshots: Vec::new(),
-            global_state_root: Hash::new(b"merge-only-global-state"),
-            merge_qc: MergeQuorumCertificate::new(
-                0,
-                1,
-                1,
-                HashOf::from_untyped_unchecked(Hash::new(b"merge-only-parent")),
-                test_network_id(),
-                1,
-                HashOf::new(&validators),
-                validators,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Hash::new(b"merge-only-message"),
-            ),
-            execution_batch: None,
-            lane_drain_certificates: Vec::new(),
-        };
-        let execution_context = BlockExecutionContextBundle::new(Vec::new())
-            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0);
-        let block = SignedBlock {
-            signatures: BTreeSet::new(),
-            payload: BlockPayload {
-                header,
-                external_entrypoints: Vec::new(),
-                execution_context: Some(execution_context),
-                da_commitments: None,
-                da_proof_policies: None,
-                da_pin_intents: None,
-                npos_consensus_effects: None,
-                global_beacon_pulse: None,
-            },
-            result: None,
-            commit_certificate: None,
-        };
-        assert!(!block.is_empty());
-    }
-    #[test]
-    fn signed_block_with_only_autonomous_lane_payload_is_not_empty() {
-        let producer = PeerId::new(
-            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::BlsNormal)
-                .expect("generate checked autonomous payload producer")
-                .public_key()
-                .clone(),
-        );
-        let envelope = AutonomousLanePayloadEnvelopeV1 {
-            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-            network_id: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-                Hash::new(b"autonomous-only-genesis"),
-            )),
-            epoch: 4,
-            lane_id: LaneId::new(2),
-            dataspace_id: DataSpaceId::new(9),
-            lane_incarnation: Hash::new(b"autonomous-only-incarnation"),
-            proposal_height: 2,
-            lane_block_height: 5,
-            lane_block_view: 0,
-            proposal_hash: Hash::new(b"autonomous-only-proposal"),
-            descriptor_hash: Hash::new(b"autonomous-only-descriptor"),
-            payload_hash: Hash::new(b"autonomous-only-payload"),
-            producer,
-            canonical_payload: vec![1, 2, 3, 4],
-        };
-        let execution_context = BlockExecutionContextBundle::new(Vec::new())
-            .with_autonomous_lane_payloads(vec![envelope]);
-        let block = block_with_execution_context(execution_context);
-        assert!(!block.is_empty());
-    }
-    #[test]
-    fn signed_block_with_only_lane_payload_ownership_is_not_empty() {
-        let ownership = SumeragiLanePayloadOwnership {
-            proposal_height: 2,
-            proposal_view: 0,
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_incarnation: Hash::new(b"ownership-only-incarnation"),
-            lane_block_height: 1,
-            lane_block_view: 0,
-            subject_hash: Hash::new(b"ownership-only-subject"),
-            qc_mode_tag: "test-lane-qc-mode".to_string(),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::new(b"ownership-only-entrypoint")],
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_descriptor_hash: Some(Hash::new(b"ownership-only-descriptor")),
-            lane_block_descriptor_validator_set: Vec::new(),
-            lane_block_descriptor_validator_count: 0,
-            lane_block_descriptor_min_quorum: 0,
-            payload_ownership_hash: Hash::new(b"ownership-only-payload"),
-            rbc_instance_hash: Hash::new(b"ownership-only-rbc"),
-        };
-        let execution_context = BlockExecutionContextBundle::new(Vec::new())
-            .with_lane_payload_ownerships(vec![ownership]);
-        let block = block_with_execution_context(execution_context);
-        assert!(!block.is_empty());
-    }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_try_sign_adds_verifiable_signature() {
@@ -2460,7 +2339,7 @@ mod tests {
             "removed lane statements are not an optional JSON field"
         );
         let mut retired = bytes.clone();
-        retired.extend_from_slice(&Vec::<crate::nexus::LaneFinalityStatement>::new().encode());
+        retired.extend_from_slice(&Vec::<()>::new().encode());
         assert!(
             BlockResult::decode_all(&mut retired.as_slice()).is_err(),
             "retired trailing lane statements must not be accepted"

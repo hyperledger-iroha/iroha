@@ -273,9 +273,6 @@ macro_rules! impl_repo_decode_from_slice {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = repo_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -309,44 +306,9 @@ impl_repo_decode_from_slice!(ReverseRepoIsi {
 impl_repo_decode_from_slice!(RepoMarginCallIsi {
     agreement_id: RepoAgreementId,
 });
-fn decode_packed_repo_instruction_box(
-    bytes: &[u8],
-) -> Result<(RepoInstructionBox, usize), norito::core::Error> {
-    let _payload_guard = norito::core::PayloadCtxGuard::enter(bytes);
-    let ptr = bytes.as_ptr();
-    let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-    let tag = u32::from_le_bytes(
-        tag_bytes
-            .try_into()
-            .map_err(|_| norito::core::Error::LengthMismatch)?,
-    );
-    let mut offset = 4usize;
-    let value =
-        match tag {
-            0 => RepoInstructionBox::Initiate(Box::new(
-                norito::core::decode_context_field_canonical::<RepoIsi>(ptr, &mut offset)?,
-            )),
-            1 => RepoInstructionBox::Reverse(norito::core::decode_context_field_canonical::<
-                ReverseRepoIsi,
-            >(ptr, &mut offset)?),
-            2 => RepoInstructionBox::MarginCall(norito::core::decode_context_field_canonical::<
-                RepoMarginCallIsi,
-            >(ptr, &mut offset)?),
-            _ => {
-                return Err(norito::core::Error::Message(format!(
-                    "invalid RepoInstructionBox tag {tag}"
-                )));
-            }
-        };
-    norito::core::finish_context_fields(ptr, offset)?;
-    Ok((value, offset))
-}
 impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = repo_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return decode_packed_repo_instruction_box(bytes);
-        }
         let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
         let tag = u32::from_le_bytes(
             tag_bytes

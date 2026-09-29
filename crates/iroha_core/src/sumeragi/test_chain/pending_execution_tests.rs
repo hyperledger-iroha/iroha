@@ -231,7 +231,8 @@ fn changed_original_genesis_configuration_is_rejected_before_publication() {
         ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
-    .unwrap_err()
+    .err()
+    .expect("configured policy mismatch must reject")
     .1;
     assert!(
         matches!(*error, crate::block::BlockValidationError::GenesisPolicyMismatch {

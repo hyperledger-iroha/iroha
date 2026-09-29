@@ -1087,6 +1087,7 @@ mod tests {
             payload_len: 0,
             proposer: 2,
             skipped_leaders: Vec::new(),
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             attest: true,
         };
         let qc = Qc {

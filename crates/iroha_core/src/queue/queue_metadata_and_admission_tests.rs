@@ -1,101 +1,4 @@
 #[test]
-fn guard_return_capacity_invariant_is_batch_atomic() {
-    let state = State::new(
-        world_with_test_domains(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let mut cfg = config_factory();
-    cfg.capacity = nonzero!(2_usize);
-    cfg.capacity_per_user = nonzero!(2_usize);
-    let queue = Arc::new(Queue::test(cfg, &time_source));
-    for _ in 0..2 {
-        queue
-            .push(accepted_tx_by_someone(&time_source), state.view())
-            .expect("fill queue");
-    }
-    let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2_usize));
-    let guarded_hashes = guards
-        .iter()
-        .map(|guard| guard.tx.hash_as_entrypoint())
-        .collect::<BTreeSet<_>>();
-    // Corrupt the private index with a tracked foreign entry to exercise the fail-closed
-    // capacity preflight. No returned guard may be partially released or appended.
-    let foreign = accepted_tx_by_someone(&time_source);
-    let foreign_hash = foreign.as_ref().hash_as_entrypoint();
-    queue.txs.insert(
-        foreign_hash,
-        Arc::new(CheckedTransaction::new_unchecked(foreign)),
-    );
-    queue.tx_enqueued_at_ms.insert(foreign_hash, 0);
-    assert!(queue.push_queued_hash(foreign_hash, 0));
-    let err = queue
-        .return_transaction_guards(&mut guards, &state)
-        .expect_err("corrupt live hash index must fail closed");
-    assert!(matches!(
-        err,
-        TransactionGuardReturnError::HashIndexCapacity {
-            queued: 1,
-            returning: 2,
-            capacity: 2
-        }
-    ));
-    assert_eq!(guards.len(), 2);
-    assert!(guards.iter().all(|guard| !guard.released));
-    assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 2);
-    assert_eq!(
-        guarded_hashes
-            .iter()
-            .filter(|hash| queue.queued_tx_enqueued_at_ms.contains_key(hash))
-            .count(),
-        0,
-        "capacity failure must not append a partial returned batch"
-    );
-    assert_eq!(queue.pop_queued_hash(), Some(foreign_hash));
-    queue.txs.remove(&foreign_hash);
-    queue.tx_enqueued_at_ms.remove(&foreign_hash);
-    let report = queue
-        .return_transaction_guards(&mut guards, &state)
-        .expect("return after repairing index");
-    assert_eq!(report.returned, 2);
-    assert_eq!(queue.queued_len(), 2);
-    assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
-}
-#[test]
-fn guard_return_missing_transaction_is_explicit_and_does_not_release_batch() {
-    let state = State::new(
-        world_with_test_domains(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    queue
-        .push(accepted_tx_by_someone(&time_source), state.view())
-        .expect("push tx");
-    let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
-    let hash = guards[0].tx.hash_as_entrypoint();
-    let (_, tracked) = queue.txs.remove(&hash).expect("remove tracked entry");
-    let err = queue
-        .return_transaction_guards(&mut guards, &state)
-        .expect_err("unowned missing transaction must fail explicitly");
-    assert_eq!(
-        err,
-        TransactionGuardReturnError::MissingTrackedTransactions { hashes: vec![hash] }
-    );
-    assert_eq!(guards.len(), 1);
-    assert!(!guards[0].released);
-    assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 1);
-    assert_eq!(queue.queued_len(), 0);
-    queue.txs.insert(hash, tracked);
-    let report = queue
-        .return_transaction_guards(&mut guards, &state)
-        .expect("return after restoring invariant");
-    assert_eq!(report.returned, 1);
-    assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
-}
-#[test]
 fn queue_metadata_cleared_on_commit_and_clear_all() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -407,7 +310,12 @@ fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
     queue.push(tx, state.view()).expect("push tx");
     assert!(queue.contains_pending_hash(hash, &state));
     let generation = state.state_view_generation();
-    let original_hashes = state.view().block_hashes.iter().copied().collect::<Vec<_>>();
+    let original_hashes = state
+        .view()
+        .block_hashes
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
 
     // The real publication writer blocks State::view at its first hash read. Its
     // original journal is aborted after the concurrency cut; nothing is published.
@@ -475,10 +383,18 @@ fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
     assert!(!queue.contains_entrypoint_hash(hash));
     assert!(!queue.contains_pending_hash(hash, &state));
     assert_eq!(queue.active_len(), 0);
-    assert!(!queue.transaction_selection_durability_faulted());
+    assert!(!queue.admission_faulted());
     assert_eq!(state.state_view_generation(), generation);
-    assert_eq!(state.view().block_hashes.iter().copied().collect::<Vec<_>>(), original_hashes);
-    assert!(state.view().transactions.get(&hash).is_none());
+    assert_eq!(
+        state
+            .view()
+            .block_hashes
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        original_hashes
+    );
+    assert!(!state.view().has_entrypoint(hash));
 }
 #[test]
 fn gossip_batch_with_state_removes_committed_entries() {

@@ -85,7 +85,7 @@ on:
       - "scripts/check_sorafs_transparency_rollout_evidence.py"
       - "scripts/run_sorafs_production_readiness.py"
       - "scripts/run_sorafs_production_readiness_negative_archive.py"
-      - "scripts/sccp_release_common.py"
+      - "scripts/release_evidence_crypto.py"
       - "scripts/sorafs_archive_path_components.py"
       - "scripts/sorafs_checker_preflight.py"
       - "scripts/sorafs_evidence_fingerprint.py"

@@ -15,39 +15,16 @@ impl Core {
         if self.halted.is_some() {
             return Millis::MAX;
         }
-        [
-            self.build_deadline(),
-            self.stage1_deadline(),
-            self.stage2_deadline(),
-            self.retx[0].map(|r| r.next),
-            self.retx[1].map(|r| r.next),
-            self.view_deadline(),
-            Some(
-                self.last_rebroadcast
-                    .saturating_add(self.local.rebroadcast_interval),
-            ),
-            Some(self.status_deadline()),
-            self.probe_deadline(),
-            self.sync.deadline(),
-            self.wants.values().map(|want| want.next_retry).min(),
-            self.exec
-                .values()
-                .filter_map(|state| match state {
-                    ExecState::RetryAt { at, .. } => Some(*at),
-                    _ => None,
-                })
-                .min(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(Millis::MAX)
+        self.deadlines()
+            .into_iter()
+            .filter_map(|(_, deadline)| deadline)
+            .min()
+            .unwrap_or(Millis::MAX)
     }
 
-    /// Every deadline by name (tests).
-    #[cfg(test)]
-    pub(super) fn deadlines(&self) -> Vec<(&'static str, Option<Millis>)> {
-        vec![
+    /// One allocation-free deadline table shared by wakeups and protocol diagnostics.
+    pub(super) fn deadlines(&self) -> [(&'static str, Option<Millis>); 12] {
+        [
             ("build", self.build_deadline()),
             ("stage1", self.stage1_deadline()),
             ("stage2", self.stage2_deadline()),
@@ -294,7 +271,7 @@ impl Core {
     fn broadcast_status(&mut self) {
         self.last_status = Some(self.now);
         let mut to = self.members_except_me();
-        if let Some(next) = self.config(&self.height.saturating_add(1)) {
+        if let Some(next) = self.config(self.height.saturating_add(1)) {
             for key in next.committee.members() {
                 if !to.contains(key) && !self.is_local_key(key) {
                     to.push(key.clone());
@@ -308,7 +285,7 @@ impl Core {
     /// The probe deadline (§6.11): every `rebroadcast_interval` while some key is unanchored and
     /// `C_{tip.height+2}` is known.
     fn probe_deadline(&self) -> Option<Millis> {
-        if !self.any_unanchored() || self.config(&self.tip.height.saturating_add(2)).is_none() {
+        if !self.any_unanchored() || self.config(self.tip.height.saturating_add(2)).is_none() {
             return None;
         }
         Some(
@@ -321,7 +298,7 @@ impl Core {
     /// `C_{tip.height+2}` other than this node.
     fn probe_tick(&mut self) {
         self.last_probe = self.now;
-        let Some(next) = self.config(&self.tip.height.saturating_add(2)) else {
+        let Some(next) = self.config(self.tip.height.saturating_add(2)) else {
             return;
         };
         let to: Vec<PublicKey> = next

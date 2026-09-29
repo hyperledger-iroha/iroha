@@ -6,7 +6,7 @@ pub use captured::assert_bidirectional;
 
 #[test]
 fn original_package_observations_are_complete() {
-    captured::assert_package_complete("iroha", 28, 56);
+    captured::assert_package_complete("iroha", 20, 40);
 }
 
 #[test]

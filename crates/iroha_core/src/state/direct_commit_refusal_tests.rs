@@ -200,7 +200,6 @@ fn check_commit_retirement(case: CommitCase, source: NotificationSource) {
     block.verify_execution_output_publication().unwrap();
     block.validate_canonical_runtime_projection().unwrap();
     block.verify_sumeragi_lane_state_publication().unwrap();
-    block.validate_merge_carrier_entrypoint_binding().unwrap();
     assert!(block.fastpq_source_inventory.is_none());
 
     let carrier_hash = proposal.header().hash();

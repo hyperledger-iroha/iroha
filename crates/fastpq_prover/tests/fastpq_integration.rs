@@ -8,8 +8,10 @@ mod common;
 mod offline_compact;
 #[path = "poseidon_manifest_consistency.rs"]
 mod poseidon_manifest_consistency;
+#[cfg(feature = "dev-tools")]
 #[path = "realistic_flows.rs"]
 mod realistic_flows;
+#[cfg(feature = "dev-tools")]
 #[path = "resource_profile.rs"]
 mod resource_profile;
 #[path = "trace_commitment.rs"]

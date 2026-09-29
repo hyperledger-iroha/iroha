@@ -117,6 +117,11 @@ pub use iroha_data_model::fastpq::{
 /// Defaults inherit existing verifier transition and batch ceilings; they are
 /// independent preparation ceilings, not a promise that a succinct proof fits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive cap and `max_` separates it from the measured count; \
+              the fields are public API shared with `iroha_core`"
+)]
 pub struct PublicTransferLimits {
     /// Maximum transcript occurrences.
     pub max_transcripts: usize,
@@ -1642,7 +1647,9 @@ mod tests {
     #[test]
     fn public_leaf_hashes_preserve_full_values_long_keys_and_all_digest_limbs() {
         for length in [0, 110, 111, 128, 255] {
-            let key: Vec<_> = (0..length).map(|index| (index % 251) as u8).collect();
+            let key: Vec<_> = (0..length)
+                .map(|index| u8::try_from(index % 251).expect("residue modulo 251 fits u8"))
+                .collect();
             let key_hash: [u8; 32] = Hash::new_from_chunks(&[KEY_DOMAIN, &key]).into();
             for value in [0, 1, 0xffff_ffff_0000_0001, u64::MAX] {
                 let hash = public_leaf(&key_hash, value);

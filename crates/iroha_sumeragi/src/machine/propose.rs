@@ -77,7 +77,6 @@ impl Core {
         let req = self.next_req;
         self.next_req = self.next_req.saturating_add(1);
         self.fresh_build = Some(FreshBuild {
-            req,
             context: ControlWitnessContext {
                 height: self.height,
                 view: self.view,
@@ -85,7 +84,6 @@ impl Core {
                 parent_hash: self.tip.block_hash,
                 parent_result: self.tip.result,
             },
-            control: None,
             payload: None,
         });
         self.out.push(Action::BuildPayload {
@@ -145,7 +143,7 @@ impl Core {
         let Some(fresh) = self.fresh_build.as_ref() else {
             return;
         };
-        if req != outstanding || req != fresh.req || fresh.payload.is_some() {
+        if req != outstanding || fresh.payload.is_some() {
             return;
         }
         let too_large =
@@ -168,8 +166,7 @@ impl Core {
         self.out.push(Action::BuildControlWitness { req, context });
         // MS47: a missing authenticated application response is silently invented.
         if cfg!(sumeragi_mutation = "MS47") {
-            self.fresh_build.as_mut().unwrap().control = Some((ControlWitness::empty(), false));
-            self.finish_fresh_build();
+            self.on_control_witness_built(req, context, &ControlWitness::empty(), false);
         }
     }
 
@@ -193,7 +190,7 @@ impl Core {
         &mut self,
         req: u64,
         context: ControlWitnessContext,
-        witness: ControlWitness,
+        witness: &ControlWitness,
         attest: bool,
     ) {
         if self.awaiting {
@@ -208,45 +205,18 @@ impl Core {
         let Some(fresh) = self.fresh_build.as_mut() else {
             return;
         };
-        if req != outstanding
-            || req != fresh.req
-            || fresh.payload.is_none()
-            || fresh.control.is_some()
-        {
+        if req != outstanding || fresh.payload.is_none() {
             return;
         }
-        if !cfg!(sumeragi_mutation = "MS48")
-            && (context != fresh.context
-                || context.height != self.height
-                || context.view != self.view
-                || context.epoch != self.cfg.epoch.id
-                || context.parent_hash != self.tip.block_hash
-                || context.parent_result != self.tip.result)
-        {
+        if !cfg!(sumeragi_mutation = "MS48") && context != fresh.context {
             return;
         }
-        fresh.control = Some((witness, attest));
-        self.finish_fresh_build();
-    }
-
-    fn finish_fresh_build(&mut self) {
-        let Build::Requested { req, .. } = self.build else {
-            return;
-        };
-        if !self.fresh_build.as_ref().is_some_and(|fresh| {
-            fresh.req == req && fresh.control.is_some() && fresh.payload.is_some()
-        }) {
-            return;
-        }
-        let mut fresh = self
-            .fresh_build
-            .take()
-            .expect("both original parts are complete");
-        let (payload, payload_attest) = fresh.payload.take().expect("original nonempty payload");
-        let (control, control_attest) =
-            fresh.control.take().expect("exact source control response");
+        // Control is requested only after the first bounded payload. Taking the request
+        // consumes its sole response and makes every duplicate stale.
+        let fresh = self.fresh_build.take().expect("original request retained");
+        let (payload, payload_attest) = fresh.payload.expect("original nonempty payload");
         self.build = Build::Idle;
-        self.propose_fresh(payload, payload_attest || control_attest, control);
+        self.propose_fresh(payload, payload_attest || attest, witness);
     }
 
     /// On `PayloadReady{req}` (§6.10): wake the eligible leader's empty-build wait at any
@@ -281,7 +251,7 @@ impl Core {
 
     /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
     /// (§3.7 A1).
-    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: ControlWitness) {
+    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: &ControlWitness) {
         let Some(me) = self.leader_eligible() else {
             self.build = Build::Idle;
             return;
@@ -314,7 +284,7 @@ impl Core {
             skipped_leaders: self
                 .topo
                 .skipped_leader_keys(&self.cfg.committee, self.view),
-            control_witness,
+            control_witness: *control_witness,
             attest,
         };
         self.propose_block(Block { header, payload }, justify);

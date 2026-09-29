@@ -97,6 +97,11 @@ impl UnifiedBuffer {
     }
 
     /// Checked full backing extent for capability checks before any allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnifiedBufferError::InvalidLayout`] when `alignment` is not a
+    /// power of two or the aligned extent overflows `isize`.
     pub fn required_capacity(len: usize, alignment: usize) -> Result<usize, UnifiedBufferError> {
         Layout::from_size_align(len, alignment)
             .map(|layout| layout.pad_to_align().size())

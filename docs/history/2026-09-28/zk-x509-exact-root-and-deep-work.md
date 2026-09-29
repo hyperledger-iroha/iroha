@@ -248,3 +248,92 @@ log and independent reconstruction are retained in the regeneration directory
 above. The current focused Core regression is queued separately under
 `dist/zk-x509-prover-evidence/norito-final-core-20260928T112152Z/`; it includes
 subsequent dependency changes and the typed Rust wallet change-note helper.
+
+The retained regeneration executable subsequently passed 69 owner, replay,
+cache, resource, sampler, transform and SHA batch controls in 236.12 seconds;
+six optimized diagnostics or subprocess helpers stayed ignored. This includes
+complete MAIN recursive cleanup and independent SHA column/terminal parity.
+Its SHA-256 is
+`b6ece676a93f153270706374d23ffd1e10f7ff90dc7e2f536225f065138854da`;
+`retained-owner-controls.log` and its JSON receipt are beside the retained binary.
+These tests exercise the earlier captured dependency snapshot, while the current
+source rebuild remains necessary. They do not construct a complete credential.
+
+
+The final focused Norito/Core run compiled successfully and completed 106 tests
+with one unrelated failure and six ignored diagnostics in 289.67 seconds. All
+selected X509 profile, codec, IO/projection proof known answers, recursive
+ownership, replay, cache, resource, transform and Rust wallet proof controls
+passed. The failing four-validator queue fixture exposed a stale canonical
+genesis confidential-policy constant; a separate existing State parity test
+reproduced that mismatch. No production digest check was bypassed. The command,
+source inventory, full log and immutable executable are retained under
+`dist/zk-x509-prover-evidence/norito-final-core-retry-20260928T120146Z/`.
+The executable SHA-256 is
+`f52fbd7618b395b5dd3ac6b6368e2283e908154ee6024b7cb9649e81e35b6680`.
+
+That same executable subsequently passed all 11 final relation/admission
+controls in 3.86 seconds: the five centralized verification tests, optional
+second-input/full-tree membership checks, full/change unshield public-column
+binding, and list/path API shape checks. External wall time was 15.37 seconds
+and maximum resident size was 284,884,992 bytes. These are scoped native
+implementation results, not a maximum X509 proof or release certificate.
+
+A standard `--release` build for the complete maximum-structural credential
+proof is captured separately under
+`dist/zk-x509-prover-evidence/norito-release-max-20260928T122728Z/`.
+Core uses release optimization level three; the repository's dependency profile
+overrides remain intact. The full proof will retain its public bytes and
+independent verification outcome before enforcing the unchanged 300-second
+target. Its compilation and proof execution are separate measurements.
+
+### First complete maximum-shape optimized attempt
+
+The preserved real `--release` Core test executable (`opt-level=3`, SHA-256
+`dab6ad04c8c1e173eaf6278b2cc1c2af12305ed649af574f1ef72bd2d6e1f6d5`)
+ran the complete credential producer against the three-certificate,
+four-disclosure, 64-entry CRL, 20-byte serial fixture. It returned
+`MainProofConstruction(DerWitness)` after **1,159.504330 seconds**; no proof
+was produced. External macOS `time -l` recorded 1,159.68 seconds wall time and
+**7,964,540,928 bytes maximum RSS**. The unchanged 300-second target was missed;
+the unchanged 12-GiB RSS ceiling was met for this failed construction. This
+is neither a successful maximum-proof measurement nor evidence of 32-GiB
+address-space containment. Actual CPU/Metal selection and individual phase
+durations were unobserved; the compiled GPU feature does not establish device
+use. Other native compilation was active during the run.
+
+The durable attempt is under
+`dist/zk-x509-prover-evidence/norito-release-max-20260928T122728Z`; its source
+archive has 2,229 relevant files with zero capture drift. The same immutable
+binary passed both exact default-genesis-policy and queue controls before
+proving. Its failed public receipt is retained under
+`dist/zk-x509-prover-evidence/iroha-x509-full-credential-19095-1790606695229771000`.
+
+A subsequent isolated actual-source constructor check reproduced two DER
+producer state errors for both ordinary and maximum release documents: a
+long-length count was written before its consuming row, and primitive OID or
+BIT STRING flags survived into a boundary row. Correcting the producer order
+passes the unchanged 898-constraint numeric AIR at all active rows and native
+padding boundaries, with targeted old-state mutation rejections. These changes
+alter no AIR, degree, transcript, profile, or proof cap. New complete-source
+preflights also exposed an omitted embedded-document producer list at the
+DER/RFC handoff; subsequent RFC column validation remains in progress. A new
+complete proof attempt is required after these source checks pass.
+
+
+The next diagnostic source records fixed public phase durations and the actual
+backend returned by each MAIN common-domain FFT batch. It labels nested timings
+as nonadditive and other transform families as unobserved. A successful complete
+run must account for all 11,246 expected MAIN FFT column evaluations. Its bounded,
+thread-local observation owner also rejects cross-thread coverage assumptions
+and prevents a timer from recording into a later observation. Three optimized
+actual-source observation controls pass; this is not an integrated proof result.
+
+Initial log-19 mask sampling now reuses at most eight clearing source columns
+while preserving the original successful per-column mask draw sequence. Isolated
+actual-source parity and live-cell error/unwind controls pass (nine controls,
+including the shared clearing owner and initial observation tests). Construction
+failure can occur earlier when a source batch fails; neither path publishes a
+proof. The existing replay allowance covers the retained native batch. These
+changes require fresh integrated Core validation and a new complete proof run;
+no elapsed-time improvement is inferred from the source work-count reduction.

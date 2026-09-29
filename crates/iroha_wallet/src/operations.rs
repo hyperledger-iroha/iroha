@@ -159,7 +159,7 @@ impl AccountService {
                 destination: request.destination.clone(),
                 amount: request.amount.clone(),
             },
-            &request.fee_payment,
+            request.fee_payment.clone(),
             journal,
         )
     }
@@ -199,16 +199,16 @@ impl AccountService {
         self.prepare_native(
             NativeOperation::AliasSetup {
                 request: request.clone(),
-                plan,
+                plan: Box::new(plan),
             },
-            &fee_payment,
+            fee_payment,
             journal,
         )
     }
     fn prepare_native(
         &self,
         operation: NativeOperation,
-        requested_fee: &FeePaymentIntent,
+        requested_fee: FeePaymentIntent,
         journal: &Path,
     ) -> Result<OperationReport> {
         requested_fee.validate()?;
@@ -250,7 +250,7 @@ impl AccountService {
             chain_discriminant: (self.config.account_chain_discriminant),
             account_id: self.config.account.clone(),
             operation,
-            requested_fee: requested_fee.clone(),
+            requested_fee,
             quote,
             transaction_hash: signed.hash().to_string(),
             signed_transaction_hex: hex::encode(signed.encode_versioned()),
@@ -259,7 +259,12 @@ impl AccountService {
         record.verify(&self.config)?;
         let journal = Journal::create(journal)?;
         journal.write_operation(&record)?;
-        transfer_report(&journal, &record, OperationStatus::Prepared, None)
+        Ok(transfer_report(
+            &journal,
+            &record,
+            OperationStatus::Prepared,
+            None,
+        ))
     }
     /// Submit a wholly unattempted saved transfer once, then verify its exact committed wire.
     ///
@@ -297,16 +302,31 @@ impl AccountService {
             before.status = OperationStatus::Pending;
         }
         if !submit || before.status != OperationStatus::Absent {
-            return transfer_report(&journal, &record, before.status, before.evidence);
+            return Ok(transfer_report(
+                &journal,
+                &record,
+                before.status,
+                before.evidence.as_ref(),
+            ));
         }
         if transaction_expired(&transaction)? {
-            return transfer_report(&journal, &record, OperationStatus::Expired, None);
+            return Ok(transfer_report(
+                &journal,
+                &record,
+                OperationStatus::Expired,
+                None,
+            ));
         }
         self.client.refresh_capabilities().wrap_err(
             "wallet transaction submission compatibility; saved operation remains unattempted",
         )?;
         if !journal.record_submission(&record)? {
-            return transfer_report(&journal, &record, OperationStatus::Pending, None);
+            return Ok(transfer_report(
+                &journal,
+                &record,
+                OperationStatus::Pending,
+                None,
+            ));
         }
         // The marker is durable before the only dispatch. Its existence permanently prevents replay.
         let _submission = self.client.submit_transaction_and_wait(&transaction);
@@ -323,7 +343,12 @@ impl AccountService {
         if status == OperationStatus::Applied {
             journal.write_applied_evidence(&after.evidence)?;
         }
-        transfer_report(&journal, &record, status, after.evidence)
+        Ok(transfer_report(
+            &journal,
+            &record,
+            status,
+            after.evidence.as_ref(),
+        ))
     }
 }
 
@@ -409,7 +434,7 @@ enum NativeOperation {
     },
     AliasSetup {
         request: AliasSetupPlanRequestV1,
-        plan: AliasTransactionPlanV1,
+        plan: Box<AliasTransactionPlanV1>,
     },
 }
 impl NativeOperation {
@@ -470,8 +495,8 @@ fn transfer_report(
     journal: &Journal,
     record: &TransactionJournal,
     status: OperationStatus,
-    evidence: Option<Value>,
-) -> Result<OperationReport> {
+    evidence: Option<&Value>,
+) -> OperationReport {
     let (kind, operation) = match &record.operation {
         NativeOperation::Transfer {
             destination,
@@ -494,7 +519,7 @@ fn transfer_report(
     if let (Some(target), Some(fields)) = (data.as_object_mut(), operation.as_object()) {
         target.extend(fields.clone());
     }
-    Ok(OperationReport { status, data })
+    OperationReport { status, data }
 }
 pub(crate) fn validate_config(config: &Config) -> Result<()> {
     iroha::account_bootstrap::validate_endpoint(&config.torii_api_url)?;

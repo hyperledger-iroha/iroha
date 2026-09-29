@@ -659,6 +659,7 @@ pub use view::TransactionsView;
 /// Module for [`TransactionsBlock`] and it's related impls
 mod block {
     use super::*;
+    use crate::state::LaneLifecycleError;
     /// Batched update to the storage that can be reverted later.
     ///
     /// The block aggregates transaction hashes for a particular block height. Call [`insert_block`]
@@ -724,7 +725,6 @@ mod block {
     }
     impl From<crate::state::LaneLifecycleError> for TransactionsBlockError {
         fn from(error: crate::state::LaneLifecycleError) -> Self {
-            use crate::state::LaneLifecycleError;
             match error {
                 error @ (LaneLifecycleError::Storage(_)
                 | LaneLifecycleError::GeometryStorage(_)

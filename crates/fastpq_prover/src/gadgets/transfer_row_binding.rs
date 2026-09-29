@@ -53,6 +53,10 @@ impl TransferRowRole {
 }
 
 /// Exact occurrence in the original transcript/delta sequence.
+#[allow(
+    clippy::struct_field_names,
+    reason = "public fields name the ordinal of each distinct occurrence sequence"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransferRowOccurrence {
     /// Zero-based transcript position; equal batch hashes do not merge positions.
@@ -248,7 +252,46 @@ pub fn bind_canonical_rows<'a>(
         ));
     }
 
-    let mut pending: HashMap<TransferRowKey, VecDeque<PendingOccurrence<'a>>> = HashMap::new();
+    let mut pending = pending_occurrences(inputs)?;
+    let mut bindings = Vec::with_capacity(transitions.len());
+    for transition in transitions {
+        if transition.operation != OperationKind::Transfer {
+            bindings.push(None);
+            continue;
+        }
+        let key = TransferRowKey::from_transition(transition);
+        let queue = pending
+            .get_mut(&key)
+            .ok_or_else(|| invariant("transfer row has no matching validated occurrence"))?;
+        let next = queue
+            .pop_front()
+            .ok_or_else(|| invariant("transfer row duplicates an already consumed occurrence"))?;
+        bindings.push(Some(TransferRowBinding {
+            occurrence: next.occurrence,
+            role: next.role,
+            input: next.input,
+            delta: next.delta,
+            transition,
+        }));
+    }
+    if pending.values().any(|queue| !queue.is_empty()) {
+        return Err(invariant(
+            "validated transfer occurrence has no statement row",
+        ));
+    }
+    Ok(bindings)
+}
+
+/// Queue every validated debit/credit occurrence under its exact row key.
+///
+/// Occurrences are visited in transcript/delta/debit-before-credit order, so
+/// each key's queue yields its earliest remaining occurrence first. Repeated-key
+/// balances and consecutive proof roots must chain. The caller has already
+/// checked that the total delta count fits `u32`.
+fn pending_occurrences(
+    inputs: &[TransferGadgetInput],
+) -> Result<HashMap<TransferRowKey, VecDeque<PendingOccurrence<'_>>>, Error> {
+    let mut pending: HashMap<TransferRowKey, VecDeque<PendingOccurrence<'_>>> = HashMap::new();
     let mut last_values: HashMap<Vec<u8>, u64> = HashMap::new();
     let mut current_root = None;
     let mut pair_ordinal = 0_u32;
@@ -309,34 +352,7 @@ pub fn bind_canonical_rows<'a>(
             pair_ordinal += 1; // Checked total bounds this increment, including the final delta.
         }
     }
-
-    let mut bindings = Vec::with_capacity(transitions.len());
-    for transition in transitions {
-        if transition.operation != OperationKind::Transfer {
-            bindings.push(None);
-            continue;
-        }
-        let key = TransferRowKey::from_transition(transition);
-        let queue = pending
-            .get_mut(&key)
-            .ok_or_else(|| invariant("transfer row has no matching validated occurrence"))?;
-        let next = queue
-            .pop_front()
-            .ok_or_else(|| invariant("transfer row duplicates an already consumed occurrence"))?;
-        bindings.push(Some(TransferRowBinding {
-            occurrence: next.occurrence,
-            role: next.role,
-            input: next.input,
-            delta: next.delta,
-            transition,
-        }));
-    }
-    if pending.values().any(|queue| !queue.is_empty()) {
-        return Err(invariant(
-            "validated transfer occurrence has no statement row",
-        ));
-    }
-    Ok(bindings)
+    Ok(pending)
 }
 
 #[derive(Clone, Copy)]
@@ -578,14 +594,21 @@ mod tests {
         let bindings = bind_canonical_rows(&transitions, &inputs).unwrap();
         for (index, binding) in bindings.into_iter().enumerate() {
             let binding = binding.unwrap();
-            assert_eq!(binding.occurrence().pair_ordinal, (index / 2) as u32);
+            assert_eq!(
+                binding.occurrence().pair_ordinal,
+                u32::try_from(index / 2).unwrap()
+            );
             assert_eq!(
                 binding.occurrence().transcript_ordinal,
                 u32::from(index >= 4)
             );
             assert_eq!(
                 binding.occurrence().delta_ordinal,
-                if index < 4 { (index / 2) as u32 } else { 0 }
+                if index < 4 {
+                    u32::try_from(index / 2).unwrap()
+                } else {
+                    0
+                }
             );
             assert_eq!(binding.role().is_debit(), u64::from(index % 2 == 0));
             assert_integer(&binding);
@@ -648,7 +671,10 @@ mod tests {
         assert_eq!(repeated.len(), 2);
         assert_eq!(repeated[0].transition(), repeated[1].transition());
         for (binding, pair) in repeated.into_iter().zip([0, 2]) {
-            assert_eq!(binding.occurrence().pair_ordinal, pair as u32);
+            assert_eq!(
+                binding.occurrence().pair_ordinal,
+                u32::try_from(pair).unwrap()
+            );
             assert!(std::ptr::eq(
                 binding.proof(),
                 &raw const inputs[0].deltas[pair].smt_proof.from
@@ -742,12 +768,9 @@ mod tests {
             .into_iter()
             .flat_map(|limb| limb.to_le_bytes().into_iter().take(7))
             .collect();
-        assert!(
-            bytes[packed.byte_len as usize..]
-                .iter()
-                .all(|byte| *byte == 0)
-        );
-        bytes.truncate(packed.byte_len as usize);
+        let byte_len = usize::try_from(packed.byte_len).unwrap();
+        assert!(bytes[byte_len..].iter().all(|byte| *byte == 0));
+        bytes.truncate(byte_len);
         bytes
     }
 
@@ -781,11 +804,19 @@ mod tests {
             let mut call = binding.input().batch_hash.as_ref().to_vec();
             call.extend_from_slice(&binding.occurrence().transcript_ordinal.to_le_bytes());
             call.extend_from_slice(&binding.occurrence().delta_ordinal.to_le_bytes());
-            call.extend_from_slice(&(context.call_identity.len() as u32).to_le_bytes());
+            call.extend_from_slice(
+                &u32::try_from(context.call_identity.len())
+                    .unwrap()
+                    .to_le_bytes(),
+            );
             call.extend_from_slice(context.call_identity);
             assert_eq!(unpack(tuple.identity.call), call);
             let mut authority = binding.input().authority_digest.as_ref().to_vec();
-            authority.extend_from_slice(&(context.authority_identity.len() as u32).to_le_bytes());
+            authority.extend_from_slice(
+                &u32::try_from(context.authority_identity.len())
+                    .unwrap()
+                    .to_le_bytes(),
+            );
             authority.extend_from_slice(context.authority_identity);
             assert_eq!(unpack(tuple.identity.authority), authority);
             assert_eq!(tuple.identity.asset_scale, 9);

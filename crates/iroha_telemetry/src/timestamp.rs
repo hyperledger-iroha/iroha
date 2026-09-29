@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use time::OffsetDateTime;
 
 /// Current UTC time as RFC 3339 text for the `ts` field of telemetry records.
-pub(crate) fn rfc3339_utc_now() -> String {
+pub fn rfc3339_utc_now() -> String {
     format_rfc3339_utc(OffsetDateTime::now_utc())
 }
 
@@ -30,9 +30,9 @@ fn format_rfc3339_utc(at: OffsetDateTime) -> String {
     );
     let nanos = at.nanosecond();
     if nanos != 0 {
-        if nanos % 1_000_000 == 0 {
+        if nanos.is_multiple_of(1_000_000) {
             let _ = write!(out, ".{:03}", nanos / 1_000_000);
-        } else if nanos % 1_000 == 0 {
+        } else if nanos.is_multiple_of(1_000) {
             let _ = write!(out, ".{:06}", nanos / 1_000);
         } else {
             let _ = write!(out, ".{nanos:09}");

@@ -79,10 +79,10 @@ impl StreamTransport for TestStreamTransport {
                 NORITO_V1_WEBSOCKET_SUBPROTOCOL
             );
             let subscription = match request.request.uri().path() {
-                torii_uri::BLOCKS_STREAM => {
+                p if p == torii_routes::streaming::BLOCKS_WS.path() => {
                     norito::to_bytes(&BlockSubscriptionRequest::new(NonZeroU64::MIN))
                 }
-                torii_uri::SUBSCRIPTION => {
+                p if p == torii_routes::streaming::SUBSCRIPTION_WS.path() => {
                     norito::to_bytes(&EventSubscriptionRequest::new(canonical_event_filters()))
                 }
                 other => panic!("unexpected SDK stream route: {other}"),
@@ -400,7 +400,9 @@ async fn readiness_falls_back_only_for_throttled_upgrades_and_submits_exact_byte
         let hash = encode_lower_hex(tx_hash.as_ref());
         let expected_bytes = signed_bytes.clone();
         let post = server.mock(move |when, then| {
-            let when = when.method(POST).path(torii_uri::TRANSACTION);
+            let when = when
+                .method(POST)
+                .path(torii_routes::pipeline::TRANSACTION.path());
             if status == 429 {
                 when.header("content-type", NORITO_MIME_TYPE)
                     .is_true(move |request| request.body_ref() == expected_bytes.as_slice());
@@ -450,7 +452,10 @@ async fn readiness_falls_back_only_for_throttled_upgrades_and_submits_exact_byte
             status_query.assert_calls(1);
             assert_eq!(
                 *transport.requests.lock().unwrap(),
-                [torii_uri::BLOCKS_STREAM, torii_uri::SUBSCRIPTION]
+                [
+                    torii_routes::streaming::BLOCKS_WS.path(),
+                    torii_routes::streaming::SUBSCRIPTION_WS.path()
+                ]
             );
         } else {
             assert!(matches!(result, Err(ToriiError::Sdk(error))
@@ -461,7 +466,7 @@ async fn readiness_falls_back_only_for_throttled_upgrades_and_submits_exact_byte
             status_query.assert_calls(0);
             assert_eq!(
                 *transport.requests.lock().unwrap(),
-                [torii_uri::BLOCKS_STREAM]
+                [torii_routes::streaming::BLOCKS_WS.path()]
             );
         }
         assert_eq!(transaction.hash(), tx_hash);

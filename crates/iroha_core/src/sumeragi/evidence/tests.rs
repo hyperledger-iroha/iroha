@@ -277,7 +277,7 @@ fn vote_pair(chain: &CertifiedTestChain, signer: u32, view_number: u64) -> Nativ
             result: Hash32([0x72; 32]),
             attest: false,
             signer,
-            sig: Signature([0; 48]),
+            sig: Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
             attestation: None,
         };
         vote.sig = Signature(

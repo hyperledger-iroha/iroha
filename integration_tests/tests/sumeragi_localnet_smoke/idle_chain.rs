@@ -191,13 +191,7 @@ pub(super) async fn run() -> Result<()> {
                 })
                 .collect()
         };
-        let cadence_ms = u64::try_from(SMOKE_PIPELINE_TIME.as_millis())
-            .wrap_err("idle-chain cadence overflows canonical millisecond width")?;
-        let (_, retransmit_interval_ms) =
-            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
-                .wrap_err("derive idle-chain Sumeragi v2 timing")?;
-        let retransmit_observation =
-            Duration::from_millis(retransmit_interval_ms).saturating_mul(2);
+        let retransmit_observation = network.block_sync_gossip_period().saturating_mul(2);
         let commit_quorum_observation = network.da_commit_quorum_timeout().saturating_mul(2);
         let idle_observation = SMOKE_PIPELINE_TIME
             .saturating_mul(10)

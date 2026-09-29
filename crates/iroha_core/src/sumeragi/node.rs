@@ -152,6 +152,7 @@ pub struct RunningNode {
     state: Arc<State>,
     config_fingerprint: iroha_crypto::Hash,
     beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
+    startup_recovery: crate::snapshot::StartupRecovery,
     /// The driver.
     pub driver: RunningDriver,
     /// The instance id (`I`).
@@ -176,6 +177,7 @@ impl RunningNode {
             state: Arc::clone(&self.state),
             config_fingerprint: self.config_fingerprint,
             beacon_readiness: self.beacon_readiness.clone(),
+            startup_recovery: self.startup_recovery.clone(),
         }
     }
 }
@@ -190,6 +192,7 @@ pub struct NodeHandle {
     state: Arc<State>,
     config_fingerprint: iroha_crypto::Hash,
     beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
+    startup_recovery: crate::snapshot::StartupRecovery,
 }
 
 /// Immutable identity and resolved configuration of the running consensus instance.
@@ -210,6 +213,12 @@ impl core::fmt::Debug for NodeHandle {
 }
 
 impl NodeHandle {
+    /// Successful authenticated replay and startup, revoked on a native worker failure or halt.
+    /// Snapshot maintenance must retain this gate and check it before every storage operation.
+    pub fn startup_recovery(&self) -> crate::snapshot::StartupRecovery {
+        self.startup_recovery.clone()
+    }
+
     /// Identity captured from the actual startup inputs, never from HTTP parameters.
     pub fn identity(&self) -> &NodeIdentity {
         &self.identity
@@ -475,7 +484,9 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         genesis_account,
         consensus_mode,
     } = inputs;
-    // TODO(S7): start from a snapshot (a consensus anchor: tip, CommitQC, `W + 2` headers).
+    // Local snapshot signatures authenticate exports, not full-World execution. Native R
+    // currently commits witnessed writes (S9); Strict startup therefore rebuilds original
+    // State from the signed genesis and certified journal before maintenance is authorized.
     if startup::applied_height(&state) != 0 {
         return Err(NodeError::Input(
             "the state must be empty: Sumeragi rebuilds it from genesis and Kura".into(),
@@ -809,6 +820,8 @@ impl Prepared {
                 chain_id,
             })
             .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
+        let (recovery_publisher, startup_recovery) = crate::snapshot::startup_recovery_channel();
+        let recovery_publisher = Arc::new(parking_lot::Mutex::new(recovery_publisher));
         let running = Driver::new(
             net,
             records,
@@ -819,6 +832,7 @@ impl Prepared {
             Arc::new(NativeEvidenceObserver {
                 state: Arc::clone(&state),
                 downstream: observer,
+                recovery: Arc::clone(&recovery_publisher),
             }),
         )
         .spawn(
@@ -836,10 +850,12 @@ impl Prepared {
         )
         .map_err(|error| NodeError::Driver(error.to_string()))?;
         ingress.register(instance, Arc::new(running.handle()));
+        recovery_publisher.lock().ready();
         Ok(RunningNode {
             state,
             config_fingerprint,
             beacon_readiness,
+            startup_recovery,
             driver: running,
             instance,
             crypto,
@@ -913,6 +929,7 @@ impl NetworkedNode {
 struct NativeEvidenceObserver {
     state: Arc<State>,
     downstream: Arc<dyn Observer>,
+    recovery: Arc<parking_lot::Mutex<crate::snapshot::StartupRecoveryPublisher>>,
 }
 impl Observer for NativeEvidenceObserver {
     fn evidence(&self, evidence: &iroha_sumeragi::message::Evidence) {
@@ -925,10 +942,16 @@ impl Observer for NativeEvidenceObserver {
         self.downstream.fault(fault);
     }
     fn halt(&self, reason: &iroha_sumeragi::api::HaltReason) {
+        self.recovery.lock().fail();
         self.downstream.halt(reason);
     }
     fn stopped(&self, worker: super::driver::Worker) {
+        self.recovery.lock().fail();
         self.downstream.stopped(worker);
+    }
+    fn finished(&self) {
+        self.recovery.lock().finish();
+        self.downstream.finished();
     }
     fn frame_limit(&self, exceeded: &super::driver::FrameLimitExceeded) {
         self.downstream.frame_limit(exceeded);
@@ -1232,7 +1255,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let extra = extra(&keys);
-        // TODO(WP9): the genesis builder drops its v2 context requirement.
         let mut builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
             .append_parameter(Parameter::Sumeragi(
                 SumeragiParameter::PayloadRetryIntervalMs(
@@ -1242,16 +1264,52 @@ mod tests {
         for parameter in extra {
             builder = builder.append_parameter(parameter);
         }
-        let genesis = builder
+        let manifest = builder
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
             )
-            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .build_raw()
+            .expect("genesis manifest")
+            .with_consensus_meta();
+        let genesis = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+                None,
+                Some(crate::state::default_genesis_confidential_policy_hash()),
+                1_000,
+            )
             .expect("genesis")
             .0;
+        let custody = keys
+            .iter()
+            .map(|key| {
+                (
+                    PeerId::new(key.public_key().clone()),
+                    bls_normal_pop_prove(key.private_key()).expect("pop"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (genesis, _, _, _) = super::super::test_chain::prepare_configured_genesis(
+            initial_world(),
+            &chain_id,
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+            &custody,
+            genesis,
+            manifest,
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+            1_000,
+            &iroha_config::parameters::actual::Pipeline::default(),
+            &iroha_config::parameters::actual::FraudMonitoring::default(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("original signed genesis policies derived from node execution configuration");
         Chain {
             genesis,
             keys,
@@ -1259,9 +1317,9 @@ mod tests {
         }
     }
 
-    fn empty_state(chain_id: &ChainId, genesis: &SignedBlock, kura: &Arc<Kura>) -> Arc<State> {
+    fn initial_world() -> World {
         let account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-        let world = World::with(
+        World::with(
             [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&account)],
             [
                 Account::new(account.clone()).build(&account),
@@ -1269,9 +1327,12 @@ mod tests {
                 Account::new(second_shard_account()).build(&second_shard_account()),
             ],
             [],
-        );
+        )
+    }
+
+    fn empty_state(chain_id: &ChainId, genesis: &SignedBlock, kura: &Arc<Kura>) -> Arc<State> {
         let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            world,
+            initial_world(),
             Arc::clone(kura),
             LiveQueryStore::start_test(),
             chain_id.clone(),
@@ -1351,6 +1412,7 @@ mod tests {
                     driver: DriverConfig::default(),
                 })
                 .expect("start");
+                assert!(node.handle().startup_recovery().is_ready());
                 Validator { node, state, queue }
             })
             .collect::<Vec<_>>();
@@ -1367,7 +1429,48 @@ mod tests {
 
     fn shutdown(validators: Vec<Validator>) {
         for validator in validators {
+            let recovery = validator.node.handle().startup_recovery();
+            validator.node.lanes.shutdown();
             validator.node.driver.shutdown();
+            assert!(
+                recovery.is_ready(),
+                "orderly shutdown retains completed recovery"
+            );
+        }
+    }
+
+    #[test]
+    fn native_observer_revokes_export_authority_on_failure_and_late_start_cannot_restore_it() {
+        let chain = chain(4, 200);
+        let state = empty_state(
+            &chain.chain_id,
+            &chain.genesis,
+            &Kura::blank_kura_for_testing(),
+        );
+        for (ready_first, halted) in [(false, false), (false, true), (true, false), (true, true)] {
+            let (publisher, recovery) = crate::snapshot::startup_recovery_channel();
+            let publisher = Arc::new(parking_lot::Mutex::new(publisher));
+            let observer = NativeEvidenceObserver {
+                state: Arc::clone(&state),
+                downstream: Arc::new(super::super::driver::traits::NoObserver),
+                recovery: Arc::clone(&publisher),
+            };
+            if ready_first {
+                publisher.lock().ready();
+                assert!(recovery.is_ready());
+            }
+            if halted {
+                observer.halt(&HaltReason::ApplyDiverged { height: 2 });
+            } else {
+                observer.stopped(super::super::driver::Worker::Exec);
+            }
+            assert!(!recovery.is_ready());
+            publisher.lock().ready();
+            observer.finished();
+            assert!(
+                !recovery.is_ready(),
+                "failure is terminal even across late startup and orderly exit"
+            );
         }
     }
 

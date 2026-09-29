@@ -68,7 +68,11 @@ fn small_signed_plane_coordinate_v1(
         ordinal,
         source_slot,
         negative_magnitude,
-        bound: if (source_slot / 8).is_multiple_of(3) { 1 } else { 2 },
+        bound: if (source_slot / 8).is_multiple_of(3) {
+            1
+        } else {
+            2
+        },
     })
 }
 

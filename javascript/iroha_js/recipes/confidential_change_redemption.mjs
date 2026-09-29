@@ -3,7 +3,7 @@
 // In a real wallet, persist each private opening securely before proving and obtain
 // its new leaf index/root from authenticated protocol state before spending it.
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomFillSync } from "node:crypto";
 import {
   ConfidentialProver,
   NetworkId,
@@ -15,17 +15,20 @@ import {
   deriveConfidentialReceiveAddressV2,
 } from "@iroha/iroha-js";
 
-const spendKey = randomBytes(32);
-const diversifierSeed = randomBytes(32);
-const inputRho = randomBytes(32);
-const changeRho = randomBytes(32);
-const networkBytes = randomBytes(32);
-networkBytes[31] |= 1;
-const networkId = NetworkId.fromBytes(networkBytes);
+const spendKey = Buffer.alloc(32);
+const diversifierSeed = Buffer.alloc(32);
+const inputRho = Buffer.alloc(32);
+const changeRho = Buffer.alloc(32);
+const networkBytes = Buffer.alloc(32);
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 let prover;
 let timer;
 try {
+  for (const bytes of [spendKey, diversifierSeed, inputRho, changeRho, networkBytes]) {
+    randomFillSync(bytes);
+  }
+  networkBytes[31] |= 1;
+  const networkId = NetworkId.fromBytes(networkBytes);
   const address = deriveConfidentialReceiveAddressV2({ spendKey, diversifierSeed });
   const defaultDiversifier = defaultConfidentialDiversifier();
   assert.notEqual(address.diversifierHex, defaultDiversifier.toString("hex"));

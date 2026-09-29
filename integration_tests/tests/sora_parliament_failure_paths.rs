@@ -73,7 +73,7 @@ async fn install_threshold_sessions(
     let tle_public_state =
         deterministic_parliament_tle_key_public_state_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive failure-corridor TLE fixture")?;
-    let install_height = next_queue_plan_execution_height(
+    let install_height = next_execution_height(
         client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "failure-corridor threshold-key installation",
@@ -519,8 +519,7 @@ async fn draw_and_seal_failure_path_bodies(
         .map(|required| required.body)
         .collect::<Vec<_>>();
     let request_height =
-        next_queue_plan_execution_height(client, 0, "confirmation-capacity initial sortition")
-            .await?;
+        next_execution_height(client, 0, "confirmation-capacity initial sortition").await?;
     let pulse_height = request_height
         .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
         .ok_or_else(|| eyre!("confirmation-capacity sortition height overflow"))?;
@@ -654,7 +653,7 @@ async fn draw_and_seal_failure_path_bodies(
     let roster_seal_height = invitation_close_height
         .checked_add(1)
         .ok_or_else(|| eyre!("confirmation-capacity roster seal height overflow"))?;
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         roster_seal_height,
@@ -788,8 +787,7 @@ async fn finalize_failure_path_policy_ballot(
 
     let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
     let registered_at_height =
-        next_queue_plan_execution_height(client, 0, "confirmation-capacity ballot registration")
-            .await?;
+        next_execution_height(client, 0, "confirmation-capacity ballot registration").await?;
     let registration_close_height = registered_at_height
         .checked_add(registration_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity registration height overflow"))?;
@@ -880,7 +878,7 @@ async fn finalize_failure_path_policy_ballot(
         );
     }
     assert!(current_height(client).await? < registration_close_height);
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         registration_close_height,
@@ -897,7 +895,7 @@ async fn finalize_failure_path_policy_ballot(
     .await?;
     assert_eq!(current_height(client).await?, registration_close_height);
 
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         survivor_freeze_height,
@@ -955,7 +953,7 @@ async fn finalize_failure_path_policy_ballot(
         assert_eq!(record.len(), TIMED_OVN_BALLOT_RECORD_BYTES_V1);
         ballot_records.push(record);
     }
-    advance_to_queue_plan_authority_height(
+    advance_to_execution_predecessor(
         network,
         client,
         commitment_close_height,
@@ -1870,8 +1868,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
 
     for sequence in 0..=MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
         let request_height =
-            next_queue_plan_execution_height(&client, 0, "hidden-capacity sortition intent")
-                .await?;
+            next_execution_height(&client, 0, "hidden-capacity sortition intent").await?;
         let pulse_height = request_height
             .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
             .ok_or_else(|| eyre!("hidden-capacity pulse height overflow"))?;

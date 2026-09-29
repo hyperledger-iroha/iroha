@@ -1173,7 +1173,7 @@ mod tests_linear {
 #[cfg(test)]
 mod staged_commit_tests {
     use super::*;
-    use std::sync::{Arc, atomic::AtomicUsize};
+    use std::sync::{atomic::AtomicUsize, Arc};
     use std::time::{Duration, Instant};
 
     struct Counts {

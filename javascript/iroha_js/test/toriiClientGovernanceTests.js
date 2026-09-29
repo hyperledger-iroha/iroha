@@ -538,20 +538,16 @@ export function registerToriiClientGovernanceTests({
       [
         "SccpRouteGovernance",
         {
-          anchor: {
+          proposal: {
             network_id: GOVERNANCE_NETWORK_ID.toString(),
-            action: {
-              action: "Remove",
-              route: {
-                lane_id: {
-                  source: { network: "bsc_mainnet", profile: null },
-                  target: { network: "sora_taira", profile: null },
-                },
-                route_id: "taira_bsc_xor",
-                asset_key: "xor",
-                revision: 1,
-              },
-            },
+            base_revisions: [{
+              subject: { subject: "route", key: { network: "bsc_mainnet", profile: null } },
+              revision: 1,
+            }],
+            actions: [{
+              action: "remove_staged",
+              payload: { network: { network: "bsc_mainnet", profile: null }, revision: 1 },
+            }],
           },
         },
         "sccp_route_governance",
@@ -1845,23 +1841,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       );
     }
     assert.equal(fetchCalls, 0);
-  });
-
-  test("ToriiClient omits retired SCCP compatibility methods", () => {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        throw new Error("fetch must not run");
-      },
-    });
-    for (const name of [
-      "getSccpProofManifests",
-      "getSccpMessageProofArtifact",
-      "getSccpMessageProofJob",
-      "governanceProposeSccpRouteManifest",
-    ]) {
-      assert.equal(Object.getOwnPropertyDescriptor(ToriiClient.prototype, name), undefined);
-      assert.equal(client[name], undefined);
-    }
   });
 
   test("governanceProposeDeployContract rejects non-byte hash arrays", async () => {

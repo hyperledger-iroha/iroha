@@ -19,10 +19,6 @@ const BLOCK_HISTORY_AUTHENTICATION: &str =
 // owner and verified restore prefix remain the source of execution authority.
 const NATIVE_EXECUTION_HISTORY_SOURCE: &str = "Original native height, Iroha hash, core header hash and execution result; current and undo cuts outside World";
 const NATIVE_EXECUTION_HISTORY_AUTHENTICATION: &str = "Original worker verified exact quorum and output seal, or original signed-genesis execution; restore verifies the actual certified native prefix and configured chain/network before accepting snapshot claims";
-const SNAPSHOT_HISTORY_SOURCE: &str = "Snapshot-policy-authorized V2 bootstrap trust root bound to exact WSV/Kura network and finality";
-const SNAPSHOT_HISTORY_AUTHENTICATION: &str =
-    "snapshot authenticated envelope owner and State startup prevalidation/install boundary";
-
 #[path = "complete/native_capture.rs"]
 mod native_capture;
 pub(crate) use native_capture::{
@@ -104,10 +100,6 @@ fn check_history_field(
             NATIVE_EXECUTION_HISTORY_SOURCE,
             NATIVE_EXECUTION_HISTORY_AUTHENTICATION,
         ),
-        "state.authenticated_snapshot_v2_bootstrap"
-        | "state.authenticated_snapshot_bootstrap_payload" => {
-            (SNAPSHOT_HISTORY_SOURCE, SNAPSHOT_HISTORY_AUTHENTICATION)
-        }
         _ => return Err(CompleteInventoryError::HistoryDescriptorMismatch(field.id)),
     };
     if (source, authentication) == expected {
@@ -482,12 +474,7 @@ mod tests {
 
     #[test]
     fn historical_derivation_base_is_closed_and_bound_to_its_state_field() {
-        for id in [
-            "state.block_hashes",
-            "state.native_execution_tip",
-            "state.authenticated_snapshot_v2_bootstrap",
-            "state.authenticated_snapshot_bootstrap_payload",
-        ] {
+        for id in ["state.block_hashes", "state.native_execution_tip"] {
             let field = find_identity(STATE_FIELDS, id).expect("actual history owner");
             let Role::History {
                 source,

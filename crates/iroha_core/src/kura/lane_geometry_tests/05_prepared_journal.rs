@@ -180,6 +180,7 @@ fn prepared_geometry_journal_finishes_renamed_phase_without_replacing_it() {
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
     let journal = unpersisted_create_journal(&kura);
     let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
@@ -219,6 +220,7 @@ fn prepared_geometry_journal_reattests_already_current_phase_without_replacement
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
     let journal = unpersisted_create_journal(&kura);
     let mut first = PreparedGeometryJournalTransition::prepare(&kura, journal.clone(), 0).unwrap();
     first.persist(&kura, LaneGeometryPhase::Intent).unwrap();
@@ -261,6 +263,7 @@ fn prepared_geometry_journal_rejects_same_bytes_pending_temp_replacement() {
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
     let path = kura.lane_geometry_journal_path();
     let prior = fs::read(&path).unwrap();
     let original_target = secure_file_metadata::from_path(&path).unwrap();
@@ -381,6 +384,8 @@ fn prepared_geometry_journal_rejects_occupied_captured_absence() {
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let journal = unpersisted_create_journal(&kura);
     let path = kura.lane_geometry_journal_path();
     // Opening Kura establishes its bootstrap journal. Remove only that file to
     // exercise captured absence while retaining the fixture's other storage.
@@ -389,7 +394,6 @@ fn prepared_geometry_journal_rejects_occupied_captured_absence() {
         !path.exists(),
         "fixture starts without an authenticated journal"
     );
-    let journal = unpersisted_create_journal(&kura);
     let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
     let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
 
@@ -415,6 +419,7 @@ fn prepared_geometry_journal_retry_uses_retained_bytes() {
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
     let journal = unpersisted_create_journal(&kura);
     let mut prepared =
         PreparedGeometryJournalTransition::prepare(&kura, journal.clone(), 0).unwrap();

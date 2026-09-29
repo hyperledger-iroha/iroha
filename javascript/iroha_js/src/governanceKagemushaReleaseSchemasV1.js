@@ -595,6 +595,9 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
       "allowed_suite_commitment": {
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
       },
+      "app_attestation_authority_policy_digest": {
+        "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+      },
       "attestation_trust_roots_digest": {
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
       },
@@ -671,7 +674,8 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
       "capability_mask",
       "qualification_report_digest",
       "valid_from_ms",
-      "expires_at_ms"
+      "expires_at_ms",
+      "app_attestation_authority_policy_digest"
     ],
     "type": "object"
   },
@@ -1363,8 +1367,17 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
         },
         "type": "array"
       },
+      "network_id": {
+        "maxLength": 74,
+        "minLength": 74,
+        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+        "type": "string"
+      },
       "profile_digest": {
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+      },
+      "purpose": {
+        "$ref": "#/components/schemas/GovernanceKagemushaReleasePurposeV1"
       },
       "release_id": {
         "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
@@ -1382,6 +1395,8 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
     },
     "required": [
       "version",
+      "network_id",
+      "purpose",
       "release_id",
       "source_tree_digest",
       "cargo_lock_digest",
@@ -1396,6 +1411,44 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
       "artifacts"
     ],
     "type": "object"
+  },
+  "GovernanceKagemushaReleasePurposeV1": {
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "production",
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "testnet_experiment",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/GovernanceKagemushaTestnetExperimentScopeV1"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      }
+    ]
   },
   "GovernanceKagemushaReproducibleBuildV1": {
     "additionalProperties": false,
@@ -1414,6 +1467,33 @@ export const KAGEMUSHA_RELEASE_SCHEMAS_V1 = deepFreeze({
       "builder_id",
       "artifact_set_digest",
       "report"
+    ],
+    "type": "object"
+  },
+  "GovernanceKagemushaTestnetExperimentScopeV1": {
+    "additionalProperties": false,
+    "properties": {
+      "asset_identity_digest": {
+        "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+      },
+      "asset_incarnation": {
+        "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+      },
+      "asset_scale": {
+        "format": "uint32",
+        "maximum": 28,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "liability_pool_id": {
+        "$ref": "#/components/schemas/GovernanceKagemushaBytes32V1"
+      }
+    },
+    "required": [
+      "asset_identity_digest",
+      "asset_incarnation",
+      "asset_scale",
+      "liability_pool_id"
     ],
     "type": "object"
   },

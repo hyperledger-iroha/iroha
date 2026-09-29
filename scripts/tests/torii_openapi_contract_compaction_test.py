@@ -31,7 +31,6 @@ SECTION_ORDER = (
     "proof.por.required",
     "proof.pdp.failures",
     "proof.potr.failures",
-    "sumeragi.da.required",
     "bridge.proof.required",
     "bridge.attestation.required",
     "bridge.bundle.required",
@@ -46,10 +45,6 @@ SECTION_ORDER = (
     "lifecycle.required",
     "status.required",
     "status.absent",
-    "native.receipt.required",
-    "native.leg.required",
-    "native.proposal.required",
-    "native.body.required",
     "hf.headers",
     "app.page.required",
     "app.page.properties",
@@ -64,7 +59,6 @@ SECTION_ORDER = (
     "governed.missing.fields",
 )
 FINALITY_TESTS = (
-    "sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility",
     "inrou_guest_image_schema_requires_one_concrete_published_artifact",
     "inrou_first_release_openapi_matches_block_clock_and_exact_admission",
     "native_finality_schemas_are_exact_closed_and_bounded",

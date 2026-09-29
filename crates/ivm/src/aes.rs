@@ -189,11 +189,12 @@ pub fn sbox(byte: u8) -> u8 {
 #[path = "aes/batch.rs"]
 mod batch;
 pub use batch::{
-    aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_many_into,
-    aesdec_n_rounds_many_into, aesenc_many_into, aesenc_n_rounds_many_into,
+    aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_n_rounds_many_into,
+    aesenc_n_rounds_many_into,
 };
+#[cfg(test)]
+use batch::{aesdec_many_into, aesenc_many_into};
 /// AES "last" round for encryption (no MixColumns): SubBytes → ShiftRows → AddRoundKey.
-#[allow(dead_code)]
 pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     sub_bytes(&mut state);
     shift_rows(&mut state);
@@ -201,7 +202,6 @@ pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     state
 }
 /// AES "last" round for decryption (no InvMixColumns): AddRoundKey → InvShiftRows → InvSubBytes.
-#[allow(dead_code)]
 pub fn aesdec_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     inv_shift_rows(&mut state);
@@ -209,15 +209,12 @@ pub fn aesdec_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     state
 }
 // --- AES-128 key expansion (pre-expanded schedule helpers) ---
-#[allow(dead_code)]
 const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
 #[inline]
-#[allow(dead_code)]
 fn rot_word(w: [u8; 4]) -> [u8; 4] {
     [w[1], w[2], w[3], w[0]]
 }
 #[inline]
-#[allow(dead_code)]
 fn sub_word(mut w: [u8; 4]) -> [u8; 4] {
     w[0] = SBOX[w[0] as usize];
     w[1] = SBOX[w[1] as usize];
@@ -226,7 +223,6 @@ fn sub_word(mut w: [u8; 4]) -> [u8; 4] {
     w
 }
 /// Expand a 128-bit AES key into 11 round keys (initial + 10 rounds).
-#[allow(dead_code)]
 pub fn aes128_expand_key(key: [u8; 16]) -> [[u8; 16]; 11] {
     let mut w = [[0u8; 4]; 44];
     for i in 0..4 {

@@ -10,7 +10,7 @@ const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 4] = [
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
 /// The total-byte owner enumerates these declared trees, eight fixed root files. In particular,
-/// `sumeragi_v2` WAL/body/certificate-serve files have independent writers and
+/// Consensus WAL/body/certificate files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
 /// is also excluded; it is not a retained data-budget artifact. No entire-store-root
 /// traversal is permitted.
@@ -267,7 +267,6 @@ impl Kura {
     fn physical_resource_reconciliation_allowed(&self) -> bool {
         !self.emergency_fast_startup_enabled()
             && !self.auxiliary_history_deferred
-            && !self.provisional_snapshot_bootstrap_pending()
             && !self.canonical_storage_poisoned.load(Ordering::Acquire)
             && !self.prune_recovery_is_required()
     }

@@ -186,6 +186,151 @@ fn execute_input(
     }
 }
 
+/// Fixed public geometry and evidence labels of one checked benchmark input.
+struct InputGeometry {
+    operation: &'static str,
+    phase: &'static str,
+    level: usize,
+    columns: usize,
+    input_len: usize,
+    input_bytes: usize,
+}
+
+/// Reject empty or incomplete input and count its exact field bytes.
+fn input_geometry(input: Digest384BenchmarkInputV1<'_>) -> Result<InputGeometry> {
+    match input {
+        Digest384BenchmarkInputV1::TraceColumns(columns) => {
+            let rows = columns.first().map_or(0, |column| column.values.len());
+            if columns.is_empty() || rows == 0 {
+                return Err(invalid("trace column benchmark input is empty"));
+            }
+            let mut bytes = 0;
+            for column in columns {
+                bytes = add(bytes, add(column.name.len(), mul(column.values.len(), 8)?)?)?;
+            }
+            Ok(InputGeometry {
+                operation: "digest384_trace_columns",
+                phase: "column-leaf",
+                level: 0,
+                columns: columns.len(),
+                input_len: rows,
+                input_bytes: bytes,
+            })
+        }
+        Digest384BenchmarkInputV1::MerklePairs(children) => {
+            if children.is_empty() || !children.len().is_multiple_of(2) {
+                return Err(invalid(
+                    "Merkle benchmark requires complete nonempty digest pairs",
+                ));
+            }
+            Ok(InputGeometry {
+                operation: "digest384_merkle_pairs",
+                phase: "binary-node",
+                level: 1,
+                columns: children.len() / 2,
+                input_len: 12,
+                input_bytes: mul(children.len(), 48)?,
+            })
+        }
+    }
+}
+
+/// Time every CPU invocation against the reference, keeping post-warmup samples.
+fn cpu_samples(
+    params: &StarkParameterSet,
+    input: Digest384BenchmarkInputV1<'_>,
+    expected: &[GoldilocksDigest384V1],
+    warmups: usize,
+    invocations: usize,
+    iterations: usize,
+) -> Result<Vec<f64>> {
+    let mut cpu_samples_ms = Vec::with_capacity(iterations);
+    for invocation in 0..invocations {
+        let started = Instant::now();
+        let output = execute_input(params, input, &mut |frames| {
+            digest_executor::execute_digest384_frames_v1(frames, DigestExecutionV1::Cpu)
+        })?;
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        if output.as_slice() != expected {
+            return Err(invalid("canonical CPU reference changed"));
+        }
+        drop(black_box(output));
+        if invocation >= warmups {
+            cpu_samples_ms.push(elapsed);
+        }
+    }
+    Ok(cpu_samples_ms)
+}
+
+/// Build the CPU-verified evidence object shared by both report adapters.
+fn reference_evidence(
+    params: &StarkParameterSet,
+    geometry: &InputGeometry,
+    canonical_words: usize,
+    output_bytes: usize,
+) -> Result<Value> {
+    let mut fields = json::Map::new();
+    for (key, value) in [
+        ("schema", "fastpq-digest384-primitive-benchmark-v1"),
+        ("catalog", FASTPQ_CATALOG_V1),
+        ("protocol", FASTPQ_FINAL_V1_ID),
+        ("profile", params.name),
+        ("role", "fastpq:v1:preprocessing-trace"),
+        ("phase", geometry.phase),
+        ("output_encoding", "six-canonical-u64-le-words"),
+    ] {
+        fields.insert(key.into(), Value::from(value));
+    }
+    for (key, value) in [
+        ("level", geometry.level),
+        ("digest_lanes", 6),
+        ("frame_count", geometry.columns),
+        ("input_field_bytes", geometry.input_bytes),
+        ("canonical_words", canonical_words),
+        ("sponge_permutations", mul(canonical_words, 3)?),
+        ("output_bytes", output_bytes),
+    ] {
+        fields.insert(
+            key.into(),
+            json::to_value(&value).expect("serialize checked work count"),
+        );
+    }
+    fields.insert("cpu_reference_verified".into(), Value::Bool(true));
+    Ok(Value::Object(fields))
+}
+
+/// Serialize parity-checked device counters under their fixed evidence keys.
+fn device_evidence(
+    device: Digest384BenchmarkDeviceV1,
+    work: &DeviceWork,
+    [warmups, iterations, invocations]: [usize; 3],
+    parity_checked_digests: usize,
+    parity_checked_lanes: usize,
+) -> Result<Value> {
+    let mut gpu = json::Map::new();
+    gpu.insert("backend".into(), Value::from(device.label()));
+    for (key, value) in [
+        ("warmup_invocations", warmups),
+        ("timed_invocations", iterations),
+        ("invocations", invocations),
+        ("dispatches", work.dispatches),
+        ("frames", work.work.frames),
+        ("canonical_words", work.work.words),
+        ("descriptor_words", mul(work.work.frames, 3)?),
+        ("output_words", mul(work.work.frames, 6)?),
+        ("max_batch_frames", work.max_batch_frames),
+        ("max_batch_words", work.max_batch_words),
+        ("parity_checked_digests", parity_checked_digests),
+        ("parity_checked_lanes", parity_checked_lanes),
+    ] {
+        gpu.insert(
+            key.into(),
+            json::to_value(&value).expect("serialize checked device count"),
+        );
+    }
+    Ok(Value::Object(gpu))
+}
+
 fn benchmark_with_dispatch(
     params: &StarkParameterSet,
     input: Digest384BenchmarkInputV1<'_>,
@@ -207,41 +352,8 @@ fn benchmark_with_dispatch(
         return Err(invalid("benchmark iterations must be positive"));
     }
     let invocations = add(warmups, iterations)?;
-    let (operation, phase, level, columns, input_len, input_bytes) = match input {
-        Digest384BenchmarkInputV1::TraceColumns(columns) => {
-            let rows = columns.first().map_or(0, |column| column.values.len());
-            if columns.is_empty() || rows == 0 {
-                return Err(invalid("trace column benchmark input is empty"));
-            }
-            let mut bytes = 0;
-            for column in columns {
-                bytes = add(bytes, add(column.name.len(), mul(column.values.len(), 8)?)?)?;
-            }
-            (
-                "digest384_trace_columns",
-                "column-leaf",
-                0,
-                columns.len(),
-                rows,
-                bytes,
-            )
-        }
-        Digest384BenchmarkInputV1::MerklePairs(children) => {
-            if children.is_empty() || !children.len().is_multiple_of(2) {
-                return Err(invalid(
-                    "Merkle benchmark requires complete nonempty digest pairs",
-                ));
-            }
-            (
-                "digest384_merkle_pairs",
-                "binary-node",
-                1,
-                children.len() / 2,
-                12,
-                mul(children.len(), 48)?,
-            )
-        }
-    };
+    let geometry = input_geometry(input)?;
+    let columns = geometry.columns;
     let mut reference_work = FrameWork::default();
     let expected = execute_input(params, input, &mut |frames| {
         reference_work.observe(frames)?;
@@ -260,49 +372,8 @@ fn benchmark_with_dispatch(
     let expected_device_frames = mul(columns, invocations)?;
     let expected_device_words = mul(reference_work.words, invocations)?;
     let parity_checked_lanes = mul(expected_device_frames, 6)?;
-    let mut cpu_samples_ms = Vec::with_capacity(iterations);
-    for invocation in 0..invocations {
-        let started = Instant::now();
-        let output = execute_input(params, input, &mut |frames| {
-            digest_executor::execute_digest384_frames_v1(frames, DigestExecutionV1::Cpu)
-        })?;
-        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
-        if output != expected {
-            return Err(invalid("canonical CPU reference changed"));
-        }
-        drop(black_box(output));
-        if invocation >= warmups {
-            cpu_samples_ms.push(elapsed);
-        }
-    }
-    let mut fields = json::Map::new();
-    for (key, value) in [
-        ("schema", "fastpq-digest384-primitive-benchmark-v1"),
-        ("catalog", FASTPQ_CATALOG_V1),
-        ("protocol", FASTPQ_FINAL_V1_ID),
-        ("profile", params.name),
-        ("role", "fastpq:v1:preprocessing-trace"),
-        ("phase", phase),
-        ("output_encoding", "six-canonical-u64-le-words"),
-    ] {
-        fields.insert(key.into(), Value::from(value));
-    }
-    for (key, value) in [
-        ("level", level),
-        ("digest_lanes", 6),
-        ("frame_count", columns),
-        ("input_field_bytes", input_bytes),
-        ("canonical_words", reference_work.words),
-        ("sponge_permutations", mul(reference_work.words, 3)?),
-        ("output_bytes", output_bytes),
-    ] {
-        fields.insert(
-            key.into(),
-            json::to_value(&value).expect("serialize checked work count"),
-        );
-    }
-    fields.insert("cpu_reference_verified".into(), Value::Bool(true));
-    let mut evidence = Value::Object(fields);
+    let cpu_samples_ms = cpu_samples(params, input, &expected, warmups, invocations, iterations)?;
+    let mut evidence = reference_evidence(params, &geometry, reference_work.words, output_bytes)?;
     let gpu_samples_ms = if let Some(device) = device {
         let mut samples = Vec::with_capacity(iterations);
         let mut work = DeviceWork::default();
@@ -330,40 +401,26 @@ fn benchmark_with_dispatch(
                 "device payload counters do not cover every complete invocation",
             ));
         }
-        let mut gpu = json::Map::new();
-        gpu.insert("backend".into(), Value::from(device.label()));
-        for (key, value) in [
-            ("warmup_invocations", warmups),
-            ("timed_invocations", iterations),
-            ("invocations", invocations),
-            ("dispatches", work.dispatches),
-            ("frames", work.work.frames),
-            ("canonical_words", work.work.words),
-            ("descriptor_words", mul(work.work.frames, 3)?),
-            ("output_words", mul(work.work.frames, 6)?),
-            ("max_batch_frames", work.max_batch_frames),
-            ("max_batch_words", work.max_batch_words),
-            ("parity_checked_digests", expected_device_frames),
-            ("parity_checked_lanes", parity_checked_lanes),
-        ] {
-            gpu.insert(
-                key.into(),
-                json::to_value(&value).expect("serialize checked device count"),
-            );
-        }
+        let gpu = device_evidence(
+            device,
+            &work,
+            [warmups, iterations, invocations],
+            expected_device_frames,
+            parity_checked_lanes,
+        )?;
         evidence
             .as_object_mut()
             .expect("evidence object")
-            .insert("gpu".into(), Value::Object(gpu));
+            .insert("gpu".into(), gpu);
         Some(samples)
     } else {
         None
     };
     Ok(Digest384BenchmarkReportV1 {
-        operation,
+        operation: geometry.operation,
         columns,
-        input_len,
-        input_bytes,
+        input_len: geometry.input_len,
+        input_bytes: geometry.input_bytes,
         output_bytes,
         gpu_payload_buffer_bytes,
         cpu_samples_ms,

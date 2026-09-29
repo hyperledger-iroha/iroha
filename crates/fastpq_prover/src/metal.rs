@@ -1,6 +1,5 @@
 #![cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 #![allow(
-    dead_code,
     clippy::cast_possible_truncation,
     clippy::cast_lossless,
     clippy::clone_on_copy,
@@ -46,6 +45,8 @@ use ticket_lifetime::{Completion, DrainBudget, DrainScope};
 #[cfg(test)]
 use crate::bn254;
 use crate::gpu_secret::SecretWords;
+#[cfg(test)]
+use crate::trace::{PoseidonColumnBatch, PoseidonColumnSlice};
 use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
@@ -58,7 +59,6 @@ use crate::{
     overrides,
     poseidon::FIELD_MODULUS,
     poseidon_manifest::poseidon_manifest,
-    trace::{PoseidonColumnBatch, PoseidonColumnSlice},
 };
 use block::{Block, ConcreteBlock};
 use fastpq_isi::poseidon::STATE_WIDTH;
@@ -99,7 +99,9 @@ use std::{
 use tracing::{debug, warn};
 type MetalResult<T> = Result<T, GpuError>;
 const POSEIDON_PERMUTE_KERNEL: &str = "poseidon_permute";
+#[cfg(test)]
 const POSEIDON_HASH_KERNEL: &str = "poseidon_hash_columns";
+#[cfg(test)]
 const POSEIDON_HASH_ROWS_KERNEL: &str = "poseidon_hash_rows";
 const FFT_KERNEL: &str = "fastpq_fft_columns";
 const LDE_KERNEL: &str = "fastpq_lde_columns";
@@ -137,8 +139,7 @@ const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 1_024;
-const MAX_BUFFER_POOL_CACHED_PAGES: usize =
-    crate::goldilocks_transform::EXACT_ROOT_METAL_POOL_CACHED_PAGES_V1;
+const MAX_BUFFER_POOL_CACHED_PAGES: usize = crate::gpu_memory::METAL_POOL_MAX_CACHED_PAGES;
 const MAX_RETAINED_DISPATCH_TICKETS: usize = 16;
 const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
 #[cfg(test)]
@@ -148,7 +149,7 @@ const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize =
 // Metal's bytes-no-copy API requires both ends of the wrapped region to be
 // page-aligned. A 16 KiB region satisfies both 4 KiB Intel and 16 KiB Apple
 // Silicon macOS page sizes.
-const METAL_BUFFER_PAGE_BYTES: usize = crate::goldilocks_transform::EXACT_ROOT_METAL_PAGE_BYTES_V1;
+const METAL_BUFFER_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 const METAL_BUFFER_PAGE_WORDS: usize = METAL_BUFFER_PAGE_BYTES / mem::size_of::<u64>();
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
@@ -332,31 +333,6 @@ pub fn bn254_lde_columns(
         return Ok(Some(Vec::new()));
     }
     bn254_lde_columns_async(coeffs, trace_log, blowup_log, coset)?.wait()
-}
-#[cfg(test)]
-fn bn254_smoke_test() -> MetalResult<()> {
-    // Minimal FFT check to prove BN254 kernels are reachable.
-    const FFT_LOG: u32 = 3;
-    let mut fft_columns = sample_bn254_columns(FFT_LOG, 1);
-    bn254_fft_columns(&mut fft_columns, FFT_LOG)?;
-    // LDE smoke test with a small trace and coset to validate staging/layout.
-    const TRACE_LOG: u32 = 2;
-    const BLOWUP_LOG: u32 = 1;
-    let coeffs = sample_bn254_columns(TRACE_LOG, 1);
-    let coset = sample_bn254_coset();
-    if let Some(eval_columns) = bn254_lde_columns(&coeffs, TRACE_LOG, BLOWUP_LOG, coset)? {
-        let expected_len = (1usize << (TRACE_LOG + BLOWUP_LOG)) * BN254_LIMBS;
-        if eval_columns
-            .iter()
-            .any(|column| column.len() != expected_len)
-        {
-            return Err(GpuError::Execution {
-                backend: GpuBackend::Metal,
-                message: "BN254 LDE output length mismatch during smoke test".into(),
-            });
-        }
-    }
-    Ok(())
 }
 #[cfg(test)]
 /// Enqueue a BN254 LDE on the Metal backend.
@@ -716,6 +692,7 @@ mod bn254_parity {
         assert_eq!(gpu_eval, cpu_expected);
     }
 }
+#[cfg(test)]
 static TEST_QUEUE_FANOUT_OVERRIDE: OnceLock<usize> = OnceLock::new();
 #[cfg(test)]
 static TEST_QUEUE_THRESHOLD_OVERRIDE: OnceLock<u32> = OnceLock::new();
@@ -1832,6 +1809,7 @@ fn try_clone_metal_words(words: &[u64], error: &'static str) -> MetalResult<Secr
     SecretWords::copy_from(words).map_err(|_| GpuError::InvalidInput(error))
 }
 
+#[cfg(test)]
 fn try_zeroed_metal_words(len: usize, error: &'static str) -> MetalResult<SecretWords> {
     SecretWords::zeroed(len).map_err(|_| GpuError::InvalidInput(error))
 }
@@ -1939,7 +1917,8 @@ impl ColumnBatchTicket {
 struct PoseidonBatchTicket {
     range: Range<usize>,
     buffer: PooledBuffer,
-    metal_buffer: Buffer,
+    /// Keeps the no-copy Metal view alive until the ticket is consumed.
+    _metal_buffer: Buffer,
     ticket: DispatchTicket,
 }
 impl PoseidonBatchTicket {
@@ -1947,7 +1926,7 @@ impl PoseidonBatchTicket {
         let PoseidonBatchTicket {
             range,
             buffer,
-            metal_buffer: _,
+            _metal_buffer: _,
             ticket,
         } = self;
         #[cfg(test)]
@@ -1966,6 +1945,7 @@ impl PoseidonBatchTicket {
         Ok(())
     }
 }
+#[cfg(test)]
 struct PoseidonHashTicket {
     column_offset: usize,
     payload: PooledBuffer,
@@ -1976,16 +1956,17 @@ struct PoseidonHashTicket {
     state_buffer: Buffer,
     ticket: DispatchTicket,
 }
+#[cfg(test)]
 impl PoseidonHashTicket {
     fn wait(self, result: &mut [u64], record_wait: bool) -> MetalResult<()> {
         let PoseidonHashTicket {
             column_offset,
-            payload: _,
-            slices: _,
+            payload: _payload,
+            slices: _slices,
             states,
-            payload_buffer: _,
-            slice_buffer: _,
-            state_buffer: _,
+            payload_buffer: _payload_buffer,
+            slice_buffer: _slice_buffer,
+            state_buffer: _state_buffer,
             ticket,
         } = self;
         let wait_start = Instant::now();
@@ -2224,6 +2205,7 @@ struct PoseidonArgs {
     block_count: u32,
     _reserved: u32,
 }
+#[cfg(test)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PoseidonRowArgs {
@@ -2247,6 +2229,7 @@ struct Bn254PoseidonMetalSlice {
     offset: u32,
     len: u32,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct PoseidonRowDispatchEvidence {
     batch_count: u32,
@@ -2260,6 +2243,7 @@ struct PoseidonRowDispatchEvidence {
     queue_index: usize,
     byte_estimate: u64,
 }
+#[cfg(test)]
 impl PoseidonRowDispatchEvidence {
     fn contextualize_error(self, error: GpuError) -> GpuError {
         warn!(
@@ -2516,7 +2500,9 @@ struct MetalPipelines {
     device: Device,
     queues: QueuePool,
     poseidon_permute: ComputePipelineState,
+    #[cfg(test)]
     poseidon_hash: ComputePipelineState,
+    #[cfg(test)]
     poseidon_hash_rows: ComputePipelineState,
     fft: ComputePipelineState,
     lde: ComputePipelineState,
@@ -3034,7 +3020,11 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     register_metal_device_hints(&device);
     let library = load_metal_library(&device)?;
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
+    // Production trace hashing stays on the canonical CPU sponge; only the
+    // Poseidon column/row parity tests load these batch-hash kernels.
+    #[cfg(test)]
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
+    #[cfg(test)]
     let poseidon_hash_rows = load_pipeline(&device, &library, POSEIDON_HASH_ROWS_KERNEL)?;
     let fft = load_pipeline(&device, &library, FFT_KERNEL)?;
     let lde = load_pipeline(&device, &library, LDE_KERNEL)?;
@@ -3072,7 +3062,9 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         device,
         queues,
         poseidon_permute,
+        #[cfg(test)]
         poseidon_hash,
+        #[cfg(test)]
         poseidon_hash_rows,
         fft,
         lde,
@@ -3262,7 +3254,7 @@ fn default_queue_column_threshold(fanout: usize) -> u32 {
     let scaled = (fanout as u32).saturating_mul(8);
     DEFAULT_QUEUE_COLUMN_THRESHOLD.max(scaled)
 }
-#[allow(dead_code)] // Metal FFT entry point is unused when CUDA-only builds run tests
+#[cfg(test)]
 pub fn fft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     let _ = goldilocks_domain_len(log_size)?;
     if columns.is_empty() {
@@ -3521,6 +3513,7 @@ fn poseidon_element_range(offset: u32, count: u32) -> MetalResult<Range<usize>> 
         ))?;
     Ok(start..start + len)
 }
+#[cfg(test)]
 fn poseidon_payload_range(offset: u32, count: u32, padded_len: usize) -> MetalResult<Range<usize>> {
     let start_state = usize::try_from(offset)
         .map_err(|_| GpuError::InvalidInput("poseidon payload offset exceeds usize"))?;
@@ -3676,7 +3669,7 @@ fn submit_post_tile_dispatch(
     record_post_tile_sample(profile.kind, args.log_len, args.stage_start, batch_columns);
     Ok(ticket)
 }
-#[allow(dead_code)] // Metal IFFT entry point is unused in non-macOS test environments
+#[cfg(test)]
 pub fn ifft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
     let _ = goldilocks_domain_len(log_size)?;
     if columns.is_empty() {
@@ -3711,7 +3704,7 @@ pub fn poseidon_tuning_snapshot() -> MetalResult<metal_config::PoseidonTuning> {
     tuning.states_per_lane = 1;
     Ok(tuning)
 }
-#[allow(dead_code)] // Metal LDE entry point is unused when Metal is not available
+#[cfg(test)]
 pub fn lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
@@ -3965,7 +3958,7 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
             slots[slot_index] = Some(PoseidonBatchTicket {
                 range: element_range,
                 buffer,
-                metal_buffer,
+                _metal_buffer: metal_buffer,
                 ticket,
             });
         }
@@ -3979,6 +3972,7 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     }
     dispatch_result
 }
+#[cfg(test)]
 pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
     ensure_backend_available()?;
@@ -4123,6 +4117,7 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     }
     Ok(result.into_vec())
 }
+#[cfg(test)]
 pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     let _drain_scope = DrainScope::enter(METAL_COMMAND_TIMEOUT);
     ensure_backend_available()?;
@@ -4741,6 +4736,7 @@ fn poseidon_bytes_per_batch(states: u32) -> u64 {
     let per_state = u128::from(width).saturating_mul(u128::from(element_bytes));
     clamp_u128_to_u64(per_state.saturating_mul(u128::from(states)))
 }
+#[cfg(test)]
 fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let payload = u128::from(padded_len).saturating_mul(u128::from(element_bytes));
@@ -4753,6 +4749,7 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
         .saturating_add(descriptor_total);
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
 }
+#[cfg(test)]
 fn poseidon_row_hash_bytes_per_batch(rows: u32, columns: u32) -> u64 {
     let element_bytes = u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX);
     let input = u128::from(rows)
@@ -5230,6 +5227,7 @@ impl PooledBuffer {
         );
         self.copy_range_to_slice(0, destination);
     }
+    #[cfg(test)]
     fn to_vec(&self) -> MetalResult<Vec<u64>> {
         let mut words = Vec::new();
         words
@@ -5241,6 +5239,7 @@ impl PooledBuffer {
         self.copy_to_slice(&mut words);
         Ok(words)
     }
+    #[cfg(test)]
     fn word(&self, index: usize) -> u64 {
         assert!(
             index < self.backing.logical_len,

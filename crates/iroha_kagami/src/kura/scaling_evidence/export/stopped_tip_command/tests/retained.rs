@@ -29,7 +29,6 @@ fn from_fixture(fixture: &Fixture) -> Args {
         "--block-store",
         fixture.block_store().to_str().unwrap(),
     );
-    set(&mut values);
     let reader = fixture.reader_limits();
     for (flag, value) in [
         ("--first-height", 1),

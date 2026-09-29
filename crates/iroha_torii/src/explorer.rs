@@ -3699,10 +3699,6 @@ mod tests {
             "proposal".to_owned(),
             json::to_value(&proposal.proposal).expect("proposal should serialize"),
         );
-        assert!(
-            !expected.contains_key("anchor"),
-            "the retired single-action anchor must not appear"
-        );
         let instruction: InstructionBox = proposal.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);
         let Value::Object(root) = dto.json else {

@@ -2306,7 +2306,10 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid operator-signature test config");
-        let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION.parse().unwrap();
+        let uri: crate::Uri = iroha_torii_shared::route_catalog::core::CONFIGURATION_GET
+            .path()
+            .parse()
+            .unwrap();
         let headers = signed_request_headers(
             &key_pair,
             &test_network_id(),
@@ -2321,7 +2324,8 @@ mod tests {
     #[test]
     fn signed_request_headers_reports_nonce_rng_failure() {
         let key_pair = checked_ed25519_keypair();
-        let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+        let uri: crate::Uri = iroha_torii_shared::route_catalog::core::CONFIGURATION_GET
+            .path()
             .parse()
             .expect("configuration URI");
         let mut rng = FailingOperatorNonceRng;

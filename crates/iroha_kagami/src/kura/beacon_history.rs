@@ -995,9 +995,9 @@ mod tests {
     fn beacon_history_distinguishes_native_merge_suffix_from_global_inputs() {
         use iroha_data_model::{
             block::{BlockExecutionContextBundle, ExternalExecutionContext},
-            nexus::{DataSpaceId, LaneId},
             sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection},
         };
+        use iroha_model_base::topology::{DataSpaceId, LaneId};
         let original = block(vec![lifecycle()]);
         let own = original.external_entrypoints_slice()[0].clone();
         let merged_source = block(vec![

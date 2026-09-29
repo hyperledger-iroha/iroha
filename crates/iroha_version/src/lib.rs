@@ -11,7 +11,6 @@ use std::{format, string::String, vec::Vec};
 /// Error types emitted while working with versioned containers.
 pub mod error {
     use super::UnsupportedVersion;
-    #[allow(unused_imports)] // False-positive
     use super::*;
     use iroha_macro::FromVariant;
     use std::{borrow::ToOwned, boxed::Box, fmt};

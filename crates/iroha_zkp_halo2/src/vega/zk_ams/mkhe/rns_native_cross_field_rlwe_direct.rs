@@ -153,6 +153,9 @@ use crate::{
 };
 
 #[cfg(test)]
+use super::rns_native_bulletproof_common as bulletproof_common;
+
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
 #[cfg(test)]
 const FLAGS_V1: u8 = 0;
@@ -239,8 +242,6 @@ pub(super) const RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_MAX_BYTES_V1: usize = 
 pub(super) const RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1: usize =
     RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 - OWNED_WIRE_BYTES_V1;
 const MIN_WIRE_BYTES_V1: usize = OWNED_WIRE_BYTES_V1 + MIN_SUCCESSOR_BYTES_V1;
-#[cfg(test)]
-const MAX_CHALLENGE_ATTEMPTS_V1: u8 = 128;
 const GBP_CHALLENGES_PER_CORE_V1: usize = 4 + LOG_N_V1;
 const POSITIVE_TERMS_PER_COORDINATE_V1: usize = 7_256;
 const NEGATIVE_TERMS_PER_COORDINATE_V1: usize = 1_376;
@@ -2702,36 +2703,6 @@ fn initial_core_transcript_state_v1(
 }
 
 #[cfg(test)]
-fn derive_nonzero_t256_challenge_v1(
-    state: &mut Vec<u8>,
-    ordinal: u32,
-) -> Result<Scalar, RnsNativeCrossFieldRlweDirectErrorV1> {
-    for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
-        let mut prefix = Vec::with_capacity(CORE_CHALLENGE_DOMAIN_V1.len() + state.len() + 8);
-        prefix.extend_from_slice(CORE_CHALLENGE_DOMAIN_V1);
-        prefix.extend_from_slice(state);
-        prefix.extend_from_slice(&ordinal.to_be_bytes());
-        prefix.push(attempt);
-        let mut left = prefix.clone();
-        left.push(0);
-        prefix.push(1);
-        let mut wide = [0_u8; 64];
-        wide[..32].copy_from_slice(&keccak256(&left));
-        wide[32..].copy_from_slice(&keccak256(&prefix));
-        let challenge = Scalar::from_uniform_le_bytes(wide);
-        wide.fill(0);
-        if !challenge.is_zero() {
-            state.push(2);
-            state.extend_from_slice(&ordinal.to_be_bytes());
-            state.push(attempt);
-            state.extend_from_slice(&challenge.to_le_bytes());
-            return Ok(challenge);
-        }
-    }
-    Err(RnsNativeCrossFieldRlweDirectErrorV1::ChallengeExhausted)
-}
-
-#[cfg(test)]
 struct CoreProverTranscriptV1<S: ProofSuite<Scalar = Scalar, Point = Point>> {
     state: Vec<u8>,
     proof: [u8; CORE_PROOF_BYTES_V1],
@@ -2805,13 +2776,11 @@ impl<S: ProofSuite<Scalar = Scalar, Point = Point>> ProverTranscript<S>
     }
 
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-        let challenge = derive_nonzero_t256_challenge_v1(&mut self.state, self.challenge_ordinal)
-            .map_err(|_| GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)?;
-        self.challenge_ordinal = self
-            .challenge_ordinal
-            .checked_add(1)
-            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        Ok(challenge)
+        bulletproof_common::derive_challenge_v1(
+            CORE_CHALLENGE_DOMAIN_V1,
+            &mut self.state,
+            &mut self.challenge_ordinal,
+        )
     }
 }
 
@@ -2843,19 +2812,7 @@ impl<'a, S: ProofSuite<Scalar = Scalar, Point = Point>> CoreVerifierTranscriptV1
     }
 
     fn take_v1(&mut self, count: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
-        let end = self
-            .cursor
-            .checked_add(count)
-            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let value =
-            self.proof
-                .get(self.cursor..end)
-                .ok_or(GeneralizedBulletproofErrorV1::ProofLength {
-                    actual: self.proof.len(),
-                    expected: end,
-                })?;
-        self.cursor = end;
-        Ok(value)
+        bulletproof_common::take_v1(self.proof, &mut self.cursor, count)
     }
 
     fn finish_v1(self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
@@ -2873,37 +2830,21 @@ impl<S: ProofSuite<Scalar = Scalar, Point = Point>> VerifierTranscript<S>
     for CoreVerifierTranscriptV1<'_, S>
 {
     fn read_scalar(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; SCALAR_BYTES_V1] = self
-            .take_v1(SCALAR_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        let scalar = Scalar::from_le_bytes_exact(encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        self.state.push(0);
-        self.state.extend_from_slice(&encoded);
-        Ok(scalar)
+        let encoded = self.take_v1(SCALAR_BYTES_V1)?;
+        bulletproof_common::absorb_scalar_v1(&mut self.state, encoded)
     }
 
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; POINT_BYTES_V1] = self
-            .take_v1(POINT_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        let point = Point::from_non_identity_wire_bytes_exact(&encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        self.state.push(1);
-        self.state.extend_from_slice(&encoded);
-        Ok(point)
+        let encoded = self.take_v1(POINT_BYTES_V1)?;
+        bulletproof_common::absorb_point_v1(&mut self.state, encoded)
     }
 
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-        let challenge = derive_nonzero_t256_challenge_v1(&mut self.state, self.challenge_ordinal)
-            .map_err(|_| GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)?;
-        self.challenge_ordinal = self
-            .challenge_ordinal
-            .checked_add(1)
-            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        Ok(challenge)
+        bulletproof_common::derive_challenge_v1(
+            CORE_CHALLENGE_DOMAIN_V1,
+            &mut self.state,
+            &mut self.challenge_ordinal,
+        )
     }
 }
 
@@ -3339,11 +3280,7 @@ fn cross_field_core_root_v1(
 
 #[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(CODEC_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(bytes);
-    hash.finalize()
+    bulletproof_common::codec_digest_v1(CODEC_DOMAIN_V1, VERSION_V1, bytes)
 }
 
 #[cfg(test)]
@@ -4408,14 +4345,14 @@ where
         .try_reserve_exact(CORES_V1)
         .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::ResourceExhausted)?;
     let mut transcript_digests = [[0_u8; DIGEST_BYTES_V1]; CORES_V1];
-    for core in 0..CORES_V1 {
+    for (core, core_digest) in transcript_digests.iter_mut().enumerate() {
         let state = initial_core_transcript_state_v1(&inputs, core)?;
         let mut transcript = CoreProverTranscriptV1::<S>::new_v1(state);
         let witness = build_core_witness_v1::<S, P>(&mut source, core)?;
         build_core_statement_v1::<S>(&inputs, core)?.prove(rng, &mut transcript, witness)?;
         let (proof, transcript_digest) = transcript.finish_v1()?;
         proofs.push(proof);
-        transcript_digests[core] = transcript_digest;
+        *core_digest = transcript_digest;
     }
     drop(source);
     RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(

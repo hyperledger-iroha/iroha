@@ -94,6 +94,11 @@ impl BatchScheduleCounts {
 ///
 /// Never pass a sampled LDE index here to choose AIR equations. A future coset
 /// evaluator must interpolate these fixed events on its declared subgroup.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, possibly overlapping schedule predicate that AIR \
+              selectors read directly"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatchBaseRow {
     /// Absolute base schedule row, always below `counts().rows`.
@@ -625,7 +630,7 @@ mod tests {
                     OperationKind::Transfer,
                 ));
             }
-            let batch_hash = Hash::new([ordinal as u8]);
+            let batch_hash = Hash::new([u8::try_from(ordinal).unwrap()]);
             let poseidon_preimage_digest = Some(single_delta_digest(&delta, &batch_hash));
             fixture.claims.push(PublicTransferTranscript {
                 batch_hash,
@@ -749,8 +754,13 @@ mod tests {
     fn public_root_bytes_are_copied_in_full_without_reduction() {
         let mut fixture = PublicFixture::new(2, false);
         fixture.inputs.old_root = [u8::MAX; 32];
-        fixture.inputs.new_root =
-            core::array::from_fn(|byte| if byte == 31 { 255 } else { byte as u8 });
+        fixture.inputs.new_root = core::array::from_fn(|byte| {
+            if byte == 31 {
+                255
+            } else {
+                u8::try_from(byte).unwrap()
+            }
+        });
         let schedule = CompactBatchSchedule::new(&fixture.prepare(), 2).unwrap();
         let (old, new) = schedule.public_roots();
         assert_eq!(old, [u32::MAX; 8]);

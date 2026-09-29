@@ -50,7 +50,7 @@ use iroha_crypto::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
-    crypto::{Crypto, verify_qc_signatures},
+    crypto::Crypto,
     message::{BlockHeader as CoreHeader, Qc, VoteKind},
     preimage::{InstanceKind, committee_digest_preimage, instance_id, payload_hash},
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
@@ -304,7 +304,8 @@ impl SumeragiFinalityProof {
             )?;
             // Exact quorum signatures authenticate execution finality. Embedded application
             // attestations remain separate evidence; this proof grants no attestation capability.
-            verify_qc_signatures(&crypto, &header.instance, &epoch.id, &committee, &qc)
+            iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee)
+                .verify_qc_signatures(&qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
             (Some(header), core_hash)
         };
@@ -696,6 +697,7 @@ impl SumeragiFinalityAttestationBody {
                 && self.network_id == NetworkId::from_genesis_hash(self.genesis_block_hash)
                 && self.genesis_finality_proof.height() == 1
                 && self.genesis_finality_proof.block_header.hash() == self.genesis_block_hash
+                && self.status.protocol_version == crate::sumeragi::PROTOCOL_VERSION
                 && self.status.halted.is_none()
                 && self
                     .status

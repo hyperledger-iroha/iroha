@@ -13,7 +13,7 @@ final class NativeSumeragiStatusTests: XCTestCase {
         XCTAssertEqual(rows.count, 8)
         for (name, json, _) in rows {
             let status = try ToriiSumeragiStatusSnapshot.parseJSON(json)
-            XCTAssertEqual(status.protocolVersion, 8)
+            XCTAssertEqual(status.protocolVersion, 1)
             XCTAssertEqual(status.view, UInt64.max)
             XCTAssertEqual(status.level, UInt32.max)
             XCTAssertEqual(status.footprint.votes, UInt64.max)
@@ -52,7 +52,7 @@ final class NativeSumeragiStatusTests: XCTestCase {
         }
     }
     func testScalarAliasesAndMalformedBodiesAreRejected() throws {
-        for version in [0, 4, 6, 7, 9] {
+        for version in [0, 2, 4, 6, 7, 8, 9] {
             XCTAssertThrowsError(try ToriiSumeragiStatusSnapshot.parseJSON(changed { $0["protocol_version"] = version }))
         }
         for bad: Any in [-1, "15", 1.5, true, NSNull()] {

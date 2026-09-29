@@ -12,6 +12,7 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
@@ -25,7 +26,6 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
-import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -437,14 +437,14 @@ class MusubiInstructionsV1FixtureTest {
             networkId = TestNetworkIds.canonical(),
             authority = AccountAddress
                 .fromAccount(TestEd25519Keys.publicKey(0x5a), "ed25519")
-                .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),
+                .toI105(TairaTestnetProfile.I105_DISCRIMINANT),
             creationTimeMs = 1_735_555_000_000L,
             executable = Executable.batch(
                 mutations.map { ExecutableBatchItem.instruction(it.box) },
             ),
             feePayment = FeePaymentIntent.authority(emptyList()),
         )
-        val encoded = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val encoded = NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT)
             .encodeTransaction(transaction)
         val transactionDecoder = canonicalDecoder(encoded)
         readField(transactionDecoder, "network_id")
@@ -789,7 +789,7 @@ class MusubiInstructionsV1FixtureTest {
                 "01000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de84",
         )
         val sortedAddress = AccountAddress.fromCanonicalBytes(sortedBytes)
-        val sortedOwner = sortedAddress.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val sortedOwner = sortedAddress.toI105(TairaTestnetProfile.I105_DISCRIMINANT)
         // External encodings must already be canonical; construction sorts member inputs.
         assertFailsWith<AccountAddressException> {
             AccountAddress.fromCanonicalBytes(reversedBytes)
@@ -799,7 +799,7 @@ class MusubiInstructionsV1FixtureTest {
             MultisigPolicyPayload.of(policy.version, policy.threshold, policy.members.reversed()),
         )
         assertContentEquals(sortedBytes, reversedAddress.canonicalBytes)
-        val reversedOwner = reversedAddress.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val reversedOwner = reversedAddress.toI105(TairaTestnetProfile.I105_DISCRIMINANT)
         assertEquals(sortedOwner, reversedOwner)
 
         val sorted = MusubiInstructionsV1.RecoverMusubiPackageV1(

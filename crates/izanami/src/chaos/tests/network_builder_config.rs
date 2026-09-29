@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
+fn make_network_builder_emits_only_native_sumeragi_config() -> Result<()> {
     init_instruction_registry();
     let pipeline_time = Duration::from_millis(300);
     let config = ChaosConfig {
@@ -28,69 +28,15 @@ fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
         })
     };
     assert!(lookup(&["sumeragi", "round_timeout_ms"]).is_none());
-    let cadence_ms = u64::try_from(pipeline_time.as_millis()).expect("cadence fits u64");
-    assert_eq!(
-        iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms),
-        Ok((3_000, 600)),
-        "runtime timing must derive solely from the signed 300ms cadence"
-    );
     assert_eq!(
         lookup(&["sumeragi", "role"]).and_then(TomlValue::as_str),
         Some("validator")
     );
-    assert_eq!(
-        lookup(&["sumeragi", "block", "max_transactions"]).and_then(TomlValue::as_integer),
-        Some(
-            i64::try_from(config.sumeragi_block_max_transactions)
-                .expect("transaction limit fits i64")
-        )
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "block", "proposal_queue_scan_multiplier"])
-            .and_then(TomlValue::as_integer),
-        Some(
-            i64::try_from(config.sumeragi_proposal_queue_scan_multiplier)
-                .expect("scan multiplier fits i64")
-        )
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "commands"]).and_then(TomlValue::as_integer),
-        Some(i64::try_from(IZANAMI_SUMERAGI_QUEUE_COMMANDS).expect("commands fit TOML"))
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "bodies"]).and_then(TomlValue::as_integer),
-        Some(i64::try_from(IZANAMI_SUMERAGI_QUEUE_BODIES).expect("bodies fit TOML"))
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "authenticated_non_validator_sources"])
-            .and_then(TomlValue::as_integer),
-        Some(
-            i64::try_from(IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-                .expect("authenticated sources fit TOML")
-        )
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "body_source_bytes"]).and_then(TomlValue::as_integer),
-        Some(i64::try_from(IZANAMI_SUMERAGI_BODY_SOURCE_BYTES).expect("source bytes fit TOML"))
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "body_bytes"]).and_then(TomlValue::as_integer),
-        Some(
-            i64::try_from(izanami_sumeragi_body_bytes(config.peer_count)?)
-                .expect("aggregate body bytes fit TOML")
-        )
-    );
+    assert!(lookup(&["sumeragi", "block"]).is_none());
+    assert!(lookup(&["sumeragi", "queues"]).is_none());
     assert_eq!(
         lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
         Some(i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS).expect("connection capacity fits TOML"))
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "chunks"]).and_then(TomlValue::as_integer),
-        Some(IZANAMI_SUMERAGI_QUEUE_CHUNKS)
-    );
-    assert_eq!(
-        lookup(&["sumeragi", "queues", "ready_bodies"]).and_then(TomlValue::as_integer),
-        Some(IZANAMI_SUMERAGI_QUEUE_READY_BODIES)
     );
     assert_eq!(
         lookup(&["sumeragi", "keys", "allowed_algorithms"])

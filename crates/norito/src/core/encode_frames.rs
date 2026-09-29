@@ -5,8 +5,8 @@ use std::io::Write;
 use super::{
     DecodeFlagsGuard, EncodeContextGuard, Encoder, Error, ExactLengthWriter, FramedPayloadWriter,
     Header, NoritoSerialize, compact_len_used, current_decode_flags_effective,
-    default_encode_flags, encoded_frame_len, field_bitset_used, finalized_encode_flags,
-    fixed_offsets_used, payload_alignment_padding_for, validate_header_flags,
+    default_encode_flags, encoded_frame_len, finalized_encode_flags, payload_alignment_padding_for,
+    validate_header_flags,
 };
 
 /// Write a measured prefix followed by one complete frame using the active layout.
@@ -88,12 +88,7 @@ where
     let payload_len = first_payload.len;
     let payload_len_u64 = u64::try_from(payload_len).map_err(|_| Error::LengthMismatch)?;
     let first_checksum = first_payload.digest.sum64();
-    let first_flags = finalized_encode_flags(
-        base_flags,
-        fixed_offsets_used(),
-        field_bitset_used(),
-        compact_len_used(),
-    );
+    let first_flags = finalized_encode_flags(base_flags, compact_len_used());
     drop(first_guard);
 
     let padding = payload_alignment_padding_for::<T>();
@@ -134,12 +129,7 @@ where
         (result, exact.written_len(), exact.rejected_write())
     };
     let second_checksum = second_payload.digest.sum64();
-    let second_flags = finalized_encode_flags(
-        base_flags,
-        fixed_offsets_used(),
-        field_bitset_used(),
-        compact_len_used(),
-    );
+    let second_flags = finalized_encode_flags(base_flags, compact_len_used());
     drop(second_guard);
     if rejected_write {
         return Err(Error::LengthMismatch);
@@ -165,8 +155,8 @@ mod tests {
     use super::*;
     use crate::core::{
         LengthCountingWriter, encoded_payload_len, frame_bare_with_header_flags, header_flags,
-        note_compact_len_emitted, note_fixed_offsets_emitted, serialize_to_buffer,
-        supported_header_flags, to_bytes, write_len_header,
+        note_compact_len_emitted, serialize_to_buffer, supported_header_flags, to_bytes,
+        write_len_header,
     };
 
     #[derive(crate::NoritoSchema)]
@@ -220,7 +210,7 @@ mod tests {
             inner_record.extend_from_slice(&inner_frame);
             let outer_frame = frame_bare_with_header_flags::<Framed<Leaf<'_>>>(
                 &inner_record,
-                finalized_encode_flags(flags, false, false, false),
+                finalized_encode_flags(flags, false),
             )
             .expect("frame independently assembled nested payload");
             let mut expected = u64::try_from(outer_frame.len())
@@ -261,21 +251,17 @@ mod tests {
             &7_u8,
             &mut Encoder::for_buffer(&mut bytes),
             |writer, length| {
-                note_fixed_offsets_emitted();
+                // The compact length prefix is the only compact marker in this
+                // encode: the one-byte frame payload writes no length itself.
                 write_len_header(writer, u64::try_from(length).unwrap())?;
                 Ok(())
             },
         )
         .unwrap();
         assert!(
-            fixed_offsets_used(),
-            "frame guards discarded the outer prefix marker"
-        );
-        assert!(
             compact_len_used(),
             "frame guards discarded the compact prefix marker"
         );
-        assert!(!field_bitset_used());
         drop(outer);
         assert_eq!(&bytes[bytes.len() - expected_frame.len()..], expected_frame);
     }
@@ -386,7 +372,7 @@ mod tests {
         assert!(matches!(error, Error::NonCanonicalEncoding));
         assert_eq!(bytes, [0xdd]);
         assert_eq!(visits.get(), 1);
-        assert!(!fixed_offsets_used());
+        assert!(!compact_len_used());
         drop(outer);
     }
 

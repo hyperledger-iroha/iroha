@@ -221,10 +221,8 @@ codec-direction hashes, and uses the existing shared contract checker.
 | --- | --- | --- |
 | `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `c32171f5c8e0cf816f51912e75ff6de296c23b29d1f0b183c2c23b142719164b` |
 
-On 2026-09-28, the native event capture refreshed the default Configuration and
-Bridge filter masks after removal of their retired SCCP event variants. Their
-root/Some frames and the combined Vec now carry the sole remaining event bit;
-all other 98 frames are unchanged. The ignored
+The default Configuration and Bridge filter masks each carry their single
+event bit in their root/Some frames and in the combined Vec. The ignored
 `capture_current_fresh_event_identity_frames` test reproduces this capture.
 
 EventMessage's slice decoder previously skipped its own field envelope and

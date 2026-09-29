@@ -2,12 +2,24 @@
 #[test]
 fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline_trigger() {
     let chain_id = ChainId::from("sequential-rejected-pipeline-trigger");
-    let network_id = deterministic_test_network_id(0x0F);
     let (authority, keypair) = gen_account_in("wonderland");
     let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let mut world = World::with([domain], [account], []);
+    let probe_state = State::new_with_chain_for_testing(
+        World::with(
+            [Domain::new(domain_id.clone()).build(&authority)],
+            [Account::new(authority.clone()).build(&authority)],
+            [],
+        ),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain_id.clone(),
+    );
+    let probe_chain = component_chain(probe_state);
+    let network_id = probe_chain.network_id();
+
     let block_key =
         Name::from_str("sequential_rejected_block_pipeline_trigger").expect("metadata key");
     let wrong_block_status_key =
@@ -40,32 +52,21 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     let wrong_hash: HashOf<SignedTransaction> =
         HashOf::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
     let rejection = {
-        let probe_domain = Domain::new(domain_id.clone()).build(&authority);
-        let probe_account = Account::new(authority.clone()).build(&authority);
-        let probe_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
-            crate::state::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            World::with([probe_domain], [probe_account], []),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            network_id,
-        )
-        .expect("probe state must accept its explicit network id");
-        install_test_lane_manifests(&probe_state);
-        probe_state
-            .seed_genesis_for_testing()
-            .expect("authenticate rejected-probe predecessor");
+        let probe_state = probe_chain.state();
         let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             external_signed.clone(),
         ))])
         .chain(0, probe_state.view().latest_block().as_deref())
         .sign(keypair.private_key())
         .unpack(|_| {});
-        let mut probe_state_block = probe_state.block(probe_block.header());
+        let (mut probe_state_block, probe_state_block_recorder) =
+            crate::block::ValidBlock::start_component_execution(
+                &probe_block.clone().into(),
+                &probe_state,
+            )
+            .expect("original writer-first component execution");
         let valid_probe = probe_block
-            .validate_and_record_transactions(&mut probe_state_block)
+            .validate_and_record_transactions(&mut probe_state_block, probe_state_block_recorder)
             .unpack(|_| {});
         valid_probe
             .as_ref()
@@ -187,7 +188,6 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let fixture_triggers = std::mem::take(&mut world.triggers);
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         crate::state::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
@@ -199,11 +199,13 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         network_id,
     )
     .expect("test state must accept its explicit network id");
-    install_test_lane_manifests(&state);
-    state
-        .seed_genesis_for_testing()
-        .expect("authenticate rejected Pipeline predecessor");
-    state.world.triggers = fixture_triggers;
+    state.configure_test_runtime_defaults();
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    assert_eq!(
+        state.network_id, network_id,
+        "exact native genesis input identity"
+    );
     let metadata_key =
         Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");
     let (commitment_entrypoint, _reveal_entrypoint) =
@@ -216,9 +218,11 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         .sign(keypair.private_key())
         .unpack(|_| {});
     assert_ne!(block.header().height(), nonzero!(9999_u64));
-    let mut state_block = state.block(block.header());
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let valid_block = block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     let results: Vec<_> = valid_block
         .as_ref()

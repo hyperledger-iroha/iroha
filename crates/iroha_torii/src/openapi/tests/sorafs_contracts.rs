@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 11_902;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_343;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "db67c5a5652744fca23ec1556e6244a8199e915413d77fb27630a15ce624ca8a";
+    "0743402196a2d2e15426d464c3e584ebfebe4d552851a21087b767e77e38a9ba";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -14,7 +14,6 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "proof.por.required",
     "proof.pdp.failures",
     "proof.potr.failures",
-    "sumeragi.da.required",
     "bridge.proof.required",
     "bridge.attestation.required",
     "bridge.bundle.required",
@@ -29,10 +28,6 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "lifecycle.required",
     "status.required",
     "status.absent",
-    "native.receipt.required",
-    "native.leg.required",
-    "native.proposal.required",
-    "native.body.required",
     "hf.headers",
     "app.page.required",
     "app.page.properties",

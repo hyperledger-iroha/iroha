@@ -208,10 +208,7 @@ fn observe_with_hook(
             original.header().height().get() == 1
                 && original.header().prev_block_hash().is_none()
                 && NetworkId::from_genesis_hash(original.hash()) == expected_network_id
-                && original
-                    .execution_context()
-                    .and_then(|context| context.merge_entry.as_ref())
-                    .is_none(),
+                && original.lane_merge().is_none(),
             "stopped-tip original is not the expected unmerged genesis"
         );
         drop(original);

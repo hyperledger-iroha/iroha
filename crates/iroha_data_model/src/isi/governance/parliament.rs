@@ -1143,9 +1143,6 @@ fn decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for CreateParliamentGovernanceAttemptV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return crate::isi::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0;
         let proposal = crate::isi::decode_aos_canonical_field::<ProposalKind>(
             crate::isi::read_aos_field(bytes, &mut offset, flags)?,
@@ -1172,9 +1169,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CreateParliamentGovernanceAttempt
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitParliamentLifecycleTransitionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return crate::isi::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0;
         let governance_attempt_id = crate::isi::decode_aos_canonical_field::<GovernanceAttemptId>(
             crate::isi::read_aos_field(bytes, &mut offset, flags)?,

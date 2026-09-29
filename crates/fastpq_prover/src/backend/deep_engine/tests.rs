@@ -31,6 +31,11 @@ fn queries(spread: bool) -> Vec<usize> {
     result
 }
 
+/// Narrow a fixture position or level; every fixture value stays below `LDE_ROWS`.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposition) {
     let plans = OpeningPlans::new(queries).unwrap();
     let digest = WireDigest::new([1, 2, 3, 5, 7, 11]).unwrap();
@@ -58,14 +63,14 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
         rows: queries
             .iter()
             .map(|&index| RowOpening {
-                index: index as u32,
+                index: narrow_u32(index),
                 values: RowValues::new(vec![1; COMMITTED_COLUMN_COUNT]).unwrap(),
             })
             .collect(),
         quotients: queries
             .iter()
             .map(|&index| QuotientMaskOpening {
-                index: index as u32,
+                index: narrow_u32(index),
                 low: F::ZERO,
                 high: F::ZERO,
                 composition_mask: F::ZERO,
@@ -81,7 +86,7 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
                 groups: indices
                     .iter()
                     .map(|&index| FriGroup {
-                        index: index as u32,
+                        index: narrow_u32(index),
                         values: FriValues::new(vec![F::ZERO; FRI_ARITIES[round]]).unwrap(),
                     })
                     .collect(),
@@ -270,86 +275,105 @@ fn independent_mask_highest_degree_flows_through_every_fold_and_full_terminal() 
     assert!(check_chains(&geometry, &composition, F::ONE, &betas, &queries, &proof).is_err());
 }
 
-#[test]
-fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
-    use crate::backend::{field_pow, mul_mod, polynomial_field::PolynomialField};
+/// Degree of the single non-constant trace column in the high-degree chain fixture.
+const HIGH_DEGREE: usize = 16_386;
 
-    const DEGREE: usize = 16_386;
-    const DEGREES: [usize; 6] = [DEGREE, 1_024, 64, 8, 1, 0];
-    let geometry = DeepGeometry::new().unwrap();
-    let queries = queries(true);
-    let (mut proof, _, _) = constant_fixture(&queries);
-    let z = F::new([17, 19, 23, 29]).unwrap();
-    let next_z = z.mul_base(geometry.trace_generator());
-    let lambda = F::new([31, 37, 41, 43]).unwrap();
-    let betas = betas();
-    // A_0(X)=X^16386, every other trace column is one, and Q0=Q1=0.
-    // Only this column contributes with R=0: D(X)=lambda*(1+lambda*X²)*h(X), where
-    // h=(X^16386-U(X))/((X-z)(X-next_z)) and U interpolates the two OOD values.
-    proof.ood.current[0] = z.power(DEGREE as u64);
-    proof.ood.next[0] = next_z.power(DEGREE as u64);
-    for row in &mut proof.rows {
-        let mut values = vec![1; COMMITTED_COLUMN_COUNT];
-        values[0] = field_pow(geometry.domain().point(row.index as usize), DEGREE as u64);
-        row.values = RowValues::new(values).unwrap();
+/// Evaluate coefficients, lowest degree first, at one base-field point.
+fn horner(coefficients: &[F], x: u64) -> F {
+    coefficients
+        .iter()
+        .rev()
+        .fold(F::ZERO, |value, &coefficient| {
+            value.mul_base(x).add(coefficient)
+        })
+}
+
+/// Closed form `lambda*(1+lambda*X²)*h(X)` of the high-degree initial DEEP layer.
+#[derive(Clone, Copy)]
+struct InitialLayer {
+    z: F,
+    next_z: F,
+    lambda: F,
+    slope: F,
+    intercept: F,
+}
+
+impl InitialLayer {
+    /// A closed form avoids a 16K-term Horner evaluation for every fiber coordinate.
+    fn at(self, x: u64) -> F {
+        use crate::backend::{field_pow, mul_mod, polynomial_field::PolynomialField};
+
+        let point = F::from_base(x).unwrap();
+        let numerator = F::from_base(field_pow(x, HIGH_DEGREE as u64))
+            .unwrap()
+            .sub(self.intercept.add(self.slope.mul_base(x)));
+        let denominator = point.sub(self.z).mul(point.sub(self.next_z));
+        numerator
+            .mul(denominator.inverse().unwrap())
+            .mul(F::ONE.add(self.lambda.mul_base(mul_mod(x, x))))
+            .mul(self.lambda)
     }
-    let composition = DeepComposition::new(
-        OodPair::new(z, geometry.trace_generator()).unwrap(),
-        &proof.ood.current,
-        &proof.ood.next,
-        &proof.ood.quotient,
-    )
-    .unwrap();
+}
 
-    // Independent complete-homogeneous coefficient recurrence for the quotient.
-    // No producer division, composition evaluation, FFT or FRI helper supplies
-    // these coefficients or the coefficient-folded expected layers.
+/// Evaluate one FRI layer polynomial, using the closed form for round zero.
+fn layer_value(initial: InitialLayer, coefficients: &[Vec<F>], round: usize, x: u64) -> F {
+    if round == 0 {
+        initial.at(x)
+    } else {
+        horner(&coefficients[round], x)
+    }
+}
+
+/// Independent complete-homogeneous coefficient recurrence for the quotient.
+///
+/// No producer division, composition evaluation, FFT or FRI helper supplies
+/// these coefficients or the coefficient-folded expected layers.
+fn high_degree_initial_layer(ood: [F; 2], z: F, next_z: F, lambda: F) -> (InitialLayer, Vec<F>) {
+    use crate::backend::polynomial_field::PolynomialField;
+
+    let [current, next] = ood;
     let sum = z.add(next_z);
     let product = z.mul(next_z);
-    let mut h = vec![F::ZERO; DEGREE - 1];
-    h[DEGREE - 2] = F::ONE;
-    for degree in (0..DEGREE - 2).rev() {
+    let mut h = vec![F::ZERO; HIGH_DEGREE - 1];
+    h[HIGH_DEGREE - 2] = F::ONE;
+    for degree in (0..HIGH_DEGREE - 2).rev() {
         h[degree] = sum
             .mul(h[degree + 1])
             .sub(product.mul(h.get(degree + 2).copied().unwrap_or(F::ZERO)));
     }
-    let slope = proof.ood.next[0]
-        .sub(proof.ood.current[0])
-        .mul(next_z.sub(z).inverse().unwrap());
-    let intercept = proof.ood.current[0].sub(z.mul(slope));
+    let slope = next.sub(current).mul(next_z.sub(z).inverse().unwrap());
+    let intercept = current.sub(z.mul(slope));
     assert_eq!(intercept, F::ZERO.sub(product.mul(h[0])));
     assert_eq!(slope, sum.mul(h[0]).sub(product.mul(h[1])));
-    let mut initial_coefficients = vec![F::ZERO; DEGREE + 1];
+    let mut initial_coefficients = vec![F::ZERO; HIGH_DEGREE + 1];
     for (degree, &coefficient) in h.iter().enumerate() {
         initial_coefficients[degree] = initial_coefficients[degree].add(lambda.mul(coefficient));
         initial_coefficients[degree + 2] =
             initial_coefficients[degree + 2].add(lambda.mul(lambda).mul(coefficient));
     }
-    let horner = |coefficients: &[F], x: u64| {
-        coefficients
-            .iter()
-            .rev()
-            .fold(F::ZERO, |value, &coefficient| {
-                value.mul_base(x).add(coefficient)
-            })
+    let initial = InitialLayer {
+        z,
+        next_z,
+        lambda,
+        slope,
+        intercept,
     };
-    // A closed form avoids a 16K-term Horner evaluation for every initial fiber
-    // coordinate. Cross-check it against the independently built coefficients.
-    let initial_at = |x: u64| {
-        let point = F::from_base(x).unwrap();
-        let numerator = F::from_base(field_pow(x, DEGREE as u64))
-            .unwrap()
-            .sub(intercept.add(slope.mul_base(x)));
-        let denominator = point.sub(z).mul(point.sub(next_z));
-        numerator
-            .mul(denominator.inverse().unwrap())
-            .mul(F::ONE.add(lambda.mul_base(mul_mod(x, x))))
-            .mul(lambda)
-    };
-    for index in [0, LDE_ROWS / 7, LDE_ROWS - 1] {
-        let x = geometry.domain().point(index);
-        assert_eq!(initial_at(x), horner(&initial_coefficients, x));
-    }
+    (initial, initial_coefficients)
+}
+
+/// Fill every opened fiber and the terminal from coefficient-folded layers.
+///
+/// Returns each round's layer coefficients and evaluation domain.
+fn fill_high_degree_rounds(
+    proof: &mut DeepProof,
+    geometry: &DeepGeometry,
+    initial: InitialLayer,
+    initial_coefficients: Vec<F>,
+    betas: &[F; 5],
+) -> (Vec<Vec<F>>, Vec<crate::backend::FriDomain>) {
+    use crate::backend::polynomial_field::PolynomialField;
+
+    const DEGREES: [usize; 6] = [HIGH_DEGREE, 1_024, 64, 8, 1, 0];
     let mut coefficients = vec![initial_coefficients];
     let mut domain = geometry.domain();
     let mut domains = Vec::with_capacity(5);
@@ -360,12 +384,7 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
         for group in &mut proof.rounds[round].groups {
             for (coordinate, value) in group.values.iter_mut().enumerate() {
                 let index = group.index as usize + coordinate * FRI_LENGTHS[round + 1];
-                let x = domain.point(index);
-                *value = if round == 0 {
-                    initial_at(x)
-                } else {
-                    horner(&coefficients[round], x)
-                };
+                *value = layer_value(initial, &coefficients, round, domain.point(index));
             }
         }
         let powers: Vec<_> = (0..FRI_ARITIES[round])
@@ -387,6 +406,49 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
     }
     assert_eq!(coefficients[5].len(), DEGREES[5] + 1);
     proof.terminal.fill(coefficients[5][0]);
+    (coefficients, domains)
+}
+
+#[test]
+fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
+    use crate::backend::{field_pow, mul_mod, polynomial_field::PolynomialField};
+
+    let geometry = DeepGeometry::new().unwrap();
+    let queries = queries(true);
+    let (mut proof, _, _) = constant_fixture(&queries);
+    let z = F::new([17, 19, 23, 29]).unwrap();
+    let next_z = z.mul_base(geometry.trace_generator());
+    let lambda = F::new([31, 37, 41, 43]).unwrap();
+    let betas = betas();
+    // A_0(X)=X^16386, every other trace column is one, and Q0=Q1=0.
+    // Only this column contributes with R=0: D(X)=lambda*(1+lambda*X²)*h(X), where
+    // h=(X^16386-U(X))/((X-z)(X-next_z)) and U interpolates the two OOD values.
+    proof.ood.current[0] = z.power(HIGH_DEGREE as u64);
+    proof.ood.next[0] = next_z.power(HIGH_DEGREE as u64);
+    for row in &mut proof.rows {
+        let mut values = vec![1; COMMITTED_COLUMN_COUNT];
+        values[0] = field_pow(
+            geometry.domain().point(row.index as usize),
+            HIGH_DEGREE as u64,
+        );
+        row.values = RowValues::new(values).unwrap();
+    }
+    let composition = DeepComposition::new(
+        OodPair::new(z, geometry.trace_generator()).unwrap(),
+        &proof.ood.current,
+        &proof.ood.next,
+        &proof.ood.quotient,
+    )
+    .unwrap();
+    let (initial, initial_coefficients) =
+        high_degree_initial_layer([proof.ood.current[0], proof.ood.next[0]], z, next_z, lambda);
+    // Cross-check the closed form against the independently built coefficients.
+    for index in [0, LDE_ROWS / 7, LDE_ROWS - 1] {
+        let x = geometry.domain().point(index);
+        assert_eq!(initial.at(x), horner(&initial_coefficients, x));
+    }
+    let (coefficients, domains) =
+        fill_high_degree_rounds(&mut proof, &geometry, initial, initial_coefficients, &betas);
     deep_proof::preflight(&proof, &queries).unwrap();
     assert_eq!(
         check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
@@ -419,11 +481,7 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
             // Evaluate the same polynomial on a different coset, preserving the
             // within-fiber root orientation and every coefficient and challenge.
             let x = mul_mod(domains[round].point(coordinate * FRI_LENGTHS[round + 1]), 2);
-            *value = if round == 0 {
-                initial_at(x)
-            } else {
-                horner(&coefficients[round], x)
-            };
+            *value = layer_value(initial, &coefficients, round, x);
         }
         assert_ne!(
             proof.rounds[round].groups[0].values, correct,
@@ -465,8 +523,8 @@ fn changed_composition_and_every_fiber_coordinate_fail_linkage() {
     proof.quotients[0].composition_mask = F::ONE;
     assert!(check_chains(&geometry, &composition, lambda, &betas(), &queries, &proof).is_err());
     proof.quotients[0].composition_mask = F::ZERO;
-    for round in 0..5 {
-        for coordinate in 0..FRI_ARITIES[round] {
+    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
+        for coordinate in 0..arity {
             proof.rounds[round].groups[0].values[coordinate] = F::ONE;
             assert!(
                 check_chains(&geometry, &composition, lambda, &betas(), &queries, &proof).is_err(),
@@ -582,8 +640,8 @@ fn root_from_frontier(
                     binding
                         .hash_parent(
                             oracle,
-                            (level + 1) as u32,
-                            index as u32,
+                            narrow_u32(level + 1),
+                            narrow_u32(index),
                             pair[0].1,
                             pair[1].1,
                         )
@@ -608,7 +666,7 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
         .iter()
         .map(|&index| {
             binding
-                .hash_leaf(Oracle::Row, index as u32, &row_bytes)
+                .hash_leaf(Oracle::Row, narrow_u32(index), &row_bytes)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -625,7 +683,7 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
         .iter()
         .map(|&index| {
             binding
-                .hash_leaf(Oracle::QuotientAndMask, index as u32, &[0; 96])
+                .hash_leaf(Oracle::QuotientAndMask, narrow_u32(index), &[0; 96])
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -639,12 +697,12 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
         &proof.quotient_siblings,
     );
     for round in 0..5 {
-        let oracle = Oracle::Fri(round as u8);
+        let oracle = Oracle::Fri(u8::try_from(round).expect("five FRI rounds fit u8"));
         let leaves = plans.round_indices[round]
             .iter()
             .map(|&index| {
                 binding
-                    .hash_leaf(oracle, index as u32, &vec![0; FRI_ARITIES[round] * 32])
+                    .hash_leaf(oracle, narrow_u32(index), &vec![0; FRI_ARITIES[round] * 32])
                     .unwrap()
             })
             .collect::<Vec<_>>();
@@ -761,6 +819,7 @@ fn policy_relation() -> CompactTransferAir {
 
 #[test]
 fn committed_policy_checks_every_segment_dimension_before_decoding() {
+    type Setter = fn(&mut VerifyLimits, usize);
     let relation = policy_relation();
     let bytes = vec![0; deep_proof::MAX_FRAME_BYTES];
     let exact = VerifyLimits {
@@ -777,7 +836,6 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
         max_air_row_values: COMMITTED_COLUMN_COUNT,
     };
     preflight(&relation, bytes.len(), exact).unwrap();
-    type Setter = fn(&mut VerifyLimits, usize);
     let dimensions: [(&str, usize, Setter); 8] = [
         (
             "max_compact_statement_bytes",

@@ -197,6 +197,8 @@ fn canonical_output_repeat_validation_is_deterministic() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -227,23 +229,22 @@ fn canonical_output_repeat_validation_is_deterministic() {
         .collect();
     // Replay the same signed inputs against an unchanged predecessor and compare
     // the complete canonical outputs, including each transaction result.
-    state
-        .seed_genesis_for_testing()
-        .expect("authenticate ordinary fixture predecessor");
     let new_block = BlockBuilder::new(acc.clone())
         .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     assert!(
-        new_block
-            .execution_context
-            .as_ref()
-            .and_then(|context| context.lane_payload_ownerships.first())
-            .is_some_and(is_default_test_execution_context_ownership),
-        "the state-free block builder must mark its lane ownership as validation-only"
+        new_block.execution_context.as_ref().is_some_and(|context| {
+            context.external.len() == acc.len()
+                && context.external.iter().all(|entry| {
+                    entry.lane_id == LaneId::SINGLE && entry.dataspace_id == DataSpaceId::UNIVERSAL
+                })
+        }),
+        "the state-free fixture binds one exact ordinary route per input"
     );
-    let mut sb = state.block(new_block.header());
-    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
+    let (mut sb, sb_recorder) = ValidBlock::start_component_execution(new_block.as_ref(), state)
+        .expect("original recorder before execution");
+    let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb, sb_recorder).unpack(|_| {});
     let first_outputs = vb.as_ref().execution_outputs().to_vec();
     assert!(
         first_outputs.iter().all(|output| output.result().is_ok()),
@@ -254,8 +255,10 @@ fn canonical_output_repeat_validation_is_deterministic() {
         .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
-    let mut sb2 = state.block(new_block2.header());
-    let vb2 = ValidBlock::validate_unchecked(new_block2.into(), &mut sb2).unpack(|_| {});
+    let (mut sb2, sb2_recorder) = ValidBlock::start_component_execution(new_block2.as_ref(), state)
+        .expect("original recorder before replay");
+    let vb2 =
+        ValidBlock::validate_unchecked(new_block2.into(), &mut sb2, sb2_recorder).unpack(|_| {});
     assert_eq!(
         vb2.as_ref().execution_outputs(),
         first_outputs.as_slice(),

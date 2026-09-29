@@ -27,7 +27,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
-import org.hyperledger.iroha.android.sccp.SccpV1;
+import org.hyperledger.iroha.android.client.TairaTestnetProfile;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.testing.TestNetworkIds;
@@ -40,7 +40,7 @@ import org.junit.Test;
 /** Adversarial coverage for the caller-owned I105 chain context. */
 public final class ExplicitChainContextTests {
 
-  private static final int TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1;
+  private static final int TAIRA = TairaTestnetProfile.I105_DISCRIMINANT;
   private static final int OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT;
 
   @Test

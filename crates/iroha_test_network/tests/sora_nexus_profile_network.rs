@@ -56,7 +56,7 @@ use iroha_data_model::{
         BeaconHorizonStatusV1, SumeragiStatus,
         finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     },
-    transaction::{FeePaymentIntent, TransactionAdmissionIntent},
+    transaction::FeePaymentIntent,
 };
 use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::{metadata::Metadata, peer::PeerId};
@@ -830,14 +830,11 @@ fn ensure_compatibility_matches(
 /// Submit one fee-paying `Log` transaction and wait until it is applied.
 async fn submit_log(client: &Client, message: String) -> Result<()> {
     let account = client.account_client()?;
-    let mut payload = account.prepare_transaction(
-        AccountTransactionDraft::new(
-            vec![InstructionBox::from(Log::new(Level::INFO, message))],
-            FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
-    )?;
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        vec![InstructionBox::from(Log::new(Level::INFO, message))],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
     let quote = account
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;
@@ -888,16 +885,13 @@ async fn install(
             "every pre-signed install height was consumed: {failures:?}"
         );
         let certificate = pre_deal.install.assemble_from_ranges(height, ranges)?;
-        let mut payload = account.prepare_transaction(
-            AccountTransactionDraft::new(
-                vec![InstructionBox::from(
-                    ApplyThresholdKeyLifecycleCertificateV1 { certificate },
-                )],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            )
-            .with_admission_intent(TransactionAdmissionIntent::Ordinary),
-        )?;
+        let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+            vec![InstructionBox::from(
+                ApplyThresholdKeyLifecycleCertificateV1 { certificate },
+            )],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ))?;
         let quote = account
             .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
             .await?;
@@ -1019,6 +1013,18 @@ fn verify_pulse(
             GlobalThresholdBeaconChainAnchorV1 {
                 height: pulse_height - 1,
                 block_hash: anchor.hash(),
+            },
+            &{
+                let header = source
+                    .header()
+                    .ok_or_else(|| eyre!("native pulse header is absent"))?;
+                iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1 {
+                    instance: header.instance.0,
+                    epoch: header.epoch.epoch,
+                    epoch_context_id: header.epoch.context.0,
+                    parent_consensus_hash: header.parent_hash.0,
+                    parent_result: header.parent_result.0,
+                }
             },
         )?;
         let proof = (block.hash(), *pulse);

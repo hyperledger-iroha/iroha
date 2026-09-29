@@ -100,7 +100,7 @@ fn each_required_or_intermediate_frame_remains_mandatory() {
         fixture
             .state
             .kura()
-            .force_hash_only_block_for_testing(core::num::NonZeroUsize::new(height).unwrap())
+            .corrupt_canonical_body_for_testing(core::num::NonZeroUsize::new(height).unwrap())
             .unwrap();
         assert_eq!(
             pending.verify_finalized(now).err(),

@@ -472,6 +472,11 @@ mod model {
             value.validate().ok()?;
             Some(value)
         }
+        /// Canonical XOR asset authenticated by genesis for this network.
+        #[must_use]
+        pub fn xor_asset_definition_id(&self) -> &crate::asset::AssetDefinitionId {
+            &self.xor_asset_definition_id
+        }
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         #[must_use]
         pub fn max_validators(&self) -> u32 {
@@ -3195,7 +3200,8 @@ mod tests {
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
             kagemusha_mint_finality:
                 crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
-            sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
+            sumeragi_v2:
+                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
         }
     }
 
@@ -3227,7 +3233,7 @@ mod tests {
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-        for version in [0, 1, 2, 3, 4, 5, 7, 99] {
+        for version in [0, 2, 3, 4, 5, 7, 8, 99] {
             let mut bad_version = baseline.clone();
             bad_version.wire_protocol_version = version;
             assert!(

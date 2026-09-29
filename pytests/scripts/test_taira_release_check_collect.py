@@ -11,6 +11,7 @@ import test_taira_release_check as existing
 from taira_fake_libtest import executable
 
 gate = existing.gate
+ACTUAL_INVENTORY_PREFLIGHT = gate.preflight_native_test_inventories
 
 
 class CollectIndependentRegressionTests(unittest.TestCase):
@@ -39,7 +40,10 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                     ignored=(name + "_first",) if name in ignored else ()))
                 script.chmod(0o500)
                 artifacts[name] = str(script)
-            artifacts["network"] = str(root / "unused-network")
+            network_script = root / "network"
+            network_script.write_text(executable(("network_fixture",), executed))
+            network_script.chmod(0o500)
+            artifacts["network"] = str(network_script)
             copies = existing.FixtureCopies(artifacts)
             released = []
 
@@ -54,7 +58,12 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 descriptor = stack.enter_context((root / "lock").open("w"))
                 locks = (descriptor.fileno(),)
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
-                existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
+                existing.isolate_stage_fixture(stack)
+                stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network", ("network_fixture",)),)))
+                # Inventory failures belong to the real complete-census preflight,
+                # before any test or network execution, even for deferred harnesses.
+                stack.enter_context(patch.object(gate, "preflight_native_test_inventories",
+                                                 side_effect=ACTUAL_INVENTORY_PREFLIGHT))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
                 # One CLI case runs before the four-peer fixture; the other is
@@ -76,6 +85,9 @@ class CollectIndependentRegressionTests(unittest.TestCase):
             other.assert_not_called()
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
             self.assertTrue(all(call.kwargs["pass_fds"] == locks and call.kwargs["cwd"] == root for call in calls.call_args_list))
+            listings = [call.args[0][0] for call in calls.call_args_list
+                        if "--list" in call.args[0]]
+            self.assertCountEqual(listings, artifacts.values())
             return (caught.exception, executed.read_text().splitlines() if executed.exists() else [],
                     released, network.call_count)
 
@@ -116,9 +128,9 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         error, executed, released, network = self.run_fixtures(missing="core")
         self.assertNotIsInstance(error, gate.SelectedRegressionFailures)
         self.assertIn("required regressions missing", str(error))
-        self.assertEqual(executed, ["cli_second", "cli_first"] + self.deferred(("crypto", "p2p")))
-        self.assertEqual(network, 1)
-        self.assertEqual(released, ["network", "cli", "crypto", "p2p"])
+        self.assertEqual(executed, [])
+        self.assertEqual(network, 0)
+        self.assertEqual(released, [])
 
     def test_artifact_release_failure_stops_immediately_even_after_collected_regression(self):
         error, executed, released, network = self.run_fixtures(failed=("core",), custody_failure="core")

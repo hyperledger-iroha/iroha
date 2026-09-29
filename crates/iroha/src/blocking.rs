@@ -22,9 +22,7 @@ use iroha_data_model::{
     Identifiable,
     account::AccountId,
     alias_setup::{AliasLifecycleTransactionPlanV1, AliasTransactionPlanV1},
-    isi::{InstructionBox, SetParameter, register::RegisterBox},
-    nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan},
-    parameter::Parameter,
+    isi::{InstructionBox, register::RegisterBox},
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{FeePaymentIntent, SignedTransaction},
 };
@@ -267,17 +265,6 @@ impl Client {
             .block_on(self.inner.get_sumeragi_diagnostics())?
     }
 
-    /// Read verified and deduplicated cross-lane transfer proofs.
-    ///
-    /// # Errors
-    /// Returns transport, proof-validation or [`BlockingCallError`] failures.
-    pub fn get_cross_lane_transfer_proofs(
-        &self,
-    ) -> Result<Vec<crate::nexus::CrossLaneTransferProof>> {
-        self.runtime
-            .block_on(self.inner.get_cross_lane_transfer_proofs())?
-    }
-
     /// Submit one signed transaction and return after Torii accepts it.
     ///
     /// # Errors
@@ -426,29 +413,6 @@ impl Client {
             .wrap_err("apply exact fee quote to transaction payload")?;
         let transaction = self.account.sign_transaction(payload)?;
         self.submit_transaction_and_wait(&transaction)
-    }
-
-    /// Submit a lane lifecycle update and wait for `Applied` finality.
-    ///
-    /// # Errors
-    /// Returns status validation, building, submission, finality, or
-    /// [`BlockingCallError`] failures.
-    pub fn submit_lane_lifecycle(
-        &self,
-        plan: LaneLifecyclePlan,
-    ) -> Result<HashOf<SignedTransaction>> {
-        reject_inside_async_runtime()?;
-        let status = self.inner.get_lane_lifecycle_status()?;
-        let catalog = status
-            .validate()
-            .wrap_err("invalid Nexus lane lifecycle status")?;
-        let parameter = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
-            .wrap_err("failed to bind Nexus lane incarnation commitments")?
-            .into_custom_parameter();
-        self.submit(
-            SetParameter::new(Parameter::Custom(parameter)),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
     }
 
     /// Verify and submit one alias setup plan, then wait for `Applied` finality.
@@ -973,6 +937,8 @@ mod tests {
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let (progress_tx, progress_rx) = mpsc::channel();
         let (dropped_tx, dropped_rx) = mpsc::channel();
+        // The async block deliberately hands the spawned task's handle out of `block_on`.
+        #[allow(clippy::async_yields_async)]
         let task = client
             .runtime
             .block_on(async move {
@@ -1024,22 +990,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn blocking_diagnostics_and_proofs_reject_async_runtime_before_io() {
+    async fn blocking_diagnostics_reject_async_runtime_before_io() {
         let (client, sends, _) = accepting_client();
-        let diagnostics = client
+        let error = client
             .get_sumeragi_diagnostics()
             .expect_err("explicit blocking call must reject Tokio");
-        let proofs = client
-            .get_cross_lane_transfer_proofs()
-            .expect_err("explicit blocking proofs must reject Tokio");
-        for error in [diagnostics, proofs] {
-            assert!(matches!(
-                error.downcast_ref::<BlockingCallError>(),
-                Some(BlockingCallError::AsyncRuntime {
-                    flavor: AsyncRuntimeFlavor::MultiThread
-                })
-            ));
-        }
+        assert!(matches!(
+            error.downcast_ref::<BlockingCallError>(),
+            Some(BlockingCallError::AsyncRuntime {
+                flavor: AsyncRuntimeFlavor::MultiThread
+            })
+        ));
         assert_eq!(sends.load(Ordering::SeqCst), 0);
     }
 

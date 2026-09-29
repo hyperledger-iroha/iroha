@@ -424,6 +424,17 @@ fn current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identit
         norito::json::from_slice::<SumeragiFinalityAttestation>(&json).unwrap(),
         attestation
     );
+    for version in [0, 2, 4, 8, u16::MAX] {
+        let mut bad = attestation.clone();
+        bad.body.status.protocol_version = version;
+        bad.signature =
+            SignatureOf::try_from_hash(fixture.keys[0].private_key(), bad.body.signing_hash())
+                .unwrap();
+        assert!(
+            bad.verify().is_err(),
+            "authentic signature cannot authorize protocol {version}"
+        );
+    }
     for mutation in 0..5 {
         let mut bad = attestation.clone();
         match mutation {

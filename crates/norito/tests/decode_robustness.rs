@@ -13,7 +13,7 @@ fn truncated_payload_is_rejected() {
     );
 }
 #[test]
-fn packed_sequences_use_fixed_headers() {
+fn sequences_use_fixed_count_headers() {
     use std::collections::BTreeSet;
     let mut validators = BTreeSet::new();
     validators.insert(42u64);

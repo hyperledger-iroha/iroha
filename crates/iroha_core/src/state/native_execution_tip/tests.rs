@@ -118,7 +118,12 @@ fn execution_history_admits_each_actual_source_before_read() {
 }
 
 fn snapshot_claim(state: &State) -> NativeExecutionTipSnapshot {
-    norito::json::from_str(&norito::json::to_json(&state.native_execution_tip).unwrap()).unwrap()
+    let view = state.view();
+    let claim = NativeExecutionTipSnapshot::from_original(
+        *view.native_execution_tip.get(),
+        *view.native_execution_tip_predecessor.get(),
+    );
+    norito::json::from_str(&norito::json::to_json(&claim).unwrap()).unwrap()
 }
 
 #[test]
@@ -150,6 +155,7 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
         .revert
         .as_mut()
         .unwrap()
+        .value
         .as_mut()
         .unwrap()
         .core_hash[0] ^= 1;
@@ -210,4 +216,18 @@ fn funded_tip_admission_is_atomic_and_original_pool_bound() {
     original.initialize(mv::BlockMode::Ordinary);
     drop(original);
     assert_eq!(*cell.view().get(), None);
+}
+
+#[test]
+fn snapshot_json_preserves_genesis_undo_absence_distinction() {
+    let chain = chain();
+    let view = chain.state().view();
+    let claim = snapshot_claim(chain.state());
+    assert!(claim.matches_original(view.native_execution_tip(), Some(None)));
+    assert!(!claim.matches_original(view.native_execution_tip(), None));
+    let empty = NativeExecutionTipSnapshot::from_original(None, None);
+    let empty: NativeExecutionTipSnapshot =
+        norito::json::from_str(&norito::json::to_json(&empty).unwrap()).unwrap();
+    assert!(empty.matches_original(None, None));
+    assert!(!empty.matches_original(None, Some(None)));
 }

@@ -164,9 +164,6 @@ fn oracle_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterOracleFeed {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let feed = super::decode_aos_canonical_field::<FeedConfig>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -182,9 +179,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterOracleFeed {
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitOracleObservation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let observation = super::decode_aos_canonical_field::<Observation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -200,9 +194,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitOracleObservation {
 impl<'a> norito::core::DecodeFromSlice<'a> for AggregateOracleFeed {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let feed_id = super::decode_aos_canonical_field::<FeedId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -242,9 +233,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AggregateOracleFeed {
 impl<'a> norito::core::DecodeFromSlice<'a> for OpenOracleDispute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let feed_id = super::decode_aos_canonical_field::<FeedId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -295,9 +283,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenOracleDispute {
 impl<'a> norito::core::DecodeFromSlice<'a> for ResolveOracleDispute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let dispute_id = super::decode_aos_canonical_field::<OracleDisputeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -332,9 +317,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ResolveOracleDispute {
 impl<'a> norito::core::DecodeFromSlice<'a> for ProposeOracleChange {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -379,9 +361,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ProposeOracleChange {
 impl<'a> norito::core::DecodeFromSlice<'a> for VoteOracleChangeStage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -421,9 +400,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for VoteOracleChangeStage {
 impl<'a> norito::core::DecodeFromSlice<'a> for RollbackOracleChange {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -454,9 +430,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RollbackOracleChange {
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDefiOracleAttestation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let attestation = super::decode_aos_canonical_field::<DefiOracleAttestation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -472,9 +445,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDefiOracleAttestation {
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordTwitterBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let attestation = super::decode_aos_canonical_field::<TwitterBindingAttestation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -500,9 +470,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordTwitterBinding {
 impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let binding_hash = super::decode_aos_canonical_field::<KeyedHash>(
             super::read_aos_field(bytes, &mut offset, flags)?,

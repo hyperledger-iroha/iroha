@@ -191,7 +191,3 @@ impl LaneLifecyclePostPublication {
         self.transition.log(self.transition_height);
     }
 }
-
-#[cfg(test)]
-#[path = "carrier_lifecycle_effects_tests.rs"]
-mod tests;

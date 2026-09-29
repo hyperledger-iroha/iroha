@@ -53,11 +53,13 @@ fn take(fields: &mut json::Map, name: &str, context: &str) -> CodecResult<Value>
 }
 
 fn parse_model<T: JsonDeserialize + JsonSerialize>(value: Value, context: &str) -> CodecResult<T> {
+    // Keep the submitted spelling for the canonical check; decoding consumes `value`.
+    let submitted = value.clone();
     let parsed: T =
-        json::from_value(value.clone()).map_err(|error| invalid(format!("{context}: {error}")))?;
+        json::from_value(value).map_err(|error| invalid(format!("{context}: {error}")))?;
     // Use each native type's single canonical spelling, including checksummed
     // hashes, I105 accounts, NFT ids and contract addresses/aliases.
-    if render_model(&parsed)? != value {
+    if render_model(&parsed)? != submitted {
         return Err(invalid(format!(
             "{context} must use its canonical native JSON spelling"
         )));
@@ -86,10 +88,19 @@ fn parse_u64_text(value: Value, context: &str) -> CodecResult<u64> {
     Ok(number)
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    clippy::unnecessary_wraps,
+    reason = "the contract macros call every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_u64_text(value: &u64) -> CodecResult<Value> {
     Ok(Value::String(value.to_string()))
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the contract macros call every field reader as `fn(Value, &str) -> CodecResult<T>`"
+)]
 fn parse_u64_number(value: Value, context: &str) -> CodecResult<u64> {
     let Value::Number(number) = value else {
         return Err(invalid(format!(
@@ -106,6 +117,10 @@ fn parse_u64_number(value: Value, context: &str) -> CodecResult<u64> {
         })
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the contract macros call every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_u64_number(value: &u64) -> CodecResult<Value> {
     if *value > MAX_SAFE_INTEGER {
         return Err(invalid(format!(
@@ -137,6 +152,10 @@ fn parse_bytes(value: Value, context: &str) -> CodecResult<Vec<u8>> {
     Ok(bytes)
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the contract macros call every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_bytes(value: &[u8]) -> CodecResult<Value> {
     Ok(Value::String(STANDARD.encode(value)))
 }
@@ -162,6 +181,10 @@ fn parse_digest(value: Value, context: &str) -> CodecResult<[u8; 32]> {
     Ok(bytes)
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the contract macros call every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_digest(value: &[u8; 32]) -> CodecResult<Value> {
     Ok(Value::String(hex::encode(value)))
 }
@@ -188,6 +211,10 @@ macro_rules! optional_operand {
                 value => $inner_parse(value, context).map(Some),
             }
         }
+        #[allow(
+            clippy::ref_option,
+            reason = "the contract macros call every field renderer as `fn(&T) -> CodecResult<Value>`"
+        )]
         fn $render(value: &Option<$ty>) -> CodecResult<Value> {
             value.as_ref().map_or(Ok(Value::Null), $inner_render)
         }

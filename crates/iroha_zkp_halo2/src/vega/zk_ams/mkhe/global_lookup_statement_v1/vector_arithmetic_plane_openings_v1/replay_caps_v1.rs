@@ -16,22 +16,19 @@ const REPLAY_BINDING_LANGUAGE_V1: &[u8] =
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PlaneOpeningReplayPurposeV1 {
-    Statement3Inputs = 3,
-    Statement5Inputs = 5,
-    Statement8Inputs = 8,
+    Statement3 = 3,
+    Statement5 = 5,
+    Statement8 = 8,
 }
 
 impl PlaneOpeningReplayPurposeV1 {
-    const ALL: [Self; REPLAY_PURPOSE_COUNT_V1] = [
-        Self::Statement3Inputs,
-        Self::Statement5Inputs,
-        Self::Statement8Inputs,
-    ];
+    const ALL: [Self; REPLAY_PURPOSE_COUNT_V1] =
+        [Self::Statement3, Self::Statement5, Self::Statement8];
     const fn index_v1(self) -> usize {
         match self {
-            Self::Statement3Inputs => 0,
-            Self::Statement5Inputs => 1,
-            Self::Statement8Inputs => 2,
+            Self::Statement3 => 0,
+            Self::Statement5 => 1,
+            Self::Statement8 => 2,
         }
     }
     pub(super) const fn statement_v1(self) -> u8 {
@@ -39,17 +36,17 @@ impl PlaneOpeningReplayPurposeV1 {
     }
     pub(super) const fn accepts_role_v1(self, role: GlobalLookupPlaneRoleV1) -> bool {
         match self {
-            Self::Statement3Inputs => matches!(
+            Self::Statement3 => matches!(
                 role,
                 GlobalLookupPlaneRoleV1::BooleanD | GlobalLookupPlaneRoleV1::BooleanS
             ),
-            Self::Statement5Inputs => matches!(
+            Self::Statement5 => matches!(
                 role,
                 GlobalLookupPlaneRoleV1::BooleanD
                     | GlobalLookupPlaneRoleV1::ComparatorBorrow
                     | GlobalLookupPlaneRoleV1::MixedTop
             ),
-            Self::Statement8Inputs => matches!(
+            Self::Statement8 => matches!(
                 role,
                 GlobalLookupPlaneRoleV1::SmallSigned
                     | GlobalLookupPlaneRoleV1::SmallNegativeMagnitude

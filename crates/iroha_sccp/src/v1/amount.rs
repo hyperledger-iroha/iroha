@@ -51,18 +51,6 @@ pub fn taira_units(q: &Numeric) -> Result<u128, AmountError> {
     mantissa.checked_mul(factor).ok_or(AmountError::TooLarge)
 }
 
-/// The canonical XOR `Numeric` of `units` Taira units (the inverse of [`taira_units`]).
-///
-/// # Errors
-///
-/// Returns [`AmountError::Zero`] for zero units.
-pub fn numeric_from_units(units: u128) -> Result<Numeric, AmountError> {
-    if units == 0 {
-        return Err(AmountError::Zero);
-    }
-    Numeric::try_new(units, XOR_DECIMALS).map_err(|_| AmountError::TooLarge)
-}
-
 /// Check the lane-specific destination bound: nonzero, and `< 2^96` when TON is an endpoint.
 ///
 /// # Errors
@@ -118,17 +106,6 @@ mod tests {
         );
         let too_large = Numeric::try_new(max_units, 0).expect("numeric");
         assert_eq!(taira_units(&too_large), Err(AmountError::TooLarge));
-    }
-
-    #[test]
-    fn numeric_from_units_roundtrips() {
-        for units in [1_u128, 9, 10, 1_000_000_000, 1_500_000_000, u128::MAX] {
-            let value = numeric_from_units(units).expect("numeric");
-            assert_eq!(taira_units(&value), Ok(units));
-        }
-        let one = numeric_from_units(1_000_000_000).unwrap();
-        assert_eq!(one.scale(), 0);
-        assert_eq!(numeric_from_units(0), Err(AmountError::Zero));
     }
 
     #[test]

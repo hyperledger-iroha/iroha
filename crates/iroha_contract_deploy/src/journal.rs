@@ -9,7 +9,7 @@ use std::{
 
 const MAX_RECORD_BYTES: u64 = 128 * 1024 * 1024;
 
-pub(super) struct Journal {
+pub struct Journal {
     directory: File,
     _lock: File,
 }
@@ -25,7 +25,7 @@ impl Journal {
                     File::open(
                         path.parent()
                             .filter(|parent| !parent.as_os_str().is_empty())
-                            .unwrap_or(Path::new(".")),
+                            .unwrap_or_else(|| Path::new(".")),
                     )?
                     .sync_all()?;
                 }

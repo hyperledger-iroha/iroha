@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 /** Java signing consumers retain the network, fee and signature admission assertions. */
 public final class NativeSignerBridgeJavaConsumerTest {
   private static final String GAS_ASSET = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-  private static final int TAIRA = org.hyperledger.iroha.sdk.sccp.SccpV1.TAIRA_I105_DISCRIMINANT_V1;
+  private static final int TAIRA = org.hyperledger.iroha.sdk.client.TairaTestnetProfile.I105_DISCRIMINANT;
 
   @Test
   void exposesNominalNetworkAndContractConstants() {

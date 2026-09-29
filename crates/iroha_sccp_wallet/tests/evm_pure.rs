@@ -48,7 +48,6 @@ use iroha_sccp_wallet::pure::{
         void_expired_calldata, void_frozen_calldata,
     },
     rotation::{RotationChainError, verify_rotation_chain, verify_rotation_steps},
-    verify_message_bundle_frame,
 };
 use norito::json::Value;
 
@@ -462,13 +461,6 @@ fn direct_finalize_bundle_verifies_and_matches_the_golden_calldata() {
     assert_eq!(
         void_expired_calldata(&verified),
         Err(EvmError::WrongPurpose)
-    );
-    // The same bundle through the framed entry point Torii's Norito responses use.
-    let frame = norito::to_bytes(&s.direct_bundle()).expect("frame");
-    assert_eq!(
-        verify_message_bundle_frame(&frame, &context, BundlePurposeV1::Finalize)
-            .expect("frame verifies"),
-        verified
     );
 }
 

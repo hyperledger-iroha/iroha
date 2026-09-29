@@ -10,6 +10,9 @@ retain every assertion while allowing comment/formatting edits. The reviewed
 inventory replaces removed runtime-key cache and toy authorization fixtures with
 packaged-key cache reuse, Kaigi authorization, and final confidential transfer
 acceptance plus rejection under the retired backend label.
+The circuit-cache confusion control uses two distinct shared test circuits;
+the preverification fixture uses the admitted Kaigi usage schema after IVM
+replay-binding retirement.
 """
 
 from __future__ import annotations
@@ -54,7 +57,7 @@ SHARDS = (
         opening_lines=1_710,
         line_ceiling=1_045,
         code_sha256=(
-            "64fa29d6673d488074651574bb36df679c2091655ea44a071ebb4ed6e9f4d4aa"
+            "0825a9370ed90dd40fcdada59040c23a2a696f496330947ee32b0bb9d5d899ae"
         ),
         preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
@@ -419,17 +422,19 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
         self.assertNotEqual(final_backend, self.sources[1])
         mutations.append(((self.sources[0], final_backend), self.zk_source))
 
-        # The renamed public binding circuit retains the exact mismatch-key
-        # rejection; silently restoring an execution-proof label is forbidden.
+        # The cache must distinguish circuits, and the admitted Kaigi fixture
+        # cannot be relabeled as retired IVM binding or a shortened identity.
         retired_binding = self.sources[0].replace(
-            "IVM_REPLAY_BINDING_V1_HALO2_BACKEND", "IVM_EXECUTION_V1_HALO2_BACKEND", 1
+            '"halo2/pasta/ipa/kaigi-usage-v1"',
+            '"halo2/pasta/ipa/ivm-replay-binding-v1"',
+            1,
         )
         self.assertNotEqual(retired_binding, self.sources[0])
         mutations.append(((retired_binding, self.sources[1]), self.zk_source))
 
         short_cid = self.sources[0].replace(
-            "circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.to_owned()",
-            "circuit_id: IVM_REPLAY_BINDING_V1_CIRCUIT_ID.to_owned()",
+            'circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".to_owned()',
+            'circuit_id: "kaigi-usage-v1".to_owned()',
             1,
         )
         self.assertNotEqual(short_cid, self.sources[0])

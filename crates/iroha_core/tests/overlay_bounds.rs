@@ -68,9 +68,11 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let vb = new_block
-        .validate_and_record_transactions(&mut sb)
+        .validate_and_record_transactions(&mut sb, sb_recorder)
         .unpack(|_| {});
     let _ = sb.commit();
     // Expect first tx rejected with NotPermitted("overlay exceeds max instructions: ...") and second approved
@@ -142,9 +144,11 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let vb = new_block
-        .validate_and_record_transactions(&mut sb)
+        .validate_and_record_transactions(&mut sb, sb_recorder)
         .unpack(|_| {});
     let _ = sb.commit();
     // Expect first tx rejected with NotPermitted("overlay exceeds max bytes: ...") and second approved
@@ -237,9 +241,11 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
         .chain(0, None)
         .sign(kp.private_key())
         .unpack(|_| {});
-    let mut sb = state.block(new_block.header());
+    let (mut sb, sb_recorder) =
+        iroha_core::block::ValidBlock::start_component_execution(&new_block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let vb = new_block
-        .validate_and_record_transactions(&mut sb)
+        .validate_and_record_transactions(&mut sb, sb_recorder)
         .unpack(|_| {});
     let _ = sb.commit();
     let block = vb.as_ref();

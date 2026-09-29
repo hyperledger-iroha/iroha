@@ -1,6 +1,6 @@
 //! Crash-safe replay and idempotency persistence for the private Musubi publication service.
 #[cfg(test)]
-pub(super) mod wire_fixtures;
+pub mod wire_fixtures;
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{

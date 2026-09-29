@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from sccp_release_common import verify_ed25519
+from release_evidence_crypto import verify_ed25519
 from sorafs_evidence_json import load_evidence_json_with_sha256_or_record_error
 from sorafs_evidence_validation import (
     require_rollout_deployment_id,

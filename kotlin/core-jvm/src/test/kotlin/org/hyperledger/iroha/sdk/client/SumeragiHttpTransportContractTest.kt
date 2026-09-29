@@ -39,7 +39,7 @@ class SumeragiHttpTransportContractTest {
 
         val status = transport.getSumeragiStatus().join()
 
-        assertEquals(8, status.protocolVersion)
+        assertEquals(1, status.protocolVersion)
         assertEquals("https://torii.example/api/v1/sumeragi/status", executor.request.uri.toString())
         assertEquals("GET", executor.request.method)
         assertTrue(executor.request.body.isEmpty())
@@ -74,7 +74,7 @@ class SumeragiHttpTransportContractTest {
                 .setHeaders(headers)
                 .build()
             assertEquals(
-                8,
+                1,
                 transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join().protocolVersion,
             )
 
@@ -99,6 +99,33 @@ class SumeragiHttpTransportContractTest {
                 transport(FixedResponseExecutor(statusResponse)).getSumeragiStatus().join()
             }
 
+        }
+    }
+
+    @Test
+    fun `status requires exact 200 and a JSON media type`() {
+        val payload = statusJson().toByteArray(StandardCharsets.UTF_8)
+        val invalidResponses = listOf(
+            TransportResponse.builder()
+                .setStatusCode(201)
+                .setBody(payload)
+                .setHeaders(mapOf("Content-Type" to listOf("application/json")))
+                .build(),
+            TransportResponse.builder()
+                .setStatusCode(204)
+                .setBody(ByteArray(0))
+                .setHeaders(mapOf("Content-Type" to listOf("application/json")))
+                .build(),
+            TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(payload)
+                .setHeaders(mapOf("Content-Type" to listOf("text/html")))
+                .build(),
+        )
+        invalidResponses.forEach { response ->
+            val executor = FixedResponseExecutor(response)
+            assertFails { transport(executor).getSumeragiStatus().join() }
+            assertTrue(executor.hasRequest())
         }
     }
 

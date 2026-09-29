@@ -93,38 +93,49 @@ fn parallel_parents_preserve_complete_six_lane_trees_roots_and_work() {
             assert_eq!(calls.load(Ordering::Relaxed), reference.parent_hashes);
             assert_eq!(actual.max_frontier_width, query_count);
         }
-        let mut changed_root = root.words();
-        changed_root[5] ^= 1;
-        let changed_root = Digest::new(changed_root).unwrap();
+        assert_tampering_matches_serial(&plan, &parallel, root, &selected, &siblings, parent);
+    }
+}
+
+/// A changed root or first sibling yields the same serial and parallel result.
+fn assert_tampering_matches_serial(
+    plan: &MultiproofPlan,
+    parallel: &rayon::ThreadPool,
+    root: Digest,
+    selected: &[Digest],
+    siblings: &[Digest],
+    parent: impl Fn(usize, usize, Digest, Digest) -> Result<Digest> + Copy + Send + Sync,
+) {
+    let mut changed_root = root.words();
+    changed_root[5] ^= 1;
+    let changed_root = Digest::new(changed_root).unwrap();
+    assert_eq!(
+        format!(
+            "{:?}",
+            plan.verify_with(changed_root, selected, siblings, parent)
+        ),
+        format!(
+            "{:?}",
+            parallel.install(|| plan.verify_parallel_with(
+                changed_root,
+                selected,
+                siblings,
+                parent
+            ))
+        ),
+    );
+    if !siblings.is_empty() {
+        let mut changed = siblings.to_vec();
+        let mut words = changed[0].words();
+        words[4] ^= 1;
+        changed[0] = Digest::new(words).unwrap();
         assert_eq!(
+            format!("{:?}", plan.verify_with(root, selected, &changed, parent)),
             format!(
                 "{:?}",
-                plan.verify_with(changed_root, &selected, &siblings, parent)
-            ),
-            format!(
-                "{:?}",
-                parallel.install(|| plan.verify_parallel_with(
-                    changed_root,
-                    &selected,
-                    &siblings,
-                    parent
-                ))
+                parallel.install(|| plan.verify_parallel_with(root, selected, &changed, parent))
             ),
         );
-        if !siblings.is_empty() {
-            let mut changed = siblings.clone();
-            let mut words = changed[0].words();
-            words[4] ^= 1;
-            changed[0] = Digest::new(words).unwrap();
-            assert_eq!(
-                format!("{:?}", plan.verify_with(root, &selected, &changed, parent)),
-                format!(
-                    "{:?}",
-                    parallel
-                        .install(|| plan.verify_parallel_with(root, &selected, &changed, parent))
-                ),
-            );
-        }
     }
 }
 
@@ -153,13 +164,16 @@ fn parallel_sparse_depth19_frontiers_match_serial_at_query_thresholds() {
         let left = left.words();
         let right = right.words();
         Ok(Digest::new(core::array::from_fn(|lane| {
-            ((u128::from(left[lane]) * 0x1_0000_0001
-                + u128::from(right[(lane + 1) % 6]) * 0x1000_0013
-                + level as u128 * 65_537
-                + index as u128 * 257
-                + lane as u128 * 17
-                + 1)
-                % u128::from(crate::backend::GOLDILOCKS_MODULUS)) as u64
+            u64::try_from(
+                (u128::from(left[lane]) * 0x1_0000_0001
+                    + u128::from(right[(lane + 1) % 6]) * 0x1000_0013
+                    + level as u128 * 65_537
+                    + index as u128 * 257
+                    + lane as u128 * 17
+                    + 1)
+                    % u128::from(crate::backend::GOLDILOCKS_MODULUS),
+            )
+            .unwrap()
         }))
         .unwrap())
     };

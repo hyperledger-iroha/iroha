@@ -310,7 +310,7 @@ pub fn private_dataspace_reader_role_id(alias: &str, dataspace: DataSpaceId) -> 
     .parse()
     .expect("private localnet aliases must produce a valid role id")
 }
-fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
+fn require_native_wire_protocol(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
     let expected = u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION);
     if manifest.wire_protocol_version() != expected {
         return Err(eyre!(

@@ -30,16 +30,18 @@ public struct ToriiParliamentNoResultKindLayoutV1: Sendable, Equatable {
 /// One recursively validated member of the closed Parliament V1 proposal inventory.
 ///
 /// The wire value is private and can only be created after the shared typed governance
-/// decoder has validated the complete nested payload. This deliberately removes the old
-/// public `ToriiJSONValue` cases that allowed callers to submit an arbitrary object under
-/// an otherwise recognized outer tag.
+/// decoder has validated the nested payload, so callers cannot submit an arbitrary object
+/// under a recognized outer tag. Every kind is decoded field by field except
+/// `SccpRouteGovernance`: its closed `SccpGovernanceProposalV1` envelope (network, base
+/// revisions, subjects and action tags) is checked, while each action payload is only
+/// required to be a JSON object until typed SCCP action decoding lands (see the TODO on
+/// `ToriiGovernanceSccpRouteProposal`).
 public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     /// Typed proposal projection produced by the same strict decoder used for reads.
     public let kind: ToriiGovernanceProposalKind
 
     private let wireValue: ToriiJSONValue
     fileprivate let exactWireData: Data
-    private let requiresExactIntegerEncoding: Bool
 
     /// Validate one exact closed-inventory proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
@@ -56,22 +58,10 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
         kind = try decoder.decode(ToriiGovernanceProposalKind.self, from: data)
         wireValue = validated.value
         exactWireData = data
-        requiresExactIntegerEncoding = validated.numberLexemes.values.contains { value in
-            value.count > 16 || UInt64(value).map { $0 > 9_007_199_254_740_991 } ?? true
-        }
         try ToriiParliamentAPIV1.rejectSigningMaterial(wireValue, context: "proposal")
     }
 
     public func encode(to encoder: Encoder) throws {
-        guard !requiresExactIntegerEncoding else {
-            throw EncodingError.invalidValue(
-                self,
-                .init(
-                    codingPath: encoder.codingPath,
-                    debugDescription: "exact extended integers must be encoded through ToriiParliamentAPIV1.attemptDraftRequestData"
-                )
-            )
-        }
         try wireValue.encode(to: encoder)
     }
 }
@@ -969,9 +959,9 @@ public enum ToriiParliamentAPIV1 {
                 "attempt_sequence must be between zero and 16."
             )
         }
-        // JSONEncoder represents arbitrary JSON numbers as Double. Assemble this
-        // tiny fixed envelope around the already validated proposal bytes so SCCP
-        // UInt128 and TON 2^120 caps retain their exact numeric lexemes.
+        // Assemble this tiny fixed envelope around the already validated proposal
+        // bytes so the draft carries exactly the proposal wire bytes that were
+        // validated, without re-encoding them through JSONEncoder.
         var data = Data("{\"attempt_sequence\":\(attemptSequence),\"proposal\":".utf8)
         data.append(proposal.exactWireData)
         data.append(Data(",\"version\":\(version)}".utf8))

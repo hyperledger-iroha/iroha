@@ -1355,9 +1355,12 @@ fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> Strin
     let accepted = accept_transaction(state, tx);
     let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     match result {
         Ok(_) => "ok".to_string(),
         Err(error) => format!("{error:?}"),
@@ -1967,9 +1970,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_003_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_err(), "missing fee must reject before commit");
     drop(block);
     let view = state.view();
@@ -2000,9 +2006,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_004_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(result.is_err(), "underpaid fee must reject before commit");
     drop(block);
     let view = state.view();
@@ -2042,9 +2051,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_005_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         result.is_err(),
         "overdrawn principal after fee execution must reject"
@@ -2078,9 +2090,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_006_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert!(
         result.is_err(),
         "overdrawn fee after principal execution must reject"
@@ -2113,9 +2128,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_007_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block
-        .validate_transaction(accepted, &mut ivm_cache)
-        .expect("local execution completes");
+    let result = iroha_core::tx::execute_component_transaction_for_testing(
+        &mut block,
+        accepted,
+        &mut ivm_cache,
+        None,
+    );
     assert_eq!(result, Ok(Vec::new()));
     block
         .commit_world_overlay_for_testing()

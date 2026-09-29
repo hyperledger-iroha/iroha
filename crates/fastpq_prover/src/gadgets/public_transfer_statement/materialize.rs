@@ -120,6 +120,11 @@ impl<V> CheckedUpdateTable for PreparedPublicTransfers<'_, V> {
 
 /// Explicit limits for private touched-state tree and path construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive cap and `max_` separates it from the measured count; \
+              the fields are public API shared with `iroha_core`"
+)]
 pub struct TransferSmtBuildLimits {
     /// Maximum chronological participant updates, including zero/self updates.
     pub max_updates: usize,

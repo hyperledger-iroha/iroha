@@ -291,7 +291,7 @@ MUTATIONS = [
     m("MS44", "ordinary lag-two scheduling installs a future epoch", ["det_s44_lag_two_cannot_install_next_epoch_early"], []),
     m("MS45", "EMPTY boundary omits mandatory attestation", ["det_s45_mandatory_boundary_attestation_survives_empty_paths"], []),
     m("MS46", "header signatures omit application control", ["det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature"], []),
-    m("MS47", "forced EMPTY invents an absent control response", ["det_s47_forced_empty_waits_for_independent_control_and_preserves_attestation"], []),
+    m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation"], []),
     m("MS48", "control response accepts another exact source", ["det_s48_control_response_requires_exact_request_epoch_view_and_parent_source"], []),
     # ---- commit-attestation rules (§3.7, SR39-SR42)
     m("MA1", "on_vote (attested): a flagged Commit vote is pooled without a verifying attestation",

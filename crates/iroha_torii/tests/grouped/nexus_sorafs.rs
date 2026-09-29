@@ -1,7 +1,5 @@
 //! Grouped Torii Nexus, SoraFS, contract, and app surface integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#[path = "../bridge_finality_endpoint.rs"]
-mod bridge_finality_endpoint;
 #[path = "../contracts_call_integration.rs"]
 mod contracts_call_integration;
 #[path = "../kagemusha_api_contract.rs"]
@@ -20,8 +18,6 @@ mod kaigi_endpoints;
 mod kaigi_operator_reads;
 #[path = "../nexus_dataspaces_summary.rs"]
 mod nexus_dataspaces_summary;
-#[path = "../nexus_lifecycle_endpoint.rs"]
-mod nexus_lifecycle_endpoint;
 #[path = "../nexus_public_lanes.rs"]
 mod nexus_public_lanes;
 #[path = "../push_bridge.rs"]
@@ -38,3 +34,6 @@ mod soranet_privacy_endpoints;
 mod space_directory_manifests;
 #[path = "../subscriptions_endpoints.rs"]
 mod subscriptions_endpoints;
+
+#[path = "../nexus_lifecycle_endpoint.rs"]
+mod nexus_lifecycle_endpoint;

@@ -822,7 +822,6 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
             .map(|height| HeightProofV1 {
                 height: height.block.header().height().get(),
                 carrier: height.block.encode_wire().unwrap(),
-                carrier: height.block.encode_wire().unwrap(),
                 lane_evidence: height.evidence.clone(),
                 queries: height.queries(),
             })

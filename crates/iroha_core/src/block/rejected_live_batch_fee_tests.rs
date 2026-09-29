@@ -28,7 +28,7 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         AssetId::of(asset_definition_id.clone(), sink_id.clone()),
         Quantity::zero(),
     );
-    let world = test_world_with_assets(
+    let world = World::with_assets(
         [domain],
         [payer, sink],
         [asset_definition],
@@ -37,17 +37,14 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -59,7 +56,9 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let marker: Name = "rejected_batch_business_effect"
         .parse()
         .expect("metadata key");
@@ -99,9 +98,14 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(
+            &unverified_block.clone().into(),
+            &state,
+        )
+        .expect("original writer-first component execution");
     let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     assert_eq!(
         valid_block
@@ -221,7 +225,7 @@ ledger::account::set_detail(
     )
     .expect("derive contract address");
     let contract_subject = Account::new(contract_address.subject_id()).build(&payer_id);
-    let mut world = test_world_with_assets(
+    let mut world = World::with_assets(
         [domain],
         [payer, sink, contract_subject],
         [asset_definition],
@@ -259,17 +263,14 @@ ledger::account::set_detail(
         .insert(payer_id.clone(), permissions);
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-    install_test_lane_manifests(&state);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.fees.fee_asset_id = asset_definition_id.to_string();
-        nexus.fees.fee_sink_account_id = sink_id.to_string();
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.fees.fee_asset_id = asset_definition_id.to_string();
+    nexus.fees.fee_sink_account_id = sink_id.to_string();
+    let mut state = configured_component_state(world, chain_id.clone(), nexus);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -281,7 +282,9 @@ ledger::account::set_detail(
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-    finalize_test_genesis_assets(&state, &latest_signed);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
+    let latest_signed = state.view().latest_block().expect("original genesis");
     let invocation = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address,
         expected_code_hash: code_hash,
@@ -317,9 +320,11 @@ ledger::account::set_detail(
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(block.header());
+    let (mut state_block, state_block_recorder) =
+        crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+            .expect("original writer-first component execution");
     let valid = block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_and_record_transactions(&mut state_block, state_block_recorder)
         .unpack(|_| {});
     let error = valid
         .as_ref()
@@ -382,12 +387,13 @@ fn successful_live_batches_accumulate_parent_block_gas() {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        install_test_lane_manifests(&state);
         let mut pipeline = state.pipeline.clone();
         pipeline.parallel_apply = parallel_apply;
         pipeline.parallel_overlay = true;
         pipeline.workers = 2;
         state.set_pipeline(pipeline);
+        let native_chain = component_chain(state);
+        let state = native_chain.state();
         let log_instruction =
             InstructionBox::from(Log::new(Level::INFO, "meter one live batch".to_owned()));
         let expected_gas = crate::gas::meter_instructions(core::slice::from_ref(&log_instruction));
@@ -422,9 +428,6 @@ fn successful_live_batches_accumulate_parent_block_gas() {
                 .expect("batch must pass stateless admission")
             })
             .collect::<Vec<_>>();
-        state
-            .seed_genesis_for_testing()
-            .expect("authenticate ordinary fixture predecessor");
         let block = BlockBuilder::new_with_time_source(
             transactions,
             TimeSource::new_fixed(Duration::from_millis(10)),
@@ -432,10 +435,12 @@ fn successful_live_batches_accumulate_parent_block_gas() {
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())
         .unpack(|_| {});
-        let mut state_block = state.block(block.header());
+        let (mut state_block, state_block_recorder) =
+            crate::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+                .expect("original writer-first component execution");
         state_block.gas_limit_per_block = expected_gas;
         let valid = block
-            .validate_and_record_transactions(&mut state_block)
+            .validate_and_record_transactions(&mut state_block, state_block_recorder)
             .unpack(|_| {});
         let results = valid
             .as_ref()

@@ -52,18 +52,19 @@ verifier to choose between competing copies of the same consensus fact.
 The Sumeragi-v2 apply service constructs the artifact from the frozen height
 context, exact decided subject, and exact CommitQC and validates it. Before
 publishing finality, Kura durably creates an immutable retained-block record
-containing the exact canonical header and the block's canonical SCCP outbox
-archive in commitment-index order. Version 3 also retains the optional compact
+containing the exact canonical header, the proposal-wire hash, and the length
+and hash of the executed block wire. Version 4 also retains the optional compact
 merge-ledger reference extracted from the canonical body for bounded local
-historical-sidecar service; unlike the SCCP archive, that field is not exported
-as a standalone inclusion proof and requesters revalidate it against their own
-carrier. The same retained record must exist before Kura may evict the
-historical block body. Kura then stores the validated
-artifact in a separate immutable finality record with the same header. Both
+historical-sidecar service; that field is not exported as a standalone
+inclusion proof and requesters revalidate it against their own carrier. The
+same retained record must exist before Kura may evict the historical block
+body. Kura then stores the validated artifact in a separate immutable finality
+record with the same header. Both
 writes are idempotent no-clobber operations; a conflicting record at the same
-height is rejected. Version 3 is the only accepted retained-record layout.
-Pre-release version-2 bytes fail closed during direct reads and startup rather
-than being promoted or used as partial finality/SCCP evidence.
+height is rejected. Version 4 is the only accepted retained-record layout.
+Any other version, including pre-release versions 2 and 3, fails closed during
+direct reads and startup rather than being promoted or used as partial finality
+evidence.
 
 Application requires its durable manifest, body frame, deterministic validation
 receipt, and execution commitment to match the CommitQC's authenticated
@@ -76,7 +77,7 @@ canonical-header association (height, hash, predecessor, and immutable
 proposal-origin view), then
 verifies every roster-aligned PoP, both quorum thresholds, and the CommitQC
 aggregate signature. Restart inventory also validates the retained header,
-archive, finality record, and durable block-hash association. Recovery can
+finality record, and durable block-hash association. Recovery can
 finish a missing finality record from the retained header without re-executing
 an already applied block or restoring its body.
 
@@ -193,29 +194,6 @@ transitions are rejected. Applications that start from a later checkpoint must
 pin that checkpoint's context id through governance or another authenticated
 channel, then verify every immediate successor.
 
-## SCCP trust boundary
-
-`TairaSccpMessageProofV1.finality_proof` is the canonical Norito encoding of the
-same `BridgeFinalityProof`; SCCP does not maintain a second consensus transcript
-or quorum implementation. Structural message checks bind the selected SCCP
-commitment and Merkle path to the commitment root in the finalized block
-header. Cryptographic verification then establishes self-consistency under the
-artifact's frozen roster.
-
-Self-consistency is not the SCCP trust decision. Each governed outbound route
-pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
-protocol version `4`, Taira chain-id hash, checkpoint height and block hash,
-checkpoint `HeightContextId`, and a domain-separated hash of the canonical
-checkpoint finality artifact. The governed semantic circuit exposes the hash of
-this typed anchor as its final public signal. SCCP admits only revision `4`;
-revision-3 anchors are invalid even when they were previously signed.
-
-Admission must resolve that anchor from historical governed route state,
-authenticate the checkpoint artifact, and establish an immediate-successor
-chain from the checkpoint to the message artifact (or compare against the same
-trusted local artifacts). Merely accepting a valid aggregate signature under a
-roster supplied by the message would not establish Taira finality.
-
 ## Compact commitment bundle
 
 `BridgeFinalityBundle` has exactly two fields:
@@ -225,8 +203,7 @@ roster supplied by the message would not establish Taira finality.
 
 The compact commitment duplicates only the exact network, height context, block
 height, and block hash needed to reject bundle drift before verifying the
-embedded proof. SCCP inclusion uses its own typed message Merkle branch and
-governed finality anchor.
+embedded proof.
 
 ## API surface
 

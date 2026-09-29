@@ -222,13 +222,6 @@ pub fn preverify(
     ))
 }
 
-/// Return whether `subjects` holds a statement for `height` (used by callers that must know an
-/// attestation can be verified).
-#[must_use]
-pub fn verifiable(digests: &(impl SccpStatementDigests + ?Sized), height: u64) -> bool {
-    digests.statement_digest(height).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -186,11 +186,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
 #[tokio::test]
 async fn governance_capabilities_expose_one_exact_network_identity() {
     let harness = mk_governance_harness(true);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let block = harness.state.block(header);
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit genesis-like capabilities fixture");
     let expected_network = *harness.state.network_id_ref();
     let response = handle_gov_capabilities(harness.state)
         .await

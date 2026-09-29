@@ -395,7 +395,7 @@ fn actual_native_archive_retains_writes_bound_to_the_original_execution_root() {
     let bytes = archive.read_exact(2, committed.block_hash()).unwrap();
     let projection: NativeExecutionProjectionV1 = norito::decode_canonical_with_limits(
         bytes.as_slice(),
-        norito::canonical_decode_limits(bytes.len()),
+        norito::canonical_decode_limits(bytes.as_slice().len()),
     )
     .unwrap();
     assert_eq!(projection.carrier_hash, committed.block_hash());

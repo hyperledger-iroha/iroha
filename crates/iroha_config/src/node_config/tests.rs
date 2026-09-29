@@ -174,11 +174,6 @@ fn profile_node_file_layers_the_profile_and_completes_data_dir() {
         assert_eq!(binding.policy_digest, profile.policy_digest().unwrap());
 
         // derive(4)
-        let queues = &config.sumeragi.queues;
-        assert_eq!(queues.commands.get(), 4_096);
-        assert_eq!(queues.bodies.get(), 1_024);
-        assert_eq!(queues.authenticated_non_validator_sources.get(), 4);
-        assert_eq!(queues.body_bytes.get(), 816 * 1024 * 1024);
         assert_eq!(
             config
                 .network
@@ -187,7 +182,6 @@ fn profile_node_file_layers_the_profile_and_completes_data_dir() {
             Some(19)
         );
         // static, policy and role overlay
-        assert_eq!(queues.chunks.get(), 4_096);
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 4);
         assert_eq!(
             config.snapshot.create_every_ms.get(),

@@ -41,7 +41,7 @@ pub(super) fn load_checkpoint(
     })?;
     // This local file is independently selected by the caller; response material cannot replace
     // its signed-genesis, network, chain or authenticated lag-2 schedule commitments.
-    SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, network, &chain_id.to_string())
+    SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, network, chain_id.as_str())
         .map_err(|_| {
             "trusted publication checkpoint does not match the configured current network and chain"
                 .to_owned()
@@ -297,16 +297,28 @@ fn preparation(
     }
 }
 
+/// Transport, signer and deadline shared by every publication assertion round trip.
+#[derive(Clone, Copy)]
+struct PublicationSession<'a> {
+    client: &'a HttpClient,
+    base: &'a Url,
+    config: &'a DeployClientConfig,
+    started: Instant,
+}
+
 fn assert_and_verify(
-    client: &HttpClient,
-    base: &Url,
-    config: &DeployClientConfig,
+    session: PublicationSession<'_>,
     row: &SorafsPublicationPreparationV1,
     floor: &SumeragiFinalityCheckpoint,
-    started: Instant,
     completed: bool,
     out: &Path,
 ) -> Result<SumeragiFinalityCheckpoint, String> {
+    let PublicationSession {
+        client,
+        base,
+        config,
+        started,
+    } = session;
     ensure_live(started)?;
     let mut challenge = [0; 32];
     rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut challenge)
@@ -411,13 +423,16 @@ pub(super) fn qualify(
     order
         .validate()
         .map_err(|_| "publication assignment is invalid".to_owned())?;
-    let assigned_floor = assert_and_verify(
+    let session = PublicationSession {
         client,
         base,
         config,
+        started,
+    };
+    let assigned_floor = assert_and_verify(
+        session,
         &assigned,
         &checkpoint,
-        started,
         false,
         &out_dir.join("publication.assigned.proof.to"),
     )?;
@@ -509,12 +524,9 @@ pub(super) fn qualify(
         return Err("publication assignment changed while supplying source bytes".to_owned());
     }
     let finality = assert_and_verify(
-        client,
-        base,
-        config,
+        session,
         &complete,
         &assigned_floor,
-        started,
         true,
         &out_dir.join("publication.completed.proof.to"),
     )?;

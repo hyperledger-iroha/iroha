@@ -1395,66 +1395,6 @@ impl Kura {
             Some(lock_identity),
         )
     }
-    /// Authenticate an already-established configured-catalog journal without
-    /// promoting, deleting, or creating any filesystem entry.
-    pub(super) fn verify_configured_lane_catalog_baseline_read_only(
-        store_root: &Path,
-        attempted: Hash,
-        lock_file: &File,
-    ) -> Result<()> {
-        let root_identity = configured_catalog_store_root_identity(store_root)?;
-        let _lock_identity = configured_catalog_store_root_lock_identity(store_root, lock_file)?;
-        let journal_path = store_root.join(JOURNAL_FILE_NAME);
-        let journal = read_configured_catalog_journal_for_preflight(
-            store_root,
-            root_identity,
-            &journal_path,
-            false,
-        )?
-        .ok_or_else(|| {
-            configured_catalog_preflight_error(
-                store_root,
-                ErrorKind::NotFound,
-                "configured-catalog baseline is missing during provisional snapshot startup",
-            )
-        })?;
-        validate_configured_catalog_journal(store_root, &journal.journal, attempted)?;
-        for temp_path in [
-            store_root.join(JOURNAL_TEMP_FILE_NAME),
-            store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME),
-        ] {
-            if configured_catalog_reserved_temp_identity(store_root, root_identity, &temp_path)?
-                .is_some()
-            {
-                return Err(configured_catalog_preflight_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "configured-catalog temporary journal requires recovery before provisional snapshot startup",
-                ));
-            }
-        }
-        let authoritative = read_configured_catalog_journal_for_preflight(
-            store_root,
-            root_identity,
-            &journal_path,
-            false,
-        )?
-        .ok_or_else(|| {
-            configured_catalog_preflight_error(
-                store_root,
-                ErrorKind::NotFound,
-                "configured-catalog baseline disappeared during read-only verification",
-            )
-        })?;
-        if authoritative.identity != journal.identity || authoritative.bytes != journal.bytes {
-            return Err(configured_catalog_preflight_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "configured-catalog baseline changed during read-only verification",
-            ));
-        }
-        configured_catalog_require_store_root_identity(store_root, root_identity)
-    }
     fn establish_or_verify_configured_lane_catalog_baseline_inner(
         store_root: &Path,
         attempted: Hash,

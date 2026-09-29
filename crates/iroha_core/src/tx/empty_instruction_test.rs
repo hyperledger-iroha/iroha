@@ -16,7 +16,7 @@ fn state_rejects_empty_instruction_transactions() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = IvmCache::new();
-    let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache).expect("local execution completes");
+    let result = execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
             assert!(

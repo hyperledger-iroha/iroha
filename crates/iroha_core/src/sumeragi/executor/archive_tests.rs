@@ -234,7 +234,7 @@ fn prepare_and_append(worker: &mut Worker<'_>, block: &Block, qc: &Qc) -> usize 
         .canonical_bytes()
         .as_ptr() as usize;
     KuraBlockStore::new(
-        Arc::clone(worker.state.kura()),
+        worker.state.kura_handle(),
         worker.context.crypto.as_ref().unwrap().clone(),
         1,
         worker.context.staging.clone(),
@@ -535,7 +535,9 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
     );
     // A restart releases the actual filesystem writers; merely dropping a join handle
     // would detach the worker and race its asynchronous release of the archive Arcs.
-    let StateExecutor { requests, _thread } = executor;
+    let StateExecutor {
+        requests, _thread, ..
+    } = executor;
     drop(requests);
     _thread.join().unwrap();
     drop(archives);
@@ -592,14 +594,13 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         .unwrap()
         .committee;
     assert!(
-        iroha_sumeragi::crypto::verify_qc(
+        iroha_sumeragi::crypto::Verifier::new(
             &**worker.context.crypto.as_ref().unwrap(),
-            &iroha_sumeragi::crypto::NoAttestation,
             &chain.instance(),
             &block.header.epoch,
-            &committee,
-            &below,
+            &committee
         )
+        .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &below)
         .is_err(),
         "negative durable frame has an actual insufficient signed quorum"
     );
