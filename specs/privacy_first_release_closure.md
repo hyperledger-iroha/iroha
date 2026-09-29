@@ -140,9 +140,11 @@ separates isolated relation/resource evidence from pending integrated execution.
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and
 retain its parameter, artifact, key and ciphertext checks, but confer no production
-qualification. Audited execution still rejects
-`MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`; synthetic signed review
-fixtures cannot satisfy that requirement.
+qualification. Audited execution rejects `KnownInsecureExactProfile`: the
+plaintext-multiple public-key equation loses its noise modulo the plaintext
+modulus. Signed review evidence cannot repair that mathematical defect. A secure
+replacement and its independent qualification are required; rounded diagnostics
+are not a qualified replacement.
 The September 23 current-source correction encodes the complete 32-byte BFV
 statement hash injectively in eight little-endian `u32` Goldilocks limbs across
 38-column trace rows. The former four-`u64` modulo-field encoding aliased

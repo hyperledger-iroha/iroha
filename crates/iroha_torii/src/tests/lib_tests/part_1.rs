@@ -1829,6 +1829,19 @@ fn synthetic_ciphertext_hex() -> String {
             .expect("encode typed parser fixture"),
     )
 }
+fn identifier_fixture_error_message(error: &Error) -> &str {
+    match error {
+        Error::AppServiceUnavailable { code, message } => {
+            assert_eq!(*code, "ram_lfe_encryption_unavailable");
+            message
+        }
+        Error::Query(ValidationFail::InternalError(message))
+        | Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) => message,
+        other => panic!("expected identifier conversion/internal error, got {other:?}"),
+    }
+}
 fn registered_hkdf_identifier_app(
     seed: u8,
 ) -> (

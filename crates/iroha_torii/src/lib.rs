@@ -10719,6 +10719,30 @@ fn identifier_internal_error(message: impl Into<String>) -> Error {
     ))
 }
 #[cfg(feature = "app_api")]
+fn identifier_execution_error(error: identifier_resolution::IdentifierResolutionError) -> Error {
+    if matches!(
+        &error,
+        identifier_resolution::IdentifierResolutionError::Evaluation(
+            iroha_crypto::RamLfeError::InsecureBfvProfile
+        )
+    ) {
+        return Error::AppServiceUnavailable {
+            code: "ram_lfe_encryption_unavailable",
+            message: error.to_string(),
+        };
+    }
+    if matches!(
+        &error,
+        identifier_resolution::IdentifierResolutionError::UnsupportedBackend(_)
+    ) {
+        return Error::AppServiceUnavailable {
+            code: "ram_lfe_backend_unavailable",
+            message: "This backend does not support encrypted execution.".to_owned(),
+        };
+    }
+    identifier_internal_error(error.to_string())
+}
+#[cfg(feature = "app_api")]
 fn parse_encrypted_identifier_ciphertext(
     raw: &str,
 ) -> Result<iroha_crypto::BfvIdentifierCiphertext, Error> {
@@ -10764,11 +10788,11 @@ fn derive_ram_lfe_request_draft(
     request: &routing::RamLfeExecuteRequestDto,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     resolver
         .execute_encrypted(program_policy, &ciphertext)
-        .map_err(|err| identifier_internal_error(err.to_string()))
+        .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
@@ -10779,7 +10803,7 @@ fn derive_identifier_request_draft(
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
     let phone_like = policy.id.kind.as_ref() == "phone"
         || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
@@ -10820,7 +10844,7 @@ fn derive_identifier_request_draft(
                     &ciphertext,
                     request.output_opening.clone(),
                 )
-                .map_err(|err| identifier_internal_error(err.to_string()))
+                .map_err(identifier_execution_error)
         }
         _ => Err(identifier_conversion_error(
             "identifier encrypted input requires a BFV-backed RAM-LFE program",
@@ -34080,14 +34104,14 @@ async fn handler_ram_lfe_execute(
         return Ok(StatusCode::CONFLICT.into_response());
     }
     identifier_resolution::require_supported_program_policy(&program_policy)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+        .map_err(identifier_execution_error)?;
     json_ok(ram_lfe_execute_response(&receipt, &draft))
 }
 #[cfg(feature = "app_api")]
@@ -34261,11 +34285,7 @@ async fn handler_identifier_resolve(
     }
     let receipt = resolver
         .sign_receipt(&policy, &program_policy, &draft, &claim)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })?;
+        .map_err(identifier_execution_error)?;
     json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
@@ -34333,11 +34353,7 @@ async fn handler_identifier_claim_receipt(
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                err.to_string(),
-            ))
-        })?;
+        .map_err(identifier_execution_error)?;
     json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),

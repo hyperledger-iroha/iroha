@@ -304,15 +304,12 @@ impl Fixture {
             assert!(producer.chain.commit(direct).into_iter().all(|ok| ok));
             let height = Height::capture(&producer.chain, producer.chain.height(), frames);
             for index in 0..height.block.network_entrypoint_count() {
+                let output = &height.block.network_output_at(index as u32).unwrap().1;
                 assert!(
-                    height
-                        .block
-                        .network_output_at(index as u32)
-                        .unwrap()
-                        .1
-                        .result
-                        .is_ok(),
-                    "actual global execution must succeed"
+                    output.result.is_ok(),
+                    "actual global execution must succeed at height {} entrypoint {index}: {:?}",
+                    producer.chain.height(),
+                    output.result,
                 );
             }
             heights.push(height);

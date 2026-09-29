@@ -574,7 +574,7 @@ fn fhe_execution_policy_validate_rejects_zero_prehash_key_digest_sentinels() {
 #[test]
 fn bfv_refresh_transcript_derives_public_key_proof_statement_digest() {
     let params = ram_lfe_bfv_parameters_v1();
-    let (_, public_key, _) = iroha_crypto::fhe_bfv::keygen_from_seed(
+    let (_, public_key, _) = iroha_crypto::bfv_test_fixtures::keygen_from_seed(
         &params,
         b"soracloud-public-key-proof-statement-keygen",
     )
@@ -651,7 +651,7 @@ fn bfv_refresh_transcript_derives_public_key_proof_statement_digest() {
 #[allow(clippy::too_many_lines)]
 fn bfv_refresh_transcript_derives_ciphertext_proof_statement_digest() {
     let params = ram_lfe_bfv_parameters_v1();
-    let (_, public_key, _) = iroha_crypto::fhe_bfv::keygen_from_seed(
+    let (_, public_key, _) = iroha_crypto::bfv_test_fixtures::keygen_from_seed(
         &params,
         b"soracloud-ciphertext-proof-statement-keygen",
     )
@@ -661,7 +661,7 @@ fn bfv_refresh_transcript_derives_ciphertext_proof_statement_digest() {
         rotation_transcripts: Vec::new(),
         bootstrap_transcript: None,
     };
-    let ciphertext = iroha_crypto::fhe_bfv::encrypt_from_seed(
+    let ciphertext = iroha_crypto::bfv_test_fixtures::encrypt_from_seed(
         &params,
         &public_key,
         &[7, 42],
@@ -765,20 +765,22 @@ fn bfv_refresh_transcript_derives_ciphertext_proof_statement_digest() {
 #[allow(clippy::too_many_lines)]
 fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
     let params = ram_lfe_bfv_parameters_v1();
-    let (_secret_key, public_key, relinearization_key) = iroha_crypto::fhe_bfv::keygen_from_seed(
-        &params,
-        b"soracloud-bootstrap-proof-statement-keygen",
-    )
-    .expect("keygen");
+    let (_secret_key, public_key, relinearization_key) =
+        iroha_crypto::bfv_test_fixtures::keygen_from_seed(
+            &params,
+            b"soracloud-bootstrap-proof-statement-keygen",
+        )
+        .expect("keygen");
     let bootstrap_seed = b"soracloud-bootstrap-proof-statement-bootstrap";
-    let bootstrap_key = iroha_crypto::fhe_bfv::bootstrap_key_with_max_refresh_rounds_from_seed(
-        &params,
-        &public_key,
-        "soracloud-bootstrap-proof",
-        BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS,
-        bootstrap_seed,
-    )
-    .expect("bootstrap key");
+    let bootstrap_key =
+        iroha_crypto::bfv_test_fixtures::bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "soracloud-bootstrap-proof",
+            BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
@@ -827,14 +829,14 @@ fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
         "Soracloud policies must bind the transcript inventory, not only bootstrap key bytes"
     );
     let (_bounded_secret_key, bounded_public_key, bounded_relinearization_key) =
-        iroha_crypto::fhe_bfv::keygen_bounded_noise_with_relinearization_from_seed(
+        iroha_crypto::bfv_test_fixtures::keygen_bounded_noise_with_relinearization_from_seed(
             &params,
             b"soracloud-bootstrap-proof-statement-bounded-keygen",
         )
         .expect("bounded keygen");
     let bounded_bootstrap_seed = b"soracloud-bootstrap-proof-statement-bounded-bootstrap";
     let bounded_bootstrap_key =
-        iroha_crypto::fhe_bfv::bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+        iroha_crypto::bfv_test_fixtures::bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
             &params,
             &bounded_public_key,
             "soracloud-bounded-bootstrap-proof",
@@ -1272,13 +1274,13 @@ fn bfv_refresh_transcript_digest_uses_policy_mode() {
         decomposition_base_log: 12,
     };
     let (secret_key, public_key, relinearization_key) =
-        iroha_crypto::fhe_bfv::keygen_bounded_noise_with_relinearization_from_seed(
+        iroha_crypto::bfv_test_fixtures::keygen_bounded_noise_with_relinearization_from_seed(
             &params,
             b"soracloud-bounded-refresh-mode-keygen",
         )
         .expect("bounded-noise keygen");
     let rotation_seed = b"soracloud-bounded-refresh-mode-rotation".to_vec();
-    let rotation_key = iroha_crypto::fhe_bfv::rotation_key_bounded_noise_from_seed(
+    let rotation_key = iroha_crypto::bfv_test_fixtures::rotation_key_bounded_noise_from_seed(
         &params,
         &public_key,
         1,
@@ -1287,7 +1289,7 @@ fn bfv_refresh_transcript_digest_uses_policy_mode() {
     .expect("bounded-noise rotation key");
     let bootstrap_seed = b"soracloud-bounded-refresh-mode-bootstrap".to_vec();
     let bootstrap_key =
-        iroha_crypto::fhe_bfv::bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+        iroha_crypto::bfv_test_fixtures::bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
             &params,
             &public_key,
             "soracloud-bounded-bootstrap",
@@ -2843,4 +2845,114 @@ fn governed_fhe_material_and_policy_history_enforce_exact_monotonic_lifecycle() 
             ..
         }
     ));
+}
+
+#[test]
+fn production_support_rejects_fhe_declarations_and_both_policy_modes() {
+    assert_eq!(
+        SoraStateEncryptionV1::Plaintext.require_production_support(),
+        Ok(())
+    );
+    assert_eq!(
+        SoraStateEncryptionV1::ClientCiphertext.require_production_support(),
+        Ok(())
+    );
+    assert_eq!(
+        SecretEnvelopeEncryptionV1::ClientCiphertext.require_production_support(),
+        Ok(())
+    );
+    assert_eq!(
+        SoraStateEncryptionV1::FheCiphertext.require_production_support(),
+        Err(SoracloudManifestError::FheUnavailable)
+    );
+    assert_eq!(
+        SecretEnvelopeEncryptionV1::FheCiphertext.require_production_support(),
+        Err(SoracloudManifestError::FheUnavailable)
+    );
+    for mode in [
+        BfvRefreshTranscriptModeV1::ExactLift,
+        BfvRefreshTranscriptModeV1::BoundedNoise,
+    ] {
+        let mut policy = sample_fhe_execution_policy();
+        policy.refresh_transcript_mode = mode;
+        assert_eq!(
+            policy.require_production_support(),
+            Err(SoracloudManifestError::FheUnavailable)
+        );
+    }
+    assert_eq!(
+        SoracloudManifestError::FheUnavailable.to_string(),
+        "soracloud_fhe_unavailable: the exact BFV profile is insecure and no replacement FHE profile is qualified"
+    );
+}
+
+#[test]
+fn production_support_checks_deployment_bindings_and_retained_secrets() {
+    let container = sample_container();
+    let mut binding = sample_binding("private_state");
+    binding.encryption = SoraStateEncryptionV1::ClientCiphertext;
+    let service = sample_service(vec![binding]);
+    let mut bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    assert_eq!(bundle.require_production_support(), Ok(()));
+    bundle.service.state_bindings[0].encryption = SoraStateEncryptionV1::FheCiphertext;
+    assert_eq!(
+        bundle.require_production_support(),
+        Err(SoracloudManifestError::FheUnavailable)
+    );
+    let mut deployment = sample_service_deployment_state();
+    assert_eq!(deployment.require_production_support(), Ok(()));
+    let mut secret = sample_secret_envelope();
+    secret.encryption = SecretEnvelopeEncryptionV1::ClientCiphertext;
+    deployment.service_secrets.insert(
+        "diagnostic_secret".to_owned(),
+        SoraServiceSecretEntryV1 {
+            schema_version: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+            secret_name: "diagnostic_secret".to_owned(),
+            envelope: secret,
+            last_update_sequence: 1,
+        },
+    );
+    assert_eq!(deployment.require_production_support(), Ok(()));
+    deployment
+        .service_secrets
+        .get_mut("diagnostic_secret")
+        .unwrap()
+        .envelope
+        .encryption = SecretEnvelopeEncryptionV1::FheCiphertext;
+    assert_eq!(
+        deployment.require_production_support(),
+        Err(SoracloudManifestError::FheUnavailable)
+    );
+}
+
+#[test]
+fn production_support_rejects_inactive_fhe_policy_history() {
+    let mut deployment = sample_service_deployment_state();
+    let material = sample_governed_fhe_material_for_lifecycle(NonZeroU32::new(1).unwrap());
+    deployment.fhe_policy_records.insert(
+        material.policy_name.clone(),
+        SoracloudFhePolicyRecordV1 {
+            schema_version: SORACLOUD_FHE_POLICY_RECORD_VERSION_V1,
+            service_name: material.service_name.clone(),
+            policy_name: material.policy_name.clone(),
+            active_version: None,
+            versions: BTreeMap::from([(
+                material.version,
+                SoracloudFhePolicyVersionStateV1 {
+                    material,
+                    admitted_by_transaction_hash: sample_hash(21),
+                    lifecycle: SoracloudFhePolicyVersionLifecycleV1::Revoked,
+                    deactivated_by_transaction_hash: Some(sample_hash(22)),
+                },
+            )]),
+        },
+    );
+    assert_eq!(
+        deployment.require_production_support(),
+        Err(SoracloudManifestError::FheUnavailable)
+    );
 }

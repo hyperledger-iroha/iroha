@@ -1,7 +1,9 @@
 //! Unrelated state execution cannot replace a finalized owner's witness records.
 
 use super::{
-    tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
+    tests::{
+        apply_source, cache_canonical_test_transaction_set, delta, header, recorded_block, state,
+    },
     *,
 };
 use crate::exec_witness;
@@ -60,9 +62,8 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
 }
 
 fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
-    exec_witness::start_block();
     let state = state();
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let source = Hash::new(b"owned recorder isolation source");
     apply_source(&mut block, source, false, None);
@@ -117,7 +118,6 @@ fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
 }
 
 fn assert_unrelated_block_isolated(with_transfer: bool, in_overlay: bool) {
-    let _guard = exec_witness::exec_witness_guard();
     let expected = capture_owner(None);
     let actual = capture_owner(Some((with_transfer, in_overlay)));
     // Compare every byte, including owner reads/writes and synthetic block writes,

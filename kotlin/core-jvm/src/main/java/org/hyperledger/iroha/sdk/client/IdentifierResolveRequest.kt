@@ -35,14 +35,12 @@ class IdentifierResolveRequest private constructor(
             return encrypted(policy.policyId, encryptedInputHex, outputOpening)
         }
 
+        /** Encrypted input is unavailable until a secure replacement profile is qualified. */
         @JvmStatic
-        @JvmOverloads
         fun encryptedFromInput(
             policy: IdentifierPolicySummary,
             input: String,
             outputOpening: RamLfeOutputOpening,
-            seed: ByteArray? = null,
-        ): IdentifierResolveRequest =
-            encrypted(policy.policyId, IdentifierBfvEnvelopeBuilder.encrypt(policy, input, seed), outputOpening)
+        ): IdentifierResolveRequest = throw RamLfeEncryptionUnavailableException()
     }
 }

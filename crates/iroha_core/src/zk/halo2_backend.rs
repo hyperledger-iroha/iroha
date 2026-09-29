@@ -159,16 +159,17 @@ pub(crate) fn verify_ipa_proof(
     instances: &[&[&[Scalar]]],
 ) -> Result<(), PlonkError> {
     let mut cursor = io::Cursor::new(proof_payload);
-    let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(&mut cursor);
-    let strategy = SingleStrategy::new(params);
-    halo2_verify_proof::<
-        IPACommitmentScheme<Curve>,
-        VerifierIPA<'_, Curve>,
-        Challenge255<Curve>,
-        _,
-        _,
-    >(params, vk, strategy, instances, &mut transcript)?;
-    drop(transcript);
+    {
+        let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(&mut cursor);
+        let strategy = SingleStrategy::new(params);
+        halo2_verify_proof::<
+            IPACommitmentScheme<Curve>,
+            VerifierIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+        >(params, vk, strategy, instances, &mut transcript)?;
+    }
     if cursor.position() != u64::try_from(proof_payload.len()).expect("proof length must fit u64") {
         return Err(PlonkError::Transcript(io::Error::new(
             io::ErrorKind::InvalidData,

@@ -975,7 +975,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,
-            bootstrap: Default::default(),
         },
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,

@@ -240,6 +240,7 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_crypto = { workspace = true, default-features = false, features = ["bfv-test-fixtures"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }
 crossbeam-epoch = "=0.9.20"
 futures = { workspace = true, features = ["std", "async-await"] }

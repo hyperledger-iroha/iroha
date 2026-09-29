@@ -69,7 +69,7 @@ pub(crate) fn poseidon6_params() -> (&'static Vec<[FieldElem; 6]>, &'static [[Fi
 pub fn poseidon2(a: u64, b: u64) -> u64 {
     poseidon2_impl(a, b)
 }
-/// Hash a batch of Poseidon2 inputs in order, using CUDA acceleration when available.
+/// Hash a batch of two-input BN254 Poseidon values in order, using CUDA when available.
 pub fn poseidon2_many_into(inputs: &[(u64, u64)], destination: &mut [u64]) -> bool {
     if inputs.len() != destination.len() {
         return false;

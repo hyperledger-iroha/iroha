@@ -167,8 +167,8 @@ object IdentifierReceiptCanonicalEncoder {
             encodeProgramId(execution.programId, "payload.execution.program_id"),
         )
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.programDigest, "payload.execution.program_digest"))
-        encodeSizedField(writer, U32Adapter, backendTag(execution.backend).toLong())
-        encodeSizedField(writer, U32Adapter, verificationModeTag(execution.verificationMode).toLong())
+        encodeSizedField(writer, U32Adapter, RamLfeWireTags.backendTag(execution.backend).toLong())
+        encodeSizedField(writer, U32Adapter, RamLfeWireTags.verificationModeTag(execution.verificationMode).toLong())
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.inputCiphertextHash, "payload.execution.input_ciphertext_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.outputCiphertextHash, "payload.execution.output_ciphertext_hash"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(execution.parameterDigest, "payload.execution.parameter_digest"))
@@ -192,10 +192,10 @@ object IdentifierReceiptCanonicalEncoder {
         val programDigest = hashHex(
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution.program_digest")
         )
-        val backend = backendName(
+        val backend = RamLfeWireTags.backendName(
             Math.toIntExact(decodeSizedField(decoder, U32Adapter, "payload.execution.backend"))
         )
-        val verificationMode = verificationModeName(
+        val verificationMode = RamLfeWireTags.verificationModeName(
             Math.toIntExact(decodeSizedField(decoder, U32Adapter, "payload.execution.verification_mode"))
         )
         val inputCiphertextHash = hashHex(
@@ -319,36 +319,6 @@ object IdentifierReceiptCanonicalEncoder {
         val programId = decodeSizedField(decoder, STRING_ADAPTER, "program_id")
         require(decoder.remaining() == 0) { "Trailing bytes after program_id" }
         return programId
-    }
-
-    private fun backendTag(raw: String): Int = when (
-        requireExactNonBlankString(raw, "payload.execution.backend")
-    ) {
-        "hkdf-sha3-512-prf-v1" -> 0
-        "bfv-affine-v1" -> 1
-        "bfv-programmed-v1" -> 2
-        else -> throw IllegalArgumentException("unsupported RAM-LFE backend: $raw")
-    }
-
-    private fun verificationModeTag(raw: String): Int = when (
-        requireExactNonBlankString(raw, "payload.execution.verification_mode")
-    ) {
-        "signed" -> 0
-        "proof" -> 1
-        else -> throw IllegalArgumentException("unsupported RAM-LFE verification mode: $raw")
-    }
-
-    private fun backendName(tag: Int): String = when (tag) {
-        0 -> "hkdf-sha3-512-prf-v1"
-        1 -> "bfv-affine-v1"
-        2 -> "bfv-programmed-v1"
-        else -> throw IllegalArgumentException("unsupported RAM-LFE backend tag: $tag")
-    }
-
-    private fun verificationModeName(tag: Int): String = when (tag) {
-        0 -> "signed"
-        1 -> "proof"
-        else -> throw IllegalArgumentException("unsupported RAM-LFE verification mode tag: $tag")
     }
 
     private fun encodePrefixedHash(raw: String, prefix: String, field: String): ByteArray {

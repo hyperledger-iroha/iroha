@@ -31,15 +31,12 @@ class IdentifierPolicySummary @JvmOverloads constructor(
     fun encryptedRequest(encryptedInputHex: String, outputOpening: RamLfeOutputOpening): IdentifierResolveRequest =
         IdentifierResolveRequest.encrypted(this, encryptedInputHex, outputOpening)
 
-    @JvmOverloads
-    fun encryptInput(input: String, seed: ByteArray? = null): String =
-        IdentifierBfvEnvelopeBuilder.encrypt(this, input, seed)
+    /** Encrypted input is unavailable until a secure replacement profile is qualified. */
+    fun encryptInput(input: String): String = throw RamLfeEncryptionUnavailableException()
 
-    @JvmOverloads
+    /** Encrypted input is unavailable until a secure replacement profile is qualified. */
     fun encryptedRequestFromInput(
         input: String,
         outputOpening: RamLfeOutputOpening,
-        seed: ByteArray? = null,
-    ): IdentifierResolveRequest =
-        IdentifierResolveRequest.encryptedFromInput(this, input, outputOpening, seed)
+    ): IdentifierResolveRequest = throw RamLfeEncryptionUnavailableException()
 }

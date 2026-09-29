@@ -150,128 +150,42 @@ additionally require the authenticated account to resolve exactly to the
 `{account_id}` path principal. Responses are private and non-storable; API
 tokens and CIDR allowlists do not replace the account signature.
 
-Torii's in-process execution runtime is configured under
-`torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
-reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
-config surface. Each runtime entry must include `secret_hex`,
-`hidden_program_hex`, `signer_private_key`, and the optional `receipt_ttl_ms`.
-`hidden_program_hex` is exact `0x`-prefixed lowercase hex for the canonical
-`HiddenRamFheProgramV1` Norito frame, decoded directly into the validated clearing
-program owner. Its digest must match the on-chain programmed BFV public parameters. Torii runtime config
-must not include BFV secret keys; it signs execution receipts and evaluates
-with public/evaluation-key material only. Programmed BFV public parameters are
-relinearization-only for the first release; Soracloud rotation/bootstrap
-refresh keys are governed by FHE execution policies instead of
-identifier-program metadata.
+Encrypted RAM-LFE and identifier execution are currently unavailable. Core
+registration, activation, restoration and receipt admission reject both
+`bfv-affine-v1` and `bfv-programmed-v1`, including signed mode. The diagnostic
+exact-lift BFV construction exposes a noiseless public-key equation; signatures
+and execution proofs cannot repair that encryption defect. The supported
+`hkdf-sha3-512-prf-v1` primitive is not encrypted-input evaluation.
 
-The separate trusted `phone#retail` attestor holds the BFV decryption key and
-a high-entropy phone-nullifier secret. It decrypts and checks exact canonical
-E.164 input locally, then signs the canonicality statement; neither the raw
-phone nor an unkeyed phone digest enters Torii or consensus state. The
-attestor's pinned signing key and nullifier secret must remain stable for the
-policy's lifetime. Without a trusted attestation, phone claim and resolve
-requests fail closed. Clients must independently pin their intended network,
-policy owner, program commitment, resolver and output-opening keys, and
-canonicality-attestor key before trusting discovered policy metadata.
+The retained configuration uses `torii.ram_lfe.programs[*]`, keyed by
+`program_id`, with a validated clearing hidden-program owner. No configuration
+setting enables the rejected BFV profile. The compiled initializer descriptor,
+canonical program frame and relinearization-only program metadata remain
+validation requirements for stored diagnostic material.
 
-Current SDK support:
+The execute response contains ciphertext and an execution receipt. It supplies
+no plaintext opening. Identifier receipts separately require an externally
+signed opening bound to the exact program, input/output ciphertexts, parameters,
+evaluation key and lifetime. For `phone#retail`, the pinned canonicality attestor
+must additionally bind the canonical E.164 value and a network-scoped keyed
+nullifier. The opening alone does not establish phone canonicality or uniqueness.
+These checks remain independently tested; they do not make encrypted admission
+available.
 
-The JavaScript and Kotlin request helpers currently reject `phone#retail`
-until they can carry and verify the signed canonicality statement. Kotlin's
-claim-wire encoder also rejects it. Clients using the Torii API directly must
-supply the statement and independently verify their pinned trust material; an
-output opening by itself is insufficient.
+SDK policy/receipt decoders accept only the exact compiled backend names and
+`signed`/`proof` metadata. Metadata decoding is not proof verification or feature
+activation. Local plaintext-encryption helpers refuse with
+`ram_lfe_encryption_unavailable`; caller-supplied seed overrides and shipped
+exact-lift encryption implementations are being retired. Existing ciphertext
+request DTOs and independent opening/signature verification have separate roles.
 
-- `normalizeIdentifierInput(value, normalization)` matches the Rust
-  canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
-  `email_address`, and `account_number`.
-- `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
-  input-encryption metadata when the policy publishes it, plus a decoded
-  BFV parameter object via `input_encryption_public_parameters_decoded`.
-  Programmed policies also expose the decoded `ram_fhe_profile`. That field is
-  intentionally BFV-scoped: it lets wallets verify the expected register
-  count, lane count, canonicalization mode, and minimum ciphertext modulus for
-  the programmed FHE backend before encrypting client-side input.
-- `getIdentifierBfvPublicParameters(policy)` and
-  `buildIdentifierRequestForPolicy(policy, { encryptedInput | input,
-  encrypt: true, outputOpening })` help JS callers consume published BFV
-  metadata and build policy-aware encrypted request bodies without
-  reimplementing policy-id and normalization rules.
-- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` and
-  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true,
-  outputOpening })` now let JS wallets construct the full BFV Norito
-  ciphertext envelope locally from published policy parameters instead of
-  shipping prebuilt ciphertext hex.
-- `ToriiClient.resolveIdentifier({ policyId, encryptedInput, outputOpening })`
-  resolves a hidden identifier and returns the signed nested
-  `{ payload, attestation }` receipt.
-- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId,
-  encryptedInput, outputOpening })` issues the signed receipt needed by
-  `ClaimIdentifier`.
-- `verifyIdentifierResolutionReceipt(receipt, policy)` verifies the returned
-  receipt against the policy resolver key on the client side, and
-  `ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` fetches the
-  persisted claim record for later audit/debug flows.
-- `IrohaSwift.ToriiClient` now exposes `listIdentifierPolicies()`,
-  `resolveIdentifier(policyId:encryptedInputHex:outputOpening:)`,
-  `issueIdentifierClaimReceipt(accountId:policyId:encryptedInputHex:outputOpening:)`,
-  and `getIdentifierClaimByReceiptHash(_)`, plus
-  `ToriiIdentifierNormalization` for the same phone/email/account-number
-  canonicalization modes.
-- `ToriiIdentifierLookupRequest` and encrypted request helpers provide the
-  typed Swift request surface for resolve and claim-receipt calls, and Swift
-  policies can now derive the BFV ciphertext locally via `encryptInput(...)`.
-- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` validates that
-  the top-level receipt fields match the signed payload and verifies the
-  resolver signature client-side before submission.
-- `HttpClientTransport` in the Android SDK now exposes
-  `listIdentifierPolicies()`, encrypted-only `resolveIdentifier(...)`,
-  encrypted-only `issueIdentifierClaimReceipt(...)`, and
-  `getIdentifierClaimByReceiptHash(...)`,
-  plus `IdentifierNormalization` for the same canonicalization rules.
-- `IdentifierResolveRequest` and encrypted request helpers provide the typed
-  Android request surface, while `IdentifierPolicySummary.encryptInput(...)`
-  derives the BFV ciphertext envelope locally from published policy
-  parameters.
-  `IdentifierResolutionReceipt.verifySignature(policy)` verifies the returned
-  resolver signature client-side.
-
-Current instruction set:
-
-- `RegisterIdentifierPolicy`
-- `ActivateIdentifierPolicy`
-- `ClaimIdentifier` (receipt-bound; raw `opaque_id` claims are rejected)
-- `RevokeIdentifier`
-
-Three backends now exist in `iroha_crypto::ram_lfe`:
-
-- the historical commitment-bound `HKDF-SHA3-512` PRF, and
-- a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
-  slots directly. When `iroha_crypto` is built with the default
-  `bfv-accel` feature, BFV ring multiplication uses an exact deterministic
-  CRT-NTT backend internally; disabling that feature falls back to the
-  scalar schoolbook path with identical outputs, and
-- a BFV-backed secret programmed evaluator that derives an instruction-driven
-  RAM-style execution trace over encrypted registers and ciphertext memory
-  lanes before deriving the opaque identifier and receipt hash. The programmed
-  backend now requires a stronger BFV modulus floor than the affine path, and
-  its public parameters are published in a canonical bundle that includes the
-  RAM-FHE execution profile consumed by wallets and verifiers.
-
-Here BFV means the Brakerski/Fan-Vercauteren FHE scheme implemented in
-`crates/iroha_crypto/src/fhe_bfv.rs`. It is the encrypted-execution mechanism
-used by the affine and programmed backends, not the name of the outer hidden
-function abstraction.
-
-Torii uses the backend published by the policy commitment. For the first
-release, RAM-LFE and hidden-identifier routes are encrypted-only: Torii does
-not accept plaintext inputs, does not hold BFV secret keys, and does not
-decrypt input or output ciphertexts. Identifier claim and resolve requests must
-include an externally signed `RamLfeOutputOpening`; the `opaque:` identifier is
-derived from the verified opened-output hash for non-phone policies. For
-`phone#retail`, it derives from the trusted attestor's network-scoped,
-secret-keyed canonical E.164 nullifier. The output opening alone cannot prove
-phone normalization or uniqueness across randomized encryptions.
+The instruction identities remain `RegisterIdentifierPolicy`,
+`ActivateIdentifierPolicy`, receipt-bound `ClaimIdentifier` and `RevokeIdentifier`.
+Private claim/revoke/rebind component tests preserve account, UAID, lifetime and
+index constraints, while actual BFV entry points require refusal with unchanged
+state. See [the execution contract](ram_lfe_execution_proof.md),
+[remediation goals](zk_first_release_goals.md), and the public
+[RAM-LFE availability guide](https://docs.iroha.tech/blockchain/ram-lfe).
 
 ## 2. Deriving and verifying UAIDs
 

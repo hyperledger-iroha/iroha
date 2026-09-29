@@ -21,7 +21,7 @@ import java.util.function.BiFunction;
 import java.util.regex.Pattern;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
-import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
+import org.hyperledger.iroha.sdk.crypto.BlsNormalPublicKeyAdmission;
 
 /** Exact-route V1 client for prepared-leg, audit, coordination, and redacted query workflows. */
 public final class AtomicPrivateSettlementToriiClientV1 {
@@ -721,7 +721,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
         || !expectedNetworkId.equals(typedBody.get("network_id"))
         || !expectedPayloadDigest.jsonLiteral().equals(typedBody.get("payload_digest"))
         || !(typedBody.get("responder") instanceof String responder)
-        || !NativeAmxV2.isCanonicalBlsNormalPeerId(responder)) {
+        || !BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(responder)) {
       throw new AtomicPrivateSettlementToriiExceptionV1(
           "settlement auditor capsule responder attestation is invalid");
     }
@@ -820,7 +820,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
         || !expectedPayloadDigest.jsonLiteral().equals(parsed.get("payload_digest"))
         || !code.equals(BigInteger.valueOf(lifecycleCode))
         || !(typedBody.get("responder") instanceof String responder)
-        || !NativeAmxV2.isCanonicalBlsNormalPeerId(responder)) {
+        || !BlsNormalPublicKeyAdmission.isCanonicalBlsNormalPeerId(responder)) {
       throw new AtomicPrivateSettlementToriiExceptionV1(
           "settlement approval acknowledgement responder attestation is invalid");
     }

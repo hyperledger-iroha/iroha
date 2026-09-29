@@ -25,7 +25,7 @@ object IdentifierJsonParser {
                         requiredExactLowercaseString(item["normalization"], "identifier policy list.items[$i].normalization")
                     ),
                     requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
-                    requiredExactLowercaseString(item["backend"], "identifier policy list.items[$i].backend"),
+                    RamLfeWireTags.parseBackend(item["backend"], "identifier policy list.items[$i].backend"),
                     optionalExactLowercaseString(item["input_encryption"], "identifier policy list.items[$i].input_encryption"),
                     optionalExactHexString(item["input_encryption_public_parameters"], "identifier policy list.items[$i].input_encryption_public_parameters"),
                     if (item["input_encryption_public_parameters_decoded"] == null) null
@@ -282,8 +282,8 @@ object IdentifierJsonParser {
         IdentifierResolutionExecutionPayload(
             requiredExactString(root["program_id"], "$context.program_id"),
             canonicalizeHex32(requiredExactString(root["program_digest"], "$context.program_digest"), "$context.program_digest"),
-            requiredExactLowercaseString(root["backend"], "$context.backend"),
-            requiredExactLowercaseString(root["verification_mode"], "$context.verification_mode"),
+            RamLfeWireTags.parseBackend(root["backend"], "$context.backend"),
+            RamLfeWireTags.parseVerificationMode(root["verification_mode"], "$context.verification_mode"),
             canonicalizeHex32(requiredExactString(root["input_ciphertext_hash"], "$context.input_ciphertext_hash"), "$context.input_ciphertext_hash"),
             canonicalizeHex32(requiredExactString(root["output_ciphertext_hash"], "$context.output_ciphertext_hash"), "$context.output_ciphertext_hash"),
             canonicalizeHex32(requiredExactString(root["parameter_digest"], "$context.parameter_digest"), "$context.parameter_digest"),

@@ -50,6 +50,42 @@ can be reused; a new semantic circuit still needs independent review. Proving th
 current arithmetic does not qualify the separate BFV encryption or bootstrap
 security claims documented in the crypto module.
 
+## Encryption replacement requirements
+
+The [implementation plan](ram_lfe_encryption_replacement.md) records the current
+rounded-path noise limit, genuine RNS ownership gap, packing constraints and
+ordered implementation gates. Existing arithmetic is not a selected replacement.
+
+The replacement must protect both encrypted inputs and the hidden function.
+Ordinary HE input confidentiality does not by itself establish circuit privacy
+against a key owner inspecting evaluated ciphertexts. This distinction is explicit
+in [Hwang, Min and Song's BFV analysis](https://eprint.iacr.org/2025/203).
+Choosing a library is also not sufficient to justify malicious-input security:
+[OpenFHE's security notes](https://openfhe-development.readthedocs.io/en/latest/sphinx_rsts/intro/security.html)
+state the semi-honest scope of its ordinary HE APIs. These are requirements for
+the new protocol, not endorsements of an unreviewed construction.
+
+Specify the evaluator, key owner, opening authority and verifier separately.
+Bind admitted keys and ciphertexts to the precise well-formedness relation;
+account for malicious parameters, inputs, repeated queries and visible failures.
+Select circuit privacy or an appropriate sanitization construction with explicit
+assumptions and quantified leakage. Do not claim that ZK about evaluation hides
+information already present in its public ciphertext output.
+
+Parameter selection must jointly cover security, correctness and maximum
+program work, as described by the
+[HE implementation guidelines](https://eprint.iacr.org/2024/463). Pin the complete
+RNS chain, distributions, failure probability, operation/noise bounds and query
+budget to the reviewed profile. Existing degree-64 and single-modulus arithmetic
+limits are diagnostic implementation facts, not security targets for a replacement.
+
+The developer facade must choose the qualified profile from the compiled program,
+own private keys and secure randomness, and preflight bounded resources before
+private work. Developers supply their program and data; they do not select ring
+dimensions, noise distributions, transcript layouts or deterministic encryption
+seeds. Keep key generation, input encryption, evaluation, plaintext opening and
+proof verification as distinct typed operations with explicit authorities.
+
 ## Required relation
 
 The verifier-owned statement must bind the full trusted **policy hash**, hidden

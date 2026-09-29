@@ -62,6 +62,18 @@ this source edit is not a compiled projection or signed publication.
   by the SDK owner. Current-main JS correctly refused stale native provenance;
   preserved-candidate refreshes do not qualify current Core or network state.
 
+Core's former successful BFV admission fixtures are replaced by 13 component and
+refusal controls. The existing account/lifetime/index transition now has a
+private verified-input owner constructed only after production admission checks.
+Component tests preserve persisted claim, revoke and rebind index assertions;
+actual registration, activation and claim entry points must refuse insecure
+metadata without changing indexes. Opening and phone-attestation checks remain
+independent. Correctly re-signed opaque-ID and receipt-hash mutations exercise the
+actual binding predicate for both email and phone policies. Independent source
+review found and repaired lost predicate and persisted-index coverage; normal
+Core compilation/execution is pending on the fresh fixed candidate. Exact
+predecessor source and review are in `.../core-fixtures/`.
+
 The secure encryption replacement, complete hidden-program relation,
 independent cryptographic review, and same-candidate SDK/network qualification
 remain open in [the goals](../../../specs/zk_first_release_goals.md).

@@ -5,14 +5,11 @@ Set: 2026-09-26. Overall status: **Active**.
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
 [privacy closure](privacy_first_release_closure.md). Implementation remains in the
-existing `optimizations` checkout. Separate captured SDK, Apple and network
-candidates preserve validation provenance. Unrelated concurrent changes are
-preserved.
+existing `optimizations` checkout. Separate SDK, Apple and network candidates preserve validation provenance; unrelated changes remain.
 
-The outcome is useful, safe proof algorithms with simple developer APIs. A
-renamed placeholder, disabled feature, new status object, passing source hash,
-or relaxed resource ceiling does not complete an algorithm. External review
-and physical-device evidence cannot be replaced by self-issued certificates.
+The outcome is useful, safe proof algorithms with simple developer APIs. Renaming,
+disabling, status objects, source hashes or relaxed caps do not complete an algorithm.
+External review and physical-device evidence cannot be self-issued.
 
 ## Goals and acceptance criteria
 
@@ -30,8 +27,7 @@ and physical-device evidence cannot be replaced by self-issued certificates.
 ## Execution order
 
 1. Repair secret arithmetic and optional-input constraints with regression tests.
-2. Make current relation guarantees explicit at the shared verifier and developer
-   boundary; migrate callers and remove stale claims.
+2. Make guarantees explicit at verifier/developer boundaries; migrate callers and remove stale claims.
 3. Use one allocation-free resource plan at developer preflight and actual prover
    admission. Resolve the mathematical construction before widening execution.
 4. Complete FASTPQ and X509 constructions against fixed statement and resource
@@ -97,13 +93,7 @@ its outstanding implementation is owned by G3 in the
 [Kotodama/IVM goals](kotodama_ivm_completion.md). This hard cut does not complete
 the execution algorithm.
 
-The earlier frozen Torii source builds normally and passes 126 of 129 selected
-tests. Its three failures expose the retired service's `bytes_b64`/`bytes` output
-mismatch. Do not restore those routes to make historical tests pass. The earlier
-28-pass CLI and six-test network plan likewise require replacement with current
-retained API/admission controls. Current generic proof identity and relation
-verification still need same-candidate runtime qualification.
-
+Historical Torii/CLI/network results do not qualify current relation admission.
 The shared integration proof fixtures and record/event/query callers now use the
 public wallet facade to construct actual one-note full-unshield proofs. The
 full-capacity wallet's wrong-role negative uses the retained confidential-transfer
@@ -111,18 +101,19 @@ key and schema. Native corruption, framing, proof-record, event and query
 assertions remain; these migrated sources are formatted but not yet compiled.
 The old successful IvmProved network case now requires exact unavailable-relation
 rejection with unchanged state and independently applied progress. A current
-20,543-file candidate captures these changes without drift. Its normal build fails
-on 23 pre-existing unfinished Sumeragi migration errors; eight native controls
-and six four-validator scenarios remain unexecuted. See the
-[current network record](../docs/history/2026-09-29/zk-current-network-qualification.md).
+20,543-file candidate retained 23 unfinished Sumeragi compile errors. A later
+coherent Core/model/Torii build passes; two idle-smoke repairs await retry. The
+native-lane correction passes 28 controls; the signed fixture now exposes manifest authority drift;
+network qualification remains open ([record](../docs/history/2026-09-29/zk-current-network-qualification.md)).
 
 RAM-LFE registration, activation, restoration and receipts now reject both signed
 and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
 Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
 An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
-complete relation and current Core/Torii qualification remain open. The execute API's
+complete relation and current Torii qualification remain open. The execute API's
 false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
-records 63 schema controls and compiled-but-fixture-blocked Kotlin/Java tests.
+records 63 schema controls, 45 Core and 35 Torii passes. Reused dependency provenance
+was not retained for the latter builds; isolated coherent reruns remain required.
 
 The retained diagnostic RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
 modulo-257 reduction, distinct canonical policy/tape commitments and a mandatory
@@ -139,11 +130,11 @@ controls also pass after correcting test access and diagnostic expectations.
 The complete BFV semantic circuit and remaining
 internal BFV scratch remain outstanding in the [execution contract](ram_lfe_execution_proof.md)
 and [initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
-The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace
-costly private wire hashing and separate stable function identity from key rotation.
-The unused pinned Pasta leaf passes [18 ordinary native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md);
-the [unused circuit experiment](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes eight
-isolated controls. Full relation and coherent production migration remain open.
+The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace private wire hashing;
+[replacement encryption](ram_lfe_encryption_replacement.md) and [scalar packing](ram_lfe_plaintext_packing.md)
+remain designs requiring a complete relation and qualification. The unused Pasta leaf passes
+[18 native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md); its [circuit](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes ten isolated controls at maximum k=16 but misses the 20 ms budget (238.840 ms).
+The distinct [BN254 naming cut](../docs/history/2026-09-29/bn254-poseidon-api.md) passes 19 native/four doc controls and actual GPU/AXT consumer compilation.
 
 ### ZK04 — FASTPQ
 
@@ -172,12 +163,13 @@ also pass on retained sources. These are contended observations, not throughput
 measurements. Receipt:
 `dist/zk-remediation/2026-09-29/fastpq-source-owner-proof-run1/two-child/complete-receipt.json`.
 
-Maximum four-key occupancy, maximum canonical AXT context and early over-limit
-rejection are the next native proof controls. Their fixture migration must
-preserve current `AxtSourceTransferOccurrenceV1` identity and exact transfer/claim
-correspondence. Full hiding/soundness review, authoritative finalized-source
-network behavior and current hardware qualification remain open. See the
-[FASTPQ readiness contract](fastpq_production_readiness.md).
+Maximum four-key ordinary and AXT proofs both pass unchanged limits: 973,336 and
+1,010,229 bytes; construction/self-check 3,668.791 and 4,233.689 seconds;
+peak RSS 1,856,045,056 and 1,875,656,704 bytes. Independent replay takes 7.70 and
+26.87 seconds; 16 API controls pass. All 38 local dependencies rebuilt from the
+frozen candidate. Exact receipts: `dist/zk-remediation/2026-09-29/fastpq-maximum-proof-run1`.
+Independent hiding/soundness review, finalized-source network behavior and current
+hardware qualification remain open in [FASTPQ readiness](fastpq_production_readiness.md).
 
 ### ZK05 — ZK-X509
 
@@ -190,33 +182,25 @@ It binds the authenticated 72-time census, 73 comparisons and nonwrapping 38-bit
 differences. Fixed matrices reuse bounded storage; private columns replay from
 immutable clearing owners instead of retaining all masked coefficients.
 
-The pinned frozen debug binary builds normally with zero source drift. Maximum
-whole assembly and profile controls pass (2); measured owned assembly is
-542,564,850 bytes against a 596,974,144-byte allowance. Its 54,409,294-byte headroom
-cannot alone admit the 64 MiB Metal pool. MAIN/ownership controls pass (85),
-profile/codec/proof known answers pass (26), and typed policy/wallet/refusal
-controls pass (36). These counts describe separate selections on one immutable
-binary, not a current workspace result.
+Earlier retained controls and the failed `DerWitness` proof remain in dated records;
+they do not qualify the later optimized candidate.
+The corrected maximum temporal fixture and family-prefix storage pass 72 normal
+optimized native controls, including all 285 base and 280 auxiliary columns on
+ordinary and maximum witnesses. Maximum owned assembly is 200,816,874 bytes
+against the unchanged 596,974,144-byte allowance. Replaced/partial owners clear;
+nonzero omitted operands reject. Full-source and retained-binary guards pass.
 
-RFC controls pass 53 and fail four stale test fixtures/expectations. The reviewed
-two-file amendment corrects the actual maximum temporal-census fixture, degree
-histogram, non-padding capacity and physical-copy row; it changes no runtime
-relation, profile or cap. Its fresh normal optimized build and controls precede
-the next maximum proof. The prior complete attempt returned `DerWitness` after
-1,159.68 seconds and produced no proof. No complete maximum proof currently
-passes the unchanged 300-second/12-GiB limits. Activation remains unavailable;
-independent review and real positive/adversarial proof evidence are required.
-Details: [September 29 X509 record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md).
-
-A subsequent storage correction retains public-family field prefixes
-and reconstructs unchanged full RFC rows, rejecting any omitted nonzero operand.
-Old/new allocation overlap and surviving schedule capacity are checked, and
-replaced/partial private owners clear. Eight exact-source isolated owner controls
-pass. Isolated actual ordinary/maximum fixtures pass all 285 base and 280 auxiliary
-column checks, temporal adversaries and generic field-extension controls without
-source drift. Maximum retained RFC payload falls from 421,806,624 to 80,058,504
-bytes. Normal Core, whole-assembly and complete-proof qualification remain pending
-in the [family-storage record](../docs/history/2026-09-29/zk-x509-family-storage.md).
+The subsequent actual maximum proof fails at `BoundSources` with
+`MainProofConstruction(TranscriptMismatch)` after DER/RFC binding completed.
+No proof was emitted. Producer time is 1,062.696 seconds; measured peak RSS is
+7,993,442,304 bytes. Metal executed 805 calls / 3,213 columns without fallback.
+Base source sampling took 442.963 seconds and commitment 567.292 seconds;
+no auxiliary masks, composition, DEEP or opening phases were reached.
+The corrected RFC/SHA mapping passes nine native controls and the maximum handoff;
+its first full BoundSources run overflows the normal stack. The heap-owner repair
+passes all 13 clean native controls, including maximum BoundSources on the normal
+stack and both independently verified component KATs. The fresh optimized run passes 109 controls;
+its full maximum proof is still running and exceeds 300 s; caps remain unchanged ([record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md)).
 
 ### ZK07 — developer workflow
 
@@ -259,10 +243,27 @@ controls (overlapping); a key-switch extension passes 49 focused controls.
 Primitive state and diagnostic exports remain outside
 this scoped [owner repair](../docs/history/2026-09-29/zk-key-owner-erasure.md).
 
-Public guidance belongs in `iroha-docs`. The FASTPQ guide and 20 translations
-pass scoped content/i18n checks and its Rust example compiles. Retired IVM help
-snippets must be regenerated through the documentation repository's normal clean,
-pinned-source workflow; manual generated edits or invented provenance are invalid.
+Public Kotlin/Java, JavaScript and Swift plaintext-encryption helpers now refuse
+with a stable unavailable error. Deterministic encryptors move to explicit test
+fixtures and public seed overloads retire. Kotlin production/test compilation
+passes; its JAR excludes diagnostic encryptors. Both complete selected Java
+harnesses pass ([record](../docs/history/2026-09-29/java-canonical-bls-consumer.md)).
+Kotlin runtime needs two canonical Kagami fixtures; the compiled producer fails at
+block4's lane manifest authority check after the identity correction. No replacement bytes were invented.
+JavaScript passes 148 build-tool controls; test arithmetic is absent from its package.
+The repaired cold ABI-25 native build passes with all 69 local artifacts fresh;
+all 47 endpoint controls pass, with strict types and lint. The first fixture failure remains recorded.
+C# passes 269 managed controls plus four authenticated-native and three real wallet controls;
+a strict derivation-revision mismatch is repaired. Current Swift five-slice builds are running.
+Rust generic/specialized encryptors are private: 349 native and 37 API compile checks pass;
+Soracloud production refusal and cleanup reruns remain. Source-bound evidence is retained.
+See [SDK boundary evidence](../docs/history/2026-09-29/ram-lfe-sdk-encryption-retirement.md).
+
+Public guidance belongs in `iroha-docs`. FASTPQ plus 20 translations pass scoped
+checks and its Rust example compiles. The RAM-LFE and fee-sponsor pages plus 40
+translations state actual availability; content/i18n and RTL browser checks pass
+([record](../docs/history/2026-09-29/ram-lfe-public-guidance.md)). Retired IVM help
+requires normal pinned-source generation, never invented provenance.
 
 ### ZK08 — current source contracts
 
@@ -276,8 +277,8 @@ native, integrated workspace or network runs.
 
 1. Replace the insecure RAM-LFE encryption construction, retire diagnostic public
    surfaces, and complete its semantic relation and current SDK/consumer controls.
-2. Produce maximum-occupancy ordinary/AXT FASTPQ artifacts through current facade
-   fixtures and independently verify them under unchanged resource limits.
+2. Carry the passing maximum ordinary/AXT FASTPQ artifacts into finalized-source
+   network and hardware qualification without changing proof or resource limits.
 3. Pass the amended X509 focused suite on a normal optimized binary, then produce
    and measure the complete maximum credential; resolve any real relation or
    resource failure without dropping supported coverage or widening caps.

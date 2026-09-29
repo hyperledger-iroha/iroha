@@ -1,10 +1,33 @@
-//! Deterministic Poseidon2 helpers shared across IVM and host components.
+//! Deterministic Poseidon helpers shared across IVM and host components.
 //!
 //! These functions mirror the internal helpers historically shipped in the
 //! `ivm` crate but live here so that other crates can depend on the canonical
 //! permutation without duplicating the arithmetic. The implementation sticks
-//! to the BN254 field parameters used by the fastpq Halo2 gadgets to keep all
-//! call-sites in sync with the proving backend.
+//! to the original BN254 Poseidon parameters used by the fastpq Halo2 gadgets.
+//! The `hash2_*` and `hash6_*` names denote input arity. Parameter width denotes
+//! permutation state width; the six-input helper is a fixed-width compression.
+//!
+//! Parameter consumers select an explicit state width:
+//! ```
+//! use iroha_zkp_poseidon::poseidon::{
+//!     Bn254PoseidonParams, bn254_poseidon_params_width3, bn254_poseidon_params_width6,
+//! };
+//! let width3: Bn254PoseidonParams<3> = bn254_poseidon_params_width3();
+//! let width6: Bn254PoseidonParams<6> = bn254_poseidon_params_width6();
+//! assert_eq!(width3.round_constants.len(), 64);
+//! assert_eq!(width6.round_constants.len(), 64);
+//! ```
+//!
+//! Misnamed algorithm exports are removed in the first release:
+//! ```compile_fail
+//! use iroha_zkp_poseidon::poseidon::Poseidon2Params;
+//! ```
+//! ```compile_fail
+//! use iroha_zkp_poseidon::poseidon::poseidon2_params_width3;
+//! ```
+//! ```compile_fail
+//! use iroha_zkp_poseidon::poseidon::poseidon2_params_width6;
+//! ```
 use halo2curves::{
     bn256::Fr,
     ff::{Field, PrimeField},
@@ -17,9 +40,9 @@ const FULL_ROUNDS_HALF: usize = FULL_ROUNDS / 2;
 const PARTIAL_ROUNDS: usize = 56;
 const ROUND_COUNT: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
 type PoseidonConstants<const W: usize> = ([[Fr; W]; ROUND_COUNT], [[Fr; W]; W]);
-/// Poseidon2 parameters (round constants + MDS) encoded as byte arrays.
+/// Original BN254 Poseidon round constants and dense MDS, in canonical field bytes.
 #[derive(Debug, Clone)]
-pub struct Poseidon2Params<const W: usize> {
+pub struct Bn254PoseidonParams<const W: usize> {
     /// Round constants for the width.
     pub round_constants: Vec<[[u8; 32]; W]>,
     /// MDS matrix entries for the width.
@@ -212,13 +235,13 @@ fn poseidon3_permute(state: &mut [Fr; 3]) {
     }
 }
 #[inline(always)]
-fn poseidon2_field(a: u64, b: u64) -> Fr {
+fn hash2_field(a: u64, b: u64) -> Fr {
     let mut state = [Fr::from(a), Fr::from(b), Fr::ZERO];
     poseidon3_permute(&mut state);
     state[0]
 }
 #[inline(always)]
-fn poseidon6_field(inputs: [u64; 6]) -> Fr {
+fn hash6_field(inputs: [u64; 6]) -> Fr {
     let (round_constants, mds) = poseidon6_params();
     let mut state = [
         Fr::from(inputs[0]),
@@ -252,26 +275,26 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
     }
     state[0]
 }
-fn params_to_bytes<const W: usize>(params: &PoseidonConstants<W>) -> Poseidon2Params<W> {
+fn params_to_bytes<const W: usize>(params: &PoseidonConstants<W>) -> Bn254PoseidonParams<W> {
     let (round_constants, mds) = params;
     let round_constants = round_constants
         .iter()
         .map(|round| round.map(field_to_bytes))
         .collect();
     let mds = mds.map(|row| row.map(field_to_bytes));
-    Poseidon2Params {
+    Bn254PoseidonParams {
         round_constants,
         mds,
     }
 }
-/// Export Poseidon2 parameters for width 3 as byte arrays.
+/// Export Poseidon parameters for width 3 as byte arrays.
 #[must_use]
-pub fn poseidon2_params_width3() -> Poseidon2Params<3> {
+pub fn bn254_poseidon_params_width3() -> Bn254PoseidonParams<3> {
     params_to_bytes(poseidon3_params())
 }
-/// Export Poseidon2 parameters for width 6 as byte arrays.
+/// Export Poseidon parameters for width 6 as byte arrays.
 #[must_use]
-pub fn poseidon2_params_width6() -> Poseidon2Params<6> {
+pub fn bn254_poseidon_params_width6() -> Bn254PoseidonParams<6> {
     params_to_bytes(poseidon6_params())
 }
 #[cfg(test)]
@@ -443,7 +466,7 @@ impl Write for PoseidonByteHasher {
         Ok(())
     }
 }
-/// Hash an arbitrary list of BN254 field elements using Poseidon2 (rate 2).
+/// Hash an arbitrary list of BN254 field elements using Poseidon (rate 2).
 #[must_use]
 pub fn hash_words(words: &[Fr]) -> Fr {
     hash_words_internal(words)
@@ -453,12 +476,12 @@ pub fn hash_words(words: &[Fr]) -> Fr {
 pub fn hash_words_bytes(words: &[Fr]) -> [u8; 32] {
     field_to_bytes(hash_words_internal(words))
 }
-/// Hash already packed little-endian `u64` byte words using the Poseidon2 sponge.
+/// Hash already packed little-endian `u64` byte words using the Poseidon sponge.
 #[must_use]
 pub fn hash_u64_words_bytes(words: &[u64]) -> [u8; 32] {
     field_to_bytes(hash_u64_words_internal(words))
 }
-/// Hash an arbitrary byte slice using the Poseidon2 sponge.
+/// Hash an arbitrary byte slice using the Poseidon sponge.
 ///
 /// Bytes are packed into little-endian `u64` field words and terminated with an unambiguous
 /// byte-level `0x01` delimiter before the field-sponge padding. The delimiter is placed in a new
@@ -506,31 +529,31 @@ fn field_to_u64(f: Fr) -> u64 {
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
 }
-/// Hash two 64-bit limbs with Poseidon2 and return the resulting field element as bytes.
+/// Hash two 64-bit limbs with Poseidon and return the resulting field element as bytes.
 #[must_use]
 pub fn hash2_bytes(a: u64, b: u64) -> [u8; 32] {
-    field_to_bytes(poseidon2_field(a, b))
+    field_to_bytes(hash2_field(a, b))
 }
-/// Hash six 64-bit limbs with Poseidon2 (width 6) and return the resulting bytes.
+/// Hash six 64-bit limbs with Poseidon (width 6) and return the resulting bytes.
 #[must_use]
 pub fn hash6_bytes(inputs: [u64; 6]) -> [u8; 32] {
-    field_to_bytes(poseidon6_field(inputs))
+    field_to_bytes(hash6_field(inputs))
 }
-/// Hash two 64-bit limbs with Poseidon2 and return the low 64 bits.
+/// Hash two 64-bit limbs with Poseidon and return the low 64 bits.
 #[must_use]
 pub fn hash2_u64(a: u64, b: u64) -> u64 {
-    field_to_u64(poseidon2_field(a, b))
+    field_to_u64(hash2_field(a, b))
 }
-/// Hash six 64-bit limbs with Poseidon2 (width 6) and return the low 64 bits.
+/// Hash six 64-bit limbs with Poseidon (width 6) and return the low 64 bits.
 #[must_use]
 pub fn hash6_u64(inputs: [u64; 6]) -> u64 {
-    field_to_u64(poseidon6_field(inputs))
+    field_to_u64(hash6_field(inputs))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn poseidon2_samples_are_consistent() {
+    fn hash2_samples_are_consistent() {
         let cases = [
             (0u64, 0u64),
             (1u64, 2u64),
@@ -540,17 +563,20 @@ mod tests {
         for (a, b) in cases {
             let bytes_first = hash2_bytes(a, b);
             let bytes_second = hash2_bytes(a, b);
-            assert_eq!(bytes_first, bytes_second, "Poseidon2 must be deterministic");
+            assert_eq!(bytes_first, bytes_second, "Poseidon must be deterministic");
             let low = hash2_u64(a, b);
             assert_eq!(bytes_first[..8], low.to_le_bytes());
         }
     }
     #[test]
-    fn poseidon6_samples_are_consistent() {
+    fn hash6_samples_are_consistent() {
         let inputs = [1u64, 2, 3, 4, 5, 6];
         let bytes_first = hash6_bytes(inputs);
         let bytes_second = hash6_bytes(inputs);
-        assert_eq!(bytes_first, bytes_second, "Poseidon6 must be deterministic");
+        assert_eq!(
+            bytes_first, bytes_second,
+            "Six-input Poseidon must be deterministic"
+        );
         assert_eq!(bytes_first[..8], hash6_u64(inputs).to_le_bytes());
     }
     #[test]
@@ -667,8 +693,36 @@ mod tests {
         assert_eq!(hasher.finalize(), hash_bytes(&input));
     }
     #[test]
+    fn bn254_parameter_exports_match_captured_bytes() {
+        use sha2::{Digest as _, Sha256};
+        fn digest<const W: usize>(params: Bn254PoseidonParams<W>) -> String {
+            let mut hash = Sha256::new();
+            for round in params.round_constants {
+                for word in round {
+                    hash.update(word);
+                }
+            }
+            for row in params.mds {
+                for word in row {
+                    hash.update(word);
+                }
+            }
+            format!("{:x}", hash.finalize())
+        }
+        // Independent pre-rename capture: axt_poseidon_constants.json, each width's
+        // round-major constants followed by row-major MDS, canonical little-endian.
+        assert_eq!(
+            digest(bn254_poseidon_params_width3()),
+            "20a6364b21446c75eafb313c00cda37f1e772a3e76f158d6938b40fd52988709"
+        );
+        assert_eq!(
+            digest(bn254_poseidon_params_width6()),
+            "443ee9a4a9e5f8425720a184e8ef3fbe1897c9fcae80e4c1827cf0a246889bda"
+        );
+    }
+    #[test]
     fn poseidon_params_exports_match_widths() {
-        let params3 = poseidon2_params_width3();
+        let params3 = bn254_poseidon_params_width3();
         assert_eq!(
             params3.round_constants.len(),
             <FrSpec as Spec<Fr, 3, 2>>::full_rounds()
@@ -676,7 +730,7 @@ mod tests {
         );
         assert_eq!(params3.mds.len(), 3);
         assert_eq!(params3.mds[0].len(), 3);
-        let params6 = poseidon2_params_width6();
+        let params6 = bn254_poseidon_params_width6();
         assert_eq!(
             params6.round_constants.len(),
             <FrSpec as Spec<Fr, 6, 5>>::full_rounds()

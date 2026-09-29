@@ -462,25 +462,27 @@ are outside this Pasta parameter cut.
 
 ### BN254 naming correction is a distinct change
 
-`iroha_zkp_poseidon/src/poseidon.rs` currently calls its algorithm Poseidon2 and
-exports `Poseidon2Params`/`poseidon2_params_width3/6`. Inspection shows original
-Poseidon round constants from `poseidon_primitives::Spec`, a dense MDS after
-every round, and no Poseidon2 initial linear layer. Its `poseidon2_field(a, b)`
-uses two inputs, while `poseidon6_field` uses six. The numeral in those helpers
-describes arity, not an algorithm version. The
-[Poseidon2 paper](https://eprint.iacr.org/2023/323) and
-[authors' implementation](https://github.com/HorizenLabs/poseidon2) define a
-different permutation/linear-layer construction.
+The leaf now names its original BN254 permutation accurately. The exported
+`Bn254PoseidonParams` and `bn254_poseidon_params_width3/6` replace the misnamed
+Poseidon2 parameter API, with no aliases. GPU parameter staging and the AXT
+fixture generator use the new exports. Private two/six-input helper names
+explicitly describe arity. The dense MDS, generated constants, byte framing,
+field arithmetic and existing output fixtures are unchanged.
 
-Correct crate descriptions, Rustdoc, parameter type and parameter-export names
-to original BN254 Poseidon; make helper arity explicit and migrate callers
-without compatibility aliases. Inventory IVM opcode mnemonics, compiler
-lowering, hardware kernels and golden vectors separately: renaming an internal
-helper must not silently change the existing opcode's numeric assignment or
-arithmetic. An ABI surface rename needs its own canonical ABI/spec/fixture
-update under first-release policy. Do not silently replace the current BN254
-arithmetic with Poseidon2 or Pasta. This naming observation does not qualify
-either BN254 construction's cryptographic security.
+The [Poseidon2 paper](https://eprint.iacr.org/2023/323) and
+[authors' implementation](https://github.com/HorizenLabs/poseidon2) describe a
+different permutation and linear layers. This correction does not select those
+algorithms or establish independent security qualification. Existing IVM opcode
+mnemonics, numeric assignments, compiler lowering and hardware kernels retain
+their arithmetic contract; a separate ABI surface change requires its own
+canonical specification and golden updates.
+
+The parameter-byte digests are derived independently from the existing AXT
+capture, and the leaf has positive typed API and retired-name compile-fail
+controls. All 19 native controls and four documentation tests pass on the frozen
+ordinary build; actual GPU parameter staging and AXT fixture-generator consumers
+also compile. This [naming amendment](../docs/history/2026-09-29/bn254-poseidon-api.md)
+does not qualify hardware execution or a complete proof protocol.
 
 ## Smallest next implementation and acceptance gates
 
@@ -496,10 +498,12 @@ either BN254 construction's cryptographic security.
    sponge. Its [isolated native record](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md)
    covers arbitrary-field round/input/copy/padding mutations, genuine proof
    tampering/wrong-instance controls, clearing and measured 56-round geometry.
-   A single maximum record requires test k=17; the production k=16 cap stays
-   unchanged. Qualify a complete bounded layout before adoption, and keep
-   existing admitted helpers unchanged until their separately inventoried
-   replacement is complete.
+   The paired-partial layout passes ten isolated controls. Its maximum single
+   hash uses 40,062 total rows at the unchanged k=16 cap and yields a 2,688-byte
+   genuine IPA proof. Verification takes 238.840 ms, above the unchanged 20 ms
+   soft budget. Normal Core integration and the complete bounded relation remain
+   unqualified. Keep admitted helpers unchanged until their separately
+   inventoried replacement is complete.
 3. Review the complete semantic role/key/privacy design. Then implement one
    native RAM path and all policy/config/data-model/Torii/Core/SDK migrations,
    regenerate descriptor/KAT/receipt/opening fixtures, and delete the replaced

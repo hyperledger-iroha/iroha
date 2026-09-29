@@ -1,5 +1,9 @@
 //! This module contains structures and implementations related to the cryptographic parts of the Iroha.
 mod algorithm;
+#[cfg(doctest)]
+mod bfv_api_boundary;
+#[cfg(any(test, feature = "bfv-test-fixtures"))]
+pub mod bfv_test_fixtures;
 #[cfg(feature = "bls")]
 mod bls_decode_cache;
 #[cfg(test)]

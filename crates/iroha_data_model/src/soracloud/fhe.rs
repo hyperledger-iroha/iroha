@@ -893,6 +893,15 @@ pub struct FheExecutionPolicyV1 {
     pub rounding_mode: FheDeterministicRoundingModeV1,
 }
 impl FheExecutionPolicyV1 {
+    /// Require a qualified production FHE profile before admission or execution.
+    ///
+    /// # Errors
+    /// Always returns [`SoracloudManifestError::FheUnavailable`]. Structural
+    /// policy validation and complete execution proofs cannot repair insecure encryption.
+    pub fn require_production_support(&self) -> Result<(), SoracloudManifestError> {
+        Err(SoracloudManifestError::FheUnavailable)
+    }
+
     /// Validate schema version and deterministic policy constraints.
     ///
     /// # Errors
@@ -3030,6 +3039,18 @@ pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is FHE ciphertext and may be operated on homomorphically.
     FheCiphertext,
 }
+impl SecretEnvelopeEncryptionV1 {
+    /// Require an encryption class supported by production secret storage.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::FheUnavailable`] for an FHE declaration.
+    pub fn require_production_support(self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::ClientCiphertext => Ok(()),
+            Self::FheCiphertext => Err(SoracloudManifestError::FheUnavailable),
+        }
+    }
+}
 /// Opaque encrypted payload with commitment used by ciphertext-native state.
 #[derive(
     Clone,
@@ -4347,6 +4368,17 @@ pub struct SoraDeploymentBundleV1 {
     pub service: SoraServiceManifestV1,
 }
 impl SoraDeploymentBundleV1 {
+    /// Require supported encryption declarations before deployment or restore.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::FheUnavailable`] for any FHE state binding.
+    pub fn require_production_support(&self) -> Result<(), SoracloudManifestError> {
+        for binding in &self.service.state_bindings {
+            binding.encryption.require_production_support()?;
+        }
+        Ok(())
+    }
+
     /// Compute the canonical hash of the container manifest.
     #[must_use]
     pub fn container_manifest_hash(&self) -> Hash {

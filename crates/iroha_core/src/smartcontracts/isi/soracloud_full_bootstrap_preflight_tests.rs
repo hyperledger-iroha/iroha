@@ -101,7 +101,7 @@ fn unmutated_material_reaches_closed_production_qualification_gate() {
     assert_invalid_parameter_contains(error.clone(), "release audit package failed validation");
     assert_invalid_parameter_contains(
         error,
-        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
+        "BFV production qualification unavailable: KnownInsecureExactProfile",
     );
 }
 

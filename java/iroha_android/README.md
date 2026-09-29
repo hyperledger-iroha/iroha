@@ -1130,6 +1130,15 @@ transaction API; submission failures are reconciled by transaction hash.
 the exact lowercase BLAKE3-256 digest of the canonical UTF-8 JSON request
 payload. An omitted payload hashes the empty byte sequence; noncanonical hex or
 a digest mismatch fails closed before the draft is returned.
+Encrypted RAM-LFE is unavailable until its diagnostic exact-lift BFV profile is
+replaced. Execute responses contain ciphertext and a receipt; they do not provide
+a plaintext opening. Identifier requests require an independently authenticated
+opening. The retired execute `output_opening` field is rejected.
+Local plaintext encryption refuses with `ram_lfe_encryption_unavailable`; public
+seed overrides and the insecure production encryptor are removed. The canonical
+Kotlin/JVM API exposes `RamLfeEncryptionUnavailableException` to Java callers.
+Retired backend names and unknown modes are rejected on decode.
+
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require
 `ToriiCanonicalRequestAuth` plus `ClientConfig.localSigningContext`. They sign the
 exact POST path and body once, reject precomputed canonical headers, and bind a

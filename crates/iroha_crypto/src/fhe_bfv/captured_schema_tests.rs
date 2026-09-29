@@ -14,7 +14,7 @@ macro_rules! assert_captured {
 fn captured_bidirectional_codec_schema_identities() {
     assert_captured!(assert_bidirectional:
         RamLfeBfvProfileV1,
-        BfvProductionQualificationBlockerV1,
+        BfvProductionSupportBlockerV1,
         BfvParameters,
         BfvRnsModulusChain,
         BfvRnsPolynomial,

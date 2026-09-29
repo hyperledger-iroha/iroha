@@ -31,6 +31,28 @@ pub(super) fn state() -> State {
     )
 }
 
+/// Acquire State first, then bind the real original recorder before any block effects.
+/// These component fixtures have no signed carrier; their transcript/output mutations
+/// remain test inputs and do not manufacture a publishable execution source owner.
+pub(super) fn recorded_block(
+    state: &State,
+    header: BlockHeader,
+) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
+    let (block, recording) = state
+        .block_with_owned_start_stages(
+            header,
+            |block| {
+                let recording = crate::exec_witness::begin_exec_witness_capture()?;
+                block.bind_original_execution_recorder()?;
+                Ok::<_, String>(recording)
+            },
+            |_, recording| Ok(recording),
+        )
+        .expect("record the pristine component scope before block effects");
+    block.require_original_execution_recorder().unwrap();
+    (block, recording)
+}
+
 /// Supply the explicit canonical wire commitment owned by this test's block fixture.
 pub(super) fn cache_canonical_test_transaction_set(
     block: &mut StateBlock<'_>,
@@ -132,7 +154,6 @@ fn canonical_transcript_bytes(transcripts: &BTreeMap<Hash, Vec<TransferTranscrip
 
 #[test]
 fn inventory_covers_nontransfer_calls_and_every_applied_source() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let external = [
         external(&state, "transfer"),
@@ -148,9 +169,8 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
         Hash::new(b"failed invocation"),
     ];
     let extras = [Hash::new(b"native purpose"), Hash::new(b"internal call")];
-    let mut block = state.block(header());
+    let (mut block, _recording) = recorded_block(&state, header());
     cache_canonical_test_transaction_set(&mut block, &external);
-    crate::exec_witness::start_block();
     assert!(block.fastpq_source_inventory().unwrap().is_none());
     for hash in [calls[1], time_calls[1]] {
         block.admit_fastpq_source_for_testing(hash);

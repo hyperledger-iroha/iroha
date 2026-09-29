@@ -1,6 +1,6 @@
 //! Four-validator qualification for bounded progress, clean idle, and proposal work.
 use super::*;
-use iroha::data_model::block::execution_output::ExecutionOutputV1;
+use iroha::data_model::{block::execution_output::ExecutionOutputV1, prelude::FindAccountById};
 #[allow(clippy::too_many_lines)]
 pub(super) async fn run_permissioned_progress() -> Result<()> {
     init_instruction_registry();
@@ -191,7 +191,8 @@ pub(super) async fn run() -> Result<()> {
                 })
                 .collect()
         };
-        let retransmit_observation = network.block_sync_gossip_period().saturating_mul(2);
+        let block_sync_gossip_period = network.block_sync_gossip_period();
+        let retransmit_observation = block_sync_gossip_period.saturating_mul(2);
         let commit_quorum_observation = network.da_commit_quorum_timeout().saturating_mul(2);
         let idle_observation = SMOKE_PIPELINE_TIME
             .saturating_mul(10)
@@ -500,7 +501,7 @@ pub(super) async fn run() -> Result<()> {
             );
         }
         eprintln!(
-            "EX-297 idle-chain evidence: cadence={SMOKE_PIPELINE_TIME:?}, retransmit_interval_ms={retransmit_interval_ms}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, baseline_settle_window={baseline_settle_window:?}, idle_window={idle_observation:?}, baseline_height={baseline_height}, external_height={external_height}, trigger_registration_height={registration_height}, internal_trigger_height={internal_height}, final_tip_hash={expected_internal_hash}"
+            "EX-297 idle-chain evidence: cadence={SMOKE_PIPELINE_TIME:?}, block_sync_gossip_period={block_sync_gossip_period:?}, retransmit_window={retransmit_observation:?}, commit_quorum_window={commit_quorum_observation:?}, baseline_settle_window={baseline_settle_window:?}, idle_window={idle_observation:?}, baseline_height={baseline_height}, external_height={external_height}, trigger_registration_height={registration_height}, internal_trigger_height={internal_height}, final_tip_hash={expected_internal_hash}"
         );
         Ok(())
     }

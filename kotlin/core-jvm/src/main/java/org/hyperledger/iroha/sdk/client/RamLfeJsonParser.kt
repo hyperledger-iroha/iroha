@@ -19,8 +19,8 @@ object RamLfeJsonParser {
                     requiredExactString(item["owner"], "ram-lfe program policy list.items[$i].owner"),
                     asBoolean(item["active"], "ram-lfe program policy list.items[$i].active"),
                     requiredPublicKeyLiteral(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key"),
-                    requiredExactLowercaseString(item["backend"], "ram-lfe program policy list.items[$i].backend"),
-                    requiredExactLowercaseString(item["verification_mode"], "ram-lfe program policy list.items[$i].verification_mode"),
+                    RamLfeWireTags.parseBackend(item["backend"], "ram-lfe program policy list.items[$i].backend"),
+                    RamLfeWireTags.parseVerificationMode(item["verification_mode"], "ram-lfe program policy list.items[$i].verification_mode"),
                     optionalExactString(item["input_encryption"], "ram-lfe program policy list.items[$i].input_encryption"),
                     optionalExactHex(item["input_encryption_public_parameters"], "ram-lfe program policy list.items[$i].input_encryption_public_parameters"),
                     if (item["input_encryption_public_parameters_decoded"] == null) null
@@ -71,8 +71,8 @@ object RamLfeJsonParser {
             canonicalizeExactHash32(root["associated_data_hash"], "ram-lfe execute response.associated_data_hash"),
             asLong(root["executed_at_ms"], "ram-lfe execute response.executed_at_ms"),
             if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "ram-lfe execute response.expires_at_ms") else null,
-            requiredExactLowercaseString(root["backend"], "ram-lfe execute response.backend"),
-            requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode"),
+            RamLfeWireTags.parseBackend(root["backend"], "ram-lfe execute response.backend"),
+            RamLfeWireTags.parseVerificationMode(root["verification_mode"], "ram-lfe execute response.verification_mode"),
             expectObject(root["receipt"], "ram-lfe execute response.receipt"),
         )
     }
@@ -83,8 +83,8 @@ object RamLfeJsonParser {
         return RamLfeReceiptVerifyResponse(
             asBoolean(root["valid"], "ram-lfe receipt verify response.valid"),
             requiredExactString(root["program_id"], "ram-lfe receipt verify response.program_id"),
-            requiredExactLowercaseString(root["backend"], "ram-lfe receipt verify response.backend"),
-            requiredExactLowercaseString(root["verification_mode"], "ram-lfe receipt verify response.verification_mode"),
+            RamLfeWireTags.parseBackend(root["backend"], "ram-lfe receipt verify response.backend"),
+            RamLfeWireTags.parseVerificationMode(root["verification_mode"], "ram-lfe receipt verify response.verification_mode"),
             canonicalizeExactHash32(root["output_hash"], "ram-lfe receipt verify response.output_hash"),
             canonicalizeExactHash32(root["associated_data_hash"], "ram-lfe receipt verify response.associated_data_hash"),
             if (root.containsKey("output_hash_matches"))
@@ -123,12 +123,6 @@ object RamLfeJsonParser {
         val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         check(string.trim() == string) { "$path must not contain surrounding whitespace" }
-        return string
-    }
-
-    private fun requiredExactLowercaseString(value: Any?, path: String): String {
-        val string = requiredExactString(value, path)
-        check(string.lowercase() == string) { "$path must be an exact lowercase string" }
         return string
     }
 
@@ -220,8 +214,6 @@ object RamLfeJsonParser {
         }
         return body.lowercase()
     }
-
-    private fun normalizedMode(value: String): String = value.trim().lowercase()
 
     private fun parseBfvPublicParameters(root: Map<String, Any?>, context: String): IdentifierBfvPublicParameters {
         val parameters = expectObject(root["parameters"], "$context.parameters")

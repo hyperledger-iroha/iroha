@@ -26,7 +26,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
-use iroha_zkp_poseidon::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
+use iroha_zkp_poseidon::poseidon::{bn254_poseidon_params_width3, bn254_poseidon_params_width6};
 use norito::{json, to_bytes};
 use std::{env, error::Error, fs, path::Path};
 const DESCRIPTOR_FIXTURE_PATH: &str = concat!(
@@ -504,8 +504,8 @@ fn build_envelope_fixture(
     })
 }
 fn build_poseidon_fixture() -> PoseidonConstantsFixture {
-    let width3 = poseidon2_params_width3();
-    let width6 = poseidon2_params_width6();
+    let width3 = bn254_poseidon_params_width3();
+    let width6 = bn254_poseidon_params_width6();
     let encode_rounds = |rounds: Vec<[[u8; 32]; 3]>| {
         rounds
             .into_iter()

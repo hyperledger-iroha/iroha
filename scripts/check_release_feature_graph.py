@@ -146,6 +146,7 @@ HOSTILE_CARGO_ENVIRONMENT = frozenset(
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
     'iroha_core feature "iroha-core-tests"',
+    'iroha_crypto feature "bfv-test-fixtures"',
     'iroha_data_model feature "test-fixtures"',
     'iroha_p2p feature "test-fixtures"',
     'iroha_sccp feature "test-fixtures"',

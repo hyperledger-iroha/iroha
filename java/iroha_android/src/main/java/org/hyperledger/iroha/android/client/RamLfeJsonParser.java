@@ -35,16 +35,12 @@ public final class RamLfeJsonParser {
               requiredPublicKeyLiteral(
                   item.get("resolver_public_key"),
                   "ram-lfe program policy list.items[" + i + "].resolver_public_key"),
-              !item.containsKey("output_opening_public_key")
-                  ? requiredPublicKeyLiteral(
-                      item.get("resolver_public_key"),
-                      "ram-lfe program policy list.items[" + i + "].resolver_public_key")
-                  : requiredPublicKeyLiteral(
+              requiredPublicKeyLiteral(
                       item.get("output_opening_public_key"),
                       "ram-lfe program policy list.items[" + i + "].output_opening_public_key"),
-              requiredExactLowercaseString(
+              RamLfeJsonParser.requiredBackend(
                   item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend"),
-              requiredExactLowercaseString(
+              RamLfeJsonParser.requiredVerificationMode(
                   item.get("verification_mode"),
                   "ram-lfe program policy list.items[" + i + "].verification_mode"),
               optionalExactString(
@@ -111,8 +107,8 @@ public final class RamLfeJsonParser {
         root.containsKey("expires_at_ms")
             ? asOptionalLong(root.get("expires_at_ms"), "ram-lfe execute response.expires_at_ms")
             : null,
-        requiredExactLowercaseString(root.get("backend"), "ram-lfe execute response.backend"),
-        requiredExactLowercaseString(
+        RamLfeJsonParser.requiredBackend(root.get("backend"), "ram-lfe execute response.backend"),
+        RamLfeJsonParser.requiredVerificationMode(
             root.get("verification_mode"), "ram-lfe execute response.verification_mode"),
         expectObject(root.get("receipt"), "ram-lfe execute response.receipt"));
   }
@@ -125,9 +121,9 @@ public final class RamLfeJsonParser {
         asBoolean(root.get("valid"), "ram-lfe receipt verify response.valid"),
         requiredExactString(
             root.get("program_id"), "ram-lfe receipt verify response.program_id"),
-        requiredExactLowercaseString(
+        RamLfeJsonParser.requiredBackend(
             root.get("backend"), "ram-lfe receipt verify response.backend"),
-        requiredExactLowercaseString(
+        RamLfeJsonParser.requiredVerificationMode(
             root.get("verification_mode"), "ram-lfe receipt verify response.verification_mode"),
         canonicalizeExactHash32(
             root.get("output_hash"), "ram-lfe receipt verify response.output_hash"),
@@ -191,10 +187,22 @@ public final class RamLfeJsonParser {
     return string;
   }
 
-  private static String requiredExactLowercaseString(final Object value, final String path) {
+  static String requiredBackend(final Object value, final String path) {
     final String string = requiredExactString(value, path);
-    if (!string.toLowerCase(Locale.ROOT).equals(string)) {
-      throw new IllegalStateException(path + " must be an exact lowercase string");
+    try {
+      IdentifierReceiptCanonicalEncoder.backendTag(string);
+    } catch (IllegalArgumentException error) {
+      throw new IllegalStateException(path + " must be a supported RAM-LFE backend", error);
+    }
+    return string;
+  }
+
+  static String requiredVerificationMode(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    try {
+      IdentifierReceiptCanonicalEncoder.verificationModeTag(string);
+    } catch (IllegalArgumentException error) {
+      throw new IllegalStateException(path + " must be signed or proof", error);
     }
     return string;
   }

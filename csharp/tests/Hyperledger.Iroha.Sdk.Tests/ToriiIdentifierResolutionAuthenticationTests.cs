@@ -45,7 +45,9 @@ public sealed class ToriiIdentifierResolutionAuthenticationTests
         Assert.True(handler.HasAccountHeader);
         using var body = JsonDocument.Parse(handler.RequestBody!);
         Assert.Equal("phone#retail", body.RootElement.GetProperty("policy_id").GetString());
-        Assert.Equal("ciphertext", body.RootElement.GetProperty("encrypted_input").GetString());
+        Assert.Equal(IdentifierRequestFixtures.Ciphertext, body.RootElement.GetProperty("encrypted_input").GetString());
+        Assert.False(body.RootElement.TryGetProperty("input", out _));
+        Assert.Equal(IdentifierRequestFixtures.OpenedHash, body.RootElement.GetProperty("output_opening").GetProperty("payload").GetProperty("opened_output_hash").GetString());
     }
 
     [Fact]
@@ -82,7 +84,8 @@ public sealed class ToriiIdentifierResolutionAuthenticationTests
     private static ToriiIdentifierResolveRequest Request() => new()
     {
         PolicyId = "phone#retail",
-        EncryptedInput = "ciphertext",
+        EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+        OutputOpening = IdentifierRequestFixtures.Opening(),
     };
 
     internal static ToriiClient AuthenticatedClient(

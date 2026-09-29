@@ -4,7 +4,8 @@
 //! [`SoraServiceManifestV1`], [`SoraStateBindingV1`], [`AgentApartmentManifestV1`],
 //! [`FheParamSetV1`], and [`FheExecutionPolicyV1`]. Together they describe executable bundles,
 //! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
-//! confidential-compute policy in a form suitable for validator admission and audit trails.
+//! policy metadata and audit trails. FHE remains unavailable for production: the exact
+//! BFV profile is insecure and no replacement encryption profile is qualified.
 #![allow(clippy::module_name_repetitions)]
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};

@@ -138,20 +138,7 @@ pub mod isi {
                     .into(),
                 ));
             }
-            if let Some(expires_at_ms) = receipt.expires_at_ms()
-                && expires_at_ms <= receipt.resolved_at_ms()
-            {
-                return Err(Error::InvariantViolation(
-                    "identifier receipt expiry must be greater than resolved_at_ms"
-                        .to_owned()
-                        .into(),
-                ));
-            }
-            if receipt_payload.receipt_hash == Hash::prehashed([0; Hash::LENGTH]) {
-                return Err(Error::InvariantViolation(
-                    "Identifier receipt hash must not be zero".to_owned().into(),
-                ));
-            }
+            validate_identifier_receipt_metadata(&receipt)?;
             let now_ms = state_transaction.block_unix_timestamp_ms();
             validate_program_receipt(
                 &receipt,
@@ -167,6 +154,26 @@ pub mod isi {
                 state_transaction,
             )
         }
+    }
+
+    fn validate_identifier_receipt_metadata(
+        receipt: &IdentifierResolutionReceipt,
+    ) -> Result<(), Error> {
+        if let Some(expires_at_ms) = receipt.expires_at_ms()
+            && expires_at_ms <= receipt.resolved_at_ms()
+        {
+            return Err(Error::InvariantViolation(
+                "identifier receipt expiry must be greater than resolved_at_ms"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        if receipt.payload.receipt_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(Error::InvariantViolation(
+                "Identifier receipt hash must not be zero".to_owned().into(),
+            ));
+        }
+        Ok(())
     }
 
     // Constructed only after policy, authority and execution validation above.
@@ -258,11 +265,7 @@ pub mod isi {
                 .into(),
             ));
         }
-        evict_expired_identifier_binding(
-            state_transaction,
-            &receipt_payload.opaque_id,
-            now_ms,
-        )?;
+        evict_expired_identifier_binding(state_transaction, &receipt_payload.opaque_id, now_ms)?;
         if let Some(existing_uaid) = state_transaction
             .world
             .opaque_uaids
@@ -639,26 +642,7 @@ pub mod isi {
             network_id,
             now_ms,
         )?;
-        let expected_hashes =
-            expected_identifier_hashes(policy, &receipt.payload.opening, phone_nullifier.as_ref())?;
-        if receipt.payload.opaque_id != OpaqueAccountId::from(expected_hashes.0) {
-            return Err(Error::InvariantViolation(
-                format!(
-                    "Identifier receipt opaque_id does not match program output hash for policy {}",
-                    policy.id
-                )
-                .into(),
-            ));
-        }
-        if receipt.payload.receipt_hash != expected_hashes.1 {
-            return Err(Error::InvariantViolation(
-                format!(
-                    "Identifier receipt hash does not match program output hash for policy {}",
-                    policy.id
-                )
-                .into(),
-            ));
-        }
+        validate_identifier_output_binding(receipt, policy, phone_nullifier.as_ref())?;
         match program_policy.verification_mode {
             RamLfeVerificationMode::Signed => {
                 if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
@@ -710,6 +694,34 @@ pub mod isi {
         }
         Ok(())
     }
+    fn validate_identifier_output_binding(
+        receipt: &IdentifierResolutionReceipt,
+        policy: &IdentifierPolicy,
+        phone_nullifier: Option<&Hash>,
+    ) -> Result<(), Error> {
+        let expected_hashes =
+            expected_identifier_hashes(policy, &receipt.payload.opening, phone_nullifier)?;
+        if receipt.payload.opaque_id != OpaqueAccountId::from(expected_hashes.0) {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Identifier receipt opaque_id does not match program output hash for policy {}",
+                    policy.id
+                )
+                .into(),
+            ));
+        }
+        if receipt.payload.receipt_hash != expected_hashes.1 {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Identifier receipt hash does not match program output hash for policy {}",
+                    policy.id
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn expected_identifier_hashes(
         policy: &IdentifierPolicy,
         opening: &RamLfeOutputOpening,

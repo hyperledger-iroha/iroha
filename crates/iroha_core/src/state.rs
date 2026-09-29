@@ -12785,18 +12785,24 @@ impl<'state> StateBlock<'state> {
             self.fastpq_source_inventory = Some(Err(error.clone()));
         }
         self.fastpq_source_quota = Some(quota);
-        let lane_incarnations = self
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                (
-                    lane.id,
-                    StateReadOnly::lane_incarnation_at_height(self, lane.id, height),
-                )
-            })
-            .collect();
+        // The global chain retains its genesis-authenticated primary identity.
+        // Nonzero execution lanes belong exclusively to the native committed
+        // lane records, using the same parent-anchor boundary as routing.
+        let global_lane = crate::sumeragi::lanes::routing::GLOBAL_LANE;
+        let mut lane_incarnations = BTreeMap::from([(
+            global_lane,
+            StateReadOnly::lane_incarnation_at_height(self, global_lane, height),
+        )]);
+        for record in &self.world.sumeragi_lanes.get().lanes {
+            if record.lane == global_lane {
+                continue;
+            }
+            let incarnation = record
+                .admits_anchor(height.saturating_sub(1))
+                .then(|| Hash::from_marked_bytes(record.incarnation))
+                .flatten();
+            lane_incarnations.insert(record.lane, incarnation);
+        }
         self.fastpq_source_context = Some(Arc::new(crate::fastpq::FastpqBlockStartSourceContext {
             source: iroha_data_model::fastpq::FastpqSourceStatementContextV1 {
                 network_id: self.network_id,
@@ -36737,13 +36743,12 @@ impl<'state> StateBlock<'state> {
             }
         };
         if self.exec_witness.is_none() {
-            if let Err(error) = self.require_original_execution_recorder() {
-                self.clear_cached_exec_witness();
-                return Err(error);
-            }
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
             let result = (|| {
                 let state = &mut *capture.state;
+                // Authority loss is a terminal local capture failure. Latch it without
+                // draining a recorder that may now belong to another execution.
+                state.require_original_execution_recorder()?;
                 let mut witness =
                     match crate::exec_witness::drain_exec_witness_checked(|transcripts| {
                         source_inventory.verify_finalized_transcript_map(transcripts)
@@ -39465,11 +39470,11 @@ mod fastpq_tx_set_hash_tests {
             .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
+        let new_block: SignedBlock = new_block.into();
         let (mut state_block, guard) =
-            crate::block::ValidBlock::start_component_execution(new_block.as_ref(), state)
+            crate::block::ValidBlock::start_component_execution(&new_block, state)
                 .expect("original recorder before execution");
-        let _ = new_block
-            .validate_and_record_transactions(&mut state_block, guard)
+        let _ = crate::block::ValidBlock::validate_unchecked(new_block, &mut state_block, guard)
             .unpack(|_| {});
         let entrypoints = [
             TransactionEntrypoint::External(tx1),

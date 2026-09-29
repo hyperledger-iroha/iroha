@@ -15,7 +15,9 @@ This fixture is arithmetic conformance data, not an independently reviewed relea
 artifact. It contains no audit package or reviewer signing key. The generator also
 asserts that a locally signed test package cannot qualify either the production
 execution wrapper or the production noise-bound wrapper. Both remain unavailable
-with `MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`.
+with `KnownInsecureExactProfile`: the exact profile has a noiseless public-key
+equation modulo the plaintext modulus. Evidence cannot repair it; rounded
+diagnostic arithmetic is not a qualified replacement.
 
 Regenerate into an absolute temporary path, inspect the size and digest, and then
 replace the fixture and this record together:

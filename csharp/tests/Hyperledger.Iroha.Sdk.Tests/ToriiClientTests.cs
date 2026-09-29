@@ -3771,7 +3771,7 @@ public sealed partial class ToriiClientTests
         manifestAccess["issued_ms"] = 2;
         Assert.Equal(1710000000000, manifestDto.Manifest["issued_ms"]!.GetValue<long>());
         AssertSnapshot(
-            node => new ToriiIdentifierPolicySummary { InputEncryptionPublicParametersDecoded = node },
+            node => new ToriiIdentifierPolicySummary { ProgramId = "identifier_lookup_retail", OutputOpeningPublicKey = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE", InputEncryptionPublicParametersDecoded = node },
             dto => dto.InputEncryptionPublicParametersDecoded);
         AssertSnapshot(
             node => new ToriiIdentifierResolveResponse { SignaturePayload = node },
@@ -8557,6 +8557,8 @@ public sealed partial class ToriiClientTests
                       "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
+                      "program_id": "identifier_lookup_retail",
+                      "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                       "resolver_public_key": "ed0120abcd",
                       "backend": "bfv-affine-v1",
                       "input_encryption": "bfv-v1",
@@ -8578,6 +8580,8 @@ public sealed partial class ToriiClientTests
         Assert.Equal(1, policies.Total);
         Assert.Single(policies.Items);
         Assert.Equal("phone#retail", policies.Items[0].PolicyId);
+        Assert.Equal("identifier_lookup_retail", policies.Items[0].ProgramId);
+        Assert.Equal("ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE", policies.Items[0].OutputOpeningPublicKey);
         Assert.True(policies.Items[0].Active);
         Assert.Equal("bfv-affine-v1", policies.Items[0].Backend);
         Assert.Equal(2048, policies.Items[0].InputEncryptionPublicParametersDecoded!["degree"]!.GetValue<int>());
@@ -8614,6 +8618,8 @@ public sealed partial class ToriiClientTests
                       "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
+                      "program_id": "identifier_lookup_retail",
+                      "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                       "resolver_public_key": {{JsonSerializer.Serialize(resolverPublicKey)}},
                       "backend": "bfv-affine-v1"
                     }
@@ -11220,7 +11226,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/identifiers/resolve", request.RequestUri!.AbsolutePath);
             Assert.Equal("phone#retail", payload.RootElement.GetProperty("policy_id").GetString());
-            Assert.Equal("+15551234567", payload.RootElement.GetProperty("input").GetString());
+            Assert.Equal(IdentifierRequestFixtures.Ciphertext, payload.RootElement.GetProperty("encrypted_input").GetString());
+            Assert.False(payload.RootElement.TryGetProperty("input", out _));
+            Assert.Equal(IdentifierRequestFixtures.OpenedHash, payload.RootElement.GetProperty("output_opening").GetProperty("payload").GetProperty("opened_output_hash").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -11234,7 +11242,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("opaque-1", resolved.OpaqueId);
@@ -11266,7 +11275,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("phone#retail", resolved.PolicyId);
@@ -11298,7 +11308,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("phone#retail", resolved.PolicyId);
@@ -11336,7 +11347,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11360,7 +11372,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11387,7 +11400,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = policyId,
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("identifier resolve request.policy_id", error.Message);
@@ -11414,6 +11428,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 PolicyId = "phone#retail",
                 EncryptedInput = encryptedInput,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("EncryptedInput", error.ParamName);
@@ -11437,7 +11452,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("identifier resolve response.policy_id", error.Message);
@@ -11462,7 +11478,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11491,7 +11508,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11524,7 +11542,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11555,7 +11574,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11576,7 +11596,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("proof", resolved.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
@@ -11610,7 +11631,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -11666,7 +11688,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
-            Input = "+15551234567",
+            EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
@@ -11728,7 +11751,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiIdentifierResolveRequest
             {
                 PolicyId = "phone#retail",
-                Input = "+15551234567",
+                EncryptedInput = IdentifierRequestFixtures.Ciphertext,
+                OutputOpening = IdentifierRequestFixtures.Opening(),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
@@ -23021,6 +23045,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiIdentifierPolicySummary
         {
             PolicyId = "phone#retail",
+            ProgramId = "identifier_lookup_retail",
+            OutputOpeningPublicKey = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             Owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             Active = true,
             Normalization = "phone_e164",
@@ -23048,6 +23074,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["owner"] = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             ["active"] = true,
             ["normalization"] = "phone_e164",
+            ["program_id"] = "identifier_lookup_retail",
+            ["output_opening_public_key"] = "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
             ["resolver_public_key"] = "ed0120abcd",
             ["backend"] = "bfv-affine-v1",
             ["input_encryption"] = "bfv-v1",
@@ -23067,6 +23095,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "active": true,
               "normalization": "phone_e164",
+              "program_id": "identifier_lookup_retail",
+              "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
               "resolver_public_key": "ed0120abcd",
               "backend": "bfv-affine-v1"
             }
@@ -23123,6 +23153,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "normalization": "phone_e164",
+                  "program_id": "identifier_lookup_retail",
+                  "output_opening_public_key": "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
                   "resolver_public_key": "ed0120abcd",
                   "backend": "bfv-affine-v1"
                 }

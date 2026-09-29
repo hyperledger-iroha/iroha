@@ -730,6 +730,11 @@ supply a plaintext opening; identifier resolution requires the caller's independ
 authenticated `outputOpening`. Production rejects the insecure `bfv-affine-v1` and
 `bfv-programmed-v1` profiles. Private identifier execution remains unavailable until
 a secure encryption profile is implemented and qualified.
+The local `encryptInput` and plaintext `encryptedRequest` entry points throw
+`ToriiClientError.ramLfeEncryptionUnavailable` before handling the input. Public
+seed overrides are removed. Requests constructed from existing ciphertext remain
+DTOs; they do not establish encryption support. Exact-lift arithmetic is retained
+only in test fixtures.
 
 ### Sora VPN native lease flow
 

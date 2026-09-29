@@ -4,7 +4,7 @@
 use super::tests::cache_canonical_test_transaction_set;
 use super::*;
 use crate::{
-    governance::manifest::{LaneManifestRegistry, LaneManifestStatus},
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::{
@@ -67,31 +67,16 @@ fn fixture_with_effects(
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let statuses = state
-        .nexus_snapshot()
-        .lane_catalog
-        .lanes()
-        .iter()
-        .map(|lane| {
-            (
-                lane.id,
-                LaneManifestStatus {
-                    lane: lane.id,
-                    alias: lane.alias.clone(),
-                    dataspace: lane.dataspace_id,
-                    visibility: lane.visibility,
-                    storage: lane.storage,
-                    governance: None,
-                    manifest_path: None,
-                    governance_rules: None,
-                    privacy_commitments: Vec::new(),
-                },
-            )
-        })
-        .collect();
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        statuses,
-    )));
+    let nexus = state.nexus_snapshot();
+    let manifests = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &nexus.registry,
+    ));
+    manifests
+        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
+        .expect("fixture manifest authority retains its frozen source");
+    state.install_lane_manifests_for_testing(&manifests);
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
@@ -288,10 +273,15 @@ fn seal_metadata(block: &mut StateBlock<'_>) -> Result<ExecutionOutputSealMetada
 
 #[test]
 fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_order() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let (state, mut source, pipeline, time) = fixture();
-    crate::exec_witness::start_block();
-    let mut block = state.block(source.header());
+
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
     let height = source.header().height().get();
     let pipeline_call = PipelineInvocationV1 {
         event: PipelineEventPositionV1::BlockApproved,
@@ -379,7 +369,6 @@ fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_ord
 
 #[test]
 fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let (state, mut source, _, _) = fixture_with_effects(false, true);
@@ -398,8 +387,14 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
     let rejected_fee = gas_fee(1);
     let total_fee = success_fee.checked_add(&rejected_fee).unwrap();
     assert!(!success_fee.is_zero() && !rejected_fee.is_zero());
-    crate::exec_witness::start_block();
-    let mut block = state.block(source.header());
+
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
     assert!(
         block
             .world
@@ -512,11 +507,16 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
 
 #[test]
 fn unknown_internal_capture_and_changed_known_capture_refuse_and_latch() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     for mutation in 0..4 {
         let (state, mut source, _, _) = fixture_with_effects(true, false);
-        crate::exec_witness::start_block();
-        let mut block = state.block(source.header());
+
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
         execute(&mut block, &source);
         assert_eq!(block.fastpq_transcripts.len(), 1);
         let internal = *block.fastpq_transcripts.keys().next().unwrap();
@@ -587,11 +587,16 @@ fn unknown_internal_capture_and_changed_known_capture_refuse_and_latch() {
 
 #[test]
 fn foreign_proposal_and_frozen_context_refuse_before_digest_mutation() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     for mutation in 0..4 {
         let (state, mut source, _, _) = fixture_with_effects(true, false);
-        crate::exec_witness::start_block();
-        let mut block = state.block(source.header());
+
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
         execute(&mut block, &source);
         assert_eq!(block.fastpq_transcripts.len(), 1);
         let transcripts = block.fastpq_transcripts.clone();
@@ -668,10 +673,15 @@ fn foreign_proposal_and_frozen_context_refuse_before_digest_mutation() {
 
 #[test]
 fn owned_seal_still_rejects_late_applied_capture_after_transcript_drain() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let (state, mut source, _, _) = fixture_with_effects(true, false);
-    crate::exec_witness::start_block();
-    let mut block = state.block(source.header());
+
+    let (mut block, _recording) = state
+        .block_with_recorded_pristine_carrier_stage(
+            &source,
+            |_| Ok::<(), String>(()),
+            |error| error,
+        )
+        .unwrap();
     execute(&mut block, &source);
     assert_eq!(block.fastpq_transcripts.len(), 1);
     let call = *block.fastpq_transcripts.keys().next().unwrap();

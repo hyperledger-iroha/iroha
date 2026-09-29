@@ -69,18 +69,6 @@ public sealed record class ToriiAliasResolutionRequest
     public string Alias { get; init; } = string.Empty;
 }
 
-public sealed record class ToriiIdentifierResolveRequest
-{
-    [JsonPropertyName("policy_id")]
-    public string PolicyId { get; init; } = string.Empty;
-
-    [JsonPropertyName("input")]
-    public string? Input { get; init; }
-
-    [JsonPropertyName("encrypted_input")]
-    public string? EncryptedInput { get; init; }
-}
-
 public sealed record class ToriiAliasResolveIndexRequest
 {
     [JsonPropertyName("index")]
@@ -5389,6 +5377,14 @@ public sealed record class ToriiIdentifierPolicySummary
 
     [JsonPropertyName("policy_id")]
     public string PolicyId { get; init; } = string.Empty;
+
+    /// <summary>Exact registered program selected by this identifier policy.</summary>
+    [JsonPropertyName("program_id")]
+    public required string ProgramId { get; init; }
+
+    /// <summary>Pinned independent authority for authenticated plaintext output openings.</summary>
+    [JsonPropertyName("output_opening_public_key")]
+    public required string OutputOpeningPublicKey { get; init; }
 
     [JsonPropertyName("owner")]
     public string Owner { get; init; } = string.Empty;

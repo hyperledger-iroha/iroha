@@ -182,6 +182,8 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiIdentifierPolicySummary))]
 [JsonSerializable(typeof(ToriiRamFheProfile))]
 [JsonSerializable(typeof(ToriiIdentifierResolveRequest))]
+[JsonSerializable(typeof(ToriiRamLfeOutputOpening))]
+[JsonSerializable(typeof(ToriiRamLfeOutputOpeningPayload))]
 [JsonSerializable(typeof(ToriiIdentifierResolveResponse))]
 [JsonSerializable(typeof(ToriiNodeCapabilities))]
 [JsonSerializable(typeof(ToriiNodeCryptoCapabilities))]
