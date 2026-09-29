@@ -246,6 +246,8 @@ impl StripedMerkle {
         mut lower_hash: impl FnMut(usize, &[usize], &[[u64; 6]], &mut [[u64; 6]]) -> Result<()>,
         mut upper_hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
     ) -> Result<()> {
+        use zeroize::Zeroize;
+
         if self.failed || self.seen >= self.plan.leaves {
             self.failed = true;
             return Err(invalid(
@@ -293,7 +295,6 @@ impl StripedMerkle {
             )?;
             // The fixed allocation remains guarded on both success and failure.
             // Clear consumed slots now without shrinking the guarded owner.
-            use zeroize::Zeroize;
             for consumed in &mut self.lower[start..end] {
                 consumed.zeroize();
             }
@@ -329,10 +330,10 @@ impl StripedMerkle {
     }
 
     fn capture(&mut self, level: usize, index: usize, value: Digest) -> Result<()> {
-        if level > 0 {
-            if let Some(cache) = &mut self.cache {
-                cache.record(level, index, value)?;
-            }
+        if level > 0
+            && let Some(cache) = &mut self.cache
+        {
+            cache.record(level, index, value)?;
         }
         let Some(plan) = &self.plan.openings else {
             return Ok(());
@@ -512,6 +513,7 @@ fn stream_rows(
         deep_binding::Oracle,
         deep_proof::{RowOpening, RowValues},
     };
+    const BATCH: usize = super::deep_leaf_batch::CAPACITY;
     if replay.width() != WIDTH
         || tree.leaves != replay.plan().lde_rows()
         || tree.stripes != replay.plan().stripes()
@@ -534,13 +536,12 @@ fn stream_rows(
         tree.start()?
     };
     let mut row = SecretPolynomial::zeroed(WIDTH)?;
-    const BATCH: usize = super::deep_leaf_batch::CAPACITY;
     let mut bytes = SecretPolynomial::zeroed(BATCH * WIDTH * 8)?;
     let mut leaves = SecretPolynomial::<[u64; 6]>::zeroed(BATCH)?;
     let mut selected = SecretPolynomial::zeroed(queries.len() * WIDTH)?;
     let parent = |level: usize, index: usize, left, right| {
         binding
-            .hash_parent(Oracle::Row, level as u32, index as u32, left, right)
+            .hash_parent_at(Oracle::Row, level, index, left, right)
             .map_err(binding_error)
     };
     replay.visit_all(|stripe| {
@@ -595,7 +596,8 @@ fn stream_rows(
         .map_err(|_| invalid("DEEP final row opening allocation failed"))?;
     for (&index, values) in queries.iter().zip(selected.chunks_exact(WIDTH)) {
         rows.push(RowOpening {
-            index: index as u32,
+            index: u32::try_from(index)
+                .map_err(|_| invalid("DEEP row opening index exceeds u32"))?,
             values: RowValues::new(values.to_vec())?,
         });
     }
@@ -648,7 +650,8 @@ pub(super) fn open_cached_rows(
             .map(|word| u64::from_le_bytes(word.try_into().expect("exact row cell")))
             .collect::<Vec<_>>();
         rows.push(RowOpening {
-            index: index as u32,
+            index: u32::try_from(index)
+                .map_err(|_| invalid("cached row opening index exceeds u32"))?,
             values: RowValues::new(values)?,
         });
     }
@@ -663,6 +666,10 @@ fn replay_stripes() -> usize {
     super::deep_geometry::LDE_ROWS / super::deep_geometry::TRACE_ROWS
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "`map_err` adapter; the sibling test module passes it point-free"
+)]
 fn binding_error(error: super::deep_binding::BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP streamed commitment: {error}"),

@@ -16,7 +16,6 @@ public final class VerifyingKeyInstructionUtilsTests {
     "halo2/ipa",
     "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-replay-binding-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -88,7 +87,7 @@ public final class VerifyingKeyInstructionUtilsTests {
 
   private static void verifierRegistryIsClosedExactTypedAndImmutable() {
     final Set<String> expected = new LinkedHashSet<>(Arrays.asList(EXACT_REGISTRY));
-    assert expected.size() == 8 : "test registry must not contain duplicates";
+    assert expected.size() == 7 : "test registry must not contain duplicates";
     assert expected.equals(VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         : "Java registry must exactly mirror the native registry";
 

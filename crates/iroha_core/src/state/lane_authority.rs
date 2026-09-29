@@ -2,11 +2,7 @@
 
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
-};
+use iroha_data_model::{NetworkId, account::AccountId, block::BlockExecutionContextBundle};
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
@@ -523,20 +519,24 @@ pub(super) fn peer_pool_with_inputs(
 /// Resolve the peers authoritative for an active route: the global committee.
 ///
 /// Every transaction executes in the global Sumeragi block, so lanes and dataspaces are routing
-/// labels. An active route's authority is the committee the lag-2 schedule derives for
-/// `authority_height` (every live validator, in the core's canonical order), the same committee
-/// QueuePlan admission binds. The reported fault tolerance is the global `⌊(n − 1) / 3⌋`.
+/// labels. An active route binds the exact authenticated epoch committee retained for
+/// `authority_height`, in canonical order, shared with QueuePlan admission. Live registrations
+/// cannot replace that authority. The reported fault tolerance is the global `(n − 1) / 3`.
 ///
 /// # Errors
-/// The dataspace is unknown, the lane is not active on it at `authority_height`, a live validator
-/// key is not BLS-normal, or no validator is live.
+/// The dataspace is unknown, the lane is inactive, or the retained authenticated schedule is
+/// absent, malformed, pending its boundary, or does not cover `authority_height`.
 pub(crate) fn resolve_global_route(
     world: &impl WorldReadOnly,
     route: LaneAuthorityRoute,
     nexus: &iroha_config::parameters::actual::Nexus,
     authority_height: u64,
 ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
-    if nexus.dataspace_catalog.by_id(route.dataspace_id()).is_none() {
+    if nexus
+        .dataspace_catalog
+        .by_id(route.dataspace_id())
+        .is_none()
+    {
         return Err(LaneAuthorityError::UnknownDataspace {
             dataspace_id: route.dataspace_id(),
         });
@@ -548,6 +548,15 @@ pub(crate) fn resolve_global_route(
             lane_id: route.lane_id(),
             dataspace_id: route.dataspace_id(),
             authority_height,
+        });
+    }
+    if world.consensus_schedule().entries().is_empty() {
+        return Err(LaneAuthorityError::UndersizedPool {
+            lane_id: route.lane_id(),
+            dataspace_id: route.dataspace_id(),
+            authority_height,
+            required: 4,
+            actual: 0,
         });
     }
     let validators = crate::sumeragi::schedule::scheduled_committee(world, authority_height)
@@ -832,7 +841,14 @@ mod global_route_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
 
-    fn state_with_validators(seeds: &[u8]) -> State {
+    fn state_with_validators(seeds: &[u8]) -> std::sync::Arc<State> {
+        if seeds.len() == 4 {
+            let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+                crate::sumeragi::test_chain::TestChainConfig::new(World::default(), 1_000),
+            )
+            .expect("authenticated four-validator genesis");
+            return std::sync::Arc::clone(chain.state());
+        }
         let mut state = State::new(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -857,7 +873,7 @@ mod global_route_tests {
                 .world
                 .register_validator_pop_for_testing(key.public_key().clone(), pop);
         }
-        state
+        std::sync::Arc::new(state)
     }
 
     #[test]
@@ -896,13 +912,16 @@ mod global_route_tests {
             ),
             Err(LaneAuthorityError::InactiveRoute { .. })
         ));
-        let single = state
-            .resolve_route_authority_at_height(
-                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                3,
-            )
-            .unwrap();
-        assert_eq!((single.validators().len(), single.fault_tolerance()), (1, 0));
+        assert!(
+            matches!(
+                state.resolve_route_authority_at_height(
+                    LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    3
+                ),
+                Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+            ),
+            "a lone live registration cannot invent authenticated voting authority"
+        );
         let empty = state_with_validators(&[]);
         assert!(matches!(
             empty.resolve_route_authority_at_height(

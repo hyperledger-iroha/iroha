@@ -33,26 +33,8 @@ pub use admission::{
 };
 pub use mode::{MapMode, Prepaid};
 
-type MapCell<K, V, M> = LinCowCell<
-    SuperBlock<K, V, M>,
-    CursorRead<K, V, M>,
-    CursorWrite<K, V, M>,
-    <M as NodeFunding>::Charge,
->;
-type MapRead<'a, K, V, M> = LinCowCellReadTxn<
-    'a,
-    SuperBlock<K, V, M>,
-    CursorRead<K, V, M>,
-    CursorWrite<K, V, M>,
-    <M as NodeFunding>::Charge,
->;
-type MapWrite<'a, K, V, M> = LinCowCellWriteTxn<
-    'a,
-    SuperBlock<K, V, M>,
-    CursorRead<K, V, M>,
-    CursorWrite<K, V, M>,
-    <M as NodeFunding>::Charge,
->;
+mod types;
+use types::*;
 
 include!("impl.rs");
 
@@ -66,7 +48,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellFamily<SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+    inner: MapFamily<K, V, M>,
 }
 
 impl<K, V, M> Clone for BptreeMapFamily<K, V, M>
@@ -107,7 +89,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellPredecessor<'a, SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+    inner: MapPredecessor<'a, K, V, M>,
 }
 
 impl<K, V, M> BptreeMapPredecessor<'_, K, V, M>
@@ -137,7 +119,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellRetainedPredecessor<SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+    inner: MapRetainedPredecessor<K, V, M>,
 }
 impl<K, V, M> Clone for BptreeMapRetainedPredecessor<K, V, M>
 where
@@ -200,13 +182,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellWriterAcquisition<
-        'a,
-        SuperBlock<K, V, M>,
-        CursorRead<K, V, M>,
-        CursorWrite<K, V, M>,
-        M::Charge,
-    >,
+    inner: MapWriterAcquisition<'a, K, V, M>,
 }
 
 /// Actual original map writer awaiting predecessor validation.
@@ -218,13 +194,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellOwnedAcquisition<
-        'a,
-        SuperBlock<K, V, M>,
-        CursorRead<K, V, M>,
-        CursorWrite<K, V, M>,
-        M::Charge,
-    >,
+    inner: MapOwnedAcquisition<'a, K, V, M>,
 }
 impl<'a, K, V, M> BptreeMapOwnedAcquisition<'a, K, V, M>
 where
@@ -262,8 +232,7 @@ where
     V: Clone + Sync + Send + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner:
-        LinCowCellOwned<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
+    inner: MapOwned<K, V, M>,
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
@@ -453,8 +422,7 @@ where
     pub fn try_acquire_owned(
         &self,
         owned: BptreeMapOwned<K, V, M>,
-    ) -> Result<BptreeMapOwnedAcquisition<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)>
-    {
+    ) -> MapOwnedAcquireResult<'_, K, V, M> {
         owned.inner.as_ref().assert_operable();
         self.inner
             .try_acquire_owned(owned.inner)
@@ -478,8 +446,7 @@ where
     pub fn try_acquire_owned_retained(
         &self,
         owned: BptreeMapOwned<K, V, M>,
-    ) -> Result<BptreeMapOwnedAcquisition<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)>
-    {
+    ) -> MapOwnedAcquireResult<'_, K, V, M> {
         owned.inner.as_ref().assert_operable();
         self.inner
             .try_acquire_owned_retained(owned.inner)
@@ -495,7 +462,7 @@ where
     pub fn try_write_owned(
         &self,
         owned: BptreeMapOwned<K, V, M>,
-    ) -> Result<BptreeMapWriteTxn<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)> {
+    ) -> MapOwnedWriteResult<'_, K, V, M> {
         self.try_acquire_owned(owned)?
             .validate()
             .map_err(|(acquired, error)| (acquired.abort(), error))
@@ -574,8 +541,7 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    _inner:
-        LinCowCellOwned<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
+    _inner: MapOwned<K, V, M>,
 }
 
 /// An original map successor checked under both physical publication locks.
@@ -586,13 +552,7 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellPreparedCommit<
-        'a,
-        SuperBlock<K, V, M>,
-        CursorRead<K, V, M>,
-        CursorWrite<K, V, M>,
-        M::Charge,
-    >,
+    inner: MapPreparedCommit<'a, K, V, M>,
 }
 
 /// The original map writer retained by its caller during physical preparation.
@@ -604,13 +564,7 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellCommitSlot<
-        'a,
-        SuperBlock<K, V, M>,
-        CursorRead<K, V, M>,
-        CursorWrite<K, V, M>,
-        M::Charge,
-    >,
+    inner: MapCommitSlot<'a, K, V, M>,
 }
 
 impl<'a, K, V, M> BptreeMapCommitSlot<'a, K, V, M>
@@ -664,13 +618,7 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    inner: LinCowCellPublished<
-        'a,
-        SuperBlock<K, V, M>,
-        CursorRead<K, V, M>,
-        CursorWrite<K, V, M>,
-        M::Charge,
-    >,
+    inner: MapPublished<'a, K, V, M>,
 }
 
 /// Original cursor and reader cleanup retained after physical publication.
@@ -682,7 +630,7 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
-    _inner: LinCowCellCommitRetirement<CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
+    _inner: MapCommitRetirement<K, V, M>,
 }
 
 impl<'a, K, V, M> BptreeMapWriteTxn<'a, K, V, M>

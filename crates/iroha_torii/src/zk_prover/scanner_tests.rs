@@ -439,7 +439,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     assert!(second_report.proofs[0].ok);
     assert_eq!(
         second_report.proofs[0].circuit_id.as_deref(),
-        Some(iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID),
+        Some("stark/fri/poseidon-x7-goldilocks-6x64-v1:torii-worker-v1"),
         "a cached proof report must preserve registry circuit attribution"
     );
     assert!(!second_report.proofs[1].ok);

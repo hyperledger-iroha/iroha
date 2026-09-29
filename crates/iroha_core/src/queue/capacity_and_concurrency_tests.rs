@@ -1,35 +1,4 @@
 #[tokio::test]
-async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let transaction = accepted_tx_by_someone(&time_source);
-    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
-    let state = Arc::new(state);
-    let queue = Arc::new(Queue::test(config_factory(), &time_source));
-    let hash = transaction.as_ref().hash_as_entrypoint();
-    queue
-        .push(transaction, state.view())
-        .expect("push transaction");
-    let mut expired_transactions = Vec::new();
-    let guard = queue
-        .pop_from_queue(&state.view(), &mut expired_transactions)
-        .expect("pop transaction");
-    assert!(expired_transactions.is_empty());
-    assert!(
-        !queue.queued_tx_enqueued_at_ms.contains_key(&hash),
-        "popping removes the transaction's FIFO owner"
-    );
-    assert_eq!(queue.remove_committed_hashes([hash], None), 1);
-    assert!(
-        queue.removed_hashes.is_empty(),
-        "an in-flight guard has no stale FIFO hash that needs a tombstone"
-    );
-    drop(guard);
-    assert!(queue.removed_hashes.is_empty());
-}
-#[tokio::test]
 async fn push_tx_overflow() {
     let capacity = nonzero!(10_usize);
     let kura: Arc<Kura> = Kura::blank_kura_for_testing();

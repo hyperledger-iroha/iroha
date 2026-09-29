@@ -176,11 +176,28 @@ public struct AccountAliasName: Codable, Equatable, Hashable, Sendable, CustomSt
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.domain) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.domain,
+                .init(codingPath: container.codingPath, debugDescription: "domain must be present, including when null")
+            )
+        }
         try self.init(
             label: container.decode(String.self, forKey: .label),
             domain: container.decodeIfPresent(String.self, forKey: .domain),
             dataspace: container.decode(String.self, forKey: .dataspace)
         )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(label, forKey: .label)
+        if let domain {
+            try container.encode(domain, forKey: .domain)
+        } else {
+            try container.encodeNil(forKey: .domain)
+        }
+        try container.encode(dataspace, forKey: .dataspace)
     }
 
     private enum CodingKeys: String, CodingKey { case label, domain, dataspace }
@@ -334,10 +351,29 @@ public struct AliasLeaseAcquisitionV1: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.pricingClassHint) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.pricingClassHint,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "pricing_class_hint must be present, including when null"
+                )
+            )
+        }
         try self.init(
             termYears: container.decode(UInt8.self, forKey: .termYears),
             pricingClassHint: container.decodeIfPresent(UInt8.self, forKey: .pricingClassHint)
         )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(termYears, forKey: .termYears)
+        if let pricingClassHint {
+            try container.encode(pricingClassHint, forKey: .pricingClassHint)
+        } else {
+            try container.encodeNil(forKey: .pricingClassHint)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1083,6 +1119,38 @@ public struct AliasPlanResourceV1: Codable, Equatable, Sendable {
         case disposition
         case quote
         case instructionIndex = "instruction_index"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        for required in [CodingKeys.quote, .instructionIndex] where !container.contains(required) {
+            throw DecodingError.keyNotFound(
+                required,
+                .init(codingPath: container.codingPath, debugDescription: "nullable V1 fields must be present")
+            )
+        }
+        self.init(
+            intent: try container.decode(AliasIntentV1.self, forKey: .intent),
+            disposition: try container.decode(AliasPlanDispositionV1.self, forKey: .disposition),
+            quote: try container.decodeIfPresent(AliasLeaseQuoteV1.self, forKey: .quote),
+            instructionIndex: try container.decodeIfPresent(UInt32.self, forKey: .instructionIndex)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(intent, forKey: .intent)
+        try container.encode(disposition, forKey: .disposition)
+        if let quote {
+            try container.encode(quote, forKey: .quote)
+        } else {
+            try container.encodeNil(forKey: .quote)
+        }
+        if let instructionIndex {
+            try container.encode(instructionIndex, forKey: .instructionIndex)
+        } else {
+            try container.encodeNil(forKey: .instructionIndex)
+        }
     }
 }
 

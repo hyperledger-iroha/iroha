@@ -145,7 +145,7 @@ test("numeric V1 rejects noncanonical and authenticated mutations", () => {
 
   const unassigned = NumericV1.encodeIntEnvelope(1n).slice();
   unassigned[0] = 0;
-  unassigned[1] = 0x13;
+  unassigned[1] = 0x0c;
   unassigned[2] = 2;
   assert.throws(() => NumericV1.decodeIntEnvelope(unassigned), { code: "unknown_type" });
 

@@ -1,6 +1,7 @@
 //! Real World capture releases writers and preserves the exact unpublished cut.
 
 use super::*;
+use crate::state::scalar_cell_custody::ScalarCellFixtureBlock;
 use crate::{
     smartcontracts::isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
     state::{DataSpaceId, LaneConfig},
@@ -208,14 +209,14 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 307);
+    assert_eq!(detached.field_count(), 311);
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        307
+        311
     );
     assert_eq!(
         detached
@@ -272,12 +273,12 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
         original.smart_contract_state.remove(path("capture/noop"));
         *original.soradns_last_publish_ms.get_mut() = Some(22);
         register_trigger(&mut original, "typed_trigger");
-        let original = original.into_fields();
-        // Retain capture notifications until the rest of the actual World
-        // fields have left this scope and released their physical writers.
-        let mut storage = original.smart_contract_state.into_capture();
-        let mut cell = original.soradns_last_publish_ms.into_capture();
-        let mut triggers = original.triggers.into_capture();
+        // Take only these original fields from the retained heap shell. Moving
+        // the complete World inventory through this frame can overflow its stack.
+        // Capture notifications remain held until every other writer is released.
+        let mut storage = original.smart_contract_state.take_capture();
+        let mut cell = original.soradns_last_publish_ms.take_capture();
+        let mut triggers = original.triggers.take_capture();
         storage.capture().unwrap();
         cell.capture().unwrap();
         triggers.capture().unwrap();
@@ -504,7 +505,7 @@ fn every_inventory_field_binds_untouched_current_and_undo_publications() {
             ]
         };
     }
-    let owners: [(&str, fn(&World)); 307] = with_world_overlay_fields!(invalidators);
+    let owners: [(&str, fn(&World)); 311] = with_world_overlay_fields!(invalidators);
     let world = fixture();
     for (name, publish_same_values) in owners {
         let detached = capture(world.block());

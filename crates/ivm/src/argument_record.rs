@@ -1,9 +1,9 @@
-//! One-shot decoding for compiler-generated public entrypoint wrappers.
+//! One-shot preparation and table materialization for public entrypoint calls.
 //!
 //! Torii, CLI, and SDK boundaries may accept ergonomic JSON, but they convert it before signing
 //! into one schema-hashed canonical Norito record. Execution preparation decodes and validates that
-//! complete record once. Contract wrappers still supply their compact schema, while the host only
-//! verifies the binding and materializes a VM-owned table of ABI words in declaration order.
+//! complete record once against the authenticated callable schema. Before guest execution the
+//! host materializes aligned, owned word tables in declaration order.
 use crate::{
     VMError,
     host::quote_tlv_payload_len_at,
@@ -42,7 +42,6 @@ use std::{mem::size_of, str::FromStr, sync::Arc};
 const ARGUMENT_DECODE_GAS_BASE: u64 = 32;
 const ARGUMENT_DECODE_GAS_PER_BYTE: u64 = 1;
 const TLV_ENVELOPE_BYTES: usize = 7 + Hash::LENGTH;
-const ARGUMENT_RECORD_BINDING_DOMAIN_V1: &[u8] = b"iroha:ivm:argument-record-binding:v1";
 #[cfg(any(test, debug_assertions))]
 thread_local! {
     static RECORD_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -107,7 +106,6 @@ impl ArgumentDecodePlan {
                 lengths.push(envelope.len());
             }
         }
-        lengths.push(decoded_table_envelope_len(self.roots.len()));
         lengths
     }
     fn raw_heap_bytes(&self) -> u64 {
@@ -122,13 +120,15 @@ impl ArgumentDecodePlan {
                     layout.allocation_bytes().unwrap_or(u64::MAX)
                 }
             })
-            .fold(0, u64::saturating_add)
+            .fold(
+                decoded_table_bytes(self.roots.len()) as u64,
+                u64::saturating_add,
+            )
     }
 }
 struct PreparedArgumentRecordInner {
     canonical_record: Arc<[u8]>,
     canonical_schema: Arc<[u8]>,
-    binding: [u8; Hash::LENGTH],
     decode_plan: ArgumentDecodePlan,
 }
 /// A schema-validated public argument record ready for one IVM invocation.
@@ -150,6 +150,45 @@ impl core::fmt::Debug for PreparedArgumentRecord {
     }
 }
 impl PreparedArgumentRecord {
+    /// Exact number of flattened argument slots in the authenticated schema.
+    #[must_use]
+    pub fn word_count(&self) -> usize {
+        self.inner.decode_plan.roots.len()
+    }
+    /// Install the invocation's argument and result tables after exact gas prepayment.
+    ///
+    /// All pointer copies, active aggregate allocations, argument slots, and result slots are
+    /// preflighted together before any allocation. The result reservation does not initialize
+    /// result slots: runtime write coverage starts when the root callable is entered.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid table counts, a missing or mismatched decode-gas prepayment, insufficient
+    /// remaining gas, or insufficient owned memory for the complete invocation preparation.
+    pub fn install_call_arguments(&self, vm: &mut IVM, result_words: usize) -> Result<(), VMError> {
+        let result_bytes = result_table_bytes(result_words)?;
+        vm.consume_prepaid_argument_decode(self.inner.decode_plan.gas())?;
+        vm.debit_gas(
+            result_bytes
+                .checked_mul(crate::call_gas::PER_BYTE)
+                .ok_or(VMError::OutOfGas)?,
+        )?;
+        let reserved_heap = self
+            .inner
+            .decode_plan
+            .raw_heap_bytes()
+            .checked_add(result_bytes)
+            .ok_or(VMError::DecodeError)?;
+        vm.preflight_host_tlv_allocations_with_reserved_heap(
+            &self.inner.decode_plan.allocation_lengths(),
+            reserved_heap,
+        )?;
+        materialize_decode_plan(vm, &self.inner.decode_plan)?;
+        let result_base = vm.alloc_heap(result_bytes)?;
+        vm.set_register(12, result_base);
+        vm.set_register(13, result_words as u64);
+        Ok(())
+    }
     /// Return the unchanged canonical record bytes carried by the signed call.
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
@@ -181,19 +220,11 @@ impl PreparedArgumentRecord {
         let canonical_schema = canonical_norito_frame(schema).map_err(|_| VMError::DecodeError)?;
         Ok(self.schema_bytes() == canonical_schema)
     }
-    /// Return the domain-separated capability payload exposed to guest code.
-    ///
-    /// The full signed record remains host-owned; compiler-generated wrappers
-    /// receive only this immutable binding and the decoded ABI word table.
-    #[must_use]
-    pub fn binding_bytes(&self) -> &[u8; Hash::LENGTH] {
-        &self.inner.binding
-    }
     /// Debit the complete deterministic decode/materialization cost before guest execution begins.
     ///
     /// This escrow is mandatory for prepared records: it prevents a hand-built
-    /// artifact from avoiding argument-decoding gas by branching around the
-    /// decode syscall after the host has already prepared the signed record.
+    /// artifact from avoiding argument preparation by ignoring its arguments.
+    /// The interpreter consumes this prepayment before entering the root callable.
     ///
     /// # Errors
     ///
@@ -202,60 +233,74 @@ impl PreparedArgumentRecord {
     pub fn precharge_vm(&self, vm: &mut IVM) -> Result<(), VMError> {
         vm.prepay_argument_decode(self.inner.decode_plan.gas())
     }
-    /// Quote materialization after verifying the VM still presents the record
-    /// pointer issued by the host and correctly bounded envelope shapes.
-    ///
-    /// Payload authentication and exact binding checks happen in [`Self::install_into_vm`] after
-    /// the decode/materialization charge has already been prepaid. The quote path deliberately does
-    /// not hash or deserialize attacker-controlled payloads.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if either VM pointer is invalid, substituted, or not allowed by the active
-    /// ABI policy, or if the exact decode cost was not prepaid for this invocation.
-    pub fn decode_gas_quote(&self, vm: &IVM, record_pointer: u64) -> Result<u64, VMError> {
-        if vm.register(10) != record_pointer {
+}
+/// Prepare canonical public input supplied by a host without a predecoded record.
+///
+/// The same metered public-input route is used by default and custom hosts, so root preparation
+/// preserves their authorization, staged gas accounting, and canonical pointer validation.
+///
+/// # Errors
+///
+/// Returns the host's input error, an unaffordable preparation charge, or a canonical-record error
+/// before any guest instruction executes.
+pub(crate) fn prepare_default_call_arguments(
+    host: &mut dyn crate::host::IVMHost,
+    vm: &mut IVM,
+    schema: &EntrypointArgumentSchemaV1,
+    result_words: usize,
+) -> Result<(), VMError> {
+    let name: Name = "trigger_event_json"
+        .parse()
+        .map_err(|_| VMError::DecodeError)?;
+    let name_payload = canonical_norito_frame(&name).map_err(|_| VMError::DecodeError)?;
+    let syscall = crate::syscalls::SYSCALL_GET_PUBLIC_INPUT;
+    let instruction = crate::encoding::wide::encode_syscallx(syscall);
+    vm.debit_gas(crate::gas::cost_of(instruction).ok_or(VMError::DecodeError)?)?;
+    let name_pointer = vm.alloc_host_tlv(&encode_tlv(PointerType::Name, &name_payload)?)?;
+    vm.set_register(10, name_pointer);
+    vm.execute_syscall(host, syscall)?;
+    let canonical_record = {
+        let record = validate_tlv_any_region(vm, vm.register(10), PointerType::NoritoBytes)?;
+        if record.payload.len() > MAX_ENTRYPOINT_ARGUMENT_RECORD_BYTES {
             return Err(VMError::DecodeError);
         }
-        let (record_bytes, schema_bytes) = quote_argument_envelope_lengths(vm)?;
-        if record_bytes != self.binding_bytes().len() || schema_bytes != self.schema_bytes().len() {
-            return Err(VMError::DecodeError);
+        let bound = schema_materialization_bound(schema)?;
+        let gas_bound = argument_record_gas_for_schema_bound(
+            record.payload.len(),
+            canonical_norito_frame_len(schema),
+            bound,
+        );
+        if gas_bound > vm.gas_remaining {
+            return Err(VMError::OutOfGas);
         }
-        if !vm.argument_decode_is_prepaid(self.inner.decode_plan.gas()) {
-            return Err(VMError::DecodeError);
-        }
-        Ok(0)
+        Arc::<[u8]>::from(record.payload)
+    };
+    let prepared =
+        prepare_argument_record_with_gas_limit(schema, canonical_record, vm.gas_remaining)?;
+    prepared.precharge_vm(vm)?;
+    prepared.install_call_arguments(vm, result_words)
+}
+fn result_table_bytes(result_words: usize) -> Result<u64, VMError> {
+    if !(1..=ivm_abi::call::MAX_CALL_WORDS_V1).contains(&result_words) {
+        return Err(VMError::DecodeError);
     }
-    /// Materialize the prepared ABI-word table in VM-owned memory.
-    ///
-    /// This validates the host-issued record pointer and canonical schema again
-    /// for direct host calls, then allocates typed pointer values and the packed
-    /// word table without decoding either Norito payload. Allocations prefer
-    /// INPUT and spill into the owned HEAP prefix when INPUT cannot fit them.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the VM inputs do not match this prepared record, the
-    /// exact decode cost was not prepaid, or VM-owned INPUT and HEAP capacity
-    /// cannot hold the complete allocation sequence.
-    pub fn install_into_vm(&self, vm: &mut IVM, record_pointer: u64) -> Result<u64, VMError> {
-        self.validate_vm_binding(vm, record_pointer)?;
-        vm.consume_prepaid_argument_decode(self.inner.decode_plan.gas())?;
-        materialize_decode_plan(vm, &self.inner.decode_plan)?;
-        Ok(0)
-    }
-    fn validate_vm_binding(&self, vm: &IVM, record_pointer: u64) -> Result<(), VMError> {
-        if vm.register(10) != record_pointer {
-            return Err(VMError::DecodeError);
-        }
-        let record_tlv = validate_tlv_any_region(vm, record_pointer, PointerType::NoritoBytes)?;
-        let schema_tlv = validate_tlv_any_region(vm, vm.register(11), PointerType::NoritoBytes)?;
-        validate_argument_envelope_lengths(&record_tlv, &schema_tlv)?;
-        if record_tlv.payload != self.binding_bytes() || schema_tlv.payload != self.schema_bytes() {
-            return Err(VMError::DecodeError);
-        }
-        Ok(())
-    }
+    Ok((result_words * ivm_abi::call::CALL_WORD_BYTES_V1) as u64)
+}
+/// Install canonical empty arguments and a bounded host-owned result reservation.
+///
+/// # Errors
+///
+/// Rejects invalid result counts, unaffordable allocation gas, or insufficient owned HEAP.
+pub fn install_empty_call_arguments(vm: &mut IVM, result_words: usize) -> Result<(), VMError> {
+    let bytes = result_table_bytes(result_words)?;
+    vm.debit_gas(bytes)?;
+    vm.preflight_host_tlv_allocations_with_reserved_heap(&[], bytes)?;
+    let result_base = vm.alloc_heap(bytes)?;
+    vm.set_register(10, 0);
+    vm.set_register(11, 0);
+    vm.set_register(12, result_base);
+    vm.set_register(13, result_words as u64);
+    Ok(())
 }
 fn argument_record_gas_for_bytes(
     record_bytes: usize,
@@ -327,6 +372,13 @@ fn value_materialization_bound(
         let children = &rendered[children_start..rendered_len];
         let bound = match node {
             EntrypointValueTypeNodeV1::Unit | EntrypointValueTypeNodeV1::Error(_) => {
+                SchemaMaterializationBound {
+                    words: 1,
+                    pointer_envelopes: 0,
+                    raw_heap_bytes: 0,
+                }
+            }
+            EntrypointValueTypeNodeV1::Struct(node) if node.fields.is_empty() => {
                 SchemaMaterializationBound {
                     words: 1,
                     pointer_envelopes: 0,
@@ -473,9 +525,7 @@ fn materialized_bytes_for_schema_bound(
 ) -> u64 {
     let word_count = usize::try_from(bound.words).unwrap_or(usize::MAX);
     pointer_copy_allocation_upper_bound(record_bytes, bound.pointer_envelopes)
-        .saturating_add(aligned_allocation_bytes(decoded_table_envelope_len(
-            word_count,
-        )))
+        .saturating_add(aligned_allocation_bytes(decoded_table_bytes(word_count)))
         .saturating_add(bound.raw_heap_bytes)
 }
 fn argument_record_runtime_gas_upper_bound(record_bytes: usize, schema_bytes: usize) -> u64 {
@@ -484,7 +534,7 @@ fn argument_record_runtime_gas_upper_bound(record_bytes: usize, schema_bytes: us
     // decoded. The raw syscall cannot authenticate or parse its schema until
     // after gas debit, so it deliberately retains the full-HEAP reserve.
     let materialized_bytes = pointer_copy_allocation_upper_bound(record_bytes, u64::MAX)
-        .saturating_add(aligned_allocation_bytes(decoded_table_envelope_len(
+        .saturating_add(aligned_allocation_bytes(decoded_table_bytes(
             MAX_ENTRYPOINT_ARGUMENT_WORDS,
         )))
         .saturating_add(crate::memory::Memory::HEAP_SIZE);
@@ -497,24 +547,8 @@ fn canonical_norito_frame_len<T: NoritoSerialize>(value: &T) -> usize {
 fn canonical_norito_frame<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, norito::core::Error> {
     norito::encode_canonical(value)
 }
-fn decoded_table_envelope_len(word_count: usize) -> usize {
-    TLV_ENVELOPE_BYTES
-        .saturating_add(1)
-        .saturating_add(word_count.saturating_mul(size_of::<u64>()))
-}
-fn argument_record_binding(canonical_record: &[u8]) -> [u8; Hash::LENGTH] {
-    let record_hash = Hash::new(canonical_record);
-    let mut material = Vec::with_capacity(
-        ARGUMENT_RECORD_BINDING_DOMAIN_V1.len() + size_of::<u64>() + Hash::LENGTH,
-    );
-    material.extend_from_slice(ARGUMENT_RECORD_BINDING_DOMAIN_V1);
-    material.extend_from_slice(
-        &u64::try_from(canonical_record.len())
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
-    material.extend_from_slice(record_hash.as_ref());
-    Hash::new(&material).into()
+fn decoded_table_bytes(word_count: usize) -> usize {
+    word_count.saturating_mul(size_of::<u64>())
 }
 fn validate_tlv_any_region(
     vm: &IVM,
@@ -780,6 +814,7 @@ fn argument_node_word_count(
         );
         if !suppress_words
             && (is_handle
+                || matches!(node, EntrypointValueTypeNodeV1::Struct(node) if node.fields.is_empty())
                 || matches!(
                     node,
                     EntrypointValueTypeNodeV1::Leaf(_)
@@ -1462,6 +1497,11 @@ fn plan_argument_atoms(
             let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
             match node {
                 EntrypointValueTypeNodeV1::Struct(node) => {
+                    if node.fields.is_empty() {
+                        let index = decoded.len();
+                        decoded.push(DecodedArgument::Scalar(0));
+                        frame.roots.push(index);
+                    }
                     let starts = argument_child_starts(nodes, node_start, node.fields.len())?;
                     frame.actions.extend(starts.into_iter().rev());
                 }
@@ -1684,7 +1724,7 @@ fn build_decode_plan(
     // Capping the charged raw-allocation component keeps the predecode schema
     // bound valid even for a value which will later fail the allocation
     // preflight; pointer copies and the output table remain charged exactly.
-    let materialized_bytes = aligned_allocation_bytes(decoded_table_envelope_len(roots.len()))
+    let materialized_bytes = aligned_allocation_bytes(decoded_table_bytes(roots.len()))
         .saturating_add(pointer_allocation_bytes)
         .saturating_add(cap_raw_heap_bytes(raw_heap_bytes));
     Ok(ArgumentDecodePlan {
@@ -1744,12 +1784,9 @@ pub fn prepare_argument_record_with_gas_limit(
     if decode_plan.gas() > gas_bound {
         return Err(VMError::DecodeError);
     }
-    let binding = argument_record_binding(&canonical_record);
-    // Compiler-generated wrappers load the schema from validated program data,
-    // so only the host-issued binding and decoded outputs consume VM arenas.
-    let mut fresh_allocation_lengths = Vec::with_capacity(decode_plan.decoded.len() + 2);
-    fresh_allocation_lengths.push(TLV_ENVELOPE_BYTES + binding.len());
-    fresh_allocation_lengths.extend(decode_plan.allocation_lengths());
+    // The authenticated schema and signed record remain host-owned. Only decoded
+    // leaf envelopes and raw argument/aggregate storage consume VM arenas.
+    let fresh_allocation_lengths = decode_plan.allocation_lengths();
     let raw_heap_bytes = decode_plan.raw_heap_bytes();
     IVM::preflight_fresh_host_tlv_allocations_with_reserved_heap(
         &fresh_allocation_lengths,
@@ -1759,7 +1796,6 @@ pub fn prepare_argument_record_with_gas_limit(
         inner: Arc::new(PreparedArgumentRecordInner {
             canonical_record,
             canonical_schema: schema_bytes,
-            binding,
             decode_plan,
         }),
     })
@@ -1790,9 +1826,8 @@ pub(crate) fn decode_argument_record_gas_quote(vm: &IVM) -> Result<u64, VMError>
 }
 /// Decode the public argument object in `r10` using the schema in `r11`.
 ///
-/// On success, `r10` receives a `Blob` pointer whose payload is a packed little-endian table of
-/// `u64` ABI words after one canonical alignment byte. The operation decodes the boundary payload
-/// exactly once, before allocating any typed result envelopes.
+/// On success, `r10` receives an aligned owned-HEAP table address and `r11` its exact word count.
+/// The operation decodes the boundary payload exactly once before allocating typed envelopes.
 pub(crate) fn decode_argument_record(vm: &mut IVM) -> Result<u64, VMError> {
     let plan = plan_argument_record_decode(vm)?;
     materialize_decode_plan(vm, &plan)
@@ -1849,13 +1884,17 @@ fn materialize_decode_plan(vm: &mut IVM, plan: &ArgumentDecodePlan) -> Result<u6
     for root in &plan.roots {
         words.push(*materialized.get(*root).ok_or(VMError::DecodeError)?);
     }
-    let mut table = Vec::with_capacity(1 + words.len() * core::mem::size_of::<u64>());
-    table.push(0);
-    for word in words {
-        table.extend_from_slice(&word.to_le_bytes());
-    }
-    let table_pointer = vm.alloc_host_tlv(&encode_tlv(PointerType::Blob, &table)?)?;
+    let table_pointer = if words.is_empty() {
+        0
+    } else {
+        let pointer = vm.alloc_heap(decoded_table_bytes(words.len()) as u64)?;
+        for (index, word) in words.iter().enumerate() {
+            vm.store_u64(pointer + (index * 8) as u64, *word)?;
+        }
+        pointer
+    };
     vm.set_register(10, table_pointer);
+    vm.set_register(11, words.len() as u64);
     Ok(gas)
 }
 #[cfg(test)]
@@ -1899,6 +1938,132 @@ mod tests {
             crate::numeric_tlv::encode_int(&BigInt::from_i128(value))
                 .expect("encode canonical Int atom"),
         )
+    }
+    #[test]
+    fn empty_nominal_product_arguments_materialize_unit_without_atoms() {
+        let empty = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Struct(
+                ivm_abi::entrypoint::EntrypointStructTypeNodeV1 {
+                    name: "Empty".into(),
+                    fields: Vec::new(),
+                },
+            )],
+        };
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![
+                EntrypointArgumentFieldV1 {
+                    name: "value".into(),
+                    ty: empty.clone(),
+                },
+                EntrypointArgumentFieldV1 {
+                    name: "values".into(),
+                    ty: list_type(2, empty),
+                },
+            ],
+        };
+        let payload = Json::new(norito::json!({"value": {}, "values": [{}, {}]}));
+        let record = argument_record_from_json(&schema, &payload).unwrap();
+        assert_eq!(record.atoms, vec![EntrypointValueAtomV1::List(2)]);
+        let prepared = prepare_argument_record_with_gas_limit(
+            &schema,
+            Arc::from(encode_argument_record_from_json(&schema, &payload).unwrap()),
+            u64::MAX,
+        )
+        .unwrap();
+        assert_eq!(prepared.word_count(), 2);
+        let mut vm = IVM::new(u64::MAX);
+        prepared.precharge_vm(&mut vm).unwrap();
+        prepared.install_call_arguments(&mut vm, 1).unwrap();
+        let table = vm.register(10);
+        assert_eq!(vm.load_u64(table), Ok(0));
+        let list = vm.load_u64(table + 8).unwrap();
+        assert_eq!(
+            crate::list::read_words(&vm, list, ListLayoutV1::try_new(2, 1).unwrap()).unwrap(),
+            vec![vec![0], vec![0]]
+        );
+    }
+    #[test]
+    fn root_call_installation_consumes_prepaid_decode_once_and_reserves_disjoint_tables() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "ready".into(),
+                ty: argument_type(EntrypointValueKindV1::Bool),
+            }],
+        };
+        let record =
+            encode_argument_record_from_json(&schema, &Json::new(norito::json!({"ready": true})))
+                .expect("canonical arguments");
+        reset_argument_record_decode_count();
+        let prepared = prepare_argument_record_with_gas_limit(&schema, Arc::from(record), u64::MAX)
+            .expect("prepare once");
+        assert_eq!(argument_record_decode_count(), 1);
+        assert_eq!(prepared.word_count(), 1);
+        let mut vm = IVM::new(u64::MAX);
+        prepared.precharge_vm(&mut vm).expect("prepay decode");
+        let gas_before = vm.gas_remaining;
+        prepared
+            .install_call_arguments(&mut vm, 32)
+            .expect("install tables");
+        assert_eq!(argument_record_decode_count(), 1);
+        assert_eq!(gas_before - vm.gas_remaining, 32 * 8);
+        assert_eq!(vm.register(11), 1);
+        assert_eq!(vm.load_u64(vm.register(10)).unwrap(), 1);
+        assert_eq!(vm.register(13), 32);
+        assert!(vm.register(12) >= vm.register(10) + 8);
+        assert_eq!(vm.register(10) % 8, 0);
+        assert_eq!(vm.register(12) % 8, 0);
+        assert_eq!(
+            prepared.install_call_arguments(&mut vm, 32),
+            Err(VMError::DecodeError)
+        );
+    }
+    #[test]
+    fn default_root_preparation_uses_the_metered_public_input_route() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "ready".into(),
+                ty: argument_type(EntrypointValueKindV1::Bool),
+            }],
+        };
+        let record =
+            encode_argument_record_from_json(&schema, &Json::new(norito::json!({"ready": true})))
+                .unwrap();
+        let input = encode_tlv(PointerType::NoritoBytes, &record).unwrap();
+        let mut host = crate::host::DefaultHost::default().with_public_inputs(
+            std::collections::BTreeMap::from([("trigger_event_json".parse().unwrap(), input)]),
+        );
+        let mut vm = IVM::new(u64::MAX);
+        reset_argument_record_decode_count();
+        prepare_default_call_arguments(&mut host, &mut vm, &schema, 1)
+            .expect("prepare public input");
+        assert_eq!(argument_record_decode_count(), 1);
+        assert_eq!(vm.load_u64(vm.register(10)).unwrap(), 1);
+        assert_eq!((vm.register(11), vm.register(13)), (1, 1));
+        assert!(vm.gas_remaining < u64::MAX - 8);
+        let mut missing_host = crate::host::DefaultHost::default();
+        let mut denied_vm = IVM::new(u64::MAX);
+        assert!(matches!(
+            prepare_default_call_arguments(&mut missing_host, &mut denied_vm, &schema, 1),
+            Err(VMError::PermissionDenied)
+        ));
+    }
+    #[test]
+    fn empty_root_arguments_use_zero_descriptor_and_bounded_result_reservation() {
+        let mut vm = IVM::new(u64::MAX);
+        assert_eq!(
+            install_empty_call_arguments(&mut vm, 0),
+            Err(VMError::DecodeError)
+        );
+        assert_eq!(
+            install_empty_call_arguments(&mut vm, ivm_abi::call::MAX_CALL_WORDS_V1 + 1),
+            Err(VMError::DecodeError)
+        );
+        assert_eq!(vm.gas_remaining, u64::MAX);
+        install_empty_call_arguments(&mut vm, ivm_abi::call::MAX_CALL_WORDS_V1)
+            .expect("full result table");
+        assert_eq!((vm.register(10), vm.register(11)), (0, 0));
+        assert_eq!(vm.register(13), 8192);
+        assert_eq!(u64::MAX - vm.gas_remaining, 65536);
     }
     #[test]
     fn numeric_argument_atoms_require_canonical_decimal_strings() {
@@ -1964,14 +2129,11 @@ mod tests {
         vm
     }
     fn decoded_words(vm: &IVM) -> Vec<u64> {
-        let table = vm
-            .validate_tlv(vm.register(10))
-            .expect("decoded argument table");
-        assert_eq!(table.type_id, PointerType::Blob);
-        assert_eq!(table.payload.first(), Some(&0));
-        table.payload[1..]
-            .chunks_exact(size_of::<u64>())
-            .map(|word| u64::from_le_bytes(word.try_into().expect("argument word")))
+        let base = vm.register(10);
+        let count = vm.register(11);
+        assert!(count <= ivm_abi::call::MAX_CALL_WORDS_V1 as u64);
+        (0..count)
+            .map(|index| vm.memory.load_u64(base + index * 8).expect("argument word"))
             .collect()
     }
     fn decoded_int(vm: &IVM, pointer: u64) -> BigInt {
@@ -2048,14 +2210,6 @@ mod tests {
         }
     }
     #[test]
-    fn argument_record_binding_v1_golden() {
-        let canonical_record = hex::decode("000102ff").expect("decode golden record bytes");
-        assert_eq!(
-            hex::encode(argument_record_binding(&canonical_record)),
-            "cd493a895d6fe36feff1ef895b7b2a190ea2df652ec39e30e85d8f61b599f8e5"
-        );
-    }
-    #[test]
     fn complete_record_performs_exactly_one_record_decode() {
         RECORD_DECODE_COUNT.with(|count| count.set(0));
         let schema = EntrypointArgumentSchemaV1 {
@@ -2082,16 +2236,12 @@ mod tests {
         let mut vm = install_record(&schema, &payload);
         decode_argument_record(&mut vm).expect("decode complete record");
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 1));
-        let table = vm.validate_tlv(vm.register(10)).expect("result table TLV");
-        assert_eq!(table.type_id, PointerType::Blob);
-        assert_eq!(table.payload.len(), 1 + 3 * core::mem::size_of::<u64>());
-        assert_eq!(table.payload[0], 0, "alignment prefix must be canonical");
-        let count_pointer = u64::from_le_bytes(table.payload[1..9].try_into().expect("count word"));
-        assert_eq!(decoded_int(&vm, count_pointer), BigInt::from_i128(7));
-        for bytes in [9..17, 17..25] {
-            let pointer =
-                u64::from_le_bytes(table.payload[bytes].try_into().expect("pointer word"));
-            vm.validate_tlv(pointer).expect("typed output TLV");
+        let words = decoded_words(&vm);
+        assert_eq!(words.len(), 3);
+        assert_eq!(vm.register(10) % 8, 0);
+        assert_eq!(decoded_int(&vm, words[0]), BigInt::from_i128(7));
+        for pointer in &words[1..] {
+            vm.validate_tlv(*pointer).expect("typed output TLV");
         }
     }
     #[test]
@@ -2124,25 +2274,12 @@ mod tests {
             prepared.canonical_bytes().as_ptr(),
             shared.canonical_bytes().as_ptr(),
         ));
-        let undomained_hash: [u8; Hash::LENGTH] = Hash::new(canonical.as_ref()).into();
-        assert_ne!(
-            *prepared.binding_bytes(),
-            undomained_hash,
-            "the guest capability must not be the bare record digest"
-        );
         let mut vm = IVM::new(u64::MAX);
-        let record_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        vm.set_register(10, record_ptr);
-        vm.set_register(11, schema_ptr);
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge prepared arguments");
         prepared
-            .decode_gas_quote(&vm, record_ptr)
-            .expect("quote prepared arguments");
-        prepared
-            .install_into_vm(&mut vm, record_ptr)
+            .install_call_arguments(&mut vm, 1)
             .expect("materialize prepared arguments");
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 1));
         let count_pointer = decoded_words(&vm)[0];
@@ -2158,78 +2295,27 @@ mod tests {
         };
         let canonical: Arc<[u8]> = Arc::from(
             encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": "7"})))
-                .expect("encode argument record"),
+                .unwrap(),
         );
         let prepared =
             prepare_argument_record_with_gas_limit(&schema, Arc::clone(&canonical), u64::MAX)
-                .expect("prepare arguments");
-        let mut vm = IVM::new(u64::MAX);
-        let issued_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let substituted_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        vm.set_register(10, substituted_ptr);
-        vm.set_register(11, schema_ptr);
-        prepared
-            .precharge_vm(&mut vm)
-            .expect("precharge prepared arguments");
-        assert!(matches!(
-            prepared.decode_gas_quote(&vm, issued_ptr),
-            Err(VMError::DecodeError)
-        ));
-        let other_schema = EntrypointArgumentSchemaV1 {
-            fields: vec![EntrypointArgumentFieldV1 {
-                name: "different".to_owned(),
-                ty: argument_type(EntrypointValueKindV1::Int),
-            }],
-        };
-        let other_schema_ptr = alloc(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &to_bytes(&other_schema).expect("encode alternate schema"),
-        );
-        vm.set_register(10, issued_ptr);
-        vm.set_register(11, other_schema_ptr);
-        assert!(matches!(
-            prepared.decode_gas_quote(&vm, issued_ptr),
-            Err(VMError::DecodeError)
-        ));
-    }
-    #[test]
-    fn prepared_quote_defers_same_length_schema_authentication_until_after_precharge() {
-        let schema = EntrypointArgumentSchemaV1 {
-            fields: vec![EntrypointArgumentFieldV1 {
-                name: "count".to_owned(),
-                ty: argument_type(EntrypointValueKindV1::Int),
-            }],
-        };
-        let canonical: Arc<[u8]> = Arc::from(
-            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": "7"})))
-                .expect("encode argument record"),
-        );
-        let prepared = prepare_argument_record_with_gas_limit(&schema, canonical, u64::MAX)
-            .expect("prepare arguments");
-        let mut vm = IVM::new(u64::MAX);
-        let issued_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let mut substituted_schema = prepared.schema_bytes().to_vec();
-        let last = substituted_schema
-            .last_mut()
-            .expect("canonical schema is non-empty");
-        *last ^= 1;
-        let substituted_schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, &substituted_schema);
-        vm.set_register(10, issued_ptr);
-        vm.set_register(11, substituted_schema_ptr);
-        prepared
-            .precharge_vm(&mut vm)
-            .expect("precharge prepared arguments");
+                .unwrap();
+        assert!(prepared.is_bound_to(&schema, &canonical).unwrap());
+        let substituted_record =
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": "8"})))
+                .unwrap();
+        assert!(!prepared.is_bound_to(&schema, &substituted_record).unwrap());
+        let mut substituted_schema = schema.clone();
+        substituted_schema.fields[0].name = "other".to_owned();
         assert_eq!(
-            prepared.decode_gas_quote(&vm, issued_ptr),
-            Ok(0),
-            "prepare checks only bounded envelope shape"
+            canonical_norito_frame_len(&schema),
+            canonical_norito_frame_len(&substituted_schema)
         );
-        assert_eq!(
-            prepared.install_into_vm(&mut vm, issued_ptr),
-            Err(VMError::DecodeError),
-            "the post-debit path authenticates the exact schema bytes"
+        assert!(
+            !prepared
+                .is_bound_to(&substituted_schema, &canonical)
+                .unwrap(),
+            "same-length schema substitution must fail exact identity before root installation"
         );
     }
     #[test]
@@ -2417,21 +2503,16 @@ mod tests {
         let prepared = prepare_argument_record_with_gas_limit(&schema, canonical, u64::MAX)
             .expect("prepare large record");
         let mut vm = IVM::new(u64::MAX);
-        let record_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        vm.set_register(10, record_ptr);
-        vm.set_register(11, schema_ptr);
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge large prepared value");
         prepared
-            .install_into_vm(&mut vm, record_ptr)
+            .install_call_arguments(&mut vm, 1)
             .expect("large prepared value must use bounded HEAP spill");
         assert!(
-            (crate::memory::Memory::INPUT_START
-                ..crate::memory::Memory::INPUT_START + crate::memory::Memory::INPUT_SIZE)
+            (crate::memory::Memory::HEAP_START..crate::memory::Memory::INPUT_START)
                 .contains(&vm.register(10)),
-            "the word table should still prefer available INPUT capacity"
+            "call tables always use owned HEAP"
         );
         let words = decoded_words(&vm);
         assert_eq!(words.len(), 1);
@@ -2482,15 +2563,11 @@ mod tests {
             prepare_argument_record_with_gas_limit(&schema, Arc::from(canonical), gas_bound)
                 .expect("the exact V1 wire cap must be executable at its schema-derived gas bound");
         let mut vm = IVM::new(u64::MAX);
-        let binding_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        vm.set_register(10, binding_ptr);
-        vm.set_register(11, schema_ptr);
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge exact-cap prepared value");
         prepared
-            .install_into_vm(&mut vm, binding_ptr)
+            .install_call_arguments(&mut vm, 1)
             .expect("exact-cap pointer atom and word table fit the V1 VM resource envelope");
         let words = decoded_words(&vm);
         assert_eq!(words.len(), 1);
@@ -2524,19 +2601,15 @@ mod tests {
         let prepared = prepare_argument_record_with_gas_limit(&schema, canonical, u64::MAX)
             .expect("prepare large record");
         let mut vm = IVM::new(u64::MAX);
-        let record_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.binding_bytes());
-        let schema_ptr = alloc(&mut vm, PointerType::NoritoBytes, prepared.schema_bytes());
-        vm.set_register(10, record_ptr);
-        vm.set_register(11, schema_ptr);
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge prepared value");
         vm.memory
             .set_heap_limit(crate::memory::Memory::INPUT_SIZE)
             .expect("constrain test heap");
-        let mut allocation_control = vm.clone();
+        let mut allocation_control = vm.try_clone_snapshot().expect("fund VM snapshot");
         assert_eq!(
-            prepared.install_into_vm(&mut vm, record_ptr),
+            prepared.install_call_arguments(&mut vm, 1),
             Err(VMError::OutOfMemory)
         );
         assert_eq!(
@@ -2544,8 +2617,8 @@ mod tests {
             0,
             "capacity failure must occur before the first guest-visible allocation"
         );
-        assert_eq!(vm.register(10), record_ptr);
-        assert_eq!(vm.register(11), schema_ptr);
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 0);
         let sentinel = encode_tlv(PointerType::Blob, b"after-preflight").expect("encode sentinel");
         assert_eq!(
             vm.alloc_input_tlv(&sentinel)
@@ -2576,20 +2649,8 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.alloc_input_tlv(&vec![0_u8; crate::memory::Memory::INPUT_SIZE as usize])
             .expect("fill INPUT exactly");
-        let binding_envelope =
-            encode_tlv(PointerType::NoritoBytes, prepared.binding_bytes()).expect("binding TLV");
-        let record_ptr = vm
-            .alloc_host_tlv(&binding_envelope)
-            .expect("spill binding to HEAP");
-        let schema_envelope =
-            encode_tlv(PointerType::NoritoBytes, prepared.schema_bytes()).expect("schema TLV");
-        let schema_ptr = vm
-            .alloc_host_tlv(&schema_envelope)
-            .expect("spill schema to HEAP");
-        vm.set_register(10, record_ptr);
-        vm.set_register(11, schema_ptr);
         let plan = &prepared.inner.decode_plan;
-        let raw_heap_bytes = plan.raw_heap_bytes();
+        let raw_heap_bytes = plan.raw_heap_bytes() + 8; // One reserved root result word.
         let spilled_tlv_bytes = plan
             .allocation_lengths()
             .into_iter()
@@ -2607,7 +2668,7 @@ mod tests {
             .checked_add(raw_heap_bytes)
             .and_then(|limit| limit.checked_add(spilled_tlv_bytes))
             .expect("bounded combined capacity");
-        let mut exact_vm = vm.clone();
+        let mut exact_vm = vm.try_clone_snapshot().expect("fund VM snapshot");
         exact_vm
             .memory
             .set_heap_limit(exact_combined_limit)
@@ -2616,7 +2677,7 @@ mod tests {
             .precharge_vm(&mut exact_vm)
             .expect("precharge exact-capacity VM after cloning");
         prepared
-            .install_into_vm(&mut exact_vm, record_ptr)
+            .install_call_arguments(&mut exact_vm, 1)
             .expect("the exact combined HEAP limit must be inclusive");
         assert_eq!(exact_vm.memory.heap_allocated_len(), exact_combined_limit);
         vm.memory
@@ -2625,13 +2686,13 @@ mod tests {
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge constrained VM");
-        let mut allocation_control = vm.clone();
+        let mut allocation_control = vm.try_clone_snapshot().expect("fund VM snapshot");
         assert_eq!(
-            prepared.install_into_vm(&mut vm, record_ptr),
+            prepared.install_call_arguments(&mut vm, 1),
             Err(VMError::OutOfMemory)
         );
         assert_eq!(vm.memory.heap_allocated_len(), baseline);
-        assert_eq!((vm.register(10), vm.register(11)), (record_ptr, schema_ptr));
+        assert_eq!((vm.register(10), vm.register(11)), (0, 0));
         let sentinel =
             encode_tlv(PointerType::Blob, b"after-combined-preflight").expect("encode sentinel");
         assert_eq!(
@@ -2663,23 +2724,11 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.alloc_input_tlv(&vec![0_u8; crate::memory::Memory::INPUT_SIZE as usize])
             .expect("fill INPUT exactly");
-        let binding_envelope =
-            encode_tlv(PointerType::NoritoBytes, prepared.binding_bytes()).expect("binding TLV");
-        let record_ptr = vm
-            .alloc_host_tlv(&binding_envelope)
-            .expect("spill binding to HEAP");
-        let schema_envelope =
-            encode_tlv(PointerType::NoritoBytes, prepared.schema_bytes()).expect("schema TLV");
-        let schema_ptr = vm
-            .alloc_host_tlv(&schema_envelope)
-            .expect("spill schema to HEAP");
-        vm.set_register(10, record_ptr);
-        vm.set_register(11, schema_ptr);
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge prepared arguments");
         prepared
-            .install_into_vm(&mut vm, record_ptr)
+            .install_call_arguments(&mut vm, 1)
             .expect("spill the complete result sequence to HEAP");
         assert!(
             (crate::memory::Memory::HEAP_START..crate::memory::Memory::INPUT_START)
@@ -2768,7 +2817,10 @@ mod tests {
             vm.set_register(10, pointer);
             vm.set_register(11, schema_pointer);
             let registers_before = [vm.register(10), vm.register(11)];
-            let writes_before = vm.memory.write_log();
+            let writes_before = vm
+                .memory
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot");
             assert_eq!(
                 decode_argument_record_gas_quote(&vm),
                 Err(VMError::NoritoInvalid),
@@ -2776,7 +2828,12 @@ mod tests {
             );
             assert_eq!(decode_argument_record(&mut vm), Err(VMError::NoritoInvalid));
             assert_eq!([vm.register(10), vm.register(11)], registers_before);
-            assert_eq!(vm.memory.write_log(), writes_before);
+            assert_eq!(
+                vm.memory
+                    .try_write_log_snapshot()
+                    .expect("allocate write-log snapshot"),
+                writes_before
+            );
         }
         let mut partial_vm = IVM::new(u64::MAX);
         let owned_record_bytes = record_envelope
@@ -3672,8 +3729,9 @@ mod tests {
         );
         let materialized_raw_heap = prepared.inner.decode_plan.raw_heap_bytes();
         assert_eq!(
-            materialized_raw_heap, expected_materialized_raw_heap,
-            "aggregate fixture must exercise the expected active raw-HEAP layout"
+            materialized_raw_heap,
+            expected_materialized_raw_heap + (prepared.word_count() * 8) as u64,
+            "raw HEAP includes the expected active aggregate layout and naked argument slots"
         );
         assert!(materialized_raw_heap <= crate::memory::Memory::HEAP_SIZE);
     }

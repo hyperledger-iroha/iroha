@@ -556,19 +556,29 @@ fn singular<'a>(fields: &[(u64, Wire<'a>)], repeated: &[u64]) -> Option<BTreeMap
     Some(out)
 }
 
-fn varint_of(map: &BTreeMap<u64, Wire<'_>>, field: u64) -> Option<Option<u64>> {
+/// The varint `field`, if present; `malformed()` when it has another wire type.
+fn varint_of<E>(
+    map: &BTreeMap<u64, Wire<'_>>,
+    field: u64,
+    malformed: impl FnOnce() -> E,
+) -> Result<Option<u64>, E> {
     match map.get(&field) {
-        None => Some(None),
-        Some(Wire::Varint(value)) => Some(Some(*value)),
-        Some(_) => None,
+        None => Ok(None),
+        Some(Wire::Varint(value)) => Ok(Some(*value)),
+        Some(_) => Err(malformed()),
     }
 }
 
-fn bytes_of<'a>(map: &BTreeMap<u64, Wire<'a>>, field: u64) -> Option<Option<&'a [u8]>> {
+/// The length-delimited `field`, if present; `malformed()` when it has another wire type.
+fn bytes_of<'a, E>(
+    map: &BTreeMap<u64, Wire<'a>>,
+    field: u64,
+    malformed: impl FnOnce() -> E,
+) -> Result<Option<&'a [u8]>, E> {
     match map.get(&field) {
-        None => Some(None),
-        Some(Wire::Bytes(value)) => Some(Some(value)),
-        Some(_) => None,
+        None => Ok(None),
+        Some(Wire::Bytes(value)) => Ok(Some(value)),
+        Some(_) => Err(malformed()),
     }
 }
 
@@ -627,25 +637,19 @@ fn decode_header(raw: &[u8]) -> Result<HeaderV1, TronLcError> {
         return Err(malformed());
     }
     let fixed32 = |field| -> Result<Option<[u8; 32]>, TronLcError> {
-        bytes_of(&map, field)
-            .ok_or_else(malformed)?
+        bytes_of(&map, field, malformed)?
             .map(|bytes| <[u8; 32]>::try_from(bytes).map_err(|_| malformed()))
             .transpose()
     };
-    let number = varint_of(&map, 7)
-        .ok_or_else(malformed)?
-        .ok_or_else(malformed)?;
-    let time_ms = varint_of(&map, 1)
-        .ok_or_else(malformed)?
-        .ok_or_else(malformed)?;
+    let number = varint_of(&map, 7, malformed)?.ok_or_else(malformed)?;
+    let time_ms = varint_of(&map, 1, malformed)?.ok_or_else(malformed)?;
     let parent_id = fixed32(3)?.ok_or_else(malformed)?;
-    let witness = bytes_of(&map, 9)
-        .ok_or_else(malformed)?
+    let witness = bytes_of(&map, 9, malformed)?
         .filter(|bytes| is_address(bytes))
         .and_then(|bytes| <[u8; ADDRESS_BYTES]>::try_from(bytes).ok())
         .ok_or_else(malformed)?;
-    varint_of(&map, 8).ok_or_else(malformed)?;
-    varint_of(&map, 10).ok_or_else(malformed)?;
+    varint_of(&map, 8, malformed)?;
+    varint_of(&map, 10, malformed)?;
     if number == 0 || time_ms == 0 || i64::try_from(number).is_err() || parent_id == [0; 32] {
         return Err(malformed());
     }
@@ -786,6 +790,27 @@ impl<'a, V: SccpLcStateView + ?Sized> Sets<'a, V> {
             .get(&period)
             .cloned()
             .or_else(|| self.view.consensus_set(NETWORK, period))
+    }
+
+    /// The delta of an advance: the learned and superseded sets, then `checkpoints` and `head`.
+    fn into_delta(
+        self,
+        checkpoints: Vec<SccpLcCheckpointV1>,
+        head: Option<SccpLcHeadV1>,
+    ) -> SccpLcDeltaV1 {
+        SccpLcDeltaV1 {
+            new_sets: self.learned.into_values().collect(),
+            superseded_sets: self
+                .superseded
+                .into_iter()
+                .map(|(set_id, superseded_at_source_ms)| SccpLcSupersessionV1 {
+                    set_id,
+                    superseded_at_source_ms,
+                })
+                .collect(),
+            checkpoints,
+            head,
+        }
     }
 }
 
@@ -1150,23 +1175,14 @@ pub(super) fn apply_advance<V: SccpLcStateView + ?Sized>(
     }
     let moved = ctx.newest != light_client.head.latest_set_id
         || latest_finalized != light_client.head.latest_finalized;
-    Ok(SccpLcDeltaV1 {
-        new_sets: sets.learned.into_values().collect(),
-        superseded_sets: sets
-            .superseded
-            .into_iter()
-            .map(|(set_id, superseded_at_source_ms)| SccpLcSupersessionV1 {
-                set_id,
-                superseded_at_source_ms,
-            })
-            .collect(),
-        checkpoints: recorder.into_vec(),
-        head: moved.then_some(SccpLcHeadV1 {
+    Ok(sets.into_delta(
+        recorder.into_vec(),
+        moved.then_some(SccpLcHeadV1 {
             latest_set_id: ctx.newest,
             latest_finalized,
             last_progress_taira_ms: taira_now_ms,
         }),
-    })
+    ))
 }
 
 fn raw_slices(segment: &TronRawSegmentV1) -> Vec<&[u8]> {
@@ -1276,7 +1292,7 @@ struct TriggerCallV1 {
 /// Decode a full `protocol.Transaction`: exactly one `raw_data`, any signatures, exactly one
 /// result with `contractRet = SUCCESS` and no failed `ret`; the raw data carries exactly one
 /// `TriggerSmartContract` contract with no TRX or token value. Every field that cannot change
-/// the executed call (memo, permission id, fee limit, TAPoS, expiration, timestamp, other
+/// the executed call (memo, permission id, fee limit, `TAPoS`, expiration, timestamp, other
 /// result fields) is accepted.
 fn decode_trigger_call(transaction: &[u8]) -> Result<TriggerCallV1, TronLcError> {
     let malformed = || TronLcError::MalformedTransaction;
@@ -1285,9 +1301,7 @@ fn decode_trigger_call(transaction: &[u8]) -> Result<TriggerCallV1, TronLcError>
         return Err(malformed());
     }
     let map = singular(&top, &[2, 5]).ok_or_else(malformed)?;
-    let raw = bytes_of(&map, 1)
-        .ok_or_else(malformed)?
-        .ok_or_else(malformed)?;
+    let raw = bytes_of(&map, 1, malformed)?.ok_or_else(malformed)?;
     let results: Vec<&[u8]> = top
         .iter()
         .filter(|(field, _)| *field == 5)
@@ -1301,8 +1315,8 @@ fn decode_trigger_call(transaction: &[u8]) -> Result<TriggerCallV1, TronLcError>
     };
     let result =
         singular(&fields(result).ok_or_else(malformed)?, &[26, 28]).ok_or_else(malformed)?;
-    if varint_of(&result, 2).ok_or_else(malformed)?.unwrap_or(0) != 0
-        || varint_of(&result, 3).ok_or_else(malformed)? != Some(CONTRACT_RESULT_SUCCESS)
+    if varint_of(&result, 2, malformed)?.unwrap_or(0) != 0
+        || varint_of(&result, 3, malformed)? != Some(CONTRACT_RESULT_SUCCESS)
     {
         return Err(TronLcError::TransactionFailed);
     }
@@ -1330,45 +1344,37 @@ fn decode_trigger_call(transaction: &[u8]) -> Result<TriggerCallV1, TronLcError>
         return Err(malformed());
     }
     let contract = singular(&contract, &[]).ok_or_else(malformed)?;
-    if varint_of(&contract, 1).ok_or_else(malformed)? != Some(TRIGGER_SMART_CONTRACT) {
+    if varint_of(&contract, 1, malformed)? != Some(TRIGGER_SMART_CONTRACT) {
         return Err(malformed());
     }
-    let any = bytes_of(&contract, 2)
-        .ok_or_else(malformed)?
-        .ok_or_else(malformed)?;
+    let any = bytes_of(&contract, 2, malformed)?.ok_or_else(malformed)?;
     let any = singular(&fields(any).ok_or_else(malformed)?, &[]).ok_or_else(malformed)?;
     if any.keys().any(|field| !matches!(field, 1 | 2))
-        || bytes_of(&any, 1).ok_or_else(malformed)? != Some(TRIGGER_TYPE_URL)
+        || bytes_of(&any, 1, malformed)? != Some(TRIGGER_TYPE_URL)
     {
         return Err(malformed());
     }
-    let call = bytes_of(&any, 2)
-        .ok_or_else(malformed)?
-        .ok_or_else(malformed)?;
+    let call = bytes_of(&any, 2, malformed)?.ok_or_else(malformed)?;
     let call = singular(&fields(call).ok_or_else(malformed)?, &[]).ok_or_else(malformed)?;
     if call.keys().any(|field| !matches!(field, 1..=6)) {
         return Err(malformed());
     }
     let address = |field| -> Result<[u8; ADDRESS_BYTES], TronLcError> {
-        bytes_of(&call, field)
-            .ok_or_else(malformed)?
+        bytes_of(&call, field, malformed)?
             .filter(|bytes| is_address(bytes))
             .and_then(|bytes| <[u8; ADDRESS_BYTES]>::try_from(bytes).ok())
             .ok_or_else(malformed)
     };
-    if varint_of(&call, 3).ok_or_else(malformed)?.unwrap_or(0) != 0
-        || varint_of(&call, 5).ok_or_else(malformed)?.unwrap_or(0) != 0
+    if varint_of(&call, 3, malformed)?.unwrap_or(0) != 0
+        || varint_of(&call, 5, malformed)?.unwrap_or(0) != 0
     {
         return Err(TronLcError::TransactionFailed);
     }
-    varint_of(&call, 6).ok_or_else(malformed)?;
+    varint_of(&call, 6, malformed)?;
     Ok(TriggerCallV1 {
         owner: address(1)?,
         contract: address(2)?,
-        data: bytes_of(&call, 4)
-            .ok_or_else(malformed)?
-            .unwrap_or_default()
-            .to_vec(),
+        data: bytes_of(&call, 4, malformed)?.unwrap_or_default().to_vec(),
     })
 }
 

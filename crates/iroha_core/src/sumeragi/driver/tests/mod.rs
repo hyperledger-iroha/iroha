@@ -29,6 +29,8 @@ pub(super) fn block(height: u64, parent: Hash32, parent_result: Hash32, payload:
     let crypto = FakeCrypto::new();
     Block {
         header: BlockHeader {
+            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
+            epoch: iroha_sumeragi::testing::TEST_EPOCH.id,
             instance: Hash32([5; 32]),
             height,
             origin_view: 0,
@@ -52,6 +54,7 @@ pub(super) fn hash(block: &Block) -> Hash32 {
 /// A `CommitQC` of `block` certifying `result` (no signers: only the driver reads it here).
 pub(super) fn commit_qc(block: &Block, result: Hash32) -> Qc {
     Qc {
+        epoch: block.header.epoch,
         kind: VoteKind::Commit,
         instance: block.header.instance,
         height: block.header.height,
@@ -62,5 +65,6 @@ pub(super) fn commit_qc(block: &Block, result: Hash32) -> Qc {
         signers: Bitmap::new(4),
         agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
         attestations: Vec::new(),
+        attestation_witness: None,
     }
 }

@@ -9,14 +9,14 @@ use std::{
 use zeroize::Zeroizing;
 
 /// An owner-private directory retained across every child operation.
-pub(crate) struct PrivateDirectory {
+pub struct PrivateDirectory {
     pub(crate) path: PathBuf,
     #[cfg(unix)]
     descriptor: File,
 }
 
 /// Resolve the existing platform prefix, retaining only normal missing path components.
-pub(crate) fn resolved_target(path: &Path) -> Result<PathBuf> {
+pub fn resolved_target(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute()
         || path
             .components()
@@ -288,11 +288,7 @@ fn single_name(name: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(crate) fn read_external(
-    path: &Path,
-    maximum: usize,
-    private: bool,
-) -> Result<Zeroizing<Vec<u8>>> {
+pub fn read_external(path: &Path, maximum: usize, private: bool) -> Result<Zeroizing<Vec<u8>>> {
     use rustix::fs::{Mode, OFlags};
     let parent = path
         .parent()
@@ -316,7 +312,7 @@ pub(crate) fn read_external(
 }
 
 #[cfg(not(unix))]
-pub(crate) fn read_external(_: &Path, _: usize, _: bool) -> Result<Zeroizing<Vec<u8>>> {
+pub fn read_external(_: &Path, _: usize, _: bool) -> Result<Zeroizing<Vec<u8>>> {
     bail!("private wallet custody requires native Unix descriptor support")
 }
 

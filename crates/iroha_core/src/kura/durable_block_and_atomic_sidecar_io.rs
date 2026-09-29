@@ -614,28 +614,6 @@ impl Kura {
         );
         Ok(())
     }
-    /// Complete an exact durable retry without demoting a finalized carrier to
-    /// the unfinished-tip query projection. The caller has checked the complete
-    /// canonical body, compact reference, log frame and sparse carrier binding.
-    fn complete_existing_merge_carrier_retry_under_prune_and_canonical_guards(
-        &self,
-        block: &SignedBlock,
-        entry: &MergeLedgerEntry,
-        chain_len: usize,
-    ) -> Result<()> {
-        let _ = self.ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(
-            entry, block,
-        )?;
-        // Preserve the physical publication authorization above. Its retired merge
-        // sidecar cannot promote the replacement Network transaction index.
-        self.set_transaction_entrypoint_index_entry(
-            usize::try_from(block.header().height().get())?,
-            block,
-            chain_len,
-        );
-        self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
-        Ok(())
-    }
     fn validate_next_or_existing_block(
         block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
         actual_height: u64,

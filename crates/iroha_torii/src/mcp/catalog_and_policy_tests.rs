@@ -743,7 +743,7 @@ fn remote_addr_probe_payload(
 fn install_remote_addr_probe_router(app: &mut SharedAppState) -> McpDispatchRouterOwner {
     let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
     let router: axum::Router = axum::Router::new().route(
-        iroha_torii_shared::uri::HEALTH,
+        iroha_torii_shared::route_catalog::core::HEALTH.path(),
         axum::routing::get_service(tower::service_fn(move |req: Request<Body>| {
             let allow = allow.clone();
             async move {
@@ -798,7 +798,7 @@ fn install_api_token_probe_router(
     ));
     let router = axum::Router::new()
         .route(
-            iroha_torii_shared::uri::HEALTH,
+            iroha_torii_shared::route_catalog::core::HEALTH.path(),
             axum::routing::get(|| async { StatusCode::NO_CONTENT }),
         )
         .layer(axum::middleware::from_fn_with_state(
@@ -866,17 +866,31 @@ async fn long_poll_quota_preserves_capacity_for_bounded_tools() {
     let _held = long_poll
         .try_acquire_owned()
         .expect("test holds the only long-poll permit");
-    for (id, name) in [
-        (1_u64, "iroha.transactions.wait"),
-        (2, "iroha.transactions.submit_and_wait"),
-        (3, "iroha.contracts.call_and_wait"),
+    // Schema-valid arguments, so the long-poll admission check is what rejects each call.
+    for (id, name, arguments) in [
+        (
+            1_u64,
+            "iroha.transactions.wait",
+            norito::json!({ "query": { "hash": ("ab".repeat(32)) } }),
+        ),
+        (
+            2,
+            "iroha.transactions.submit_and_wait",
+            norito::json!({ "body_base64": "AA==" }),
+        ),
+        (
+            3,
+            "iroha.contracts.call_and_wait",
+            norito::json!({ "body": {} }),
+        ),
     ] {
+        let arguments = arguments.as_object().expect("object arguments");
         let wait_response = handle_named_tool_call(
             Some(Value::from(id)),
             std::sync::Arc::clone(&app),
             &HeaderMap::new(),
             name,
-            &Map::new(),
+            arguments,
         )
         .await;
         assert_eq!(
@@ -2533,7 +2547,7 @@ fn read_only_policy_blocks_mutating_tools() {
     let explicit_query_tool = sample_tool_at(
         "iroha.queries.submit",
         Method::POST,
-        iroha_torii_shared::uri::QUERY,
+        iroha_torii_shared::route_catalog::pipeline::QUERY.path(),
         ToolEffect::Read,
     );
     assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
@@ -2555,7 +2569,9 @@ fn openapi_tool_effects_drive_policy() {
         .find(|tool| {
             tool.route_backing()
                 .is_some_and(|(_, method, path_template)| {
-                    method == &Method::POST && path_template == iroha_torii_shared::uri::QUERY
+                    method == &Method::POST
+                        && path_template
+                            == iroha_torii_shared::route_catalog::pipeline::QUERY.path()
                 })
         })
         .expect("query tool");

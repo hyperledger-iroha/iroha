@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 impl SignedBlock {
     /// Check every payload commitment without changing the signed proposal header.
     /// # Errors
-    /// Rejects mixed native inputs or any absent, foreign or stale payload commitment.
+    /// Rejects any absent, foreign or stale payload commitment.
     pub fn validate_proposal_commitments(&self) -> Result<(), String> {
         let header = self.header();
         let external = MerkleTree::root_from_typed_leaves(
@@ -33,7 +33,7 @@ impl SignedBlock {
         {
             return Err("proposal header commitments differ from their actual payload".into());
         }
-        self.validate_native_lane_source()
+        Ok(())
     }
     /// Validate source/phase/cardinality and transcript-vector shape, not actual execution.
     /// # Errors
@@ -49,38 +49,6 @@ impl SignedBlock {
             .validate()
             .map_err(|error| error.to_string())?;
         self.validate_output_rows(&result.outputs, &result.fastpq_transcripts)
-    }
-    /// Check native source/output structure at the existing source-specific boundary.
-    /// # Errors
-    /// Rejects a native carrier lacking valid actual global outputs.
-    pub fn validate_native_lane_results(&self) -> Result<(), String> {
-        if self
-            .execution_context()
-            .and_then(|context| context.native_lane_decisions.as_ref())
-            .is_none()
-        {
-            return Ok(());
-        }
-        self.validate_execution_result_structure()
-    }
-    pub(super) fn validate_native_lane_source(&self) -> Result<(), String> {
-        let Some(context) = self.execution_context() else {
-            return Ok(());
-        };
-        let Some(batch) = context.native_lane_decisions.as_ref() else {
-            return Ok(());
-        };
-        context.validate_native_lane_decisions_shape()?;
-        if self.external_entrypoint_count() != 0
-            || self.header().execution_context_hash() != Some(HashOf::new(context))
-            || self.header().merkle_root().is_some()
-            || batch.base_state_height.checked_add(1) != Some(self.header().height().get())
-            || self.header().prev_block_hash().is_none()
-            || self.header().creation_time().is_zero()
-        {
-            return Err("native carrier differs from its sole input/header context".into());
-        }
-        Ok(())
     }
 
     pub(super) fn validate_output_rows(

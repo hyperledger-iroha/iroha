@@ -1145,13 +1145,12 @@ fn language_server_dispatch(
                     let version = message
                         .pointer("/params/textDocument/version")
                         .and_then(norito::json::Value::as_i64);
-                    if let Some(version) = version {
-                        if versions
+                    if let Some(version) = version
+                        && versions
                             .get(uri)
                             .is_some_and(|previous| *previous >= version)
-                        {
-                            continue;
-                        }
+                    {
+                        continue;
                     }
                     editor_cache.clear();
                     if let Err(message) = store_lsp_document(&mut documents, uri, text) {
@@ -1195,13 +1194,12 @@ fn language_server_dispatch(
                     let version = message
                         .pointer("/params/textDocument/version")
                         .and_then(norito::json::Value::as_i64);
-                    if let Some(version) = version {
-                        if versions
+                    if let Some(version) = version
+                        && versions
                             .get(uri)
                             .is_some_and(|previous| *previous >= version)
-                        {
-                            continue;
-                        }
+                    {
+                        continue;
                     }
                     editor_cache.clear();
                     if let Err(message) = store_lsp_document(&mut documents, uri, text) {
@@ -1358,10 +1356,10 @@ fn language_server_dispatch(
             }
             Some(_) | None => {}
         }
-        if inbox.complete(&pending, transport_output, &output)? {
-            if let Some(uris) = next_diagnostic_uris {
-                published_diagnostic_uris = uris;
-            }
+        if inbox.complete(&pending, transport_output, &output)?
+            && let Some(uris) = next_diagnostic_uris
+        {
+            published_diagnostic_uris = uris;
         }
     }
     Ok(())
@@ -1724,15 +1722,19 @@ fn collect_lsp_workspace_diagnostics(
         .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
         .collect()
 }
-fn lsp_project_with_open_overlays(
-    project: &LoadedSourceProject,
-    documents: &HashMap<String, String>,
-) -> Option<(
+/// Project link graph with the open editor documents overlaid: the link request, the
+/// document URI of each project source, the open document URIs owned by the project, and
+/// the effective project manifest.
+type LspOverlaidProject = (
     ivm::kotodama::linker::SourceLinkRequest,
     BTreeMap<ProjectSourceKey, String>,
     HashSet<String>,
     Option<ivm::kotodama::driver::ProjectManifestSource>,
-)> {
+);
+fn lsp_project_with_open_overlays(
+    project: &LoadedSourceProject,
+    documents: &HashMap<String, String>,
+) -> Option<LspOverlaidProject> {
     let manifest_overlay = project.manifest.as_ref().and_then(|manifest| {
         documents
             .iter()

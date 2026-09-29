@@ -4,7 +4,7 @@ use super::*;
     Clone, Debug, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
 )]
 #[norito(deny_unknown_fields)]
-pub(super) struct ContractDeploymentStateSnapshot {
+pub struct ContractDeploymentStateSnapshot {
     pub(super) authority: String,
     contract_alias: String,
     pub(super) deploy_nonce: String,
@@ -16,14 +16,14 @@ pub(super) struct ContractDeploymentStateSnapshot {
     ledger_time_ms: String,
     chain_discriminant: String,
 }
-pub(super) struct ValidatedContractDeploymentState {
+pub struct ValidatedContractDeploymentState {
     pub(super) snapshot: ContractDeploymentStateSnapshot,
     pub(super) deploy_nonce: u64,
     pub(super) dataspace_id: DataSpaceId,
     pub(super) previous_contract_address:
         Option<iroha::data_model::smart_contract::ContractAddress>,
 }
-pub(super) fn insert_string_metadata(
+pub fn insert_string_metadata(
     metadata: &mut Metadata,
     key: &str,
     value: impl Into<String>,
@@ -31,10 +31,7 @@ pub(super) fn insert_string_metadata(
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
     Ok(())
 }
-pub(super) fn insert_gov_manifest_approvers(
-    metadata: &mut Metadata,
-    approvers: &[String],
-) -> Result<()> {
+pub fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) -> Result<()> {
     let mut accounts = Vec::new();
     for (index, raw) in approvers.iter().enumerate() {
         let trimmed = raw.trim();
@@ -51,7 +48,7 @@ pub(super) fn insert_gov_manifest_approvers(
     }
     Ok(())
 }
-pub(super) fn deployment_transaction_metadata(
+pub fn deployment_transaction_metadata(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     gov_manifest_approvers: &[String],
 ) -> Result<Metadata> {
@@ -69,7 +66,7 @@ pub(super) fn deployment_transaction_metadata(
     insert_gov_manifest_approvers(&mut metadata, gov_manifest_approvers)?;
     Ok(metadata)
 }
-pub(super) fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
+pub fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
     let parsed = raw
         .parse::<u64>()
         .wrap_err_with(|| format!("deployment-state `{field}` is not a u64"))?;
@@ -80,7 +77,7 @@ pub(super) fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
     }
     Ok(parsed)
 }
-pub(super) fn read_contract_deployment_state(
+pub fn read_contract_deployment_state(
     client: &Client,
     authority: &AccountId,
     contract_alias: &ContractAlias,
@@ -178,12 +175,12 @@ pub(super) fn read_contract_deployment_state(
         previous_contract_address,
     })
 }
-pub(super) struct NativeUploadTransactionPlan {
+pub struct NativeUploadTransactionPlan {
     pub(super) chunk_count: u32,
     pub(super) pre_stage: Vec<(String, String, SignedTransaction)>,
     pub(super) finalize: (String, String, SignedTransaction),
 }
-pub(super) struct TransactionSigningContext<'a> {
+pub struct TransactionSigningContext<'a> {
     pub(super) network_id: NetworkId,
     pub(super) authority: &'a AccountId,
     pub(super) private_key: &'a PrivateKey,
@@ -212,7 +209,7 @@ impl TransactionSigningContext<'_> {
     }
 }
 #[cfg(test)]
-pub(super) fn native_upload_report(
+pub fn native_upload_report(
     plan: &NativeUploadTransactionPlan,
     skip_register_bytes: bool,
 ) -> norito::json::Value {
@@ -234,7 +231,7 @@ pub(super) fn native_upload_report(
         "register_bytes_tx_hash": (register_bytes_tx_hash),
     })
 }
-pub(super) fn deployment_transaction_sequence(
+pub fn deployment_transaction_sequence(
     skip_register_bytes: bool,
     register_plans: Vec<(String, String, SignedTransaction)>,
     register_manifest_tx: SignedTransaction,
@@ -258,7 +255,7 @@ pub(super) fn deployment_transaction_sequence(
     planned
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_commit_deployment_transaction(
+pub fn build_commit_deployment_transaction(
     signing: &TransactionSigningContext<'_>,
     expected_deploy_nonce: u64,
     contract_address: iroha::data_model::smart_contract::ContractAddress,
@@ -275,7 +272,7 @@ pub(super) fn build_commit_deployment_transaction(
         expected_previous_contract_address,
     })])
 }
-pub(super) fn build_native_upload_transaction_plan(
+pub fn build_native_upload_transaction_plan(
     signing: &TransactionSigningContext<'_>,
     code_hash: Hash,
     code: &[u8],
@@ -339,7 +336,7 @@ pub(super) fn build_native_upload_transaction_plan(
     }
     Err(eyre!("contract upload plan did not contain a final chunk"))
 }
-pub(super) fn quote_and_resign_transaction(
+pub fn quote_and_resign_transaction(
     client: &Client,
     draft: &SignedTransaction,
     requested_fee_payment: &FeePaymentIntent,

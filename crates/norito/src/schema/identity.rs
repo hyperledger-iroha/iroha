@@ -31,13 +31,22 @@ pub trait NoritoSchema {
     fn frame_name() -> String {
         Self::nominal_name()
     }
+
+    /// Return a declared literal frame identity without allocating, when available.
+    fn static_frame_name() -> Option<&'static str> {
+        None
+    }
 }
 
 /// Compute the fixed domain-separated digest of a declared root-frame identity.
 ///
 /// This function is not an overridable part of the identity declaration.
 pub fn frame_hash<T: NoritoSchema + ?Sized>() -> [u8; 16] {
-    crate::core::schema_hash_for_name(&T::frame_name())
+    if let Some(name) = T::static_frame_name() {
+        crate::core::schema_hash_for_name(name)
+    } else {
+        crate::core::schema_hash_for_name(&T::frame_name())
+    }
 }
 
 /// Compose a named constructor with ordered nominal type or const arguments.

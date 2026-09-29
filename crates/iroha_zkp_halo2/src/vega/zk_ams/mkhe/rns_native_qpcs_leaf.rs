@@ -44,18 +44,18 @@ impl RnsNativeOracleV1 {
             Self::Fri { layer } if layer < ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 => {
                 Ok((RnsNativeProofHashRoleV1::Fri, [2, layer], domain >> layer))
             }
-            _ => Err(RnsNativeLeafErrorV1::InvalidOracle),
+            _ => Err(RnsNativeLeafErrorV1::Oracle),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RnsNativeLeafErrorV1 {
-    InvalidOracle,
-    InvalidPayload,
-    InvalidIndex,
-    InvalidContext,
-    InvalidHash,
+    Oracle,
+    Payload,
+    Index,
+    Context,
+    Hash,
 }
 
 /// A validated payload commitment for one exact oracle; no raw constructor exists.
@@ -74,19 +74,19 @@ impl RnsNativeLeafPayloadV1 {
     ) -> Result<Self, RnsNativeLeafErrorV1> {
         oracle.geometry()?;
         if values.len() != CANONICAL_LEAF_BYTES_V1 {
-            return Err(RnsNativeLeafErrorV1::InvalidPayload);
+            return Err(RnsNativeLeafErrorV1::Payload);
         }
         for (coordinate, pair) in values
             .chunks_exact(RNS_NATIVE_QPCS_FQ2_BYTES_V1)
             .enumerate()
         {
             decode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, pair)
-                .map_err(|_| RnsNativeLeafErrorV1::InvalidPayload)?;
+                .map_err(|_| RnsNativeLeafErrorV1::Payload)?;
         }
-        let context = RnsNativeProofHashContextV1::canonical()
-            .map_err(|_| RnsNativeLeafErrorV1::InvalidContext)?;
+        let context =
+            RnsNativeProofHashContextV1::canonical().map_err(|_| RnsNativeLeafErrorV1::Context)?;
         if context.parameter_digest() != parameter_digest {
-            return Err(RnsNativeLeafErrorV1::InvalidContext);
+            return Err(RnsNativeLeafErrorV1::Context);
         }
         let digest = with_leaf_frame_v1(context, oracle, None, values, |frame| {
             Ok(RnsNativeProofDigestV1::from_shared(frame.hash()))
@@ -124,7 +124,7 @@ fn with_leaf_frame_v1<T>(
     let (tree_role, axes, length) = oracle.geometry()?;
     let (role, domain, position) = if let Some(index) = index {
         if index >= length || content.len() != 48 {
-            return Err(RnsNativeLeafErrorV1::InvalidIndex);
+            return Err(RnsNativeLeafErrorV1::Index);
         }
         (
             tree_role,
@@ -137,7 +137,7 @@ fn with_leaf_frame_v1<T>(
         )
     } else {
         if content.len() != CANONICAL_LEAF_BYTES_V1 {
-            return Err(RnsNativeLeafErrorV1::InvalidPayload);
+            return Err(RnsNativeLeafErrorV1::Payload);
         }
         (
             RnsNativeProofHashRoleV1::OraclePayload,
@@ -161,7 +161,7 @@ fn with_leaf_frame_v1<T>(
     ];
     let frame = context
         .frame(role, RnsNativeProofHashPhaseV1::Leaf, position, fields)
-        .map_err(|_| RnsNativeLeafErrorV1::InvalidHash)?;
+        .map_err(|_| RnsNativeLeafErrorV1::Hash)?;
     apply(&frame)
 }
 
@@ -176,7 +176,7 @@ fn with_node_frame_v1<T>(
 ) -> Result<T, RnsNativeLeafErrorV1> {
     let (role, axes, length) = oracle.geometry()?;
     if height == 0 || height > length.ilog2() as usize || index >= length >> height {
-        return Err(RnsNativeLeafErrorV1::InvalidIndex);
+        return Err(RnsNativeLeafErrorV1::Index);
     }
     let initial_version = [VERSION_V1];
     let prefix_version = [VERSION_V1, axes[1]];
@@ -202,7 +202,7 @@ fn with_node_frame_v1<T>(
             },
             fields,
         )
-        .map_err(|_| RnsNativeLeafErrorV1::InvalidHash)?;
+        .map_err(|_| RnsNativeLeafErrorV1::Hash)?;
     apply(&frame)
 }
 
@@ -219,8 +219,7 @@ impl RnsNativeOracleV1 {
     ) -> Result<[RnsNativeProofHashWorkV1; 3], RnsNativeLeafErrorV1> {
         let context = canonical_context_v1(parameter_digest)?;
         let count = |frame: &fastpq_isi::GoldilocksDigest384FrameV1<'_>| {
-            RnsNativeProofHashWorkV1::from_frame(frame)
-                .map_err(|_| RnsNativeLeafErrorV1::InvalidHash)
+            RnsNativeProofHashWorkV1::from_frame(frame).map_err(|_| RnsNativeLeafErrorV1::Hash)
         };
         // Contents never affect frame length. These fixed zero slices are not hashed
         // and do not serve as authenticated leaves, proofs or source coefficients.
@@ -242,10 +241,10 @@ impl RnsNativeOracleV1 {
 fn canonical_context_v1(
     parameter_digest: [u8; 32],
 ) -> Result<RnsNativeProofHashContextV1, RnsNativeLeafErrorV1> {
-    let context = RnsNativeProofHashContextV1::canonical()
-        .map_err(|_| RnsNativeLeafErrorV1::InvalidContext)?;
+    let context =
+        RnsNativeProofHashContextV1::canonical().map_err(|_| RnsNativeLeafErrorV1::Context)?;
     if context.parameter_digest() != parameter_digest {
-        return Err(RnsNativeLeafErrorV1::InvalidContext);
+        return Err(RnsNativeLeafErrorV1::Context);
     }
     Ok(context)
 }
@@ -285,10 +284,10 @@ impl<'a> RnsNativeLeafCacheV1<'a> {
         oracle: RnsNativeOracleV1,
     ) -> Result<Self, RnsNativeLeafErrorV1> {
         oracle.geometry()?;
-        let context = RnsNativeProofHashContextV1::canonical()
-            .map_err(|_| RnsNativeLeafErrorV1::InvalidContext)?;
+        let context =
+            RnsNativeProofHashContextV1::canonical().map_err(|_| RnsNativeLeafErrorV1::Context)?;
         if context.parameter_digest() != parameter_digest {
-            return Err(RnsNativeLeafErrorV1::InvalidContext);
+            return Err(RnsNativeLeafErrorV1::Context);
         }
         Ok(Self {
             parameter_digest,
@@ -307,12 +306,12 @@ impl<'a> RnsNativeLeafCacheV1<'a> {
         // Reject an out-of-range leaf before hashing or changing the cache.
         let (_, _, length) = self.oracle.geometry()?;
         if index >= length {
-            return Err(RnsNativeLeafErrorV1::InvalidIndex);
+            return Err(RnsNativeLeafErrorV1::Index);
         }
-        if let Some((previous, commitment)) = self.entry {
-            if previous == values {
-                return commitment.at_index(index);
-            }
+        if let Some((previous, commitment)) = self.entry
+            && previous == values
+        {
+            return commitment.at_index(index);
         }
         let commitment = RnsNativeLeafPayloadV1::from_canonical_values(
             self.parameter_digest,
@@ -453,10 +452,7 @@ mod tests {
                 );
                 assert!(roots.insert(actual));
             }
-            assert_eq!(
-                payload.at_index(length),
-                Err(RnsNativeLeafErrorV1::InvalidIndex)
-            );
+            assert_eq!(payload.at_index(length), Err(RnsNativeLeafErrorV1::Index));
         }
         assert_eq!(roots.len(), 12);
         assert!(
@@ -483,8 +479,7 @@ mod tests {
             .unwrap()
             .parameter_digest();
         let mut values = [0; CANONICAL_LEAF_BYTES_V1];
-        for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
-            let q = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
+        for (limb, &q) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().enumerate() {
             let offset = limb * ROWS_PER_LIMB_V1 * RNS_NATIVE_QPCS_FQ2_BYTES_V1;
             values[offset..offset + 15].copy_from_slice(
                 &encode_fq2_v1(
@@ -522,7 +517,7 @@ mod tests {
                     RnsNativeOracleV1::Initial,
                     &invalid
                 ),
-                Err(RnsNativeLeafErrorV1::InvalidPayload)
+                Err(RnsNativeLeafErrorV1::Payload)
             ));
         }
         for size in [
@@ -537,7 +532,7 @@ mod tests {
                     RnsNativeOracleV1::Initial,
                     &vec![0; size]
                 ),
-                Err(RnsNativeLeafErrorV1::InvalidPayload)
+                Err(RnsNativeLeafErrorV1::Payload)
             ));
         }
     }
@@ -573,11 +568,11 @@ mod tests {
         assert_eq!(cache.payload_hashes, 3);
         assert_eq!(
             cache.leaf(0, &first[..first.len() - 1]),
-            Err(RnsNativeLeafErrorV1::InvalidPayload)
+            Err(RnsNativeLeafErrorV1::Payload)
         );
         assert_eq!(
             cache.leaf(1 << ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, &first),
-            Err(RnsNativeLeafErrorV1::InvalidIndex)
+            Err(RnsNativeLeafErrorV1::Index)
         );
         assert_eq!(cache.payload_hashes, 3);
         assert_eq!(cache.leaf(0, &first).unwrap(), original);

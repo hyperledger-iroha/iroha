@@ -3,7 +3,7 @@
 use super::*;
 
 /// Reconcile pinned custody with all bonded and pending shares and exact asset backing.
-pub(super) fn validate_public_lane_stake_reserves(
+pub(crate) fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), String> {
     let currency = world
@@ -246,6 +246,9 @@ mod tests {
 
     fn restore(value: json::Value) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura: Kura::blank_kura_for_testing(),

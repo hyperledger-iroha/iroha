@@ -10,6 +10,9 @@
 //! generation and verification, Merkle path queries and hardware feature
 //! discovery. Additional concurrency primitives may be added in future core
 //! releases without changing the fixed ABI v1 surface in this release.
+mod semantic_surface;
+use semantic_surface::semantic_abi_surface_v1;
+
 use iroha_data_model::prelude::{
     DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, INT_SCHEMA_HASH_V1, INT_SCHEMA_NAME_V1,
     MAX_DECIMAL_ENVELOPE_BYTES_V1, MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_ENVELOPE_BYTES_V1,
@@ -157,11 +160,6 @@ pub const STATE_MAP_MAX_BASE_FRAME_BYTES: usize = STATE_MAP_MAX_BASE_BYTES
     + core::mem::size_of::<u64>();
 /// Maximum encoded `Vec<StatePath>` page accepted by `STATE_MAP_KEY_AT`.
 pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
-/// Decode a NoritoBytes value containing a signed decimal ASCII integer and return
-/// the value in `x10` as a 64-bit signed integer (two's complement).
-///
-/// Args: r10 = &NoritoBytes (ASCII decimal) Ret: r10 = value (as u64 bits)
-pub const SYSCALL_DECODE_INT: u32 = 0x53;
 /// Return payload length for a pointer-ABI TLV.
 ///
 /// Args: r10 = &TLV Ret: r10 = payload length (u64)
@@ -197,10 +195,6 @@ pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 ///
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId Ret: r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
-/// Encode a 64-bit signed integer in ASCII decimal and return a host-owned `&NoritoBytes` TLV.
-///
-/// Args: r10 = value (i64 as u64) Ret: r10 = &NoritoBytes (ASCII decimal)
-pub const SYSCALL_ENCODE_INT: u32 = 0x55;
 /// Build a state path from a base Name and a NoritoBytes key by appending
 /// `"/" + lowercase_hex(payload)`.
 ///
@@ -225,14 +219,18 @@ pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
 ///
 /// Args: r10 = &NoritoBytes (canonical Norito `Name` frame) Ret: r10 = host-owned &Name
 pub const SYSCALL_NAME_DECODE: u32 = 0x5C;
-/// Encode an arbitrary pointer-ABI TLV into NoritoBytes by copying its envelope bytes.
+/// Encode a pointer-ABI TLV into NoritoBytes by copying its canonical envelope.
+///
+/// Numeric Int, Decimal, and Quantity frames are checked before publication.
 ///
 /// Args: r10 = &PointerType::<T>
-/// Ret:  r10 = &NoritoBytes(payload = TLV bytes)
+/// Ret:  r10 = &NoritoBytes(payload = complete TLV bytes)
 pub const SYSCALL_POINTER_TO_NORITO: u32 = 0x5D;
 /// Decode a NoritoBytes payload produced by [`SYSCALL_POINTER_TO_NORITO`] back into the
 /// original pointer-ABI TLV. Expects the payload to begin with the canonical TLV header
-/// `(type_id, version, len, payload…)`.
+/// `(type_id, version, len, payload…)`. Numeric frames must be canonical and
+/// within their nominal V1 domains. Expected numeric types require a matching
+/// envelope and reject null input.
 ///
 /// Args: r10 = &NoritoBytes, r11 = expected pointer type id (u16)
 /// Ret:  r10 = &PointerType::<T>
@@ -401,8 +399,10 @@ pub const SYSCALL_AXT_TOUCH: u32 = 0xB1;
 pub const SYSCALL_AXT_COMMIT: u32 = 0xB2;
 /// Verify a DS proof bundle inside an AXT.
 pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
-/// Use a capability handle granted by an asset DS inside an AXT.
-pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
+// 0xB4 is unassigned in ABI V1. Signed anchored spends are carried by
+// AxtEnvelopeRecord, not by a reusable-handle VM syscall.
+/// Stage one canonical issuer-signed anchored spend inside the active AXT envelope.
+pub const SYSCALL_AXT_STAGE_ANCHORED_SPEND: u32 = 0xB5;
 /// Return whether `number` is one of the state-backed AXT envelope syscalls.
 ///
 /// AXT remains available to both contract and generic ABI V1 programs when execution is bound to a
@@ -416,7 +416,7 @@ pub const fn is_axt_syscall(number: u32) -> bool {
             | SYSCALL_AXT_TOUCH
             | SYSCALL_AXT_COMMIT
             | SYSCALL_VERIFY_DS_PROOF
-            | SYSCALL_USE_ASSET_HANDLE
+            | SYSCALL_AXT_STAGE_ANCHORED_SPEND
     )
 }
 /// Open and fund a native asset escrow.
@@ -500,12 +500,11 @@ pub const SYSCALL_NORMALIZE_NORITO_BYTES: u32 = 0x01_0028;
 pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// Decode a complete schema-bound public argument record.
 ///
-/// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
-/// the host-issued domain-separated record binding for a prepared invocation;
+/// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)`;
 /// r11 = `&NoritoBytes(EntrypointArgumentSchemaV1)`.
-/// Ret: r10 = `&Blob(0u8 || [u64; word_count])`; the leading byte aligns the
-/// declaration-ordered flattened words, which contain sum tags, canonical
-/// scalar bits, or validated pointer-ABI addresses.
+/// Ret: r10 = aligned owned-HEAP table base (zero for no arguments), r11 = exact word count.
+/// Slots contain declaration-ordered flattened scalar bits, aggregate handles, or validated
+/// pointer-ABI addresses. Public root invocation preparation is performed by the interpreter.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
 /// Atomically set native incoming/outgoing availability for one account/asset pair.
 ///
@@ -582,6 +581,20 @@ pub const SYSCALL_INT_WRAP_ADD: u32 = 0x01_0111;
 pub const SYSCALL_INT_WRAP_SUB: u32 = 0x01_0112;
 /// Integer multiplication modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_MUL: u32 = 0x01_0113;
+/// Floor square root of a signed 512-bit integer, rejecting negative input.
+pub const SYSCALL_INT_ISQRT: u32 = 0x01_0114;
+/// Checked full-width integer absolute value.
+pub const SYSCALL_INT_ABS: u32 = 0x01_0115;
+/// Smaller of two full-width signed integers.
+pub const SYSCALL_INT_MIN: u32 = 0x01_0116;
+/// Larger of two full-width signed integers.
+pub const SYSCALL_INT_MAX: u32 = 0x01_0117;
+/// Mathematical ceiling of a full-width integer quotient.
+pub const SYSCALL_INT_DIV_CEIL: u32 = 0x01_0118;
+/// Nonnegative greatest common divisor of full-width integers.
+pub const SYSCALL_INT_GCD: u32 = 0x01_0119;
+/// Truncating integer mean with a full-width intermediate sum.
+pub const SYSCALL_INT_MEAN: u32 = 0x01_011A;
 /// Convert an `int` to an exact scale-zero `decimal`.
 pub const SYSCALL_DECIMAL_FROM_INT: u32 = 0x01_0120;
 /// Checked decimal negation.
@@ -663,7 +676,7 @@ pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
 /// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
 #[must_use]
 pub const fn is_numeric_v1_syscall(number: u32) -> bool {
-    matches!(number, 0x01_0100..=0x01_0113 | 0x01_0120..=0x01_0130 | 0x01_0140..=0x01_0150)
+    matches!(number, 0x01_0100..=0x01_011A | 0x01_0120..=0x01_0130 | 0x01_0140..=0x01_0150)
 }
 /// Construct one native JSON value from a compiler-emitted schema and flattened words.
 ///
@@ -698,7 +711,9 @@ pub const SYSCALL_KOTO_TEST_ACTOR_SIGN: u32 = 0x00FE_0003;
 /// Kotodama test-runner helper: invoke a contract entrypoint with canonical argument encoding.
 ///
 /// `x10 = 0` selects the current caller; otherwise `x10` is a fixture actor alias TLV.
-/// The remaining operands are entrypoint alias, JSON arguments, return-pointer mask, and arity.
+/// `x11` is the entrypoint alias, `x12` is JSON arguments, `x13` is the caller-owned
+/// result table, and `x14` is its exact capacity (1..=8192 words). Successful
+/// schema-bound transfer returns the table base/count in `x10`/`x11`.
 /// This helper is test-only and does not change the production ABI syscall surface.
 pub const SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS: u32 = 0x00FE_0004;
 /// Kotodama test-runner helper: assert that an actor entrypoint invocation rejects.
@@ -886,7 +901,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_AXT_TOUCH
             | SYSCALL_AXT_COMMIT
             | SYSCALL_VERIFY_DS_PROOF
-            | SYSCALL_USE_ASSET_HANDLE
+            | SYSCALL_AXT_STAGE_ANCHORED_SPEND
             | SYSCALL_ESCROW_OPEN_OFFER
             | SYSCALL_ESCROW_ACCEPT
             | SYSCALL_ESCROW_MARK_PAYMENT_SENT
@@ -971,8 +986,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SCHEMA_INFO
             | SYSCALL_NAME_DECODE
             | SYSCALL_BUILD_PATH_KEY_NORITO
-            | SYSCALL_ENCODE_INT
-            | SYSCALL_DECODE_INT
             | SYSCALL_POINTER_TO_NORITO
             | SYSCALL_POINTER_FROM_NORITO
             | SYSCALL_TLV_EQ
@@ -1085,8 +1098,6 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_STATE_GET, "STATE_GET"),
     (SYSCALL_STATE_SET, "STATE_SET"),
     (SYSCALL_STATE_DEL, "STATE_DEL"),
-    (SYSCALL_DECODE_INT, "DECODE_INT"),
-    (SYSCALL_ENCODE_INT, "ENCODE_INT"),
     (SYSCALL_BUILD_PATH_KEY_NORITO, "BUILD_PATH_KEY_NORITO"),
     (SYSCALL_JSON_ENCODE, "JSON_ENCODE"),
     (SYSCALL_JSON_DECODE, "JSON_DECODE"),
@@ -1158,7 +1169,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_AXT_TOUCH, "AXT_TOUCH"),
     (SYSCALL_AXT_COMMIT, "AXT_COMMIT"),
     (SYSCALL_VERIFY_DS_PROOF, "VERIFY_DS_PROOF"),
-    (SYSCALL_USE_ASSET_HANDLE, "USE_ASSET_HANDLE"),
+    (SYSCALL_AXT_STAGE_ANCHORED_SPEND, "AXT_STAGE_ANCHORED_SPEND"),
     (SYSCALL_ESCROW_OPEN_OFFER, "ESCROW_OPEN_OFFER"),
     (SYSCALL_ESCROW_ACCEPT, "ESCROW_ACCEPT"),
     (SYSCALL_ESCROW_MARK_PAYMENT_SENT, "ESCROW_MARK_PAYMENT_SENT"),
@@ -1256,6 +1267,13 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_INT_WRAP_ADD, "INT_WRAP_ADD"),
     (SYSCALL_INT_WRAP_SUB, "INT_WRAP_SUB"),
     (SYSCALL_INT_WRAP_MUL, "INT_WRAP_MUL"),
+    (SYSCALL_INT_ISQRT, "INT_ISQRT"),
+    (SYSCALL_INT_ABS, "INT_ABS"),
+    (SYSCALL_INT_MIN, "INT_MIN"),
+    (SYSCALL_INT_MAX, "INT_MAX"),
+    (SYSCALL_INT_DIV_CEIL, "INT_DIV_CEIL"),
+    (SYSCALL_INT_GCD, "INT_GCD"),
+    (SYSCALL_INT_MEAN, "INT_MEAN"),
     (SYSCALL_DECIMAL_FROM_INT, "DECIMAL_FROM_INT"),
     (SYSCALL_DECIMAL_NEG, "DECIMAL_NEG"),
     (SYSCALL_DECIMAL_ADD, "DECIMAL_ADD"),
@@ -1478,6 +1496,9 @@ struct AbiQueryPageSurface {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiEntrypointSurface {
     schema_version: u8,
+    call_table_layout: &'static str,
+    call_frame_checks: &'static str,
+    max_call_words: u64,
     unit_layout: &'static str,
     struct_identity: &'static str,
     error_layout: &'static str,
@@ -1613,7 +1634,6 @@ struct AbiStateValueKindSurface {
     tag: u32,
     word_layout: &'static str,
     pointer_type_id_or_zero: u16,
-    resource_handle: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiTaggedLayoutSurface {
@@ -1855,575 +1875,6 @@ impl AbiDescriptorEncoder {
     fn finish(self) -> Vec<u8> {
         self.bytes
     }
-}
-fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
-    use crate::core_query::CoreQueryEntityTagV1 as Tag;
-    vec![
-        AbiCoreQueryProjectionSurface {
-            name: "AccountView",
-            entity_tag: Tag::Account.as_u64(),
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "id",
-                    ty: "AccountId",
-                },
-                AbiNamedTypeSurface {
-                    name: "metadata",
-                    ty: "Json",
-                },
-            ],
-        },
-        AbiCoreQueryProjectionSurface {
-            name: "AssetView",
-            entity_tag: Tag::Asset.as_u64(),
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "id",
-                    ty: "AssetId",
-                },
-                AbiNamedTypeSurface {
-                    name: "amount",
-                    ty: "Quantity",
-                },
-            ],
-        },
-        AbiCoreQueryProjectionSurface {
-            name: "AssetDefinitionView",
-            entity_tag: Tag::AssetDefinition.as_u64(),
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "id",
-                    ty: "AssetDefinitionId",
-                },
-                AbiNamedTypeSurface {
-                    name: "name",
-                    ty: "String",
-                },
-                AbiNamedTypeSurface {
-                    name: "description",
-                    ty: "Option<String>",
-                },
-                AbiNamedTypeSurface {
-                    name: "owned_by",
-                    ty: "AccountId",
-                },
-                AbiNamedTypeSurface {
-                    name: "total_quantity",
-                    ty: "Quantity",
-                },
-                AbiNamedTypeSurface {
-                    name: "metadata",
-                    ty: "Json",
-                },
-            ],
-        },
-        AbiCoreQueryProjectionSurface {
-            name: "DomainView",
-            entity_tag: Tag::Domain.as_u64(),
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "id",
-                    ty: "DomainId",
-                },
-                AbiNamedTypeSurface {
-                    name: "owned_by",
-                    ty: "AccountId",
-                },
-                AbiNamedTypeSurface {
-                    name: "metadata",
-                    ty: "Json",
-                },
-            ],
-        },
-        AbiCoreQueryProjectionSurface {
-            name: "NftView",
-            entity_tag: Tag::Nft.as_u64(),
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "id",
-                    ty: "NftId",
-                },
-                AbiNamedTypeSurface {
-                    name: "owned_by",
-                    ty: "AccountId",
-                },
-                AbiNamedTypeSurface {
-                    name: "content",
-                    ty: "Json",
-                },
-            ],
-        },
-    ]
-}
-fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
-    const TYPES: [&str; 3] = ["int", "decimal", "quantity"];
-    const ARITHMETIC: [&str; 5] = ["+", "-", "*", "/", "%"];
-    const COMPARISONS: [&str; 6] = ["==", "!=", "<", "<=", ">", ">="];
-    const INVALID: (&str, &str) = ("invalid", "compile-time-error:operator-not-defined");
-    let mut rows = Vec::with_capacity(102);
-    for ty in TYPES {
-        let (allowed, result, semantics) = match ty {
-            "int" => (true, "int", "checked-negation;mantissa-overflow-on-min-int"),
-            "decimal" => (
-                true,
-                "decimal",
-                "checked-exact-negation;canonicalize-then-final-domain-check",
-            ),
-            "quantity" => (
-                false,
-                INVALID.0,
-                "compile-time-error:quantity-is-nonnegative",
-            ),
-            _ => unreachable!("closed numeric type inventory"),
-        };
-        rows.push(AbiNumericOperatorSurface {
-            operator: "unary-",
-            lhs: ty,
-            rhs: "none",
-            allowed,
-            result,
-            semantics,
-        });
-    }
-    for operator in ARITHMETIC {
-        for lhs in TYPES {
-            for rhs in TYPES {
-                let allowed = matches!(
-                    (operator, lhs, rhs),
-                    (_, "int", "int")
-                        | ("+" | "-" | "*" | "/", "decimal", "decimal")
-                        | ("+" | "-", "quantity", "quantity")
-                        | ("*" | "/", "quantity", "decimal")
-                        | ("/", "quantity", "quantity")
-                );
-                let (result, semantics) = if !allowed {
-                    INVALID
-                } else {
-                    match (operator, lhs, rhs) {
-                        ("+" | "-" | "*", "int", "int") => {
-                            ("int", "exact-checked-integer-arithmetic")
-                        }
-                        ("/", "int", "int") => ("int", "checked-quotient-truncates-toward-zero"),
-                        ("%", "int", "int") => (
-                            "int",
-                            "checked-remainder-sign-is-dividend;paired-quotient-must-fit",
-                        ),
-                        ("+" | "-", "decimal", "decimal") => (
-                            "decimal",
-                            "align-scale-exactly;canonicalize;check-final-domain",
-                        ),
-                        ("*", "decimal", "decimal") => (
-                            "decimal",
-                            "multiply-exactly;canonicalize;check-final-domain",
-                        ),
-                        ("/", "decimal", "decimal") => (
-                            "decimal",
-                            "exact-terminating-division-only;canonical-scale-at-most-28",
-                        ),
-                        ("+", "quantity", "quantity") => {
-                            ("quantity", "exact-checked-nonnegative-addition")
-                        }
-                        ("-", "quantity", "quantity") => (
-                            "quantity",
-                            "exact-subtraction;negative-result-is-quantity-underflow",
-                        ),
-                        ("*", "quantity", "decimal") => (
-                            "quantity",
-                            "exact-product;negative-result-is-negative-quantity;canonical-final-domain-check",
-                        ),
-                        ("/", "quantity", "decimal") => (
-                            "quantity",
-                            "exact-terminating-division;negative-result-is-negative-quantity",
-                        ),
-                        ("/", "quantity", "quantity") => {
-                            ("decimal", "exact-terminating-dimensionless-ratio")
-                        }
-                        _ => unreachable!("allowed arithmetic row has semantics"),
-                    }
-                };
-                rows.push(AbiNumericOperatorSurface {
-                    operator,
-                    lhs,
-                    rhs,
-                    allowed,
-                    result,
-                    semantics,
-                });
-            }
-        }
-    }
-    for operator in COMPARISONS {
-        for lhs in TYPES {
-            for rhs in TYPES {
-                let allowed = lhs == rhs;
-                let semantics = if !allowed {
-                    INVALID.1
-                } else if lhs == "quantity" {
-                    "compare-canonical-nonnegative-mathematical-values"
-                } else {
-                    "compare-canonical-mathematical-values"
-                };
-                rows.push(AbiNumericOperatorSurface {
-                    operator,
-                    lhs,
-                    rhs,
-                    allowed,
-                    result: if allowed { "bool" } else { INVALID.0 },
-                    semantics,
-                });
-            }
-        }
-    }
-    debug_assert_eq!(rows.len(), 102);
-    rows
-}
-fn semantic_abi_surface_v1() -> Result<
-    (
-        Vec<AbiCoreQueryProjectionSurface>,
-        AbiQueryPageSurface,
-        AbiEntrypointSurface,
-        AbiNumericSurface,
-    ),
-    AbiSurfaceError,
-> {
-    use crate::{
-        core_query::QUERY_PAGE_CAPACITY_V1,
-        entrypoint::{
-            MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH, MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
-            MAX_ENTRYPOINT_LIST_CAPACITY_V1, MIN_ENTRYPOINT_LIST_CAPACITY_V1,
-        },
-        pointer_abi::PointerType,
-    };
-    let query_page_capacity =
-        u8::try_from(QUERY_PAGE_CAPACITY_V1).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
-    let max_schema_nodes = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES)
-        .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
-    let max_schema_depth = u64::try_from(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH)
-        .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
-    let int_pointer_type_id = PointerType::Int as u16;
-    let decimal_pointer_type_id = PointerType::Decimal as u16;
-    let quantity_pointer_type_id = PointerType::Quantity as u16;
-    Ok((
-        core_query_projection_surface_v1(),
-        AbiQueryPageSurface {
-            name: "QueryPage",
-            fields: vec![
-                AbiNamedTypeSurface {
-                    name: "items",
-                    ty: "List<T,64>",
-                },
-                AbiNamedTypeSurface {
-                    name: "next_offset",
-                    ty: "Option<int>",
-                },
-            ],
-            items_capacity: query_page_capacity,
-            next_offset_semantics: "present-iff-another-canonical-page-exists;some-requires-nonempty-items;nonnegative;not-less-than-item-count;from-window=offset+item-count-with-checked-i64",
-            item_ordering: "canonical-entity-id-ascending",
-        },
-        AbiEntrypointSurface {
-            schema_version: 1,
-            unit_layout: "Unit=one-public-zero-scalar-word;Unit-atom-has-no-payload;JSON-null;nonzero-word-rejected;also-valid-in-sums-lists-state;every-public-CNTR-entrypoint-requires-return_type-and-return_schema;omitted-source-return-annotation=type-()-and-Unit-schema;absent-return-descriptor-invalid;nested-calls-always-return-schema-hashed-EntrypointReturnRecordV1-including-Unit-null",
-            struct_identity: "local-source-type-name-or-exact-locked-package::SourceUnit::Struct;max1024-ASCII-bytes;package=slash-separated-components-with-optional-single-@revision;component=[A-Za-z0-9_][A-Za-z0-9_.-]*;unit-and-struct=canonical-unreserved-source-type-identifiers;qualified-linker-private-substring-rejected;no-alias-or-revision-normalization;public-and-durable-schema-hashes-bind-exact-name;plain-core-view-and-page-names-require-reserved-schema-shape",
-            error_layout: "Error=one-public-u32-scalar-word;ErrorCode-atom-u32-code;JSON-exact-symbolic-variant-name;nonzero-enum-local-code-must-belong-to-schema;descriptor={identity:String,variants:Vec<{name:String,code:u32}>};identity=stable-locked-package-unit-enum-not-linker-ordinal;canonical-increasing-codes-and-unique-names;max256-variants;schema-hash=Iroha-Hash(domain-iroha:kotodama:error-schema:v1\0+Norito-encoded-ordered-variants);identity-is-bound-separately;every-boundary-state-descriptor-exactly-in-signed-CNTR;max256-error-types;CONTRACT_ABORT-descriptor-frame-max65536-bytes-and-CNTR-member-before-rejection;rejection-carries-authenticated-origin-contract-variant-identity-schemahash-code-through-nesting",
-            sum_json: "typed-JSON-uses-exact-single-key-tagged-objects;Option::some(value)={some:value};Option::none()={none:true};Result::ok(value)={ok:value};Result::err(value)={err:value};Some(Unit)={some:null}-distinct-from-None;nested-tags-preserved;no-flattened-or-nullable-Option-form;consistent-public-arguments-returns-and-durable-state-projection;JSON_BUILD-preserves-the-same-Option-tags-for-admitted-native-values;JSON_BUILD-rejects-implicit-Result",
-            int_kind: "Int",
-            int_pointer_type_id,
-            decimal_kind: "Decimal",
-            decimal_pointer_type_id,
-            quantity_kind: "Quantity",
-            quantity_pointer_type_id,
-            list_kind: "List",
-            list_layout: "flat-preorder;exact-element-subtree-immediately-follows",
-            list_child_count: 1,
-            list_capacity_is_schema_bound: true,
-            list_min_capacity: MIN_ENTRYPOINT_LIST_CAPACITY_V1,
-            list_max_capacity: MAX_ENTRYPOINT_LIST_CAPACITY_V1,
-            max_schema_nodes,
-            max_schema_depth,
-        },
-        AbiNumericSurface {
-            semantics_descriptor_version: 3,
-            int_pointer_type_id,
-            decimal_pointer_type_id,
-            quantity_pointer_type_id,
-            mantissa_bits: NUMERIC_MANTISSA_BITS_V1,
-            max_scale: DECIMAL_MAX_SCALE_V1,
-            int_domain: "-2^511..=2^511-1",
-            decimal_domain: "signed-mantissa-times-10^-scale;scale=0..28;exact",
-            quantity_domain: "nonnegative-decimal;nominal-ledger-quantity",
-            canonicalization: "minimal-signed-little-endian;zero-empty;strip-fractional-trailing-zeroes;zero-scale-is-zero",
-            integer_division: "quotient-truncates-toward-zero;remainder-sign-is-dividend",
-            wrapping_modulus: "2^512;reinterpret-as-signed-domain",
-            rules: vec![
-                AbiNumericRuleSurface {
-                    name: "checked_intermediates",
-                    specification: "compute-exact-mathematical-result-with-conceptually-unbounded-intermediates;canonicalize;then-check-final-domain",
-                },
-                AbiNumericRuleSurface {
-                    name: "result_domain",
-                    specification: "canonical-scale-first;then-signed-512-bit-mantissa;then-nonnegative-quantity-invariant",
-                },
-                AbiNumericRuleSurface {
-                    name: "integer_arithmetic",
-                    specification: "neg-add-sub-mul-div-rem-are-checked;division-and-remainder-by-zero-fail;min-int-div-or-rem-minus-one-is-mantissa-overflow",
-                },
-                AbiNumericRuleSurface {
-                    name: "decimal_add_sub",
-                    specification: "align-to-common-decimal-scale-exactly;operate;canonicalize;check-final-domain",
-                },
-                AbiNumericRuleSurface {
-                    name: "decimal_multiplication",
-                    specification: "multiply-mantissas-exactly;sum-scales;canonicalize;reject-only-if-canonical-final-scale-or-mantissa-is-out-of-domain",
-                },
-                AbiNumericRuleSurface {
-                    name: "exact_division",
-                    specification: "reduce-denominator;classify-prime-factors;non-2-or-5-factor-is-repeating-decimal;terminating-minimum-scale-above-28-is-exact-division-scale-overflow;never-round",
-                },
-                AbiNumericRuleSurface {
-                    name: "fused_mul_div_round",
-                    specification: "decimal-or-quantity-receiver;decimal-multiplier-and-divisor;mathematical-product-kept-unbounded;one-final-round-at-explicit-scale;shared-observed-primitive-meters-every-work-phase-before-work;r10=value;r11=multiplier;r12=divisor;r13=Int-scale;r14=rounding;r15=zero;all-arithmetic-failures-trap;quantity-result-must-be-nonnegative",
-                },
-                AbiNumericRuleSurface {
-                    name: "rounded_division",
-                    specification: "explicit-output-scale-0-through-28-and-one-of-seven-rounding-tags;round-exact-rational-once;canonicalize-result",
-                },
-                AbiNumericRuleSurface {
-                    name: "comparison",
-                    specification: "compare-mathematical-values-after-canonicalization;same-declared-numeric-type-required-after-contextual-literal-inference",
-                },
-                AbiNumericRuleSurface {
-                    name: "conversion",
-                    specification: "runtime-int-to-decimal-requires-named-decimal-from-int;decimal-to-int-exact-by-default-with-distinct-named-truncating-and-rounded-forms;quantity-entry-checked-and-explicit;exact-literal-inference-is-compile-time-only",
-                },
-                AbiNumericRuleSurface {
-                    name: "quantity",
-                    specification: "nominal-nonnegative-domain;addition-checked;representable-negative-subtraction-is-quantity-underflow;multiplication-and-division-by-decimal-preserve-quantity;quantity-ratio-yields-decimal",
-                },
-                AbiNumericRuleSurface {
-                    name: "wrapping",
-                    specification: "only-explicit-int-neg-add-sub-mul-wrap-modulo-2^512;ordinary-operators-never-wrap",
-                },
-                AbiNumericRuleSurface {
-                    name: "bitwise_shift_surface",
-                    specification: "no-source-bitwise-or-shift-operators-in-abi-v1",
-                },
-            ],
-            operators: numeric_operator_surface_v1(),
-            json_grammar: vec![
-                AbiNumericJsonSurface {
-                    type_name: "int",
-                    token_kind: "JSON-string-only",
-                    decoded_string_grammar: "0|-?[1-9][0-9]*",
-                    validation: "canonical-base-10-no-plus-no-leading-zero-no-negative-zero-no-decimal-point-no-exponent;then-signed-512-bit-domain",
-                },
-                AbiNumericJsonSurface {
-                    type_name: "decimal",
-                    token_kind: "JSON-string-only",
-                    decoded_string_grammar: "-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?",
-                    validation: "shortest-canonical-non-exponent-spelling;no-plus-leading-zero-negative-zero-or-removable-fractional-zero;then-scale-0-through-28-and-signed-512-bit-mantissa",
-                },
-                AbiNumericJsonSurface {
-                    type_name: "quantity",
-                    token_kind: "JSON-string-only",
-                    decoded_string_grammar: "(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?",
-                    validation: "shortest-canonical-nonnegative-non-exponent-spelling;no-plus-leading-zero-or-removable-fractional-zero;then-scale-0-through-28-and-signed-512-bit-mantissa",
-                },
-            ],
-            fault_ordering: vec![
-                AbiNumericRuleSurface {
-                    name: "operand_pointer_validation",
-                    specification: "operands-in-register-order:pointer-provenance;type-policy;expected-type;version;capped-length;range;snapshot;hash;frame;schema;canonical",
-                },
-                AbiNumericRuleSurface {
-                    name: "scale_pointer_validation",
-                    specification: "after-all-operands-and-before-control-registers-when-the-syscall-has-a-dynamic-scale-pointer",
-                },
-                AbiNumericRuleSurface {
-                    name: "control_validation",
-                    specification: "required-zero-registers;rounding-tag;failure-mode-in-syscall-contract-order",
-                },
-                AbiNumericRuleSurface {
-                    name: "division_by_zero",
-                    specification: "after-structural-and-control-validation;before-arithmetic-classification",
-                },
-                AbiNumericRuleSurface {
-                    name: "arithmetic_classification",
-                    specification: "operation-specific-exact-arithmetic-fault-before-final-result-domain-faults",
-                },
-                AbiNumericRuleSurface {
-                    name: "final_result_domain",
-                    specification: "scale-overflow;then-mantissa-overflow;then-negative-quantity",
-                },
-                AbiNumericRuleSurface {
-                    name: "quantity_subtraction",
-                    specification: "representable-negative-result-maps-to-quantity-underflow;out-of-range-negative-result-remains-mantissa-overflow",
-                },
-            ],
-            wire_format_version: NUMERIC_WIRE_FORMAT_VERSION_V1,
-            int_schema_name: INT_SCHEMA_NAME_V1,
-            int_schema_hash: INT_SCHEMA_HASH_V1,
-            decimal_schema_name: DECIMAL_SCHEMA_NAME_V1,
-            decimal_schema_hash: DECIMAL_SCHEMA_HASH_V1,
-            quantity_schema_name: QUANTITY_SCHEMA_NAME_V1,
-            quantity_schema_hash: QUANTITY_SCHEMA_HASH_V1,
-            frame_header_bytes: u64::try_from(NUMERIC_FRAME_HEADER_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            int_max_frame_bytes: u64::try_from(MAX_INT_FRAME_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            decimal_max_frame_bytes: u64::try_from(MAX_DECIMAL_FRAME_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            quantity_max_frame_bytes: u64::try_from(MAX_QUANTITY_FRAME_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            pointer_envelope_overhead_bytes: u64::try_from(NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            int_max_envelope_bytes: u64::try_from(MAX_INT_ENVELOPE_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            decimal_max_envelope_bytes: u64::try_from(MAX_DECIMAL_ENVELOPE_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            quantity_max_envelope_bytes: u64::try_from(MAX_QUANTITY_ENVELOPE_BYTES_V1)
-                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-            frame_layout: NUMERIC_FRAME_LAYOUT_V1,
-            pointer_envelope_layout: NUMERIC_POINTER_ENVELOPE_LAYOUT_V1,
-            error_precedence: NUMERIC_ERROR_PRECEDENCE_V1,
-            rounding_modes: vec![
-                AbiNumericRoundingSurface {
-                    name: "toward_zero",
-                    tag: crate::numeric::RoundingModeV1::TowardZero.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "away_from_zero",
-                    tag: crate::numeric::RoundingModeV1::AwayFromZero.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "floor",
-                    tag: crate::numeric::RoundingModeV1::Floor.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "ceil",
-                    tag: crate::numeric::RoundingModeV1::Ceil.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "nearest_even",
-                    tag: crate::numeric::RoundingModeV1::NearestEven.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "nearest_away",
-                    tag: crate::numeric::RoundingModeV1::NearestAway.tag(),
-                },
-                AbiNumericRoundingSurface {
-                    name: "nearest_toward_zero",
-                    tag: crate::numeric::RoundingModeV1::NearestTowardZero.tag(),
-                },
-            ],
-            failure_modes: vec![
-                AbiNumericRoundingSurface {
-                    name: "trap",
-                    tag: crate::numeric::NUMERIC_FAILURE_TRAP,
-                },
-                AbiNumericRoundingSurface {
-                    name: "status",
-                    tag: crate::numeric::NUMERIC_FAILURE_STATUS,
-                },
-            ],
-            faults: vec![
-                AbiNumericFaultSurface {
-                    name: "mantissa_overflow",
-                    tag: crate::numeric::NumericFaultV1::MantissaOverflow.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "scale_overflow",
-                    tag: crate::numeric::NumericFaultV1::ScaleOverflow.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "division_by_zero",
-                    tag: crate::numeric::NumericFaultV1::DivisionByZero.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "repeating_decimal",
-                    tag: crate::numeric::NumericFaultV1::RepeatingDecimal.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "exact_division_scale_overflow",
-                    tag: crate::numeric::NumericFaultV1::ExactDivisionScaleOverflow.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "invalid_scale",
-                    tag: crate::numeric::NumericFaultV1::InvalidScale.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "inexact_conversion",
-                    tag: crate::numeric::NumericFaultV1::InexactConversion.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "negative_quantity",
-                    tag: crate::numeric::NumericFaultV1::NegativeQuantity.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "quantity_underflow",
-                    tag: crate::numeric::NumericFaultV1::QuantityUnderflow.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "invalid_rounding_mode",
-                    tag: crate::numeric::NumericFaultV1::InvalidRoundingMode.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "invalid_failure_mode",
-                    tag: crate::numeric::NumericFaultV1::InvalidFailureMode.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "reserved_register_nonzero",
-                    tag: crate::numeric::NumericFaultV1::ReservedRegisterNonZero.tag(),
-                },
-            ],
-            pointer_faults: vec![
-                AbiNumericFaultSurface {
-                    name: "invalid_address",
-                    tag: crate::numeric::PointerAbiFaultV1::InvalidAddress.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "unknown_type",
-                    tag: crate::numeric::PointerAbiFaultV1::UnknownType.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "type_not_allowed",
-                    tag: crate::numeric::PointerAbiFaultV1::TypeNotAllowed.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "wrong_type",
-                    tag: crate::numeric::PointerAbiFaultV1::WrongType.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "invalid_envelope_version",
-                    tag: crate::numeric::PointerAbiFaultV1::InvalidEnvelopeVersion.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "oversized_length",
-                    tag: crate::numeric::PointerAbiFaultV1::OversizedLength.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "truncated_envelope",
-                    tag: crate::numeric::PointerAbiFaultV1::TruncatedEnvelope.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "payload_hash_mismatch",
-                    tag: crate::numeric::PointerAbiFaultV1::PayloadHashMismatch.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "malformed_frame",
-                    tag: crate::numeric::PointerAbiFaultV1::MalformedFrame.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "schema_mismatch",
-                    tag: crate::numeric::PointerAbiFaultV1::SchemaMismatch.tag(),
-                },
-                AbiNumericFaultSurface {
-                    name: "noncanonical",
-                    tag: crate::numeric::PointerAbiFaultV1::NonCanonical.tag(),
-                },
-            ],
-        },
-    ))
 }
 fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError> {
     use crate::private_input::{
@@ -2830,8 +2281,7 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 kind_record.text("name", kind.name)?;
                 kind_record.u32("tag", kind.tag)?;
                 kind_record.text("word_layout", kind.word_layout)?;
-                kind_record.u16("pointer_type_id_or_zero", kind.pointer_type_id_or_zero)?;
-                kind_record.bool("resource_handle", kind.resource_handle)
+                kind_record.u16("pointer_type_id_or_zero", kind.pointer_type_id_or_zero)
             })?;
             typed.sequence("nodes", &value.nodes, |node_record, node| {
                 node_record.text("name", node.name)?;
@@ -2856,6 +2306,9 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     })?;
     descriptor.record("entrypoint", |entrypoint| {
         entrypoint.u8("schema_version", surface.entrypoint.schema_version)?;
+        entrypoint.text("call_table_layout", surface.entrypoint.call_table_layout)?;
+        entrypoint.text("call_frame_checks", surface.entrypoint.call_frame_checks)?;
+        entrypoint.u64("max_call_words", surface.entrypoint.max_call_words)?;
         entrypoint.text("unit_layout", surface.entrypoint.unit_layout)?;
         entrypoint.text("struct_identity", surface.entrypoint.struct_identity)?;
         entrypoint.text("error_layout", surface.entrypoint.error_layout)?;
@@ -3170,7 +2623,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             pointer_type_id_or_zero: value
                 .pointer_type()
                 .map_or(0, |pointer_type| pointer_type as u16),
-            resource_handle: value.is_resource_handle(),
         }
     };
     let kinds = vec![
@@ -3250,11 +2702,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             "one-u64-pointer-word;complete-canonical-TLV",
         ),
         kind(
-            StateValueKindV1::AssetHandle,
-            "AssetHandle",
-            "one-u64-pointer-word;complete-canonical-TLV;non-copyable-resource",
-        ),
-        kind(
             StateValueKindV1::ProofBlob,
             "ProofBlob",
             "one-u64-pointer-word;complete-canonical-TLV",
@@ -3274,7 +2721,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         AbiTaggedLayoutSurface {
             name: "Struct",
             tag: StateValueNodeV1::STRUCT_TAG,
-            layout: "u8-tag+canonical-Norito-String(name)+canonical-Norito-Vec<String>(ordered-field-names);one-inline-immediate-child-subtree-per-field",
+            layout: "u8-tag+canonical-Norito-String(name)+canonical-Norito-Vec<String>(ordered-field-names);one-inline-immediate-child-subtree-per-field;zero-fields=one-zero-runtime-slot-and-no-record-atoms",
         },
         AbiTaggedLayoutSurface {
             name: "Tuple",
@@ -3336,7 +2783,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         AbiTaggedLayoutSurface {
             name: "List",
             tag: StateValueAtomV1::LIST_TAG,
-            layout: "KRV1-u8-tag+u8(item-count-0..64)+each-item-as-u16le(atom-count-1..256)+inline-active-only-element-atom-stream;items-in-order",
+            layout: "KRV1-u8-tag+u8(item-count-0..64)+each-item-as-u16le(atom-count-0..256)+inline-active-only-element-atom-stream;items-in-order",
         },
         AbiTaggedLayoutSurface {
             name: "Unit",
@@ -3373,8 +2820,8 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         record_name: STATE_VALUE_RECORD_NAME_V1,
         record_hash: norito::schema::identity::frame_hash::<StateValueRecordV1>(),
         schema_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KSV1||u16le(total-logical-node-count)||flat-preorder-u8-node-and-kind-tag-stream);List-capacity-precedes-inline-element-subtree;exactly-one-root;iterative-encode-decode",
-        record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KRV1||schema-hash-[u8;32]||root-u16le-atom-count||flat-active-only-atom-stream);atom=u8-tag+variant-payload;Tag-and-Bool=u8(only-0-or-1);Pointer=u32le-byte-length+raw-bytes;List=u8-item-count(0..64)+each-item-u16le-atom-count(1..256)+inline-item-stream;iterative-encode-decode-drop",
-        traversal_semantics: "schema-is-exactly-one-preorder-tree;products-store-children-in-order;sums-and-lists-consume-one-compiler-owned-word;record-atoms-contain-only-active-sum-payloads",
+        record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KRV1||schema-hash-[u8;32]||root-u16le-atom-count(0..256)||flat-active-only-atom-stream);atom=u8-tag+variant-payload;Tag-and-Bool=u8(only-0-or-1);Pointer=u32le-byte-length+raw-bytes;List=u8-item-count(0..64)+each-item-u16le-atom-count(0..256)+inline-item-stream;iterative-encode-decode-drop",
+        traversal_semantics: "schema-is-exactly-one-preorder-tree;products-store-children-in-order;sums-and-lists-consume-one-compiler-owned-word;record-atoms-contain-only-active-sum-payloads;empty-struct=one-zero-runtime-slot-and-empty-schema-bound-atom-stream",
         option_tag_semantics: "false=None-with-no-payload;true=Some-with-one-active-child-payload",
         result_tag_semantics: "false=Err-with-error-child-payload;true=Ok-with-ok-child-payload",
         kinds,
@@ -3591,11 +3038,11 @@ mod tests {
     #[test]
     fn numeric_v1_ranges_are_complete_and_legacy_numbers_fail_closed() {
         let policy = crate::SyscallPolicy::AbiV1;
-        let expected = (0x01_0100..=0x01_0113)
+        let expected = (0x01_0100..=0x01_011A)
             .chain(0x01_0120..=0x01_012F)
             .chain(0x01_0140..=0x01_014F)
             .collect::<Vec<_>>();
-        assert_eq!(expected.len(), 52);
+        assert_eq!(expected.len(), 59);
         for number in expected {
             assert!(is_numeric_v1_syscall(number));
             assert!(is_syscall_allowed(policy, number));
@@ -3703,7 +3150,7 @@ mod tests {
             SYSCALL_AXT_TOUCH,
             SYSCALL_AXT_COMMIT,
             SYSCALL_VERIFY_DS_PROOF,
-            SYSCALL_USE_ASSET_HANDLE,
+            SYSCALL_AXT_STAGE_ANCHORED_SPEND,
         ] {
             assert!(is_generic_program_syscall_allowed(
                 crate::SyscallPolicy::AbiV1,
@@ -3722,7 +3169,7 @@ mod tests {
             SYSCALL_AXT_TOUCH,
             SYSCALL_AXT_COMMIT,
             SYSCALL_VERIFY_DS_PROOF,
-            SYSCALL_USE_ASSET_HANDLE,
+            SYSCALL_AXT_STAGE_ANCHORED_SPEND,
         ] {
             assert!(is_axt_syscall(syscall));
         }
@@ -3786,8 +3233,10 @@ mod tests {
             crate::SyscallPolicy::AbiV1,
             SYSCALL_STATE_SCAN
         ));
-        assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, 0x01_0030));
-        assert!(syscall_name(0x01_0030).is_none());
+        for retired in [0x53, 0x55, 0x01_0030] {
+            assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, retired));
+            assert!(syscall_name(retired).is_none());
+        }
         assert_eq!(
             syscalls_doc_gen::DOCS.len(),
             allowed.len(),
@@ -4187,7 +3636,7 @@ mod tests {
             typed.record_hash,
             norito::schema::identity::frame_hash::<StateValueRecordV1>()
         );
-        assert_eq!(typed.kinds.len(), 19);
+        assert_eq!(typed.kinds.len(), 18);
         assert_eq!(typed.nodes.len(), 9);
         assert_eq!(typed.atoms.len(), 6);
         assert_eq!(typed.max_nodes, MAX_STATE_VALUE_NODES as u64);
@@ -4439,10 +3888,6 @@ mod tests {
             assert_surface_mutation_changes_hash(|changed| {
                 changed.durable_state.typed_value.kinds[index].pointer_type_id_or_zero ^= 0x8000;
             });
-            assert_surface_mutation_changes_hash(|changed| {
-                let kind = &mut changed.durable_state.typed_value.kinds[index];
-                kind.resource_handle = !kind.resource_handle;
-            });
         }
         for index in 0..typed.nodes.len() {
             assert_surface_mutation_changes_hash(|changed| {
@@ -4679,6 +4124,27 @@ mod tests {
         });
     }
     #[test]
+    fn abi_hash_binds_table_layout_frame_checks_and_word_limit() {
+        let original = collect_abi_surface(crate::SyscallPolicy::AbiV1).expect("ABI surface");
+        assert_eq!(original.entrypoint.max_call_words, 8192);
+        assert!(
+            original
+                .entrypoint
+                .call_table_layout
+                .contains("no-register-value-call-path")
+        );
+        let encoded = encode_abi_surface(&original).expect("encode canonical surface");
+        let mut changed = original.clone();
+        changed.entrypoint.max_call_words -= 1;
+        assert_ne!(encoded, encode_abi_surface(&changed).unwrap());
+        changed = original.clone();
+        changed.entrypoint.call_frame_checks = "no-initialization-check";
+        assert_ne!(encoded, encode_abi_surface(&changed).unwrap());
+        changed = original;
+        changed.entrypoint.call_table_layout = "invalid-layout";
+        assert_ne!(encoded, encode_abi_surface(&changed).unwrap());
+    }
+    #[test]
     fn abi_hash_descriptor_binds_entrypoint_numeric_and_recursive_list_semantics() {
         use crate::{
             entrypoint::{
@@ -4824,8 +4290,13 @@ mod tests {
         }
         assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
         assert!(surface.pointer_type_ids.contains(&0x0010));
-        assert_eq!(PointerType::from_u16(0x0013), None);
-        assert!(!surface.pointer_type_ids.contains(&0x0013));
+        assert_eq!(PointerType::from_u16(0x000C), None);
+        assert!(!surface.pointer_type_ids.contains(&0x000C));
+        assert_eq!(
+            PointerType::from_u16(0x0013),
+            Some(PointerType::AxtAnchoredSpendV1)
+        );
+        assert!(surface.pointer_type_ids.contains(&0x0013));
         assert_eq!(surface.numeric.int_pointer_type_id, PointerType::Int as u16);
         assert_eq!(
             surface.numeric.decimal_pointer_type_id,
@@ -4837,8 +4308,8 @@ mod tests {
         );
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
-        assert_eq!(surface.numeric.semantics_descriptor_version, 3);
-        assert_eq!(surface.numeric.rules.len(), 13);
+        assert_eq!(surface.numeric.semantics_descriptor_version, 4);
+        assert_eq!(surface.numeric.rules.len(), 14);
         assert_eq!(surface.numeric.operators.len(), 102);
         assert_eq!(
             surface
@@ -4927,6 +4398,7 @@ mod tests {
                 ("invalid_rounding_mode", 10),
                 ("invalid_failure_mode", 11),
                 ("reserved_register_nonzero", 12),
+                ("negative_square_root", 13),
             ]
         );
         assert_eq!(

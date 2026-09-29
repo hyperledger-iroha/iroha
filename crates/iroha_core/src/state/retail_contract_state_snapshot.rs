@@ -63,7 +63,8 @@ pub(crate) struct LocalRetailContractStateSnapshotV1 {
 
 impl StateView<'_> {
     /// Cold-capture the complete current contract-state map and prove only the
-    /// expected retail policy and activation marker from this State generation.
+    /// expected retail policy and activation marker from this State generation,
+    /// charging the map nodes to the caller's original finite operation pool.
     ///
     /// The caller must never treat this local root as finalized. A future
     /// selective route needs an exact finalized accumulated-root commitment and
@@ -75,6 +76,7 @@ impl StateView<'_> {
         &self,
         expected_policy: &RetailDailyLimitPolicyV1,
         expected_activation: &RetailDailyActivationV1,
+        budget: &mv::allocation::AllocationBudget,
     ) -> Result<LocalRetailContractStateSnapshotV1, RetailContractStateSnapshotErrorV1> {
         let block_hash = self
             .latest_block_hash()
@@ -95,6 +97,7 @@ impl StateView<'_> {
             .ok_or(RetailContractStateSnapshotErrorV1::MissingActivation)?;
         let map = ContractStateMapV1::capture(
             state.iter().map(|(path, value)| (path, value.as_slice())),
+            budget,
         )?;
         let accumulated_root = map.root();
         let policy_proof = map
@@ -175,11 +178,13 @@ mod tests {
         );
         // Test State installs native lane markers at startup; the committed
         // root must include those existing entries as well as our three keys.
+        let budget = mv::allocation::AllocationBudget::new(1 << 20);
         let baseline = state.world.smart_contract_state.view();
         let mut expected_full = ContractStateMapV1::capture(
             baseline
                 .iter()
                 .map(|(path, value)| (path, value.as_slice())),
+            &budget,
         )
         .unwrap();
         drop(baseline);
@@ -207,14 +212,14 @@ mod tests {
         assert!(matches!(
             state
                 .view()
-                .capture_local_retail_contract_state_v1(&policy, &marker),
+                .capture_local_retail_contract_state_v1(&policy, &marker, &budget),
             Err(RetailContractStateSnapshotErrorV1::NoCommittedBlock)
         ));
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0);
         state.block_hashes = BlockHashes::new(vec![header.hash()]);
         let view = state.view();
         let snapshot = view
-            .capture_local_retail_contract_state_v1(&policy, &marker)
+            .capture_local_retail_contract_state_v1(&policy, &marker, &budget)
             .expect("exact local inclusion");
         assert_eq!(snapshot.height, 1);
         assert_eq!(snapshot.block_hash, header.hash());
@@ -229,10 +234,20 @@ mod tests {
                 .verify(&marker_path, snapshot.accumulated_root)
         );
         assert_eq!(snapshot.accumulated_root, expected_full.root());
+        let retained = budget.reserved_bytes();
+        budget.set_limit_bytes(retained);
+        assert!(matches!(
+            view.capture_local_retail_contract_state_v1(&policy, &marker, &budget),
+            Err(RetailContractStateSnapshotErrorV1::Map(
+                MerkleMapError::Admission(_)
+            ))
+        ));
+        assert_eq!(budget.reserved_bytes(), retained);
+        budget.set_limit_bytes(1 << 20);
         let mut wrong_policy = policy.clone();
         wrong_policy.daily_cap = Quantity::from(6_u32);
         assert!(matches!(
-            view.capture_local_retail_contract_state_v1(&wrong_policy, &marker),
+            view.capture_local_retail_contract_state_v1(&wrong_policy, &marker, &budget),
             Err(RetailContractStateSnapshotErrorV1::Inclusion(_))
         ));
     }

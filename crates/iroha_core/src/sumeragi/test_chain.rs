@@ -22,7 +22,10 @@ use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
-    parameter::system::{Parameter, SumeragiConsensusMode},
+    parameter::{
+        Parameter,
+        system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+    },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
@@ -31,8 +34,8 @@ use iroha_model_base::{chain::ChainId, peer::PeerId};
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi::{
     api::ExecOutcome,
-    crypto::{Signer as _, form_qc},
-    message::{Block, BlockHeader, Qc, Vote, VoteKind},
+    crypto::{AttestOutcome, Attestor as _, Signer as _, form_qc},
+    message::{Block, BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
     preimage::payload_hash,
     types::{Committee, Hash32},
 };
@@ -69,7 +72,7 @@ const CLOCK_SEED: u8 = 0xCC;
 pub enum Signers {
     /// A quorum: the first three validators in committee order.
     Quorum,
-    /// All four validators.
+    /// All four validators: an oversized certificate for negative verification tests.
     All,
     /// Three validators other than the first ones (another valid certificate of the same block).
     LastThree,
@@ -105,6 +108,8 @@ pub struct TestChainConfig {
     pub consensus_mode: SumeragiConsensusMode,
     /// Creation time of the first genesis transaction in milliseconds.
     pub genesis_time_ms: u64,
+    /// Original execution configuration, fixed before signed genesis policies are derived.
+    pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// The node's committed lane blocks, which the chain's blocks merge.
     pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
@@ -133,8 +138,42 @@ impl TestChainConfig {
             genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
+            pipeline: iroha_config::parameters::actual::Pipeline::default(),
             lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         }
+    }
+}
+
+/// Original prepared genesis and its configured, unapplied State for a genuine test chain.
+///
+/// The caller supplies custody in the exact signed committee order. This configuration cannot
+/// replace the signed epoch, network, consensus mode, or execution result with fixture values.
+pub struct PreparedTestChainConfig {
+    /// Independently authenticated original signed genesis.
+    pub genesis: iroha_genesis::ValidatedGenesisBundle,
+    /// Exact manifest used to authenticate the original signed genesis.
+    pub manifest: iroha_genesis::RawGenesisTransaction,
+    /// Configured State before genesis, including its original lane catalogs and policies.
+    pub state: Arc<State>,
+    /// The same empty Kura retained by `state`.
+    pub kura: Arc<Kura>,
+    /// Exact BLS private keys, in signed genesis committee order.
+    pub validator_keys: Vec<KeyPair>,
+    /// Exact independently provisioned Pasta seeds in that same order.
+    pub pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    /// Signing key of an account present after original genesis executes.
+    pub clock: KeyPair,
+    /// The original source of committed lane blocks.
+    pub lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+}
+
+impl core::fmt::Debug for PreparedTestChainConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PreparedTestChainConfig")
+            .field("genesis_hash", &self.genesis.expected_hash())
+            .field("validators", &self.validator_keys.len())
+            .field("clock_account", self.clock.public_key())
+            .finish_non_exhaustive()
     }
 }
 
@@ -164,11 +203,13 @@ fn fixture_keys() -> Vec<KeyPair> {
 /// A chain of certified blocks over one State (see the module documentation).
 pub struct CertifiedTestChain {
     state: Arc<State>,
+    attestor: super::attestation::NativePastaAttestor,
     kura: Arc<Kura>,
     genesis: SignedBlock,
     validated_genesis: iroha_genesis::ValidatedGenesisBundle,
     genesis_account: AccountId,
     executor: StateExecutor,
+    events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
     blocks: KuraBlockStore,
     signers: Vec<KeyPairSigner>,
     committee: Committee,
@@ -179,6 +220,7 @@ pub struct CertifiedTestChain {
     tip: (u64, Hash32, Hash32),
     router: Queue,
     clock: KeyPair,
+    pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
@@ -226,6 +268,16 @@ impl CertifiedTestChain {
     /// Genesis cannot be built or does not apply; the State (with whatever genesis left
     /// unapplied) is returned for inspection.
     pub fn start(config: TestChainConfig) -> Result<Self, StartFailure> {
+        Self::from_prepared(Self::prepare(config)?)
+    }
+
+    /// Construct one original signed genesis and its matching pristine configured State.
+    /// This owner can be staged without publication to test real execution/refusal boundaries.
+    /// No result, certificate, or poststate is supplied by the fixture caller.
+    ///
+    /// # Errors
+    /// Returns the original State when the signed source cannot be prepared.
+    pub fn prepare(config: TestChainConfig) -> Result<PreparedTestChainConfig, StartFailure> {
         iroha_genesis::init_instruction_registry();
         let TestChainConfig {
             chain_id,
@@ -235,6 +287,7 @@ impl CertifiedTestChain {
             genesis_parameters,
             consensus_mode,
             genesis_time_ms,
+            pipeline,
             lane_blocks,
         } = config;
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
@@ -281,33 +334,17 @@ impl CertifiedTestChain {
                 });
             }
         };
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        let (genesis, manifest, state, kura) = prepare_configured_genesis(
             world,
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            NetworkId::from_genesis_hash(genesis.hash()),
-        ));
-        let nexus = state.nexus_snapshot();
-        state.install_lane_manifests(&Arc::new(
-            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-        ));
-        let tip = match startup::apply_genesis(
-            &state,
-            genesis.clone(),
-            &genesis_account,
-            consensus_mode.into(),
-            None,
-        ) {
-            Ok(tip) => tip,
-            Err(error) => {
-                return Err(StartFailure {
-                    error: error.into(),
-                    state,
-                });
-            }
-        };
+            &chain_id,
+            &genesis_key,
+            &validators,
+            genesis,
+            manifest,
+            consensus_mode,
+            genesis_time_ms,
+            &pipeline,
+        )?;
         let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &genesis.encode_wire().expect("fixture genesis framing"),
             &manifest,
@@ -315,6 +352,117 @@ impl CertifiedTestChain {
             genesis.hash(),
         )
         .expect("fixture signed genesis and manifest agree");
+        Ok(PreparedTestChainConfig {
+            genesis: validated_genesis,
+            manifest,
+            state,
+            kura,
+            validator_keys: keys,
+            pasta_seeds: (0..4)
+                .map(|index| zeroize::Zeroizing::new([0xA0 + index; 32]))
+                .collect(),
+            clock,
+            lane_blocks,
+        })
+    }
+
+    /// Apply the original prepared signed genesis and execute its successors through the
+    /// production StateExecutor, publication, Kura, and recovery representation.
+    ///
+    /// All authority and custody checks precede execution. The clock account must be present
+    /// in the resulting original genesis state; no account or value is fabricated here.
+    /// This four-seat fixture signs votes itself, but never supplies caller-authored R values.
+    ///
+    /// # Errors
+    /// Rejects mismatched source manifest, State/Kura identity, applied state, committee or
+    /// custody. Actual genesis execution failures return the same State for inspection.
+    pub fn from_prepared(config: PreparedTestChainConfig) -> Result<Self, StartFailure> {
+        iroha_genesis::init_instruction_registry();
+        let PreparedTestChainConfig {
+            genesis: validated_genesis,
+            manifest,
+            state,
+            kura,
+            validator_keys: keys,
+            pasta_seeds,
+            clock,
+            lane_blocks,
+        } = config;
+        let invalid = |message: String| StartFailure {
+            error: TestChainError::Genesis(message),
+            state: Arc::clone(&state),
+        };
+        iroha_genesis::validate_prepared_genesis_bundle(
+            validated_genesis.canonical_wire(),
+            &manifest,
+            validated_genesis.public_key(),
+            validated_genesis.expected_hash(),
+        )
+        .map_err(|error| invalid(format!("original prepared manifest: {error:#}")))?;
+        let genesis = validated_genesis.block().clone();
+        let chain_id = manifest.chain_id().clone();
+        let epoch = super::epoch::genesis_epoch(&genesis).map_err(&invalid)?;
+        if state.chain_id_ref() != &chain_id
+            || state.view().network_id() != &epoch.network_id
+            || !std::ptr::eq(state.kura(), kura.as_ref())
+            || state.view().height() != 0
+            || kura.blocks_count() != 0
+        {
+            return Err(invalid(
+                "prepared genesis requires its exact chain/network and original empty State/Kura"
+                    .into(),
+            ));
+        }
+        if epoch.committee.len() != 4
+            || keys.len() != epoch.committee.len()
+            || pasta_seeds.len() != epoch.committee.len()
+            || keys
+                .iter()
+                .zip(&epoch.committee)
+                .any(|(key, member)| key.public_key() != member.validator.public_key())
+        {
+            return Err(invalid(
+                "fixture custody must cover all four exact ordered signed genesis seats".into(),
+            ));
+        }
+        let generation = Arc::new(epoch.authority);
+        for (index, seed) in pasta_seeds.iter().enumerate() {
+            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+                Arc::clone(&generation),
+                zeroize::Zeroizing::new(**seed),
+                u32::try_from(index).expect("four seats"),
+            )
+            .map_err(|error| invalid(format!("original Pasta custody seat {index}: {error}")))?;
+        }
+        let validators = epoch
+            .committee
+            .into_iter()
+            .map(|member| (member.validator, member.proof_of_possession))
+            .collect::<Vec<_>>();
+        let genesis_account = AccountId::new(validated_genesis.public_key().clone());
+        let consensus_mode = validated_genesis.consensus_metadata().mode;
+        let tip = startup::apply_genesis(
+            &state,
+            genesis.clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .map_err(|error| StartFailure {
+            error: error.into(),
+            state: Arc::clone(&state),
+        })?;
+        if state
+            .view()
+            .world()
+            .accounts()
+            .get(&AccountId::new(clock.public_key().clone()))
+            .is_none()
+        {
+            return Err(invalid(
+                "fixture clock account is absent after original genesis".into(),
+            ));
+        }
         let crypto = Arc::new(BlsCrypto::new());
         crypto
             .admit_committee(
@@ -325,13 +473,27 @@ impl CertifiedTestChain {
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
         let staging = Staging::new();
-        let blocks =
-            KuraBlockStore::new(Arc::clone(&kura), shared, GENESIS_HEIGHT, staging.clone());
+        let blocks = KuraBlockStore::new(
+            Arc::clone(&kura),
+            shared,
+            GENESIS_HEIGHT,
+            staging.clone(),
+            state.ivm_execution_budget(),
+        );
+        let (events, event_receiver) = tokio::sync::broadcast::channel(4096);
         let executor = StateExecutor::spawn(ExecutorContext {
             state: Arc::clone(&state),
+            native_context_archive: Arc::new(
+                crate::query::native_context_archive::NativeContextArchive::open(
+                    state.kura(),
+                    state.ivm_execution_budget(),
+                    state.kura().native_context_archive_max_bytes(),
+                )
+                .expect("original-pool native context archive"),
+            ),
             queue: None,
             staging,
-            events: tokio::sync::broadcast::channel(1024).0,
+            events,
             genesis_account: genesis_account.clone(),
             consensus_mode: consensus_mode.into(),
             applied: (GENESIS_HEIGHT, tip.block_hash),
@@ -355,17 +517,44 @@ impl CertifiedTestChain {
         )
         .expect("fixture committee");
         let instance = global_instance(&genesis, &chain_id.to_string());
+        let authority = Arc::new(
+            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+                generation,
+                zeroize::Zeroizing::new(*pasta_seeds[0]),
+                0,
+            )
+            .expect("actual genesis Pasta fixture custody"),
+        );
+        let (attestor, publisher) = super::attestation::channel(
+            instance,
+            signers[0].public_key(),
+            true,
+            &state.ivm_execution_budget(),
+        )
+        .expect("original pool fixture mailbox");
+        executor
+            .attach_attestation(
+                super::attestation::NativePastaVerifier::new(
+                    instance,
+                    NetworkId::from_genesis_hash(genesis.hash()),
+                ),
+                Some(authority),
+                publisher,
+            )
+            .expect("attach original fixture custody");
         let router = Queue::from_config(
             iroha_config::parameters::actual::Queue::default(),
             tokio::sync::broadcast::channel(16).0,
         );
         Ok(Self {
             state,
+            attestor,
             kura,
             genesis,
             validated_genesis,
             genesis_account,
             executor,
+            events: event_receiver,
             blocks,
             signers,
             committee,
@@ -375,8 +564,144 @@ impl CertifiedTestChain {
             tip: (GENESIS_HEIGHT, tip.block_hash, tip.result),
             router,
             clock,
+            pasta_seeds,
             lane_blocks,
         })
+    }
+
+    /// Drain the events actually delivered by native publication, preserving their order.
+    ///
+    /// # Errors
+    /// Fails on channel loss or a stopped Worker; missing events never count as parity.
+    pub fn take_events(&mut self) -> Result<Vec<iroha_data_model::events::EventBox>, String> {
+        let mut events = Vec::new();
+        loop {
+            match self.events.try_recv() {
+                Ok(event) => events.push(event),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => return Ok(events),
+                Err(error) => return Err(format!("native fixture event delivery: {error}")),
+            }
+        }
+    }
+
+    /// Execute a real NPoS prefix through its authenticated pre-boundary pulse at height 9.
+    ///
+    /// The DKG session is genuinely proved but seeded as component prestate at height 8;
+    /// this fixture does not claim transaction-driven ceremony or live-network qualification.
+    /// The returned chain is ready to execute its mandatory attested boundary work at 10.
+    pub fn npos_boundary_fixture() -> Self {
+        use crate::beacon::{
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+            GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
+        };
+        use iroha_data_model::consensus::{
+            GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconChainAnchorV1,
+            GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconPulseContextV1,
+        };
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        let policy = SumeragiNposParameters {
+            epoch_length_blocks: NonZeroU64::new(10).unwrap(),
+            epoch_seed: [0x61; 32],
+            ..SumeragiNposParameters::default()
+        };
+        config
+            .genesis_parameters
+            .push(Parameter::Custom(policy.into_custom_parameter()));
+        let mut chain = Self::start(config).expect("actual signed NPoS genesis");
+        while chain.height() < 8 {
+            chain.commit(Vec::new());
+        }
+        let current = chain
+            .state
+            .view()
+            .world()
+            .consensus_schedule()
+            .ready(9)
+            .unwrap()
+            .epoch
+            .clone();
+        let mut pairs = VALIDATOR_SEEDS
+            .iter()
+            .map(|seed| KeyPair::from_seed(vec![*seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let roster = pairs
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roster,
+            current
+                .committee
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect::<Vec<_>>()
+        );
+        let id: [u8; 32] =
+            iroha_crypto::Hash::new(b"native original Pasta boundary fixture DKG").into();
+        let (session, signers) = prepared_session_and_signers_fixture_for_keys_v1(
+            GlobalThresholdBeaconDkgSessionV1 {
+                version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+                network_id: chain.network_id(),
+                session_id: id,
+                attempt_id: id,
+                authority_generation: current.authority.generation,
+                roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&roster),
+                committee_size: 4,
+                threshold: 2,
+                start_height: 1,
+                commitments_end_height: 2,
+                deliveries_end_height: 3,
+                acceptances_end_height: 4,
+            },
+            &pairs,
+        );
+        let mut record =
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())
+                .unwrap();
+        record
+            .activate(session.record().adaptive_dkg.finalized_at_height)
+            .unwrap();
+        chain.setup_world_at(2_000, |transaction| {
+            transaction
+                .world
+                .global_beacon_key_sessions
+                .insert(id, record);
+            transaction
+                .world
+                .global_beacon_active_session
+                .insert(crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, id);
+        });
+        let parent = chain.committed(8);
+        let epoch = super::schedule::core_epoch(&current).unwrap().id;
+        let mut aggregate = GlobalThresholdBeaconPulseAggregatorV1::new(
+            session,
+            9,
+            GlobalThresholdBeaconChainAnchorV1 {
+                height: 8,
+                block_hash: parent.block_hash(),
+            },
+            GlobalThresholdBeaconPulseContextV1 {
+                instance: chain.instance.0,
+                epoch: epoch.epoch,
+                epoch_context_id: epoch.context.0,
+                parent_consensus_hash: parent.core_hash().0,
+                parent_result: parent.result().0,
+            },
+        )
+        .unwrap();
+        for signer in signers.iter().take(2) {
+            let partial = signer
+                .sign_partial(aggregate.session(), aggregate.payload())
+                .unwrap();
+            aggregate.accept_partial(partial).unwrap();
+        }
+        let pulse = aggregate.finalize().unwrap();
+        let control = super::epoch_beacon::control::encode(Some(pulse)).unwrap();
+        chain.commit_with_control(None, Vec::new(), Signers::Quorum, control);
+        assert_eq!(chain.height(), 9);
+        chain
     }
 
     /// The State the chain applies to.
@@ -472,29 +797,74 @@ impl CertifiedTestChain {
         transactions: Vec<SignedTransaction>,
         signers: Signers,
     ) -> Vec<bool> {
-        self.commit_with_pulse(time_ms, transactions, signers, None)
+        self.commit_with_control(time_ms, transactions, signers, Default::default())
     }
 
-    /// Commit real transaction work with a finalized current threshold pulse. The ordinary
-    /// executor verifies the pulse and certifies its actual state writes; this seam creates
-    /// no signer authority, pulse signature, admission exemption, or synthetic empty work.
-    pub fn commit_with_pulse(
+    /// Execute and certify a block with its separately authenticated control witness.
+    /// Actual transaction or lane work is mandatory; the witness cannot create a block.
+    pub fn commit_with_control(
         &mut self,
         time_ms: Option<u64>,
-        mut transactions: Vec<SignedTransaction>,
+        transactions: Vec<SignedTransaction>,
         signers: Signers,
-        pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        control_witness: iroha_sumeragi::types::ControlWitness,
+    ) -> Vec<bool> {
+        self.commit_with_proposal(time_ms, transactions, signers, control_witness, |_| {})
+    }
+
+    /// Prepare the original resultless proposal before constructing its native header.
+    /// The complete proposal
+    /// still passes ordinary production payload validation and execution before any QC is made.
+    ///
+    /// # Panics
+    /// See [`Self::commit`]. The hook must preserve the original canonical block time.
+    pub fn commit_with_proposal(
+        &mut self,
+        time_ms: Option<u64>,
+        transactions: Vec<SignedTransaction>,
+        signers: Signers,
+        control_witness: iroha_sumeragi::types::ControlWitness,
+        prepare: impl FnOnce(&mut SignedBlock),
     ) -> Vec<bool> {
         let submitted = transactions.len();
+        let mut proposal = self.proposal(time_ms, transactions);
+        let original_time = proposal.header().creation_time();
+        prepare(&mut proposal);
+        assert_eq!(
+            proposal.header().creation_time(),
+            original_time,
+            "original canonical block time"
+        );
+        let stored = self.commit_proposal(proposal, signers, control_witness);
+        (0..submitted)
+            .map(|index| {
+                stored
+                    .block()
+                    .network_output_at(u32::try_from(index).expect("index fits"))
+                    .is_some_and(|(_, output)| output.result.is_ok())
+            })
+            .collect()
+    }
+
+    /// Build original nonempty work using the production payload assembler and this chain's
+    /// authenticated time, route, lane source and signed transaction rules.
+    ///
+    /// # Panics
+    /// Input admission or original payload assembly fails.
+    pub fn proposal(
+        &self,
+        time_ms: Option<u64>,
+        mut transactions: Vec<SignedTransaction>,
+    ) -> SignedBlock {
         let height = self.tip.0 + 1;
         let view = self.state.view();
         let parent = view.latest_block().expect("the applied parent");
         let scheduled = view
             .world()
             .consensus_schedule()
-            .get(height)
+            .ready(height)
             .cloned()
-            .expect("the schedule covers the next height");
+            .expect("the schedule authorizes the next height");
         let transaction_parameters = view.world().parameters().transaction();
         // The leader merges the lane blocks its lane stores have committed; they may raise the
         // block time (the merge time floor).
@@ -533,11 +903,7 @@ impl CertifiedTestChain {
                     &time_source,
                 )
                 .expect("the fixture transaction is accepted");
-                let plan = self
-                    .router
-                    .route_plan_with_state(&accepted, &self.state)
-                    .expect("the fixture transaction routes");
-                (accepted, plan)
+                accepted
             })
             .collect::<Vec<_>>();
         let assembly = Assembly {
@@ -545,17 +911,69 @@ impl CertifiedTestChain {
             view: 0,
             cadence,
         };
-        let proposal =
-            payload::assemble_with_merges(&self.state, assembly, &accepted, &merges, pulse)
-                .expect("assembly");
+        let proposal = payload::assemble_with_merges(&self.state, assembly, &accepted, &merges)
+            .expect("assembly");
         assert_eq!(
             proposal.header().creation_time(),
             block_time,
             "the fixture predicts the canonical block time"
         );
+        proposal
+    }
+
+    /// Execute, certify, publish and apply one original resultless proposal through the same
+    /// worker used by the node. The native header binds the exact supplied canonical wire.
+    ///
+    /// Callers supply their original prepared proposal. No execution
+    /// result, context proof, or certificate is accepted from the caller; the worker derives R.
+    ///
+    /// # Panics
+    /// The proposal is not authorized by the current native schedule or production execution
+    /// rejects it. This helper never publishes a rejected proposal.
+    pub fn commit_proposal(
+        &mut self,
+        proposal: SignedBlock,
+        signers: Signers,
+        control_witness: iroha_sumeragi::types::ControlWitness,
+    ) -> CommittedBlock {
+        self.begin_proposal(proposal, control_witness)
+            .expect("actual original proposal executes")
+            .publish(signers)
+            .expect("original execution publishes")
+    }
+
+    /// Retain one actual Worker execution before certification or publication.
+    /// The returned owner exclusively borrows the chain until it is published or discarded.
+    ///
+    /// # Errors
+    /// Returns the original production execution verdict. No caller-authored R is accepted.
+    pub fn begin_proposal(
+        &mut self,
+        proposal: SignedBlock,
+        control_witness: iroha_sumeragi::types::ControlWitness,
+    ) -> Result<PendingTestExecution<'_>, String> {
+        let height = self.tip.0 + 1;
+        assert_eq!(
+            proposal.header().height().get(),
+            height,
+            "original next height"
+        );
+        let scheduled = self
+            .state
+            .view()
+            .world()
+            .consensus_schedule()
+            .ready(height)
+            .cloned()
+            .expect("the schedule authorizes the original proposal");
         let payload_bytes = payload::encode(&proposal).expect("non-empty payload");
+        let epoch = super::schedule::core_epoch(&scheduled.epoch)
+            .expect("authenticated epoch")
+            .id;
         let header = BlockHeader {
+            control_witness,
             instance: self.instance,
+            epoch,
             height,
             origin_view: 0,
             parent_hash: self.tip.1,
@@ -564,7 +982,8 @@ impl CertifiedTestChain {
             payload_len: u32::try_from(payload_bytes.len()).expect("payload fits"),
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: attestation_required(&proposal),
+            attest: attestation_required(&proposal)
+                || height == scheduled.epoch.authorization.last_height,
         };
         let block = Block {
             header,
@@ -573,25 +992,20 @@ impl CertifiedTestChain {
         let block_hash = block.hash(&*self.crypto);
         let result = match self.executor.execute(&block, &block_hash) {
             Some(ExecOutcome::Valid(result)) => result,
-            other => panic!("fixture block {height} does not execute: {other:?}"),
+            other => {
+                return Err(format!(
+                    "fixture block {height} does not execute: {other:?}"
+                ));
+            }
         };
-        let commit_qc = self.commit_qc(height, block_hash, result, block.header.attest, signers);
-        assert_eq!(
-            self.executor.prepare(&block, &commit_qc).expect("prepare"),
-            Some(result)
-        );
-        self.blocks.append(&block, &commit_qc).expect("append");
-        self.executor.commit(&block, &commit_qc).expect("commit");
-        self.tip = (height, block_hash, result);
-        let stored = self.committed(height);
-        (0..submitted)
-            .map(|index| {
-                stored
-                    .block()
-                    .network_output_at(u32::try_from(index).expect("index fits"))
-                    .is_some_and(|(_, output)| output.result.is_ok())
-            })
-            .collect()
+        Ok(PendingTestExecution {
+            chain: self,
+            block,
+            block_hash,
+            result,
+            certificate: None,
+            published: None,
+        })
     }
 
     /// A `CommitQC` of `(height, block_hash, result)` signed by `signers` (view 0).
@@ -604,6 +1018,99 @@ impl CertifiedTestChain {
         attest: bool,
         signers: Signers,
     ) -> Qc {
+        let epoch = if height <= self.tip.0 {
+            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
+                .unwrap()
+                .id
+        } else {
+            let view = self.state.view();
+            super::schedule::core_epoch(
+                &view
+                    .world()
+                    .consensus_schedule()
+                    .ready(height)
+                    .unwrap()
+                    .epoch,
+            )
+            .unwrap()
+            .id
+        };
+        let witness = if attest {
+            if height <= self.tip.0 {
+                Some(
+                    ResultWitness::from_untrusted(
+                        self.committed(height)
+                            .block()
+                            .commit_certificate()
+                            .unwrap()
+                            .result_preimage()
+                            .to_vec(),
+                    )
+                    .unwrap(),
+                )
+            } else {
+                let statement = iroha_sumeragi::preimage::att_preimage(
+                    &self.instance,
+                    &epoch,
+                    height,
+                    &block_hash,
+                    &result,
+                );
+                let AttestOutcome::Attested(share) =
+                    self.attestor
+                        .attest(height, self.signers[0].public_key(), &statement)
+                else {
+                    panic!(
+                        "the executed original must publish its actual Pasta receipt before Valid"
+                    );
+                };
+                Some(share.witness)
+            }
+        } else {
+            None
+        };
+        self.commit_qc_with_witness(height, block_hash, result, attest, signers, witness)
+    }
+
+    /// Sign a source-complete certificate over the exact original worker witness supplied by
+    /// an execution fixture. It must hash to R; every Pasta signer verifies the same full source.
+    pub fn commit_qc_with_witness(
+        &self,
+        height: u64,
+        block_hash: Hash32,
+        result: Hash32,
+        attest: bool,
+        signers: Signers,
+        witness: Option<ResultWitness>,
+    ) -> Qc {
+        assert_eq!(
+            attest,
+            witness.is_some(),
+            "exact mandatory witness presence"
+        );
+        if let Some(witness) = &witness {
+            assert_eq!(
+                super::commitment::result_of_preimage(witness.as_slice()),
+                result
+            );
+        }
+        let epoch = if height <= self.tip.0 {
+            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
+                .unwrap()
+                .id
+        } else {
+            let view = self.state.view();
+            super::schedule::core_epoch(
+                &view
+                    .world()
+                    .consensus_schedule()
+                    .ready(height)
+                    .unwrap()
+                    .epoch,
+            )
+            .unwrap()
+            .id
+        };
         let votes = signers
             .indices()
             .iter()
@@ -611,6 +1118,7 @@ impl CertifiedTestChain {
                 let mut vote = Vote {
                     kind: VoteKind::Commit,
                     instance: self.instance,
+                    epoch,
                     height,
                     view: 0,
                     block_hash,
@@ -622,6 +1130,28 @@ impl CertifiedTestChain {
                     ),
                     attestation: None,
                 };
+                if let Some(witness) = &witness {
+                    let message = super::attestation::native_seal_message(
+                        self.instance,
+                        self.network_id(),
+                        &vote.statement(),
+                        witness.as_slice(),
+                    )
+                    .expect("actual original native statement");
+                    let result =
+                        super::commitment::ExecutionResultCommitment::decode(witness.as_slice())
+                            .unwrap();
+                    let custody = self.pasta_custody(signer);
+                    let signer = custody
+                        .signer_for_authority(&result.schedule.current.authority)
+                        .unwrap();
+                    vote.attestation = Some(CommitAttestation {
+                        witness: witness.clone(),
+                        signature: super::attestation::encode_native_seal(
+                            signer.sign(&message).unwrap(),
+                        ),
+                    });
+                }
                 vote.sig = self.signers[signer as usize].sign(&vote.preimage());
                 vote
             })
@@ -629,8 +1159,8 @@ impl CertifiedTestChain {
         let refs = votes.iter().collect::<Vec<_>>();
         match form_qc(&*self.crypto, self.committee.n(), &refs) {
             Ok(qc) => qc,
-            // Below the quorum `form_qc` refuses: aggregate by hand (a certificate that does not
-            // verify, for negative tests).
+            // Under- or oversized sets are refused by `form_qc`: aggregate by hand only
+            // to supply a genuinely signed malformed certificate to negative tests.
             Err(_) => {
                 let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(self.committee.n());
                 for vote in &votes {
@@ -640,6 +1170,7 @@ impl CertifiedTestChain {
                 Qc {
                     kind: VoteKind::Commit,
                     instance: self.instance,
+                    epoch,
                     height,
                     view: 0,
                     block_hash,
@@ -647,10 +1178,31 @@ impl CertifiedTestChain {
                     attest,
                     signers: signers_bitmap,
                     agg_sig: iroha_sumeragi::crypto::Crypto::aggregate(&*self.crypto, &sigs),
-                    attestations: Vec::new(),
+                    attestations: votes
+                        .iter()
+                        .filter_map(|vote| vote.attestation.as_ref().map(|share| share.signature))
+                        .collect(),
+                    attestation_witness: witness,
                 }
             }
         }
+    }
+
+    /// Original seed custody matching this chain's signed genesis authority and canonical seat.
+    pub fn pasta_custody(
+        &self,
+        index: u32,
+    ) -> crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1 {
+        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(
+                super::epoch::genesis_epoch(&self.genesis)
+                    .unwrap()
+                    .authority,
+            ),
+            zeroize::Zeroizing::new(*self.pasta_seeds[index as usize]),
+            index,
+        )
+        .expect("fixture custody matches its actual signed genesis")
     }
 
     /// Test setup outside consensus: run `edit` on a transaction of an overlay for the next
@@ -702,7 +1254,8 @@ impl CertifiedTestChain {
             .sign(key.private_key())
     }
 
-    fn tick(&self, created_ms: u64) -> SignedTransaction {
+    /// Sign actual nonempty fixture work using the account seeded by this chain's genesis.
+    pub(super) fn tick(&self, created_ms: u64) -> SignedTransaction {
         self.sign(
             &self.clock,
             [InstructionBox::from(Log::new(
@@ -712,6 +1265,269 @@ impl CertifiedTestChain {
             created_ms,
         )
     }
+}
+
+/// Exclusive test owner of one original native Worker execution.
+///
+/// The Worker keeps the original overlay and witness; this owner retains only the exact
+/// source header, source payload and R returned by that Worker. Certification and publication
+/// use the production path. Dropping an unpublished owner discards only that speculative work.
+pub struct PendingTestExecution<'chain> {
+    chain: &'chain mut CertifiedTestChain,
+    block: Block,
+    block_hash: Hash32,
+    result: Hash32,
+    certificate: Option<(Signers, Qc)>,
+    published: Option<CommittedBlock>,
+}
+
+impl PendingTestExecution<'_> {
+    /// Hash of R returned by the original execution.
+    #[must_use]
+    pub fn result(&self) -> Hash32 {
+        self.result
+    }
+
+    /// Observe or alter the original unprepared execution on its owning Worker thread.
+    /// A changed sealed source must fail production preparation. Borrowed source values
+    /// cannot escape this callback, and certified publication cannot be inspected mutably.
+    ///
+    /// # Errors
+    /// The original owner is absent, already certified, or the callback panics.
+    pub fn inspect<R: Send + 'static>(
+        &mut self,
+        inspect: impl for<'borrow, 'state> FnOnce(
+            super::executor::PendingExecutionView<'borrow, 'state>,
+        ) -> R
+        + Send
+        + 'static,
+    ) -> Result<R, String> {
+        self.chain
+            .executor
+            .inspect_pending(self.block_hash, inspect)
+    }
+
+    /// Certify this retained R and prepare the same original Worker execution.
+    /// A failed attempt retains its exact certificate and source for a retry.
+    ///
+    /// # Errors
+    /// Refuses changed signing choices, source mutation, invalid quorum, or production refusal.
+    pub fn prepare(&mut self, signers: Signers) -> Result<(), String> {
+        if let Some((original, _)) = &self.certificate {
+            if *original != signers {
+                return Err("original pending certificate cannot be replaced".into());
+            }
+        } else {
+            let mut qc = self.chain.commit_qc(
+                self.block.header.height,
+                self.block_hash,
+                self.result,
+                self.block.header.attest,
+                signers,
+            );
+            qc.admit_attestation_witness(&self.chain.state.ivm_execution_budget())
+                .map_err(|error| error.to_string())?;
+            self.certificate = Some((signers, qc));
+        }
+        let (_, qc) = self
+            .certificate
+            .as_ref()
+            .expect("original certificate retained");
+        match self
+            .chain
+            .executor
+            .prepare(&self.block, qc)
+            .map_err(|error| error.to_string())?
+        {
+            Some(result) if result == self.result => Ok(()),
+            other => Err(format!("original execution preparation refused: {other:?}")),
+        }
+    }
+
+    /// Persist and publish this exact original execution. Repeated completion returns the
+    /// original committed block without repeating State changes or event delivery.
+    ///
+    /// # Errors
+    /// Returns preparation, durable storage or publication refusal with this owner retained.
+    pub fn publish(&mut self, signers: Signers) -> Result<CommittedBlock, String> {
+        if let Some(published) = &self.published {
+            if self
+                .certificate
+                .as_ref()
+                .is_some_and(|(original, _)| *original != signers)
+            {
+                return Err("original published certificate cannot be replaced".into());
+            }
+            return Ok(published.clone());
+        }
+        self.prepare(signers)?;
+        let (_, qc) = self
+            .certificate
+            .as_ref()
+            .expect("prepared original certificate");
+        self.chain
+            .blocks
+            .append(&self.block, qc)
+            .map_err(|error| error.to_string())?;
+        self.chain
+            .executor
+            .commit(&self.block, qc)
+            .map_err(|error| error.to_string())?;
+        self.chain.tip = (self.block.header.height, self.block_hash, self.result);
+        let published = self.chain.committed(self.block.header.height);
+        self.published = Some(published.clone());
+        Ok(published)
+    }
+}
+
+impl Drop for PendingTestExecution<'_> {
+    fn drop(&mut self) {
+        if self.published.is_none() {
+            self.chain.executor.discard(self.block.header.height, &[]);
+        }
+    }
+}
+
+/// Derive the signed policies through the same refusing native execution boundary used by
+/// production. A provisional mismatch supplies only the two typed policy digests. Its overlay
+/// is discarded, its pristine World is moved into a new State bound to the final signed network,
+/// and the corrected original is executed again before this function returns.
+#[allow(clippy::too_many_arguments)]
+fn prepare_configured_genesis(
+    mut world: World,
+    chain_id: &ChainId,
+    key: &KeyPair,
+    validators: &[(PeerId, Vec<u8>)],
+    mut genesis: SignedBlock,
+    mut manifest: iroha_genesis::RawGenesisTransaction,
+    mode: SumeragiConsensusMode,
+    time_ms: u64,
+    pipeline: &iroha_config::parameters::actual::Pipeline,
+) -> Result<
+    (
+        SignedBlock,
+        iroha_genesis::RawGenesisTransaction,
+        Arc<State>,
+        Arc<Kura>,
+    ),
+    StartFailure,
+> {
+    let kura = Kura::blank_kura_for_testing();
+    let topology =
+        super::network_topology::Topology::new(validators.iter().map(|(peer, _)| peer.clone()));
+    let account = AccountId::new(key.public_key().clone());
+    for attempt in 0..2 {
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+            NetworkId::from_genesis_hash(genesis.hash()),
+        );
+        state.set_pipeline(pipeline.clone());
+        let nexus = state.nexus_snapshot();
+        state.install_lane_manifests_for_testing(&Arc::new(
+            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+        ));
+        let policies = {
+            let validation = crate::block::ValidBlock::validate_signed_genesis(
+                genesis.clone(),
+                &topology,
+                &account,
+                &TimeSource::new_system(),
+                &state,
+                mode.into(),
+            )
+            .unpack(|_| {});
+            match validation {
+                Ok((valid, overlay)) => {
+                    drop((valid, overlay));
+                    Ok(None)
+                }
+                Err((_, error)) => match *error {
+                    crate::block::BlockValidationError::GenesisPolicyMismatch {
+                        actual_execution,
+                        actual_nexus,
+                        ..
+                    } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
+                    error => Err(format!("original native genesis execution: {error}")),
+                },
+            }
+        };
+        let policies = match policies {
+            Ok(policies) => policies,
+            Err(error) => {
+                return Err(StartFailure {
+                    error: TestChainError::Genesis(error),
+                    state: Arc::new(state),
+                });
+            }
+        };
+        let Some((execution, nexus)) = policies else {
+            return Ok((genesis, manifest, Arc::new(state), kura));
+        };
+        let mut parameters = manifest.sumeragi_v2_context_parameters();
+        parameters.execution_policy_hash = execution.into();
+        parameters.nexus_amx_context_hash = nexus.into();
+        manifest = manifest
+            .with_sumeragi_v2_context_parameters(parameters)
+            .with_consensus_meta();
+        genesis = match manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                key, None, None, time_ms,
+            ) {
+            Ok(signed) => signed.0,
+            Err(error) => {
+                return Err(StartFailure {
+                    error: TestChainError::Genesis(format!(
+                        "sign derived native genesis policies: {error:#}"
+                    )),
+                    state: Arc::new(state),
+                });
+            }
+        };
+        // The provisional execution never publishes. Only the original pristine World survives;
+        // no result, schedule, context values, or provisional network identity crosses this move.
+        world = state.world;
+    }
+    unreachable!("second native validation either succeeds or returns its typed failure")
+}
+
+/// Build a signed genesis with an explicit NPoS policy for authority-reader tests.
+pub(crate) fn signed_genesis_fixture(
+    chain_id: &ChainId,
+    genesis_key: &KeyPair,
+    validators: &[(PeerId, Vec<u8>)],
+    instructions: Vec<InstructionBox>,
+    genesis_time_ms: u64,
+    mode: ConsensusMode,
+    npos: Option<SumeragiNposParameters>,
+) -> Result<SignedBlock, String> {
+    if (mode == ConsensusMode::Npos) != npos.is_some() {
+        return Err("fixture NPoS policy must exactly match signed mode".into());
+    }
+    let parameters = npos
+        .into_iter()
+        .flat_map(|policy| {
+            [
+                Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                    policy.epoch_length_blocks,
+                )),
+                Parameter::Custom(policy.into_custom_parameter()),
+            ]
+        })
+        .collect();
+    build_genesis(
+        chain_id,
+        genesis_key,
+        validators,
+        instructions,
+        parameters,
+        mode.into(),
+        genesis_time_ms,
+    )
+    .map(|(block, _)| block)
 }
 
 /// The signed genesis of the fixed committee with `instructions` in its ordinary transaction.
@@ -758,7 +1574,7 @@ fn build_genesis(
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             genesis_key,
             None,
-            None,
+            Some(crate::state::default_genesis_confidential_policy_hash()),
             genesis_time_ms,
         )
         .map_err(|error| format!("{error:#}"))?;
@@ -768,6 +1584,191 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prepared_config() -> PreparedTestChainConfig {
+        iroha_genesis::init_instruction_registry();
+        let chain_id = ChainId::from("original-prepared-native-fixture");
+        let genesis_key = KeyPair::from_seed(vec![0xD0; 32], Algorithm::Ed25519);
+        let clock = KeyPair::from_seed(vec![0xD5; 32], Algorithm::Ed25519);
+        let mut keys = (0xD1..=0xD4)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let validators = keys
+            .iter()
+            .map(|key| {
+                (
+                    PeerId::new(key.public_key().clone()),
+                    bls_normal_pop_prove(key.private_key()).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (genesis, manifest) = build_genesis(
+            &chain_id,
+            &genesis_key,
+            &validators,
+            Vec::new(),
+            Vec::new(),
+            SumeragiConsensusMode::Permissioned,
+            10_000,
+        )
+        .unwrap();
+        let owner = AccountId::new(genesis_key.public_key().clone());
+        let world = World::with(
+            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(AccountId::new(clock.public_key().clone())).build(&owner),
+            ],
+            [],
+        );
+        let (genesis, manifest, state, kura) = prepare_configured_genesis(
+            world,
+            &chain_id,
+            &genesis_key,
+            &validators,
+            genesis,
+            manifest,
+            SumeragiConsensusMode::Permissioned,
+            10_000,
+            &iroha_config::parameters::actual::Pipeline::default(),
+        )
+        .unwrap();
+        let genesis = iroha_genesis::validate_prepared_genesis_bundle(
+            &genesis.encode_wire().unwrap(),
+            &manifest,
+            genesis_key.public_key(),
+            genesis.hash(),
+        )
+        .unwrap();
+        PreparedTestChainConfig {
+            genesis,
+            manifest,
+            state,
+            kura,
+            validator_keys: keys,
+            pasta_seeds: (0..4)
+                .map(|index| zeroize::Zeroizing::new([0xA0 + index; 32]))
+                .collect(),
+            clock,
+            lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
+        }
+    }
+
+    mod pending_execution_tests {
+        use super::*;
+        include!("test_chain/pending_execution_tests.rs");
+    }
+
+    mod native_publication_tests {
+        use super::*;
+        include!("test_chain/native_publication_tests.rs");
+    }
+
+    #[test]
+    fn prepared_chain_executes_original_genesis_and_authenticates_its_result_at_h2() {
+        let config = prepared_config();
+        let original = config.genesis.canonical_wire().to_vec();
+        let chain_id = config.manifest.chain_id().clone();
+        let network = NetworkId::from_genesis_hash(config.genesis.expected_hash());
+        let exact_state = Arc::clone(&config.state);
+        let exact_kura = Arc::clone(&config.kura);
+        let mut chain = CertifiedTestChain::from_prepared(config).unwrap();
+        assert!(Arc::ptr_eq(chain.state(), &exact_state));
+        assert!(Arc::ptr_eq(chain.kura(), &exact_kura));
+        assert_eq!(chain.genesis().encode_wire().unwrap(), original);
+        assert_ne!(chain.validators(), fixture_validators());
+        let genesis = chain.committed(1);
+        assert_eq!(
+            genesis
+                .block()
+                .canonical_resultless_proposal()
+                .encode_wire()
+                .unwrap(),
+            original,
+        );
+        let mut prefix = super::super::certified_chain::CertifiedPrefix::new(
+            &chain_id,
+            network,
+            Arc::clone(genesis.block()),
+        )
+        .unwrap();
+        chain.commit_at(20_000, Vec::new());
+        let successor = chain.committed(2);
+        let (certified, anchor) = prefix
+            .push(Arc::clone(successor.block()))
+            .unwrap()
+            .into_parts();
+        assert_eq!(certified.core_hash(), successor.core_hash());
+        let anchor = anchor.expect("actual H2 certificate authenticates original H1 result");
+        assert_eq!(anchor.into_committed().result(), genesis.result());
+        assert!(
+            successor
+                .block()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result
+                .is_ok()
+        );
+        assert!(successor.commitment().native_lanes.verify(
+            network,
+            2,
+            successor.commitment().execution.ordinary_writes_root,
+        ));
+    }
+
+    #[test]
+    fn prepared_chain_rejects_foreign_or_incomplete_custody_before_execution() {
+        for control in 0..5 {
+            let mut config = prepared_config();
+            match control {
+                0 => config.validator_keys.swap(0, 1),
+                1 => {
+                    config.validator_keys.pop();
+                }
+                2 => config.pasta_seeds[2] = zeroize::Zeroizing::new([0xFF; 32]),
+                3 => {
+                    config.pasta_seeds.pop();
+                }
+                4 => config.kura = Kura::blank_kura_for_testing(),
+                _ => unreachable!(),
+            }
+            let state = Arc::clone(&config.state);
+            let error = CertifiedTestChain::from_prepared(config).unwrap_err();
+            assert!(matches!(error.error, TestChainError::Genesis(_)));
+            assert!(Arc::ptr_eq(&state, &error.state));
+            assert_eq!(state.view().height(), 0);
+            assert_eq!(state.kura().blocks_count(), 0);
+        }
+    }
+
+    #[test]
+    fn malformed_original_lane_merge_is_rejected_without_publication() {
+        let mut chain = CertifiedTestChain::from_prepared(prepared_config()).unwrap();
+        let before = chain.committed(1);
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            chain.commit_with_proposal(
+                Some(20_000),
+                Vec::new(),
+                Signers::Quorum,
+                Default::default(),
+                |proposal| {
+                    let mut context = proposal.execution_context().cloned().unwrap_or_default();
+                    context.lane_merge = Some(Default::default());
+                    proposal.set_execution_context(Some(context));
+                },
+            );
+        }));
+        assert!(
+            rejected.is_err(),
+            "empty lane merge must fail actual execution"
+        );
+        assert_eq!(chain.height(), 1);
+        assert_eq!(chain.state().view().height(), 1);
+        assert_eq!(chain.kura().blocks_count(), 1);
+        assert_eq!(chain.committed(1).result(), before.result());
+    }
 
     #[test]
     fn blocks_commit_certified_at_exact_times() {

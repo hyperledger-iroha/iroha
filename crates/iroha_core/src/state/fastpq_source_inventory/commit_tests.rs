@@ -77,7 +77,7 @@ fn assert_unpublished(state: &State) {
 fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
     let _guard = crate::exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
-        for replay in [false, true] {
+        {
             let state = state_with_marker();
             crate::exec_witness::start_block();
             let mut block = state.block(header());
@@ -90,7 +90,6 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
             block.drain_transfer_transcripts_with_pending(None);
             block.capture_exec_witness().unwrap();
             take_all_captured_outputs(&mut block, with_transfer);
-            block.authenticated_replay_commit = replay;
             stage_membership(&mut block, source);
             block.commit().unwrap();
             assert_eq!(
@@ -109,7 +108,7 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
     let _guard = crate::exec_witness::exec_witness_guard();
     for same_key in [false, true] {
         for drain_late in [false, true] {
-            for replay in [false, true] {
+            {
                 let state = state_with_marker();
                 crate::exec_witness::start_block();
                 let mut block = state.block(header());
@@ -122,7 +121,6 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
                 block.drain_transfer_transcripts_with_pending(None);
                 block.capture_exec_witness().unwrap();
                 take_all_captured_outputs(&mut block, true);
-                block.authenticated_replay_commit = replay;
                 let late = if same_key {
                     original
                 } else {
@@ -154,7 +152,7 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
 #[test]
 fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
     let _guard = crate::exec_witness::exec_witness_guard();
-    for replay in [false, true] {
+    {
         let state = state_with_marker();
         crate::exec_witness::start_block();
         let mut block = state.block(header());
@@ -182,7 +180,6 @@ fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
             Err("FASTPQ witness capture refuses a poisoned carrier".into()),
         );
         assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
-        block.authenticated_replay_commit = replay;
         stage_membership(&mut block, Some(source));
         // Inventory construction poisoned the carrier, so the earlier output
         // publication guard refuses it before the inventory-specific commit gate.

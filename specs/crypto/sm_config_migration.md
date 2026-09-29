@@ -27,7 +27,7 @@ leave `user` at Ed25519-only so the developer defaults remain unchanged.
 ```toml
 # defaults/actual/config.toml
 [crypto]
-enable_sm_openssl_preview = false         # flip to true only when the preview backend is rolled out
+enable_sm_openssl_preview = false         # optional OpenSSL SM3/SM4; SM2 uses the portable relation
 default_hash = "sm3-256"
 allowed_signing = ["ed25519", "sm2"]      # keep sorted for deterministic manifests
 sm2_distid_default = "CN12345678901234"   # organisation-specific distinguishing identifier

@@ -8,6 +8,9 @@ use crate::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::{AccountId, address::ChainDiscriminantGuard};
 
+type EncodeFn = fn(&str, u16) -> CodecResult<Vec<u8>>;
+type DecodeFn = fn(&[u8], u16) -> CodecResult<String>;
+
 fn payload(name: &str, duration: u64) -> Value {
     let owner = AccountId::new(
         KeyPair::try_from_seed(vec![0x57; 32], Algorithm::Ed25519)
@@ -72,9 +75,7 @@ fn both_plain_operations_preserve_all_u64_duration_boundaries_and_network_scope(
         for duration in [0, 1, (1_u64 << 53) - 1, 1_u64 << 53, u64::MAX] {
             let value = payload(name, duration);
             let text = json::to_json(&value).unwrap();
-            type Encode = fn(&str, u16) -> CodecResult<Vec<u8>>;
-            type Decode = fn(&[u8], u16) -> CodecResult<String>;
-            let operations: [(Encode, Decode); 2] = [
+            let operations: [(EncodeFn, DecodeFn); 2] = [
                 (encode_instruction_frame, decode_instruction_frame),
                 (encode_instruction_archive, decode_instruction_archive),
             ];

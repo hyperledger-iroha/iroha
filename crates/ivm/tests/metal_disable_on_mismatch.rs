@@ -22,8 +22,7 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         // Also make sure it isn't re-enabled
         std::env::set_var("IVM_DISABLE_METAL", "0");
     }
-    // Trigger Metal init path (this will run self-test and disable on mismatch)
-    let _ = ivm::vadd32([1, 2, 3, 4], [4, 3, 2, 1]);
+    // Querying availability triggers the backend self-test; tiny vectors select CPU.
     let was_available = ivm::metal_available();
     // After forced failure, it must be false (disabled)
     assert!(
@@ -62,6 +61,39 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         0x15, 0xad,
     ];
     assert_eq!(digest, expected, "scalar fallback must match known digest");
+    // The large-tree path would qualify and dispatch Metal on a healthy
+    // machine. A quarantined owner must use the canonical CPU result while
+    // retaining the original input and producing no production GPU receipt.
+    let input: Vec<u8> = (0..32 * 16_384)
+        .map(|index| (index as u8).wrapping_mul(37).wrapping_add(11))
+        .collect();
+    let before = ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches);
+    let expected_root = ivm::ByteMerkleTree::from_bytes_parallel(&input, 32)
+        .expect("valid CPU tree")
+        .root();
+    let accelerated_root = ivm::ByteMerkleTree::root_from_bytes_accel(&input, 32)
+        .expect("quarantined Metal falls back to CPU");
+    assert_eq!(accelerated_root, expected_root);
+    let states: Vec<[u8; 16]> = (0..128)
+        .map(|index| std::array::from_fn(|byte| (index + byte * 17) as u8))
+        .collect();
+    let round_keys = [[0xCA; 16], [0x35; 16]];
+    let expected_aes: Vec<_> = states
+        .iter()
+        .copied()
+        .map(|state| round_keys.into_iter().fold(state, ivm::aesenc_impl))
+        .collect();
+    let mut actual_aes = vec![[0; 16]; states.len()];
+    assert!(ivm::aesenc_n_rounds_many_into(
+        &states,
+        &round_keys,
+        &mut actual_aes
+    ));
+    assert_eq!(actual_aes, expected_aes);
+    assert_eq!(
+        ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches),
+        before
+    );
     #[cfg_attr(not(feature = "metal"), allow(unused_unsafe))]
     unsafe {
         std::env::remove_var("IVM_FORCE_METAL_SELFTEST_FAIL");
@@ -78,8 +110,9 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         return;
     }
     ivm::release_metal_state();
-    let pre_compiles = ivm::bit_pipe_compile_count();
+    let pre_dispatches = ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches);
     ivm::set_acceleration_config(ivm::AccelerationConfig {
+        resource_limits: iroha_accel::RegistryLimits::STANDARD,
         enable_simd: true,
         enable_metal: false,
         enable_cuda: true,
@@ -101,11 +134,12 @@ fn metal_backend_respects_config_disable_and_falls_back() {
     let result = ivm::vadd32([1, 2, 3, 4], [4, 3, 2, 1]);
     assert_eq!(result, [5, 5, 5, 5]);
     assert_eq!(
-        ivm::bit_pipe_compile_count(),
-        pre_compiles,
-        "Disabling Metal must prevent pipeline compilation"
+        ivm::MetalKernel::ALL.map(ivm::metal_completed_dispatches),
+        pre_dispatches,
+        "Disabling Metal must prevent dispatch"
     );
     ivm::set_acceleration_config(ivm::AccelerationConfig {
+        resource_limits: iroha_accel::RegistryLimits::STANDARD,
         enable_simd: true,
         enable_metal: true,
         enable_cuda: true,

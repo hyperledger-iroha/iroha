@@ -400,6 +400,20 @@ impl PreparedMusubiArchiveFetchConfigV1 {
     }
 }
 impl AuthenticatedMusubiArchiveFetchClientV1 {
+    /// Exact genesis-derived network fixed when this authenticated transport was built.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
+    }
+
+    /// Canonical configured HTTPS root for one provider, without exposing runtime credentials.
+    #[must_use]
+    pub fn provider_gateway_origin(&self, provider: ProviderId) -> Option<&str> {
+        self.providers
+            .get(&provider)
+            .map(|runtime| runtime.base_url.as_str())
+    }
+
     /// Load only `[musubi.fetch]` from one required platform `client.toml`.
     ///
     /// Account identity, account keys, mutation credentials, basic auth, and environment
@@ -1285,7 +1299,6 @@ impl Read for GatewayPayloadReaderV1 {
 }
 fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
     match error {
-        GatewayFetchError::RateLimited { .. } => retryable("MUSUBI_ARCHIVE_CHUNK_RETRYABLE"),
         GatewayFetchError::Request { .. } | GatewayFetchError::RequestBody { .. } => {
             retryable("MUSUBI_ARCHIVE_CHUNK_REQUEST_FAILED")
         }
@@ -1303,7 +1316,8 @@ fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRunti
             status: StatusCode::NOT_FOUND | StatusCode::GONE,
             ..
         } => unavailable("MUSUBI_ARCHIVE_CHUNK_UNAVAILABLE"),
-        GatewayFetchError::UnexpectedStatus {
+        GatewayFetchError::RateLimited { .. }
+        | GatewayFetchError::UnexpectedStatus {
             status:
                 StatusCode::REQUEST_TIMEOUT
                 | StatusCode::TOO_EARLY
@@ -2047,6 +2061,23 @@ mod tests {
     const TEST_OPERATOR_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     #[test]
+    fn authenticated_fetch_client_exposes_its_fixed_network() {
+        let network_id: NetworkId = TEST_NETWORK_ID.parse().expect("test network identity");
+        let client = AuthenticatedMusubiArchiveFetchClientV1 {
+            providers: BTreeMap::new(),
+            network_id,
+            client_id: "test".to_owned(),
+            request_timeout: Duration::from_secs(1),
+            prepared: BTreeMap::new(),
+            stream_failure: None,
+        };
+        assert_eq!(client.network_id(), network_id);
+        assert_eq!(
+            client.provider_gateway_origin(ProviderId::new([0x11; 32])),
+            None
+        );
+    }
+    #[test]
     fn exact_stream_token_decode_ignores_ambient_layout_flags() {
         let token = StreamTokenV1 {
             body: sorafs_manifest::StreamTokenBodyV1 {
@@ -2322,6 +2353,10 @@ operator_private_key_file = "provider.key"
         .expect("write operator-authenticated platform config");
         let client = AuthenticatedMusubiArchiveFetchClientV1::load_platform_file(&config_path)
             .expect("invalid account keys must be irrelevant to fetch configuration");
+        assert_eq!(
+            client.provider_gateway_origin(ProviderId::new([0x11; 32])),
+            Some("https://8.8.8.8/")
+        );
         let debug = format!("{client:?}");
         assert!(debug.contains("provider_count: 1"));
         assert!(!debug.contains(&operator.public_key().to_string()));

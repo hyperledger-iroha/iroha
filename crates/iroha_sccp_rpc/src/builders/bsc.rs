@@ -163,13 +163,12 @@ impl BscBuilder {
         )))
     }
 
-    fn announced(&self, header: &[u8]) -> Result<(Vec<BscValidatorV1>, u8), BuildError> {
+    fn announced(header: &[u8]) -> Result<(Vec<BscValidatorV1>, u8), BuildError> {
         header_announced_set(header)
             .map_err(|error| BuildError::Inconsistent(format!("BSC epoch checkpoint: {error}")))
     }
 
     fn activation(
-        &self,
         checkpoint: u64,
         previous: &(Vec<BscValidatorV1>, u8),
     ) -> Result<u64, BuildError> {
@@ -217,8 +216,8 @@ impl BscBuilder {
         let finalized = self.finalized_number()?;
         let stored = self.headers_at(&[latest_set_id.saturating_sub(epoch), latest_set_id])?;
         let mut newest = latest_set_id;
-        let mut current = self.announced(&stored[1])?;
-        let mut valid_from = self.activation(latest_set_id, &self.announced(&stored[0])?)?;
+        let mut current = Self::announced(&stored[1])?;
+        let mut valid_from = Self::activation(latest_set_id, &Self::announced(&stored[0])?)?;
         let checkpoints: Vec<u64> = (1..)
             .map_while(|index: u64| latest_set_id.checked_add(index.checked_mul(epoch)?))
             .take_while(|height| *height <= finalized)
@@ -228,11 +227,11 @@ impl BscBuilder {
             if steps.len() == max_steps {
                 break;
             }
-            let announced = self.announced(&header)?;
+            let announced = Self::announced(&header)?;
             if announced == current {
                 continue;
             }
-            let next_valid_from = self.activation(*height, &current)?;
+            let next_valid_from = Self::activation(*height, &current)?;
             let until = height
                 .saturating_add(BSC_MAX_SEGMENT_HEADERS as u64 - 1)
                 .min(next_valid_from.saturating_sub(2))

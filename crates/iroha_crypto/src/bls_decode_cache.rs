@@ -4,11 +4,11 @@
 //! subgroup and identity checks. Entries contain public bytes, never secrets or
 //! authority/PoP verdicts. Exact bytes and orientation are compared without a
 //! digest. Fixed thread-local storage avoids additional decode allocations;
-//! callers reserve the same worst-case validation charge before every lookup.
+//! successful and rejected validations allocate no diagnostic or point backing.
 
 use std::cell::RefCell;
 
-use crate::{Algorithm, ParseError, signature::bls};
+use crate::{Algorithm, signature::bls};
 
 const CAPACITY: usize = 128;
 const MAX_KEY_BYTES: usize = 96;
@@ -73,7 +73,7 @@ thread_local! {
 }
 
 /// Reuse only a complete canonical validation of these exact public-key bytes.
-pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
+pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), bls::canonical::Failure> {
     let cached = VALIDATED_KEYS
         .try_with(|cache| {
             cache
@@ -95,15 +95,13 @@ pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> 
     Ok(())
 }
 
-fn validate_uncached(algorithm: Algorithm, payload: &[u8]) -> Result<(), ParseError> {
+fn validate_uncached(algorithm: Algorithm, payload: &[u8]) -> Result<(), bls::canonical::Failure> {
     #[cfg(test)]
     UNCACHED_VALIDATIONS.with(|count| count.set(count.get() + 1));
     match algorithm {
-        Algorithm::BlsNormal => bls::BlsNormal::parse_public_key(payload).map(drop),
-        Algorithm::BlsSmall => bls::BlsSmall::parse_public_key(payload).map(drop),
-        _ => Err(ParseError(
-            "BLS validation requires a BLS algorithm".to_owned(),
-        )),
+        Algorithm::BlsNormal => bls::BlsNormal::validate_public_key_for_decode(payload),
+        Algorithm::BlsSmall => bls::BlsSmall::validate_public_key_for_decode(payload),
+        _ => Err(bls::canonical::Failure::PublicKeyAlgorithm),
     }
 }
 
@@ -218,7 +216,7 @@ mod tests {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             let key = key(algorithm);
             let (_, bytes) = key.to_bytes();
-            let exact = bytes.len() * 3 + 1;
+            let exact = bytes.len() + 1;
             for warm in [false, true] {
                 reset();
                 if warm {

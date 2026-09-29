@@ -1687,12 +1687,12 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     pub network_id: NetworkId,
     /// Finalized block height.
     pub block_height: u64,
-    /// Frozen consensus context governing `block_height`.
+    /// Complete native scheduling context identity governing `block_height`.
     pub height_context_id: HeightContextId,
-    /// Digest of the exact Commit vote subject.
+    /// Domain-separated digest of the exact native Commit statement (instance, epoch, height, block and R).
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub subject_digest: [u8; 32],
-    /// Digest of the full exact execution commitment signed by the ordinary Commit vote.
+    /// Exact native R digest of the full original execution and schedule result.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub execution_commitment_digest: [u8; 32],
     /// Marked SHA-256 bridge of the paired Poseidon top-up tree root.
@@ -1713,10 +1713,15 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// # Errors
     ///
     /// Returns an error when any authority-bearing identity is absent, the top-up projection is
-    /// empty or oversized, or `validator_count` is not an admitted `3f + 1` committee size.
+    /// oversized, an unsigned genesis bootstrap is presented as finality, or `validator_count`
+    /// is not an admitted `3f + 1` committee size. A rejected flagged top-up after genesis may
+    /// certify zero leaves; it creates no membership proof and authorizes no mint.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
         self.validate_header()?;
-        if self.kagemusha_top_up_count == 0 && self.next_epoch_authorization.is_none() {
+        if self.block_height == 1
+            && self.kagemusha_top_up_count == 0
+            && self.next_epoch_authorization.is_none()
+        {
             return Err(invalid("mint_finality.header"));
         }
         Ok(())
@@ -2853,9 +2858,6 @@ macro_rules! impl_kagemusha_instruction_decode_from_slice {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = kagemusha_instruction_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0_usize;
                 let request = super::decode_aos_canonical_field::<$request>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -3469,21 +3471,26 @@ mod tests {
             .expect("bootstrap circuit binding");
         assert!(message.validate().is_err());
         assert!(message.signing_digest().is_err());
-        let mut mint = message.clone();
+        let mut mint = message;
         mint.kagemusha_top_up_count = 1;
         assert!(mint.validate().is_ok());
         assert!(mint.validate_bootstrap().is_err());
         assert!(mint.bootstrap_binding_digest().is_err());
-        let mut later = message.clone();
+        let mut later = message;
         later.block_height = 2;
+        assert!(
+            later.validate().is_ok(),
+            "a rejected flagged top-up certifies an empty result"
+        );
+        assert!(later.signing_digest().is_ok());
         assert!(later.validate_bootstrap().is_err());
-        let mut successor = message.clone();
+        let mut successor = message;
         successor.block_height = successor.epoch_authorization.last_height;
         successor.next_epoch_authorization =
             Some(retained_authorization(&successor.epoch_authorization));
         assert!(successor.validate().is_ok());
         assert!(successor.validate_bootstrap().is_err());
-        let mut non_genesis = message.clone();
+        let mut non_genesis = message;
         non_genesis.epoch_authorization = retained_authorization(&message.epoch_authorization);
         non_genesis.block_height = non_genesis.epoch_authorization.first_height;
         assert!(non_genesis.validate_bootstrap().is_err());

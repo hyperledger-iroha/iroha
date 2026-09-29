@@ -315,6 +315,37 @@ def _validate_forbidden_seams(production: str) -> None:
         _require(re.search(pattern, production, re.MULTILINE) is None, f"forbidden seam: {pattern}")
 
 
+def _validate_v1_lowering_contract(production: str) -> None:
+    """Bind reviewed V1 replacements before consulting the source byte seal."""
+
+    for retired in (
+        "fn lower_entrypoint_wrapper(", "__entrypoint_impl__", "fn runtime_word_is_pointer(",
+        "return_pointer_mask", "returns_pointer:", "Builtin::UseAssetHandle",
+        "DataRefKind::AssetHandle", "Instr::DecodeInt", "Instr::EncodeInt",
+    ):
+        _require(retired not in production, f"retired V1 lowering returned: {retired}")
+    surface = re.sub(r"\s+", "", _function_region(production, "lower_surface_builtin_call"))
+    numeric = (
+        "builtin@(Builtin::Isqrt|Builtin::Abs|Builtin::Min|Builtin::Max|"
+        "Builtin::DivCeil|Builtin::Gcd|Builtin::Mean)"
+        "=>lower_direct_helper_call(ctx,builtin,args,vars),"
+    )
+    _require(numeric in surface, "full-width numeric helper routing changed")
+    direct = _function_region(production, "lower_direct_helper_call")
+    _require("lowered_args.push(lower_expr(ctx, arg, vars));" in direct
+             and "lower_expr_as_" not in direct,
+             "full-width numeric arguments must not narrow")
+    _require("Builtin::StageAnchoredSpend=>{letspend=lower_expr(ctx,&args[0],vars);"
+             "ctx.current_instr(Instr::StageAnchoredSpend{spend});emit_i64_const(ctx,0)}"
+             in surface, "anchored-spend lowering changed")
+    expression = _function_region(production, "lower_expr")
+    _require("let l = lower_expr(ctx, left, vars);\n            let r = lower_expr(ctx, right, vars);"
+             in expression, "equality operands must lower once left-to-right")
+    _require("let t = emit_typed_value_eq(ctx, l, r, &left.ty);" in expression
+             and "let t2 = emit_unary(ctx, UnaryOp::Not, t);" in expression,
+             "recursive equality/inequality routing changed")
+
+
 def _source_ownership(owner_source: str | None = None) -> dict[str, object]:
     owner_path = "crates/kotodama_lang/src/lib.rs"
     owner = owner_source if owner_source is not None else _regular_bytes(REPO_ROOT / owner_path, REPO_ROOT).decode()
@@ -348,6 +379,7 @@ def _candidate_inventory(source: str, public_leaf: str, tail_leaf: str,
                          asset_overrides: dict[str, bytes] | None = None) -> dict[str, object]:
     production, suffix = _split_candidate(source)
     _validate_forbidden_seams(production)
+    _validate_v1_lowering_contract(production)
     _require("StateKeys" not in production and "Builtin::StateKeys" not in production,
              "retired offset traversal must not return")
     _require("StateScan {" in production and "state_value_cache" in production,
@@ -446,6 +478,28 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
         self.rejects("//! Intermediate representation for Kotodama programs.",
                      "//! Intermediate representation for Kotodama programs. ", "source")
 
+    def test_v1_replacement_routes_cannot_regress(self) -> None:
+        for old, new, message in (
+            ("Builtin::Mean) => lower_direct_helper_call(ctx, builtin, args, vars),",
+             "Builtin::Mean) => emit_i64_const(ctx, 0),", "full-width numeric helper routing"),
+            ("lowered_args.push(lower_expr(ctx, arg, vars));",
+             "lowered_args.push(lower_expr_as_i64(ctx, arg, vars));", "must not narrow"),
+            ("ctx.current_instr(Instr::StageAnchoredSpend { spend });",
+             "ctx.current_instr(Instr::AxtCommit);", "anchored-spend lowering"),
+            ("let l = lower_expr(ctx, left, vars);\n            let r = lower_expr(ctx, right, vars);",
+             "let r = lower_expr(ctx, right, vars);\n            let l = lower_expr(ctx, left, vars);",
+             "left-to-right"),
+            ("let t = emit_typed_value_eq(ctx, l, r, &left.ty);",
+             "let t = emit_pointer_eq(ctx, l, r);", "recursive equality"),
+        ):
+            with self.subTest(message=message):
+                self.rejects(old, new, message)
+        production, _ = _split_candidate(self.source)
+        for retired in ("fn lower_entrypoint_wrapper(", "return_pointer_mask", "Builtin::UseAssetHandle"):
+            with self.subTest(retired=retired):
+                with self.assertRaisesRegex(GuardError, "retired V1 lowering"):
+                    _validate_v1_lowering_contract(production + "\n// " + retired)
+
     def test_compiled_module_ownership_cannot_redirect(self) -> None:
         for owner in ('pub mod something_else;', '#[path = "other.rs"]\npub mod ir;',
                       '#[path = "other.rs"]\n#[allow(dead_code)]\npub mod ir;'):
@@ -457,7 +511,7 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
         self.rejects(anchor, "// impl Fn callback seam", "forbidden seam")
         self.rejects(anchor, 'include!("compacted_body.rs");', "forbidden production token")
         self.rejects("    StateScan {", "    StateKeys {", "retired offset traversal")
-        self.rejects("fn runtime_word_is_pointer(ty: &Type) -> bool {",
+        self.rejects("fn runtime_value_word_types(ty: &Type) -> Vec<Type> {",
                      "fn append(ty: &Type, words: &mut Vec<Type>) {", "duplicated nested")
 
 

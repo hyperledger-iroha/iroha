@@ -133,27 +133,6 @@ impl KagamiTaira {
         )
         .expect("Taira peer TOML")
     }
-
-    /// The signed `(nexus_amx_context_hash, execution_policy_hash)`.
-    fn signed_hashes(&self) -> (Hash, Hash) {
-        let context = self.manifest.sumeragi_v2_context_parameters();
-        (
-            Hash::prehashed(context.nexus_amx_context_hash),
-            Hash::prehashed(context.execution_policy_hash),
-        )
-    }
-
-    /// Restage the signed genesis under `config`, as prepared-bundle admission does.
-    fn staged_hashes(&self, config: &actual::Root, side: &str) -> (Hash, Hash) {
-        crate::genesis::staged_signed_sumeragi_v2_context_hashes(
-            &self.manifest,
-            &self.signed,
-            config,
-        )
-        .unwrap_or_else(|error| {
-            panic!("restage the signed Taira genesis under the {side}: {error:?}")
-        })
-    }
 }
 
 fn taira_discriminant() -> u16 {
@@ -366,82 +345,6 @@ fn line_diff(left: &str, right: &str) -> Vec<String> {
     out
 }
 
-/// Every configuration section either hash reads, rendered for a diff.
-fn hash_input_sections(config: &actual::Root) -> Vec<(&'static str, String)> {
-    let nexus = &config.nexus;
-    vec![
-        ("pipeline", format!("{:#?}", config.pipeline)),
-        ("oracle", format!("{:#?}", config.oracle)),
-        ("crypto", format!("{:#?}", config.crypto)),
-        (
-            "fraud_monitoring",
-            format!("{:#?}", config.fraud_monitoring),
-        ),
-        ("gov", format!("{:#?}", config.gov)),
-        ("content", format!("{:#?}", config.content)),
-        ("settlement", format!("{:#?}", config.settlement)),
-        ("zk", format!("{:#?}", config.zk)),
-        ("nexus.staking", format!("{:#?}", nexus.staking)),
-        ("nexus.fees", format!("{:#?}", nexus.fees)),
-        (
-            "nexus.hf_shared_leases",
-            format!("{:#?}", nexus.hf_shared_leases),
-        ),
-        (
-            "nexus.uploaded_models",
-            format!("{:#?}", nexus.uploaded_models),
-        ),
-        ("nexus.endorsement", format!("{:#?}", nexus.endorsement)),
-        ("nexus.axt", format!("{:#?}", nexus.axt)),
-        (
-            "nexus.atomic_private_settlement",
-            format!("{:#?}", nexus.atomic_private_settlement),
-        ),
-        (
-            "nexus.dataspace_fee_sponsor_program_ids",
-            format!("{:#?}", nexus.dataspace_fee_sponsor_program_ids),
-        ),
-        ("nexus.governance", format!("{:#?}", nexus.governance)),
-        ("nexus.compliance", format!("{:#?}", nexus.compliance)),
-        ("nexus.fusion", format!("{:#?}", nexus.fusion)),
-        ("nexus.autoscale", format!("{:#?}", nexus.autoscale)),
-        ("nexus.commit", format!("{:#?}", nexus.commit)),
-        ("nexus.da", format!("{:#?}", nexus.da)),
-        (
-            "nexus.lane_relay_emergency",
-            format!("{:#?}", nexus.lane_relay_emergency),
-        ),
-        (
-            "nexus.catalog",
-            format!(
-                "{:#?}\n{:#?}\n{:#?}\n{:#?}",
-                nexus.configured_lane_catalog,
-                nexus.configured_dataspace_catalog,
-                nexus.routing_policy,
-                nexus.registry
-            ),
-        ),
-    ]
-}
-
-fn section_differences(kagami: &actual::Root, profile: &actual::Root) -> String {
-    use std::fmt::Write as _;
-    let mut report = String::new();
-    for ((name, left), (_, right)) in hash_input_sections(kagami)
-        .into_iter()
-        .zip(hash_input_sections(profile))
-    {
-        if left != right {
-            writeln!(report, "[{name}]").expect("writing to a String cannot fail");
-            for line in line_diff(&left, &right) {
-                report.push_str(&line);
-                report.push('\n');
-            }
-        }
-    }
-    report
-}
-
 #[test]
 fn line_diff_reports_only_changed_lines() {
     assert!(line_diff("a\nb\nc", "a\nb\nc").is_empty());
@@ -542,86 +445,6 @@ fn governance_normalization_sets_exactly_the_six_governance_roles() {
     );
 }
 
-/// The profile render plus Kagami's Taira genesis reproduces both signed hashes.
-#[test]
-fn sora_nexus_v1_render_reproduces_kagami_taira_policy_and_amx_hashes() {
-    let profile = Profile::compiled(ProfileId::SoraNexusV1).expect("compiled profile");
-    let kagami = KagamiTaira::generate(profile.genesis_recipe().block_cadence_ms);
-    let signed = kagami.signed_hashes();
-    let kagami_config = read_node_config(&kagami.path(&format!("peer{PEER}.toml")), true);
-    assert_eq!(
-        kagami.staged_hashes(&kagami_config, "Kagami peer config"),
-        signed,
-        "Kagami's own peer config must reproduce its signed genesis hashes"
-    );
-    let root = tempfile::tempdir().expect("profile node directory");
-    let root = fs::canonicalize(root.path())
-        .map(|path| (root, path))
-        .expect("canonical root");
-    let node_file = render_profile_node(&kagami, PEER, &root.1);
-    let mut rendered = read_node_config(&node_file, false);
-    copy_kagami_catalog(&mut rendered.nexus, &kagami_config.nexus);
-    let genesis_public_key: iroha_crypto::PublicKey =
-        fs::read_to_string(kagami.path("genesis.public_key"))
-            .expect("Kagami genesis public key")
-            .trim()
-            .parse()
-            .expect("genesis public key");
-    let kagami_custody = localnet_gas_account_id(&genesis_public_key);
-    let profile_custody = iroha_config::profile::protocol_custody_account(ProfileId::SoraNexusV1);
-    for (field, (kagami_account, profile_account)) in CUSTODY_ACCOUNT_FIELDS.iter().zip(
-        custody_accounts(&kagami_config.pipeline, &kagami_config.nexus)
-            .into_iter()
-            .zip(custody_accounts(&rendered.pipeline, &rendered.nexus)),
-    ) {
-        assert_eq!(
-            kagami_account, kagami_custody,
-            "Kagami {field} is not keyless"
-        );
-        assert_eq!(
-            profile_account, profile_custody,
-            "profile {field} is not keyless"
-        );
-    }
-    copy_kagami_custody_account(
-        (&mut rendered.pipeline, &mut rendered.nexus),
-        (&kagami_config.pipeline, &kagami_config.nexus),
-    );
-    let published_sample = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
-    let keyless_roles = KeylessRole::ALL.into_iter().filter(|role| role.is_static());
-    for ((field, role), (kagami_account, profile_account)) in
-        GOVERNANCE_ACCOUNT_FIELDS.iter().zip(keyless_roles).zip(
-            governance_accounts(&kagami_config.gov)
-                .into_iter()
-                .zip(governance_accounts(&rendered.gov)),
-        )
-    {
-        assert_eq!(
-            kagami_account, published_sample,
-            "Kagami {field} is not the published sample account"
-        );
-        assert_eq!(
-            profile_account,
-            keyless_role_account(ProfileId::SoraNexusV1, role),
-            "profile {field} is not its keyless role account"
-        );
-    }
-    copy_kagami_governance_accounts(&mut rendered.gov, &kagami_config.gov);
-    let staged = kagami.staged_hashes(&rendered, "sora-nexus-v1 render");
-    assert!(
-        staged == signed,
-        "sora-nexus-v1 differs from Kagami Taira outside the intentional differences\n\
-         nexus_amx_context_hash: kagami {} profile {}\n\
-         execution_policy_hash: kagami {} profile {}\n\
-         differing hash inputs:\n{}",
-        signed.0,
-        staged.0,
-        signed.1,
-        staged.1,
-        section_differences(&kagami_config, &rendered)
-    );
-}
-
 /// The profile's genesis recipe is Kagami's signed Taira genesis, except for the cadence.
 #[test]
 fn sora_nexus_v1_genesis_recipe_matches_kagami_taira_genesis() {
@@ -654,7 +477,6 @@ fn sora_nexus_v1_genesis_recipe_matches_kagami_taira_genesis() {
         "epoch_length_blocks"
     );
     assert_eq!(npos.max_validators(), geometry.npos_max_validators);
-    assert_eq!(npos.seat_band_pct(), recipe.npos_seat_band_pct);
     assert_eq!(
         npos.min_self_bond(),
         &Quantity::from(recipe.npos_min_self_bond)

@@ -167,7 +167,7 @@ pub fn evidence(seed: u8) -> KagemushaEvidenceFileV1 {
 }
 
 #[cfg(test)]
-pub(crate) fn artifacts() -> Vec<KagemushaArtifactBindingV1> {
+pub fn artifacts() -> Vec<KagemushaArtifactBindingV1> {
     KagemushaArtifactRoleV1::ALL
         .iter()
         .copied()
@@ -639,7 +639,7 @@ pub fn authority_policy(keys: &[KeyPair], threshold: u16) -> KagemushaReleaseAut
 }
 
 #[cfg(test)]
-pub(crate) fn release_attestation(
+pub fn release_attestation(
     manifest: &KagemushaReleaseManifestV1,
     receipt: &KagemushaInternalValidationReceiptV1,
     policy: &KagemushaReleaseAuthorityPolicyV1,

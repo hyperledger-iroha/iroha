@@ -1,6 +1,9 @@
 #[cfg(feature = "governance")]
 use crate::isi::governance;
 mod wire_ids;
+
+#[cfg(test)]
+mod native_capture;
 use crate::{
     isi::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
@@ -358,11 +361,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 384;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 388;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 384;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 388;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 366;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 367;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -412,9 +415,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "f60fd06020e0e3f83e49304e1eac02be6ecb9b8ee38d8f4dde497d054f6a8b3f";
+            "0ae93a287df4b7a45e0ff9c048e7df63510cfb6ef37af5201f72a17dd4554a84";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "3744dcad43ecdc5194383ce63a43c5bcd779296cbf1a71a97fee852abb467c22";
+            "10d660a74b76fb28738f0785ff7a64c6cc99b30f83eca855742c0369b75fcb89";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -441,7 +444,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                18,
+                21,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -459,6 +462,9 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
             "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
             "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierPolicyInstallV1",
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseInstallV1",
+            "iroha.instruction.v1::governance::ProposeKagemushaVerifierReleaseActivateV1",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
@@ -481,6 +487,20 @@ mod tests {
             .map(|entry| entry.wire_id)
             .collect::<Vec<_>>();
         assert_eq!(actual, PERMITTED_GOVERNANCE_WIRE_IDS);
+        let release_install: governance::ProposeKagemushaVerifierReleaseInstallV1 =
+            norito::decode_canonical(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
+            )))
+            .expect("canonical verifier-release instruction fixture");
+        assert_default_registry_decodes(release_install);
+        let release_activate: governance::ProposeKagemushaVerifierReleaseActivateV1 =
+            norito::decode_canonical(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
+            )))
+            .expect("canonical verifier-activation instruction fixture");
+        assert_default_registry_decodes(release_activate);
         let retired_manual_council_wire_id = [
             "iroha.instruction.v1::governance::",
             "Persist",

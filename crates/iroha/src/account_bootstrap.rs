@@ -7,7 +7,7 @@ use iroha_data_model::{NetworkId, account::address::ChainDiscriminantGuard};
 use iroha_torii_shared::{
     account_capabilities::{ACCOUNT_CAPABILITIES_MAX_BYTES_V1, AccountCapabilitiesV1},
     account_faucet_policy::{ACCOUNT_FAUCET_POLICY_MAX_BYTES, AccountFaucetAdvertisement},
-    uri,
+    route_catalog,
 };
 use url::{Host, Url};
 
@@ -74,7 +74,7 @@ impl Client {
     pub async fn capabilities(&self) -> Result<AccountCapabilitiesV1> {
         let bytes = self
             .get(
-                uri::ACCOUNTS_CAPABILITIES,
+                route_catalog::application_api::ACCOUNTS_CAPABILITIES_GET.path(),
                 ACCOUNT_CAPABILITIES_MAX_BYTES_V1,
             )
             .await?;
@@ -94,7 +94,10 @@ impl Client {
         network_prefix: u16,
     ) -> Result<AccountFaucetAdvertisement> {
         let bytes = self
-            .get(uri::ACCOUNTS_FAUCET_POLICY, ACCOUNT_FAUCET_POLICY_MAX_BYTES)
+            .get(
+                route_catalog::application_api::ACCOUNTS_FAUCET_POLICY_GET.path(),
+                ACCOUNT_FAUCET_POLICY_MAX_BYTES,
+            )
             .await?;
         let _profile = ChainDiscriminantGuard::enter(network_prefix);
         let policy: AccountFaucetAdvertisement =

@@ -48,47 +48,7 @@ impl ResidentOwner for TransactionEntrypointIndex {
     }
 }
 
-impl ResidentOwner for MergeLedgerLog {
-    const FAMILY: resource_inventory::Family = resource_inventory::Family::ResidentMerge;
 
-    fn failure_invalidation_mask() -> u32 {
-        // A failed append can leave a tail repaired by later reads/preflights.
-        // Their resident guard keeps snapshots busy through the repair and
-        // invalidates the physical baseline before releasing the same log lock.
-        Self::FAMILY.mask() | physical_resource_mask()
-    }
-
-    fn resident_associations(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
-        // The bounded payload cache is not substituted for the full frame maps.
-        resident_inventory::lengths([
-            self.frames_by_hash.len(),
-            self.frames_by_epoch.len(),
-            self.in_memory_entries.len(),
-            self.latest_execution_entries.len(),
-        ])
-    }
-
-    fn resident_complete(&self) -> bool {
-        !self.history_deferred
-            && self.resident_inventory_valid
-            && self.append_recovery_offset.is_none()
-            && self.frames_by_hash.len() == self.total_entries
-            && self.frames_by_epoch.len() == self.total_entries
-            && (self.file.is_some() || self.in_memory_entries.len() == self.total_entries)
-    }
-}
-
-impl ResidentOwner for MergeCarrierIndex {
-    const FAMILY: resource_inventory::Family = resource_inventory::Family::ResidentCarrier;
-
-    fn resident_associations(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
-        resident_inventory::lengths([self.by_height.len(), self.by_entry.len()])
-    }
-
-    fn resident_complete(&self) -> bool {
-        self.initialized && self.by_height.len() == self.by_entry.len()
-    }
-}
 
 impl Kura {
     /// Register only fully reconstructed resident owners, without doing reconstruction.

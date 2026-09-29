@@ -5,7 +5,7 @@ use crate::backend::{GOLDILOCKS_MODULUS, fixed_domain::FixedTraceDomain};
 use fastpq_isi::FASTPQ_FINAL_V1;
 
 fn root() -> u64 {
-    FixedTraceDomain::new(&FASTPQ_FINAL_V1, TRACE_ROWS as usize)
+    FixedTraceDomain::new(&FASTPQ_FINAL_V1, usize::try_from(TRACE_ROWS).unwrap())
         .unwrap()
         .generator
 }
@@ -115,7 +115,7 @@ fn fixture(base_trace: bool) -> (Vec<Vec<F>>, [Vec<F>; 2]) {
     (trace, quotient)
 }
 
-fn assert_shape<T>(result: Result<T>) {
+fn assert_shape<T>(result: &Result<T>) {
     assert!(matches!(result, Err(Error::InvalidTraceShape { .. })));
 }
 
@@ -139,10 +139,10 @@ fn ood_pair_preserves_all_coordinates_and_checks_exact_root_order() {
         assert_eq!(pair.points()[1].sub(z).mul(pair.inverse_span), F::ONE);
     }
     for base in [0, 1, 7, GOLDILOCKS_MODULUS - 1] {
-        assert_shape(OodPair::new(F::from_base(base).unwrap(), root()));
+        assert_shape(&OodPair::new(F::from_base(base).unwrap(), root()));
     }
     for invalid_root in [0, 1, GOLDILOCKS_MODULUS - 1, root().power(2)] {
-        assert_shape(OodPair::new(dense(2), invalid_root));
+        assert_shape(&OodPair::new(dense(2), invalid_root));
     }
     assert_noncanonical(
         OodPair::new(dense(2), GOLDILOCKS_MODULUS),
@@ -306,16 +306,16 @@ fn fixed_widths_are_required_at_every_boundary() {
     let owner = DeepComposition::new(points, &row, &row, &q).unwrap();
     for width in [0, TRACE_COLUMNS - 1, TRACE_COLUMNS + 1, 342] {
         let malformed = vec![F::ZERO; width];
-        assert_shape(DeepComposition::new(points, &malformed, &row, &q));
-        assert_shape(DeepComposition::new(points, &row, &malformed, &q));
-        assert_shape(owner.value_at(F::ONE, &malformed, &q, F::ONE));
-        assert_shape(owner.base_value_at(1, &vec![0; width], &q, F::ONE));
+        assert_shape(&DeepComposition::new(points, &malformed, &row, &q));
+        assert_shape(&DeepComposition::new(points, &row, &malformed, &q));
+        assert_shape(&owner.value_at(F::ONE, &malformed, &q, F::ONE));
+        assert_shape(&owner.base_value_at(1, &vec![0; width], &q, F::ONE));
     }
     for count in [0, 1, 3] {
         let malformed = vec![F::ZERO; count];
-        assert_shape(DeepComposition::new(points, &row, &row, &malformed));
-        assert_shape(owner.value_at(F::ONE, &row, &malformed, F::ONE));
-        assert_shape(owner.base_value_at(1, &[0; TRACE_COLUMNS], &malformed, F::ONE));
+        assert_shape(&DeepComposition::new(points, &row, &row, &malformed));
+        assert_shape(&owner.value_at(F::ONE, &row, &malformed, F::ONE));
+        assert_shape(&owner.base_value_at(1, &[0; TRACE_COLUMNS], &malformed, F::ONE));
     }
 }
 
@@ -415,7 +415,7 @@ fn all_query_inputs_are_checked_even_with_zero_challenge_or_singular_point() {
         &[],
     );
     for point in points.points() {
-        assert_shape(owner.value_at(point, &zero, &q, F::ZERO));
+        assert_shape(&owner.value_at(point, &zero, &q, F::ZERO));
     }
     assert_eq!(
         owner

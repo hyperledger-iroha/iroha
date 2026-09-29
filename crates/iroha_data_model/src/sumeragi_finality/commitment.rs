@@ -1,26 +1,24 @@
 //! Current consensus result commitments shared by execution and independent proof readers.
+use super::{NativeLaneStateProof, ScheduleOutcome};
 use crate::{
     block::execution_output::ExecutionOutputV1, parameter::system::SumeragiParameters,
     transaction::signed::TransactionEntrypoint,
+};
+use crate::{
+    consensus::FinalizedGlobalThresholdBeaconPulseV1, isi::kagemusha_v1::BeaconEpochBindingV1,
+    parameter::system::ConsensusMode,
 };
 use iroha_crypto::{Hash, MerkleTreeCommitment};
 use iroha_sumeragi::{
     api::ConfigError,
     pacemaker::{FRAME_OVERHEAD, validate_chain},
-    preimage::committee_digest_preimage,
-    types::{ChainParams, Hash32, HeightConfig},
+    types::{ChainParams, Hash32},
 };
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
 };
-/// A malformed canonical current execution commitment.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CommitmentCodecError {
-    /// The bytes do not have the canonical result layout.
-    #[error("execution commitment encoding: {0}")]
-    Encoding(String),
-}
+use thiserror::Error;
 /// Largest consensus frame every node's transport accepts, the chain-wide bound that on-chain
 /// chain parameters are validated against (§9.4, O10): 16 MiB of payload plus the core's frame
 /// overhead. It is a protocol constant, not node configuration, so validation is deterministic;
@@ -29,7 +27,7 @@ pub const CHAIN_TRANSPORT_FRAME_LIMIT: u64 = 16 * 1024 * 1024 + FRAME_OVERHEAD a
 
 /// Chain parameters of one height as stored in World and committed in `R` (§10.1, §12.4): the
 /// Norito and JSON form of the core's [`ChainParams`].
-#[derive(norito::NoritoSchema)]
+#[derive(norito::NoritoSchema, iroha_schema::IntoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::ChainParamsRecord")]
 #[derive(
     Clone,
@@ -110,6 +108,9 @@ impl ChainParamsRecord {
 /// Domain tag of `R` (§4.1).
 pub const RESULT_TAG: &[u8] = b"iroha/sumeragi/result/v1";
 
+/// Hard bound for the canonical result preimage, including complete bounded epoch contexts.
+pub const MAX_RESULT_PREIMAGE_BYTES: usize = 64 * 1024;
+
 /// The chain hash `H` (§1): `iroha_crypto::Hash` as a core [`Hash32`].
 #[must_use]
 pub fn chain_hash(bytes: &[u8]) -> Hash32 {
@@ -117,12 +118,10 @@ pub fn chain_hash(bytes: &[u8]) -> Hash32 {
 }
 
 /// `R` of a canonical result preimage: `H(RESULT_TAG ‖ preimage)`.
+/// Streams the domain and borrowed preimage without allocating a second payload buffer.
 #[must_use]
 pub fn result_of_preimage(preimage: &[u8]) -> Hash32 {
-    let mut bytes = Vec::with_capacity(RESULT_TAG.len() + preimage.len());
-    bytes.extend_from_slice(RESULT_TAG);
-    bytes.extend_from_slice(preimage);
-    chain_hash(&bytes)
+    Hash32(Hash::new_from_chunks(&[RESULT_TAG, preimage]).into())
 }
 
 /// The deterministic outcome of executing one block: roots over the execution witness and the
@@ -153,53 +152,191 @@ pub struct ExecutionCommitment {
     pub transaction_output_commitment: Option<MerkleTreeCommitment<ExecutionOutputV1>>,
 }
 
-/// The preimage of `R` (§4.1): the execution commitment and the configuration of `h + 2`.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionResultCommitment")]
+/// The canonical preimage of `R`: exact executed height, execution, complete native schedule
+/// graph and the finalized beacon pulse consumed by this execution, when present.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ExecutionResultCommitment {
+    /// Exact height whose execution and schedule this result authenticates.
+    pub height: u64,
     /// What executing the block produced.
     pub execution: ExecutionCommitment,
-    /// `committee_digest(C_{h+2})` (§2.1) under the chain hash.
-    pub next_committee_digest: [u8; 32],
-    /// `ChainParams_{h+2}`.
-    pub next_params: ChainParamsRecord,
+    /// Full current context and authenticated successor schedule, including boundary decisions.
+    pub schedule: ScheduleOutcome,
+    /// Finalized unique threshold-beacon pulse verified against execution prestate.
+    /// Historical readers check its canonical public bindings; its threshold verification is
+    /// attested by the exact current quorum, not reconstructed without the full session.
+    pub beacon: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    /// Complete native context-set proof bound to the same network, height and write root.
+    pub native_lanes: NativeLaneStateProof,
+}
+
+impl norito::NoritoSchema for ExecutionResultCommitment {
+    fn nominal_name() -> String {
+        "iroha_data_model::sumeragi_finality::ExecutionResultCommitment".to_owned()
+    }
+    fn static_frame_name() -> Option<&'static str> {
+        // Canonical streaming must not allocate a String merely to hash this declared identity.
+        Some("iroha_data_model::sumeragi_finality::ExecutionResultCommitment")
+    }
 }
 
 impl ExecutionResultCommitment {
-    /// Bind `execution` to the configuration `next` scheduled for `h + 2`.
-    #[must_use]
-    pub fn new(execution: ExecutionCommitment, next: &HeightConfig) -> Self {
-        Self {
+    /// Bind an execution to its exact native epoch graph and finalized beacon pulse.
+    ///
+    /// # Errors
+    /// The height, complete epoch contexts, schedule graph or public pulse bindings are invalid.
+    pub fn new(
+        height: u64,
+        execution: ExecutionCommitment,
+        schedule: ScheduleOutcome,
+        beacon: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+        native_lanes: NativeLaneStateProof,
+    ) -> Result<Self, CommitmentError> {
+        let value = Self {
+            height,
             execution,
-            next_committee_digest: chain_hash(&committee_digest_preimage(&next.committee)).0,
-            next_params: ChainParamsRecord::from_core(&next.params),
+            schedule,
+            beacon,
+            native_lanes,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validate the complete graph and public pulse bindings before trusting its authority.
+    /// This does not independently verify a threshold signature: execution must verify that
+    /// signature with the authenticated complete beacon session before certifying this result.
+    ///
+    /// # Errors
+    /// An inconsistent height, invalid graph, missing required pulse or malformed pulse.
+    pub fn validate(&self) -> Result<(), CommitmentError> {
+        if self.height == 0 || self.schedule.height != self.height {
+            return Err(CommitmentError::Schedule(
+                "result and schedule heights differ".into(),
+            ));
         }
+        self.schedule
+            .validate()
+            .map_err(|error| CommitmentError::Schedule(error.to_string()))?;
+        let current = &self.schedule.current;
+        if !self.native_lanes.verify(
+            current.network_id,
+            self.height,
+            self.execution.ordinary_writes_root,
+        ) {
+            return Err(CommitmentError::NativeLaneState);
+        }
+        let required = current.mode == ConsensusMode::Npos
+            && self.height > 1
+            && self.height.checked_add(1) == Some(current.authorization.last_height);
+        let Some(pulse) = self.beacon.as_ref() else {
+            return if required {
+                Err(CommitmentError::Beacon(
+                    "missing boundary-selection pulse".into(),
+                ))
+            } else {
+                Ok(())
+            };
+        };
+        super::validate_beacon_pulse_shape(pulse)
+            .map_err(|error| CommitmentError::Beacon(error.to_string()))?;
+        if pulse.network_id != current.network_id
+            || pulse.height != self.height
+            || pulse.finalized_chain_anchor.height.checked_add(1) != Some(self.height)
+        {
+            return Err(CommitmentError::Beacon(
+                "pulse belongs to another network, height or anchor".into(),
+            ));
+        }
+        if let BeaconEpochBindingV1::Installed(binding) = current.authorization.beacon {
+            if pulse.session_id != binding.session_id
+                || pulse.transcript_hash != binding.transcript_hash
+            {
+                return Err(CommitmentError::Beacon(
+                    "pulse differs from authenticated epoch session".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The canonical preimage bytes (stored as `CommitCertificate.result_preimage`).
     ///
     /// # Errors
     /// A Norito serialization failure.
-    pub fn preimage(&self) -> Result<Vec<u8>, CommitmentCodecError> {
-        norito::encode_canonical(self)
-            .map_err(|error| CommitmentCodecError::Encoding(error.to_string()))
+    pub fn preimage(&self) -> Result<Vec<u8>, CommitmentError> {
+        let len = norito::canonical_frame_len(self)
+            .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
+        if len > MAX_RESULT_PREIMAGE_BYTES {
+            return Err(CommitmentError::PreimageLength(len));
+        }
+        norito::encode_canonical(self).map_err(|error| CommitmentError::Encoding(error.to_string()))
     }
 
     /// Decode a canonical preimage (e.g. from a stored or received certificate).
     ///
     /// # Errors
     /// The bytes are not one canonical frame of this type.
-    pub fn decode(preimage: &[u8]) -> Result<Self, CommitmentCodecError> {
-        norito::decode_canonical(preimage)
-            .map_err(|error| CommitmentCodecError::Encoding(error.to_string()))
+    pub fn decode(preimage: &[u8]) -> Result<Self, CommitmentError> {
+        if preimage.len() > MAX_RESULT_PREIMAGE_BYTES {
+            return Err(CommitmentError::PreimageLength(preimage.len()));
+        }
+        let decoded: Self = norito::decode_canonical_with_limits(
+            preimage,
+            norito::DecodeLimits::new(
+                96,
+                MAX_RESULT_PREIMAGE_BYTES,
+                8192,
+                4 * MAX_RESULT_PREIMAGE_BYTES,
+                32,
+            ),
+        )
+        .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
+        decoded.validate()?;
+        Ok(decoded)
     }
 
     /// `R` of this commitment.
     ///
     /// # Errors
     /// A Norito serialization failure.
-    pub fn result(&self) -> Result<Hash32, CommitmentCodecError> {
+    pub fn result(&self) -> Result<Hash32, CommitmentError> {
         self.preimage().map(|bytes| result_of_preimage(&bytes))
     }
+}
+
+/// Why `R` could not be computed. Every variant is a deterministic function of the executed
+/// block and its witness (a local bug, never the proposer's fault alone).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum CommitmentError {
+    /// The executed block carries no execution result.
+    #[error("the executed block has no execution result")]
+    MissingResult,
+    /// The executed block already carries a commit certificate.
+    #[error("the executed block already carries a commit certificate")]
+    CertifiedBlock,
+    /// The block's outputs or their Merkle cache are malformed.
+    #[error("malformed execution outputs: {0}")]
+    InvalidOutputs(String),
+    /// The result-bearing block wire is empty or above the protocol bound.
+    #[error("the executed block wire length {0} is out of range")]
+    WireLength(u64),
+    /// The witness carries malformed or duplicate KAGEMUSHA receipts.
+    #[error("invalid KAGEMUSHA top-ups: {0}")]
+    KagemushaTopUps(String),
+    /// The complete native epoch schedule is invalid.
+    #[error("invalid epoch schedule: {0}")]
+    Schedule(String),
+    /// Complete context proof differs from the exact native execution carrier.
+    #[error("invalid native context proof")]
+    NativeLaneState,
+    /// A finalized pulse has malformed or inconsistent public bindings.
+    #[error("invalid finalized beacon pulse: {0}")]
+    Beacon(String),
+    /// A canonical result preimage exceeds the protocol byte bound.
+    #[error("result preimage exceeds its byte bound: {0}")]
+    PreimageLength(usize),
+    /// A Norito encoding or decoding failure.
+    #[error("encoding: {0}")]
+    Encoding(String),
 }

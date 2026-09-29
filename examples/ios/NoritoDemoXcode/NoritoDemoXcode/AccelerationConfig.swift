@@ -3,12 +3,8 @@ import Foundation
 import IrohaSwift
 
 struct DemoAccelerationConfig {
-  static let environmentKey = AccelerationSettingsLoader.defaultEnvironmentKey
-
-  static func load(logger: ((String) -> Void)? = nil) -> AccelerationSettings {
-    AccelerationSettingsLoader.load(
-      environmentKey: environmentKey,
-      environment: ProcessInfo.processInfo.environment,
+  static func load(logger: ((String) -> Void)? = nil) throws -> AccelerationSettings {
+    try AccelerationSettingsLoader.load(
       bundle: .main,
       logger: { message in
         if let logger {

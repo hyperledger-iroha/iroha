@@ -120,17 +120,17 @@ pub(super) struct CompactHashQuotient {
 impl CompactHashQuotient {
     /// Construct the fixed active-invocation ledger on a supported multiple of 512.
     pub(super) fn new(params: &StarkParameterSet, trace_rows: usize) -> Result<Self> {
+        static COMPILED: OnceLock<CompiledLedger> = OnceLock::new();
         let selectors = PeriodicSelectors::new(params, trace_rows, PERIOD)?;
         // Selector construction already checked these exact domain sizes.
         let blowup = params.fri.blowup_factor as usize;
         let lde_rows = trace_rows * blowup;
-        let _lde_domain = FriDomain::from_lde_parameters(
+        let lde_domain = FriDomain::from_lde_parameters(
             params.lde_root,
             params.lde_log_size,
             lde_rows,
             params.omega_coset,
         )?;
-        static COMPILED: OnceLock<CompiledLedger> = OnceLock::new();
         let compiled = COMPILED.get_or_init(CompiledLedger::compile);
         for (actual, max) in [
             (compiled.nodes.len(), MAX_PROVER_LEDGER_NODES),
@@ -161,7 +161,7 @@ impl CompactHashQuotient {
             selectors,
             trace_rows,
             compiled,
-            lde_domain: _lde_domain,
+            lde_domain,
             lde_rows,
             #[cfg(test)]
             mask_cycle_rows: PERIOD * blowup,
@@ -562,24 +562,22 @@ impl CompiledLedger {
             core::array::from_fn(|_| BTreeMap::new());
         let mut maximum_local = 0;
         let mut maximum_transition = 0;
-        let mut _reference_residues = 0;
+        let mut reference_residues = 0;
         for phase in 0..PERIOD {
-            let residues = if let Some(index) = hash::RowIndex::new(phase) {
-                hash::local_residues(Expression::ONE, index, &current)
-            } else {
-                hash_row_cells(&current).to_vec()
-            };
+            let residues = hash::RowIndex::new(phase).map_or_else(
+                || hash_row_cells(&current).to_vec(),
+                |index| hash::local_residues(Expression::ONE, index, &current),
+            );
             maximum_local = maximum_local.max(residues.len());
-            _reference_residues += residues.len();
+            reference_residues += residues.len();
             group_phase(&arena, phase, &residues, &mut local);
-            if let Some(index) = hash::RowIndex::new(phase) {
-                if let Some(residues) =
+            if let Some(index) = hash::RowIndex::new(phase)
+                && let Some(residues) =
                     hash::transition_residues(Expression::ONE, index, &current, &next)
-                {
-                    maximum_transition = maximum_transition.max(residues.len());
-                    _reference_residues += residues.len();
-                    group_phase(&arena, phase, &residues, &mut transitions);
-                }
+            {
+                maximum_transition = maximum_transition.max(residues.len());
+                reference_residues += residues.len();
+                group_phase(&arena, phase, &residues, &mut transitions);
             }
         }
         assert_eq!(
@@ -619,7 +617,7 @@ impl CompiledLedger {
             local,
             transitions,
             max_degree,
-            reference_residues: _reference_residues,
+            reference_residues,
         }
     }
 
@@ -757,8 +755,8 @@ mod tests {
     fn seeded_row(seed: u64) -> CompactRow {
         hash_row_from_cells(&core::array::from_fn(|index| {
             let value = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add((index as u64 + 1).wrapping_mul(1442695040888963407_u64));
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add((index as u64 + 1).wrapping_mul(1_442_695_040_888_963_407_u64));
             value % GOLDILOCKS_MODULUS
         }))
     }
@@ -910,7 +908,9 @@ mod tests {
         let generator = FixedTraceDomain::new(&FASTPQ_FINAL_V1, PERIOD)
             .unwrap()
             .generator;
-        let bytes: Vec<_> = (0..83).map(|index| (index * 71 + 13) as u8).collect();
+        let bytes: Vec<_> = (0..83_u8)
+            .map(|index| index.wrapping_mul(71).wrapping_add(13))
+            .collect();
         let witness = hash::CompactHashWitness::from_bytes(&bytes).unwrap();
         let zero = CompactRow::zero();
         let mut point = 1;
@@ -939,9 +939,9 @@ mod tests {
             assert!(result.transitions.iter().all(|&value| value == 0));
         }
         let arbitrary = seeded_row(123);
-        for phase in [407, 408, 510, 511] {
+        for phase in [407_u64, 408, 510, 511] {
             let result = ledger
-                .evaluate(field_pow(generator, phase as u64), &arbitrary, &arbitrary)
+                .evaluate(field_pow(generator, phase), &arbitrary, &arbitrary)
                 .unwrap();
             assert!(
                 result.transitions.iter().all(|&value| value == 0),
@@ -975,6 +975,10 @@ mod tests {
         let next = make_row(73);
         let point = FASTPQ_FINAL_V1.omega_coset;
         let phases = ledger.selectors.evaluate(point).unwrap();
+        #[allow(
+            clippy::large_stack_arrays,
+            reason = "fixed by-value 597-slot accumulator, as `evaluate` returns it"
+        )]
         let mut expected = HashNumerators {
             local: [GoldilocksFp4V1::ZERO; LOCAL_SLOTS],
             transitions: [GoldilocksFp4V1::ZERO; TRANSITION_SLOTS],
@@ -1123,7 +1127,7 @@ mod tests {
             }
             let ledger = CompactHashQuotient::new(&params, trace_rows).unwrap();
             let cycle = ledger.prepare_prover_masks().unwrap();
-            assert!(core::ptr::eq(cycle.ledger, &ledger));
+            assert!(core::ptr::eq(cycle.ledger, &raw const ledger));
             let mut base_scratch = ledger.evaluation_scratch::<u64>();
             let mut extension_scratch = ledger.evaluation_scratch::<GoldilocksFp4V1>();
             let base_pointer = base_scratch.values.as_ptr();
@@ -1286,7 +1290,7 @@ mod tests {
         let preparation_start = std::time::Instant::now();
         let cycle = ledger.prepare_prover_masks().unwrap();
         let preparation_elapsed = preparation_start.elapsed();
-        assert!(core::ptr::eq(cycle.ledger, &ledger));
+        assert!(core::ptr::eq(cycle.ledger, &raw const ledger));
         assert_eq!(ledger.mask_cycle_rows, 4096);
         assert_eq!(cycle.values.len(), 4096 * ledger.compiled.masks.len());
         let current = seeded_row(31);
@@ -1353,15 +1357,36 @@ mod tests {
                 .unwrap()
         );
 
-        // Timings are evidence only: no machine-speed assertion affects validity.
+        report_mask_cycle_timings(
+            &ledger,
+            &cycle,
+            preparation_elapsed,
+            (&current, &next),
+            (&extension_current, &extension_next),
+        );
+    }
+
+    /// Time 100 direct, cached-mask and scratch evaluations over both fields.
+    ///
+    /// Timings are evidence only: no machine-speed assertion affects validity.
+    fn report_mask_cycle_timings(
+        ledger: &CompactHashQuotient,
+        cycle: &ProverMaskCycle<'_>,
+        preparation_elapsed: std::time::Duration,
+        (current, next): (&CompactRow, &CompactRow),
+        (extension_current, extension_next): (
+            &CompactRow<GoldilocksFp4V1>,
+            &CompactRow<GoldilocksFp4V1>,
+        ),
+    ) {
         let base_start = std::time::Instant::now();
         for index in 0..100 {
             std::hint::black_box(
                 ledger
                     .evaluate(
                         ledger.lde_domain.point(index),
-                        std::hint::black_box(&current),
-                        &next,
+                        std::hint::black_box(current),
+                        next,
                     )
                     .unwrap(),
             );
@@ -1373,8 +1398,8 @@ mod tests {
                 ledger
                     .evaluate(
                         GoldilocksFp4V1::embed_base(ledger.lde_domain.point(index)),
-                        std::hint::black_box(&extension_current),
-                        &extension_next,
+                        std::hint::black_box(extension_current),
+                        extension_next,
                     )
                     .unwrap(),
             );
@@ -1384,7 +1409,7 @@ mod tests {
         for index in 0..100 {
             std::hint::black_box(
                 cycle
-                    .evaluate(index, std::hint::black_box(&current), &next)
+                    .evaluate(index, std::hint::black_box(current), next)
                     .unwrap(),
             );
         }
@@ -1395,8 +1420,8 @@ mod tests {
                 cycle
                     .evaluate(
                         index,
-                        std::hint::black_box(&extension_current),
-                        &extension_next,
+                        std::hint::black_box(extension_current),
+                        extension_next,
                     )
                     .unwrap(),
             );
@@ -1409,8 +1434,8 @@ mod tests {
                 cycle
                     .evaluate_with_scratch(
                         index,
-                        std::hint::black_box(&current),
-                        &next,
+                        std::hint::black_box(current),
+                        next,
                         &mut base_scratch,
                     )
                     .unwrap(),
@@ -1424,8 +1449,8 @@ mod tests {
                 cycle
                     .evaluate_with_scratch(
                         index,
-                        std::hint::black_box(&extension_current),
-                        &extension_next,
+                        std::hint::black_box(extension_current),
+                        extension_next,
                         &mut extension_scratch,
                     )
                     .unwrap(),
@@ -1453,6 +1478,10 @@ mod tests {
             GoldilocksFp4V1::new([column as u64 + 7, 29, 43, 61]).unwrap()
         }));
         for point in polynomial::points().into_iter().skip(5) {
+            #[allow(
+                clippy::large_stack_arrays,
+                reason = "fixed by-value 597-slot accumulator, as `evaluate` returns it"
+            )]
             let mut expected = HashNumerators {
                 local: [GoldilocksFp4V1::ZERO; LOCAL_SLOTS],
                 transitions: [GoldilocksFp4V1::ZERO; TRANSITION_SLOTS],

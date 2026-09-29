@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1715 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1880 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1719 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1884 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -285,7 +285,7 @@ class BeaconGateTests(unittest.TestCase):
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
-          'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+          'queue::tests::current_ordinary_fifo_survives_committed_height_and_replay',
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
           'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
@@ -747,6 +747,9 @@ class BeaconGateTests(unittest.TestCase):
 
     def test_merge_beacon_composition_controls_are_unique_and_focused_in_both_scopes(self):
         required = (
+            'state::tests::component_commit_topology_preserves_scheduled_network_authority',
+            'state::tests::native_admission_fixture_binds_final_controls_results_signature_and_body',
+            'state::tests::native_economic_executor_transfers_once_across_shared_roles_and_drops_atomically',
             'state::tests::autonomous_merge_beacon_composition_preserves_certified_roots_and_commits_once',
             'state::tests::autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_drift',
         )
@@ -1862,14 +1865,15 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
             "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
             "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
-            "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
+            "queue::tests::current_payload_selects_full_block_gas_call_with_idle_catalog_route",
             "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
             "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
             "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
             "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
             "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
             "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
-            "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
+            "queue::tests::strict_queue_plan_journal_admission_replays_exact_transaction_after_restart",
+            "queue::tests::strict_queue_plan_journal_full_write_ambiguity_replays_exact_put",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
             "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
             "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
@@ -3720,7 +3724,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                   'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
                   'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
                   'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-                  'zk::debug_backend_tests::halo2_ivm_replay_binding_rejects_relabelled_demo_verifying_key',
+                  'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
                   'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
          'torii-unit': ['sns::tests::registration_absence_http_response_is_typed_and_other_not_found_is_not',
                         'openapi::tests::sns_name_absence_openapi_is_typed_and_selector_bound'],

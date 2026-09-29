@@ -63,6 +63,9 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         None,
         None,
         None,
+        None,
+        None,
+        None,
     )
     .err()
     .expect("original history pool must refuse before block start");
@@ -89,6 +92,9 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         &state,
         penalty_index,
         false,
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -134,6 +140,9 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
         &state,
         penalty_index,
         false,
+        None,
+        None,
+        None,
         None,
         None,
         None,

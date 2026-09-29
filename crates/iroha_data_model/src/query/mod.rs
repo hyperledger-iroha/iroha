@@ -19,7 +19,6 @@ use crate::{
     },
     block::{BlockHeader, SignedBlock},
     domain::Domain,
-    merge::MergeLedgerEntry,
     nft::{Nft, NftId},
     parameter::{Parameter, Parameters},
     permission::Permission,
@@ -31,7 +30,7 @@ use crate::{
     trigger::{Trigger, TriggerId},
 };
 use derive_more::Constructor;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey, SignatureOf};
+use iroha_crypto::{Hash, HashOf, MerkleProof, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_model_base::domain::DomainId;
@@ -978,16 +977,8 @@ mod model {
             )
         }
     }
-    pub(super) const QUERY_BOX_PACKED_STRUCT_ERROR: &str = "packed-struct QueryBox layout";
-    fn query_box_tuple_flags() -> Result<u8, norito::core::Error> {
-        let flags = norito::core::effective_decode_flags()
-            .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return Err(norito::core::Error::UnsupportedFeature(
-                QUERY_BOX_PACKED_STRUCT_ERROR,
-            ));
-        }
-        Ok(flags)
+    fn query_box_tuple_flags() -> u8 {
+        norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
     }
     fn query_box_encoded_len(name: &str, payload_len: usize, flags: u8) -> Option<usize> {
         let name_len = name
@@ -1012,7 +1003,7 @@ mod model {
                     query.type_name_key()
                 ))
             })?;
-            let flags = query_box_tuple_flags()?;
+            let flags = query_box_tuple_flags();
             let payload_len = if let Some(exact) = query.encoded_payload_len_exact() {
                 exact
             } else {
@@ -1063,7 +1054,7 @@ mod model {
         fn encoded_len_exact(&self) -> Option<usize> {
             let query = &**self;
             let name = query_wire_id(query.type_name_key())?;
-            let flags = query_box_tuple_flags().ok()?;
+            let flags = query_box_tuple_flags();
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
@@ -1079,7 +1070,6 @@ mod model {
         fn try_deserialize(
             archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
         ) -> Result<Self, norito::core::Error> {
-            query_box_tuple_flags()?;
             let (name, bytes): (String, Vec<u8>) =
                 norito::core::DeserializePayload::try_deserialize(archived.cast())?;
             decode_registered_query(&name, &bytes).ok_or_else(|| {
@@ -1278,8 +1268,6 @@ mod model {
         FindDaPinIntentByAlias(self::da::prelude::FindDaPinIntentByAlias),
         /// Fetch a DA pin intent by lane/epoch/sequence tuple.
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
-        /// Fetch a verified lane relay record by its canonical relay reference.
-        FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
         /// Fetch a fee sponsor program by identifier.
         FindFeeSponsorProgramById(self::nexus::prelude::FindFeeSponsorProgramById),
         /// Fetch the immutable native business receipt, including every exact movement.
@@ -1518,8 +1506,6 @@ mod model {
         DomainCommittee(crate::nexus::DomainCommittee),
         /// DA pin intent payload.
         DaPinIntent(crate::da::pin_intent::DaPinIntentWithLocation),
-        /// Verified lane relay payload.
-        VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Fee sponsor policy payload.
         FeeSponsorProgram(crate::nexus::FeeSponsorProgram),
         /// Finalized chain-authoritative `SoraFS` pin manifest.
@@ -2223,39 +2209,6 @@ mod model {
         pub signature: QuerySignature,
         pub payload: QueryRequestWithAuthority,
     }
-    /// Verifiable source metadata for a transaction committed through a merge carrier.
-    #[derive(
-        Debug,
-        Clone,
-        PartialOrd,
-        Ord,
-        PartialEq,
-        Eq,
-        Decode,
-        Encode,
-        IntoSchema,
-        crate :: DeriveJsonSerialize,
-        crate :: DeriveJsonDeserialize,
-    )]
-    /// Proof context for an entrypoint/result pair ordered through a certified merge sidecar.
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::query::model::CertifiedMergeTransactionInclusion")]
-    pub struct CertifiedMergeTransactionInclusion {
-        /// Inclusion schema version. Only version one is valid.
-        pub version: u8,
-        /// Canonical hash of the complete merge-ledger entry referenced by the carrier block.
-        pub merge_entry_hash: HashOf<MergeLedgerEntry>,
-        /// Contiguous merge-ledger epoch of the certified entry.
-        pub merge_epoch_id: u64,
-        /// Canonical hash of the self-contained merge execution batch.
-        pub execution_batch_hash: Hash,
-        /// Exact number of entrypoint/result leaves in the batch.
-        pub entrypoint_count: u64,
-        /// Typed Merkle root of entrypoint hashes in canonical merge execution order.
-        pub entrypoint_merkle_root: HashOf<MerkleTree<TransactionEntrypoint>>,
-        /// Typed Merkle root of result hashes in the same order.
-        pub result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
-    }
     /// Response returned by [`FindTransactions`] query.
     #[derive(
         Debug,
@@ -2306,7 +2259,6 @@ impl CommittedTransaction {
         commitment: &crate::block::consensus_v2::ExecutionCommitment,
     ) -> bool {
         if commitment.validate().is_err()
-            || commitment.merge_carrier.is_some()
             || self.block_hash != header.hash()
             || self.entrypoint_hash != self.entrypoint.hash()
             || self.output_hash != HashOf::new(&self.output)
@@ -2359,10 +2311,9 @@ impl CommittedTransaction {
         };
         u64::try_from(wire.len()).ok() == Some(commitment.executed_block_wire_len)
             && Hash::new(&wire) == commitment.executed_block_wire_hash
-            && commitment.merge_carrier.is_none()
-            && block.execution_context().is_none_or(|context| {
-                context.has_current_version() && context.merge_entry.is_none()
-            })
+            && block
+                .execution_context()
+                .is_none_or(crate::block::BlockExecutionContextBundle::has_current_version)
             && self.verify_inclusion_in_block(block)
     }
     /// Structural inclusion under exact full-wire commitments. The caller must authenticate
@@ -2627,9 +2578,6 @@ where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        if norito::core::use_packed_struct() {
-            return norito::core::SerializePayload::serialize(self.0, writer);
-        }
         let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
@@ -2641,9 +2589,6 @@ where
         self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if norito::core::use_packed_struct() {
-            return norito::core::SerializePayload::encoded_len_exact(self.0);
-        }
         let mut total = 0_usize;
         let values: [&dyn norito::core::SerializePayload; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
@@ -4379,7 +4324,6 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByManifest => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
-    nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     nexus::prelude::FindFeeSponsorProgramById => crate::nexus::FeeSponsorProgram,
     settlement::prelude::FindSettlementReceiptById => crate::isi::SettlementReceipt,
     settlement::prelude::FindFxCorridorPolicyRegistry => crate::isi::settlement::FxCorridorPolicyRegistry,
@@ -4763,14 +4707,13 @@ pub mod error;
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
     pub use super::{
-        CertifiedMergeTransactionInclusion, CommittedTransaction, QueryBox, QueryRequest,
-        SingularQueryBox, account::prelude::*, asset::prelude::*, block::prelude::*,
-        builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
-        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, game::prelude::*,
-        musubi::prelude::*, nft::prelude::*, nft_market::prelude::*, oracle::prelude::*,
-        parameters::prelude::*, peer::prelude::*, permission::prelude::*, role::prelude::*,
-        rwa::prelude::*, settlement::prelude::*, sorafs::prelude::*, transaction::prelude::*,
-        trigger::prelude::*,
+        CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox, account::prelude::*,
+        asset::prelude::*, block::prelude::*, builder::prelude::*, da::prelude::*,
+        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, escrow::prelude::*,
+        executor::prelude::*, game::prelude::*, musubi::prelude::*, nft::prelude::*,
+        nft_market::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
+        permission::prelude::*, role::prelude::*, rwa::prelude::*, settlement::prelude::*,
+        sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
     };
 }
 include!("query_tail_tests.rs");

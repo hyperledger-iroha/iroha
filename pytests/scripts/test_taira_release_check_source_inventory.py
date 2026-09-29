@@ -217,7 +217,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                          r'#\[path = "beacon_bootstrap_tests\.rs"\]\s*mod tests;')
         declared = tuple(re.findall(r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(",
                                     source.read_text()))
-        self.assertEqual(len(declared), 12)
+        self.assertEqual(len(declared), 14)
         for scope in gate.QUALIFICATION_SCOPES:
             selected = tuple(name for _, tests in gate.qualification_stages(scope)["daemon"]
                              for name in tests)

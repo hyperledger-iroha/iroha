@@ -52,6 +52,9 @@ fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
             "CONTRACT_LIFECYCLE_GOVERNANCE",
             "CONTRACT_EMERGENCY_HOLD",
             "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
+            "KAGEMUSHA_VERIFIER_POLICY_INSTALL",
+            "KAGEMUSHA_VERIFIER_RELEASE_INSTALL",
+            "KAGEMUSHA_VERIFIER_RELEASE_ACTIVATE",
         ]
     );
 }
@@ -670,7 +673,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
             &iroha_config::parameters::actual::LaneRegistry::default(),
         ),
     );
-    state.install_lane_manifests(&lane_manifests);
+    state.install_lane_manifests_for_testing(&lane_manifests);
     let events = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),

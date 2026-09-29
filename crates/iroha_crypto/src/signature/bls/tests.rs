@@ -1,5 +1,5 @@
 use super::{
-    implementation::{BlsConfiguration, BlsImpl, PreparedPublicKeyCacheAccess},
+    implementation::{BlsConfiguration, BlsImpl, VerifyOkCacheAccess},
     normal::NormalConfiguration,
     small::SmallConfiguration,
 };
@@ -80,33 +80,27 @@ fn test_random_keypair_from_rng_rejects_all_zero_seed<C: BlsConfiguration>() {
         Ok(_) => panic!("all-zero BLS random seed material must fail"),
     }
 }
-fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAccess>() {
+fn test_signature_verification<C: BlsConfiguration + VerifyOkCacheAccess>() {
     let (pk, sk) = BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("BLS keypair");
     let signature_1 = BlsImpl::<C>::try_sign(MESSAGE_1, &sk).expect("BLS sign");
     BlsImpl::<C>::verify(MESSAGE_1, &signature_1, &pk)
         .expect("Signature verification should succeed");
 }
-fn test_checked_random_keypair_signs_and_verifies<
-    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
->() {
+fn test_checked_random_keypair_signs_and_verifies<C: BlsConfiguration + VerifyOkCacheAccess>() {
     let (pk, sk) =
         BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("checked random BLS keypair");
     let signature = BlsImpl::<C>::try_sign(MESSAGE_1, &sk).expect("checked BLS sign");
     BlsImpl::<C>::verify(MESSAGE_1, &signature, &pk)
         .expect("checked random BLS signature should verify");
 }
-fn test_signature_verification_different_messages<
-    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
->() {
+fn test_signature_verification_different_messages<C: BlsConfiguration + VerifyOkCacheAccess>() {
     let (pk, sk) = BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("BLS keypair");
     let signature = BlsImpl::<C>::try_sign(MESSAGE_1, &sk).expect("BLS sign");
     BlsImpl::<C>::verify(MESSAGE_2, &signature, &pk)
         .expect_err("Signature verification for wrong message should fail");
 }
 #[allow(clippy::similar_names)]
-fn test_signature_verification_different_keys<
-    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
->() {
+fn test_signature_verification_different_keys<C: BlsConfiguration + VerifyOkCacheAccess>() {
     let (_pk_1, sk_1) = BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("BLS keypair");
     let (pk_2, _sk_2) = BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("BLS keypair");
     let signature = BlsImpl::<C>::try_sign(MESSAGE_1, &sk_1).expect("BLS sign");
@@ -114,7 +108,7 @@ fn test_signature_verification_different_keys<
         .expect_err("Signature verification for wrong public key should fail");
 }
 fn test_verify_cache_rejects_variable_length_tuple_splice<
-    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+    C: BlsConfiguration + VerifyOkCacheAccess,
 >() {
     let (pk, sk) =
         BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0x74; 32])).expect("BLS keypair");
@@ -126,9 +120,7 @@ fn test_verify_cache_rejects_variable_length_tuple_splice<
     BlsImpl::<C>::verify(&spliced_message, &signature[1..], &pk)
         .expect_err("malformed signature must not borrow a cached tuple verdict");
 }
-fn test_verify_rejects_all_zero_signature_material<
-    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
->() {
+fn test_verify_rejects_all_zero_signature_material<C: BlsConfiguration + VerifyOkCacheAccess>() {
     let (pk, sk) = BlsImpl::<C>::try_keypair(KeyGenOption::Random).expect("BLS keypair");
     let valid_signature = BlsImpl::<C>::try_sign(MESSAGE_1, &sk).expect("BLS sign");
     let all_zero_signature = vec![0u8; valid_signature.len()];

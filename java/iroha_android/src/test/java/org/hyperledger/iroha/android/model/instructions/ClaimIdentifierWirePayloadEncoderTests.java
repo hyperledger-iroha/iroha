@@ -164,7 +164,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             sampleOpening("parity_test", PARITY_SIGNATURE_HEX, PARITY_HASH_HEX),
             "opaque:" + PARITY_HASH_HEX,
             PARITY_HASH_HEX,
-            "uaid:" + PARITY_HASH_HEX,
+            "uaid:" + PARITY_HASH_HEX.toLowerCase(Locale.ROOT),
             liveAccountId);
     final IdentifierResolutionReceipt receipt =
         new IdentifierResolutionReceipt(

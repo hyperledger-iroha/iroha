@@ -115,7 +115,7 @@ fn runtime_catalog_readback_binds_next_transition_and_rejects_stale_root() {
                 &state.autoscale_sample_history_snapshot(),
             )
             .expect("install complete authenticated runtime fixture");
-        state.install_lane_manifests(&pending.updated_lane_manifests);
+        state.install_lane_manifests_for_testing(&pending.updated_lane_manifests);
         let status = {
             let view = state.view();
             iroha_data_model::nexus::LaneLifecycleStatusV1::new(
@@ -512,7 +512,7 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
             manifests.consensus_policy_digest(),
             pending.updated_lane_manifests.consensus_policy_digest()
         );
-        state.install_lane_manifests(&manifests);
+        state.install_lane_manifests_for_testing(&manifests);
         assert_eq!(
             state.execution_policy_digest_v1().unwrap(),
             execution_before
@@ -612,7 +612,7 @@ fn runtime_catalog_replacement_uses_its_retained_parameter_predecessor() {
                 &state.autoscale_sample_history_snapshot(),
             )
             .expect("install the matching runtime owner for the retained catalog");
-        state.install_lane_manifests(&pending.updated_lane_manifests);
+        state.install_lane_manifests_for_testing(&pending.updated_lane_manifests);
         let live = runtime_catalog_from_world(&state.world.view()).unwrap();
         assert!(live.is_some());
         let mut replacement = state.world.block_and_revert();

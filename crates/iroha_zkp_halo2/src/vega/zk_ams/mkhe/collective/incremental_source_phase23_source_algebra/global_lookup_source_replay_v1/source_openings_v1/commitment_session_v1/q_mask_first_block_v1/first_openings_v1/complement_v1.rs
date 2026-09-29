@@ -173,7 +173,7 @@ impl QMaskComplementOpeningsV1 {
         require_original_block_v1(session, table, &source.stream.block)?;
         let count = self.blindings.len();
         if count > MASK_DIGITS_V1
-            || count % 4 != 0
+            || !count.is_multiple_of(4)
             || source.loaded
             || source.next_block != count / 4
             || source.stream.blindings.len() != MASK_DIGITS_V1

@@ -354,7 +354,6 @@ export {
   buildIvmProvedTransactionPayload,
   signQuotedIvmProvedTransactionPayload,
   buildIvmProvedTransaction,
-  submitIvmProvedContractCall,
   buildMintAssetTransaction,
   buildBurnAssetTransaction,
   buildBurnTriggerTransaction,

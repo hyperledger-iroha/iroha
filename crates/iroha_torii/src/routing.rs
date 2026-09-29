@@ -3507,6 +3507,8 @@ impl MaybeTelemetry {
                 blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
                 lane_history_retention:
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+                native_context_archive_max_bytes:
+                    iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 transaction_history_bytes:
@@ -3543,6 +3545,9 @@ impl MaybeTelemetry {
         let _ = peers.push(local_peer_id.clone());
         world_block.commit();
         let mut state = State::try_new(
+            iroha_core::state::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             world,
             kura.clone(),
             query,
@@ -7531,57 +7536,6 @@ mod zk_vote_tally_response_tests {
         assert_eq!(decoded.tally, response.tally);
     }
 }
-fn sumeragi_evidence_response_encode_error() -> Error {
-    query_internal_error("Sumeragi evidence response encoding failed")
-}
-fn bounded_sumeragi_evidence_count_response(
-    payload: SumeragiEvidenceCountResponse,
-    format: crate::utils::ResponseFormat,
-    max_body_bytes: usize,
-) -> Result<Response> {
-    crate::utils::respond_with_format_bounded(payload, format, max_body_bytes)
-        .map_err(|_| sumeragi_evidence_response_encode_error())
-}
-fn bounded_sumeragi_evidence_list_norito_response(
-    payload: &SumeragiEvidenceListWireResponse,
-    max_body_bytes: usize,
-) -> Result<Response> {
-    let body = crate::utils::encode_norito_bounded(payload, max_body_bytes)
-        .map_err(|_| sumeragi_evidence_response_encode_error())?;
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
-        .body(Body::from(body))
-        .expect("build bounded Sumeragi evidence Norito response"))
-}
-fn bounded_sumeragi_evidence_list_json_response(
-    payload: &Value,
-    max_body_bytes: usize,
-) -> Result<Response> {
-    let body = crate::utils::encode_json_bounded(payload, max_body_bytes)
-        .map_err(|_| sumeragi_evidence_response_encode_error())?;
-    Ok(application_json_response(body))
-}
-/// GET /v1/sumeragi/evidence/count — returns the number of unique admitted v2 proofs.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_evidence_count(
-    State(state): State<std::sync::Arc<CoreState>>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let world = state.world_view();
-    let count = u64::try_from(world.consensus_evidence().iter().count()).map_err(|_| {
-        conversion_error("Sumeragi evidence count is not representable as u64".to_owned())
-    })?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    bounded_sumeragi_evidence_count_response(
-        SumeragiEvidenceCountResponse { count },
-        format,
-        SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES,
-    )
-}
 derived_items! {
 ( Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query params for evidence listing
@@ -7604,312 +7558,6 @@ pub(crate) struct EvidenceListStringQuery {
     /// Exact evidence-kind query value, when present.
     pub kind: Option<String>,
 }
-}
-fn invalid_evidence_list_pagination(field: &'static str, value: &str, expected: &str) -> Error {
-    Error::AppQueryValidation {
-        code: "sumeragi_evidence_pagination_invalid",
-        message: format!("invalid evidence {field} `{value}`; expected {expected}"),
-    }
-}
-fn parse_evidence_list_usize(value: &str, field: &'static str) -> Result<usize, Error> {
-    if value.is_empty()
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || (value.len() > 1 && value.starts_with('0'))
-    {
-        return Err(invalid_evidence_list_pagination(
-            field,
-            value,
-            "a canonical unsigned decimal integer",
-        ));
-    }
-    let parsed = value.parse::<u64>().map_err(|_| {
-        invalid_evidence_list_pagination(field, value, "a canonical unsigned decimal integer")
-    })?;
-    usize::try_from(parsed).map_err(|_| {
-        invalid_evidence_list_pagination(field, value, "an integer representable by this server")
-    })
-}
-fn validate_evidence_list_kind(value: &str) -> Result<(), Error> {
-    if value == "SumeragiV2Equivocation" {
-        Ok(())
-    } else {
-        Err(Error::AppQueryValidation {
-            code: "sumeragi_evidence_kind_invalid",
-            message: format!(
-                "unsupported evidence kind `{value}`; expected SumeragiV2Equivocation"
-            ),
-        })
-    }
-}
-fn validate_evidence_list_query(query: &EvidenceListQuery) -> Result<(), Error> {
-    if let Some(limit) = query.limit
-        && !(1..=SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize).contains(&limit)
-    {
-        return Err(invalid_evidence_list_pagination(
-            "limit",
-            &limit.to_string(),
-            "an integer in 1..=1000",
-        ));
-    }
-    if let Some(offset) = query.offset
-        && offset > SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize
-    {
-        return Err(invalid_evidence_list_pagination(
-            "offset",
-            &offset.to_string(),
-            "an integer in 0..=10000",
-        ));
-    }
-    query
-        .kind
-        .as_deref()
-        .map(validate_evidence_list_kind)
-        .transpose()
-        .map(|_| ())
-}
-fn evidence_page_capacity(offset: usize, limit: usize) -> Result<usize, Error> {
-    offset.checked_add(limit).ok_or_else(|| {
-        invalid_evidence_list_pagination(
-            "offset",
-            &offset.to_string(),
-            "an offset whose sum with limit is representable by this server",
-        )
-    })
-}
-impl TryFrom<EvidenceListStringQuery> for EvidenceListQuery {
-    type Error = Error;
-    fn try_from(raw: EvidenceListStringQuery) -> Result<Self, Self::Error> {
-        let query = Self {
-            limit: raw
-                .limit
-                .as_deref()
-                .map(|value| parse_evidence_list_usize(value, "limit"))
-                .transpose()?,
-            offset: raw
-                .offset
-                .as_deref()
-                .map(|value| parse_evidence_list_usize(value, "offset"))
-                .transpose()?,
-            kind: raw.kind,
-        };
-        validate_evidence_list_query(&query)?;
-        Ok(query)
-    }
-}
-#[cfg(test)]
-mod evidence_list_query_contract_tests {
-    use super::*;
-    fn assert_safe_evidence_response_encoding_error(error: Error) {
-        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
-            panic!("bounded evidence response returned the wrong error");
-        };
-        assert_eq!(message, "Sumeragi evidence response encoding failed");
-    }
-    fn raw_query(
-        limit: Option<&str>,
-        offset: Option<&str>,
-        kind: Option<&str>,
-    ) -> EvidenceListStringQuery {
-        EvidenceListStringQuery {
-            limit: limit.map(str::to_owned),
-            offset: offset.map(str::to_owned),
-            kind: kind.map(str::to_owned),
-        }
-    }
-    routing_test! { async bounded_evidence_count_response_accepts_exact_limit_and_rejects_overflow
-        let payload = SumeragiEvidenceCountResponse { count: u64::MAX };
-        let exact = norito::json::to_json(&payload)
-            .expect("encode count fixture")
-            .len();
-        let response = bounded_sumeragi_evidence_count_response(
-            payload,
-            crate::utils::ResponseFormat::Json,
-            exact,
-        )
-        .expect("exact count response limit");
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect count response");
-        assert_eq!(body.len(), exact);
-        let error = match bounded_sumeragi_evidence_count_response(
-            payload,
-            crate::utils::ResponseFormat::Json,
-            exact - 1,
-        ) {
-            Ok(_) => panic!("one byte below the exact count response must fail"),
-            Err(error) => error,
-        };
-        assert_safe_evidence_response_encoding_error(error);
-    }
-    routing_test! { async bounded_evidence_norito_list_accepts_exact_limit_and_rejects_overflow
-        let payload = SumeragiEvidenceListWireResponse {
-            total: 0,
-            items: Vec::new(),
-        };
-        let exact = norito::core::encoded_frame_len(&payload)
-            .expect("count empty evidence-list frame");
-        let response = bounded_sumeragi_evidence_list_norito_response(&payload, exact)
-            .expect("exact Norito evidence-list response limit");
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect Norito evidence-list response");
-        assert_eq!(body.len(), exact);
-        let error = match bounded_sumeragi_evidence_list_norito_response(&payload, exact - 1) {
-            Ok(_) => panic!("one byte below the exact Norito list response must fail"),
-            Err(error) => error,
-        };
-        assert_safe_evidence_response_encoding_error(error);
-    }
-    routing_test! { async bounded_evidence_json_list_accepts_exact_limit_and_rejects_overflow
-        let payload = json_object(vec![
-            json_entry("total", 0_u64),
-            json_entry("items", Vec::<Value>::new()),
-        ]);
-        let exact = norito::json::to_json(&payload)
-            .expect("encode empty evidence-list JSON")
-            .len();
-        let response = bounded_sumeragi_evidence_list_json_response(&payload, exact)
-            .expect("exact JSON evidence-list response limit");
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect JSON evidence-list response");
-        assert_eq!(body.len(), exact);
-        let error = match bounded_sumeragi_evidence_list_json_response(&payload, exact - 1) {
-            Ok(_) => panic!("one byte below the exact JSON list response must fail"),
-            Err(error) => error,
-        };
-        assert_safe_evidence_response_encoding_error(error);
-    }
-    routing_test! { sync exact_evidence_query_contract_rejects_legacy_and_normalized_spellings
-        EvidenceListQuery::try_from(raw_query(
-            Some("1"),
-            Some("0"),
-            Some("SumeragiV2Equivocation"),
-        ))
-        .expect("the sole current evidence kind must be accepted");
-        for kind in [
-            "DoublePrepare",
-            "DoubleCommit",
-            "InvalidQc",
-            "InvalidProposal",
-            "Censorship",
-            "DoublePrevote",
-            "DoublePrecommit",
-            "InvalidQC",
-            "doubleprepare",
-            " InvalidQc",
-            "InvalidQc ",
-            "null",
-            "NULL",
-            "",
-            "Unknown",
-        ] {
-            let error = EvidenceListQuery::try_from(raw_query(None, None, Some(kind)))
-                .expect_err("noncanonical evidence kind must fail closed");
-            let Error::AppQueryValidation { code, message } = error else {
-                panic!("noncanonical evidence kind `{kind}` returned the wrong error");
-            };
-            assert_eq!(code, "sumeragi_evidence_kind_invalid");
-            assert!(message.contains(kind));
-        }
-    }
-    routing_test! { sync exact_evidence_query_contract_rejects_noncanonical_pagination
-        for limit in ["0", "1001", "01", " 1", "1 ", "+1", "null", ""] {
-            let error = EvidenceListQuery::try_from(raw_query(Some(limit), None, None))
-                .expect_err("invalid evidence limit must fail closed");
-            let Error::AppQueryValidation { code, .. } = error else {
-                panic!("invalid evidence limit `{limit}` returned the wrong error");
-            };
-            assert_eq!(code, "sumeragi_evidence_pagination_invalid");
-        }
-        for offset in ["01", " 0", "0 ", "+0", "-1", "null", ""] {
-            let error = EvidenceListQuery::try_from(raw_query(None, Some(offset), None))
-                .expect_err("invalid evidence offset must fail closed");
-            let Error::AppQueryValidation { code, .. } = error else {
-                panic!("invalid evidence offset `{offset}` returned the wrong error");
-            };
-            assert_eq!(code, "sumeragi_evidence_pagination_invalid");
-        }
-    }
-    routing_test! { sync evidence_offset_boundary_and_capacity_overflow_fail_before_state_scan
-        let boundary = EvidenceListQuery {
-            limit: Some(SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize),
-            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize),
-            kind: None,
-        };
-        validate_evidence_list_query(&boundary).expect("bounded offset must remain valid");
-        assert_eq!(
-            evidence_page_capacity(
-                SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize,
-                SUMERAGI_EVIDENCE_LIST_MAX_LIMIT as usize,
-            )
-                .expect("bounded page capacity"),
-            (SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + SUMERAGI_EVIDENCE_LIST_MAX_LIMIT) as usize
-        );
-        let over_cap = EvidenceListQuery {
-            limit: Some(1),
-            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET as usize + 1),
-            kind: None,
-        };
-        assert!(validate_evidence_list_query(&over_cap).is_err());
-        assert!(evidence_page_capacity(usize::MAX, 1).is_err());
-    }
-}
-/// GET /v1/sumeragi/evidence — list recent committed WSV evidence entries.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_evidence_list(
-    State(state): State<std::sync::Arc<CoreState>>,
-    crate::NoritoQuery(q): crate::NoritoQuery<EvidenceListQuery>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    validate_evidence_list_query(&q)?;
-    let offset = q.offset.unwrap_or(0);
-    let limit = q
-        .limit
-        .unwrap_or(SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize);
-    let capacity = evidence_page_capacity(offset, limit)?;
-    let world = state.world_view();
-    let iter = world.consensus_evidence().iter().map(|(_, record)| {
-        (
-            (
-                Reverse(record.recorded_at_height),
-                Reverse(record.recorded_at_view),
-                Reverse(record.recorded_at_ms),
-            ),
-            record,
-        )
-    });
-    let (records, total) = collect_bounded_ranked_page(iter, offset, limit, capacity);
-    let total = u64::try_from(total).map_err(|_| {
-        conversion_error("Sumeragi evidence total is not representable as u64".to_owned())
-    })?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        // This is the sole full-record ownership copy. The page-count bound and
-        // committed evidence-table byte invariant bound it before the canonical
-        // count-first encoder makes its exact destination allocation.
-        let wire = SumeragiEvidenceListWireResponse {
-            total,
-            items: records.iter().map(|record| (**record).clone()).collect(),
-        };
-        return bounded_sumeragi_evidence_list_norito_response(
-            &wire,
-            SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
-        );
-    }
-    // Map to Norito-JSON response
-    let items: Vec<norito::json::Value> = records
-        .iter()
-        .map(|record| evidence_to_json(record))
-        .collect();
-    let payload = json_object(vec![json_entry("total", total), json_entry("items", items)]);
-    bounded_sumeragi_evidence_list_json_response(
-        &payload,
-        SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES,
-    )
 }
 #[cfg(test)]
 fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
@@ -9168,97 +8816,6 @@ mod zk_roots_selector_tests {
         assert_query_conversion_contains(err, "does not match retained root history");
     }
 }
-fn hash_to_hex<H>(hash: H) -> String
-where
-    H: AsRef<[u8; iroha_crypto::Hash::LENGTH]>,
-{
-    hex::encode(hash.as_ref())
-}
-fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
-    let (status, details) = match status {
-        EvidencePenaltyStatus::Pending => ("pending", Value::Null),
-        EvidencePenaltyStatus::Applied { height } => {
-            let mut details = json::Map::new();
-            details.insert("height".into(), Value::from(height));
-            ("applied", Value::Object(details))
-        }
-        EvidencePenaltyStatus::Cancelled { height } => {
-            let mut details = json::Map::new();
-            details.insert("height".into(), Value::from(height));
-            ("cancelled", Value::Object(details))
-        }
-    };
-    let mut lifecycle = json::Map::new();
-    lifecycle.insert("status".into(), Value::from(status));
-    lifecycle.insert("details".into(), details);
-    Value::Object(lifecycle)
-}
-fn evidence_to_json(rec: &EvidenceRecord) -> Value {
-    use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
-    use norito::codec::Encode as _;
-    let evidence = &rec.evidence.equivocation;
-    let (class, round, signer, first, second) = match &evidence.conflict {
-        SumeragiV2Equivocation::Proposal { first, second } => (
-            "proposal",
-            first.round,
-            first.proposer,
-            first.encode(),
-            second.encode(),
-        ),
-        SumeragiV2Equivocation::PhaseVote { first, second } => (
-            "phase_vote",
-            first.round,
-            first.signer,
-            first.encode(),
-            second.encode(),
-        ),
-        SumeragiV2Equivocation::TimeoutVote { first, second } => (
-            "timeout_vote",
-            first.round,
-            first.signer,
-            first.encode(),
-            second.encode(),
-        ),
-    };
-    let mut map = json::Map::new();
-    map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
-    map.insert("class".into(), Value::from(class));
-    map.insert("height".into(), Value::from(round.height));
-    map.insert("view".into(), Value::from(round.view));
-    map.insert("epoch".into(), Value::from(evidence.context.epoch));
-    map.insert("signer".into(), Value::from(signer));
-    map.insert(
-        "context_id".into(),
-        Value::from(hash_to_hex(round.context_id.0)),
-    );
-    map.insert(
-        "artifact_hash_1".into(),
-        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-            iroha_crypto::Hash::new(first),
-        ))),
-    );
-    map.insert(
-        "artifact_hash_2".into(),
-        Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
-            iroha_crypto::Hash::new(second),
-        ))),
-    );
-    map.insert(
-        "recorded_height".into(),
-        Value::from(rec.recorded_at_height),
-    );
-    map.insert("recorded_view".into(), Value::from(rec.recorded_at_view));
-    map.insert("recorded_ms".into(), Value::from(rec.recorded_at_ms));
-    map.insert(
-        "consensus_admitted_height".into(),
-        Value::from(rec.recorded_at_height),
-    );
-    map.insert(
-        "penalty_status".into(),
-        evidence_penalty_status_to_json(rec.penalty_status),
-    );
-    Value::Object(map)
-}
 fn reject_direct_multisig_signing(
     state: &CoreState,
     tx: &SignedTransaction,
@@ -9743,67 +9300,6 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
         IngressRouting::StrictDurable(routing_plan),
     )
 }
-pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-    routing_plan: RoutingPlan,
-    expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV1,
-) -> Result<queue::QueuePlanDurableAdmissionV1> {
-    super::require_current_transaction_admission(accepted_tx.entrypoint().admission_intent())?;
-    super::require_current_transaction_route(&routing_plan)?;
-    let pressure = {
-        let block_time = state.sumeragi_block_cadence();
-        queue.refresh_pressure_budget_from_block_time(block_time)
-    };
-    if pressure.saturated_by_age {
-        iroha_logger::debug!(
-            tx_hash = %accepted_tx.hash(),
-            queued = pressure.queued_tx_count,
-            tracked = pressure.tracked_tx_count,
-            capacity = pressure.capacity.get(),
-            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "local queue is latency-saturated; keeping strict durable ingress open until capacity is exhausted"
-        );
-    }
-    queue
-        .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
-            accepted_tx,
-            state.as_ref(),
-            routing_plan,
-            expected_admission_binding,
-        )
-        .map_err(|queue::Failure { tx, err }| {
-            if matches!(err, queue::Error::Full) {
-                iroha_logger::debug!(
-                    tx_hash = %tx.as_ref().hash(),
-                    "queue rejected strict durable transaction due to backpressure"
-                );
-            } else {
-                iroha_logger::warn!(
-                    tx_hash = %tx.as_ref().hash(),
-                    ?err,
-                    "failed to durably admit transaction with an exact queue-plan claim"
-                );
-            }
-            drop(tx);
-            (err, queue.current_backpressure())
-        })
-        .map_err(|(err, backpressure)| Error::PushIntoQueue {
-            source: Box::new(err),
-            backpressure,
-        })
-        .inspect(|claim| {
-            let route = claim.routing_plan.coordinator_route();
-            iroha_logger::debug!(
-                lane = route.lane_id.as_u32(),
-                dataspace = route.dataspace_id.as_u64(),
-                authority_height = claim.context.authority_height,
-                proposal_height = claim.context.proposal_height,
-                "transaction enqueued with a durable queue-plan admission claim"
-            );
-        })
-}
 enum IngressRouting {
     Derived,
     Planned(RoutingPlan),
@@ -10047,11 +9543,14 @@ mod lane_admission_latency_tests {
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         let before = histogram.get_sample_count();
         observe_lane_admission_latency(
             &gate,
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             LaneId::SINGLE,
             0.25,
         );
@@ -15597,75 +15096,6 @@ fn normalize_contract_payload_after_authorization<E>(
     authorize()?;
     normalize_contract_payload(descriptor, payload).map_err(map_normalization_error)
 }
-pub(crate) fn normalize_contract_call_metadata_for_bytecode(
-    metadata: &mut Metadata,
-    bytecode: &[u8],
-) -> Result<()> {
-    let entrypoint = metadata
-        .get("contract_entrypoint")
-        .map(|raw| {
-            raw.try_into_any_norito::<String>().map_err(|err| {
-                conversion_error(format!("invalid contract_entrypoint metadata: {err}"))
-            })
-        })
-        .transpose()?
-        .map(|value| value.trim().to_owned());
-    if entrypoint.as_deref().is_some_and(str::is_empty) {
-        return Err(conversion_error(
-            "contract_entrypoint must not be empty".to_owned(),
-        ));
-    }
-    let Some(entrypoint) = entrypoint else {
-        if ivm::ProgramMetadata::parse(bytecode)
-            .ok()
-            .and_then(|parsed| parsed.contract_interface)
-            .is_some()
-        {
-            return Err(conversion_error(
-                "self-describing contract calls require explicit contract_entrypoint metadata"
-                    .to_owned(),
-            ));
-        }
-        return Ok(());
-    };
-    let parsed = ivm::ProgramMetadata::parse(bytecode)
-        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        conversion_error(
-            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == entrypoint)
-        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{entrypoint}`")))?;
-    match descriptor.kind {
-        manifest::EntryPointKind::View => {
-            return Err(conversion_error(format!(
-                "contract entrypoint `{entrypoint}` is read-only and cannot be invoked as a transaction"
-            )));
-        }
-        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen => {
-            return Err(conversion_error(format!(
-                "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and requires a top-level deployed ContractCall"
-            )));
-        }
-        manifest::EntryPointKind::Kotoage => {}
-    }
-    let manifest_descriptor = descriptor.to_manifest_descriptor();
-    let payload = metadata.get("contract_payload").cloned();
-    let normalized = normalize_contract_payload(&manifest_descriptor, payload.as_ref())?;
-    if let Some(payload) = normalized {
-        metadata.insert(
-            "contract_payload"
-                .parse()
-                .expect("static metadata key `contract_payload`"),
-            payload,
-        );
-    }
-    Ok(())
-}
 fn resolve_contract_entrypoint_pc(
     prepared: &ivm::PreparedContract,
     selector: &str,
@@ -20367,11 +19797,11 @@ mod contract_payload_normalization_tests {
         }
     }
     #[test]
-    fn normalize_contract_call_metadata_for_bytecode_preserves_canonical_zk_ivm_payload() {
+    fn normalize_contract_payload_preserves_compiled_public_call_fields() {
         let code = ivm::KotodamaCompiler::new()
             .compile_source(
                 r#"
-seiyaku ZkIvmPayloadNormalizeTest {
+seiyaku PublicCallPayloadNormalizeTest {
 
   kotoage fn burn_and_record(
     AccountId sender,
@@ -20388,11 +19818,16 @@ seiyaku ZkIvmPayloadNormalizeTest {
                 .to_string();
         let settlement_asset =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            IrohaJson::new("burn_and_record"),
-        );
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("compiled contract metadata");
+        let interface = parsed
+            .contract_interface
+            .expect("compiled contract interface");
+        let descriptor = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "burn_and_record")
+            .expect("compiled public entrypoint")
+            .to_manifest_descriptor();
         let mut request_payload = Map::new();
         request_payload.insert("sender".into(), Value::from(sender.clone()));
         request_payload.insert(
@@ -20401,15 +19836,10 @@ seiyaku ZkIvmPayloadNormalizeTest {
         );
         request_payload.insert("amount".into(), Value::from("25000000000000000"));
         request_payload.insert("record_instruction".into(), Value::from("0xaabbcc"));
-        metadata.insert(
-            "contract_payload".parse().expect("metadata key"),
-            IrohaJson::new(Value::Object(request_payload)),
-        );
-        normalize_contract_call_metadata_for_bytecode(&mut metadata, &code)
-            .expect("canonical metadata payload should validate");
-        let payload = metadata
-            .get("contract_payload")
-            .expect("contract payload metadata");
+        let request_payload = IrohaJson::new(Value::Object(request_payload));
+        let payload = normalize_contract_payload(&descriptor, Some(&request_payload))
+            .expect("canonical public call payload should validate")
+            .expect("normalized payload");
         let value = json::parse_value(payload.get()).expect("normalized payload json");
         let mut expected = Map::new();
         expected.insert("sender".into(), Value::from(sender));
@@ -20873,6 +20303,7 @@ mod multisig_selector_tests {
         };
         let mut out = meta.encode();
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -30301,7 +29732,7 @@ mod sorafs_capacity_tests {
             Arc::clone(&state),
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await;
         assert!(
@@ -43237,35 +42668,6 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     }
 }
 }
-fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
-    qc.signers_bitmap
-        .iter()
-        .map(|byte| byte.count_ones())
-        .sum::<u32>()
-}
-fn committed_lane_block_wire(
-    entry: &iroha_core::status::CommittedLaneBlockSnapshot,
-) -> SumeragiCommittedLaneBlock {
-    SumeragiCommittedLaneBlock {
-        lane_id: entry.lane_id,
-        dataspace_id: entry.dataspace_id,
-        lane_incarnation: entry.proposal.descriptor.lane_incarnation,
-        lane_block_height: entry.lane_block_height,
-        lane_block_view: entry.lane_block_view,
-        descriptor_hash: entry.descriptor_hash,
-        proposal_hash: entry.proposal_hash,
-        execution_status: entry.execution_status.as_str().to_owned(),
-        executable_payload_available: entry.executable_payload_available(),
-        subject_hash: entry.proposal.descriptor.subject_hash,
-        payload_ownership_hash: entry.proposal.descriptor.payload_ownership_hash,
-        rbc_instance_hash: entry.proposal.descriptor.rbc_instance_hash,
-        qc_mode_tag: entry.proposal.descriptor.qc_mode_tag.clone(),
-        validator_count: entry.proposal.descriptor.validator_count,
-        min_quorum: entry.proposal.descriptor.min_quorum,
-        prepare_qc_signer_count: lane_block_qc_signer_count(&entry.prepare_qc),
-        commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
-    }
-}
 /// GET /v1/sumeragi/status — the status of the node's global Sumeragi instance
 /// (`specs/sumeragi.md` §12.1); unavailable before the instance's core started.
 #[iroha_futures::telemetry_future]
@@ -44850,6 +44252,7 @@ mod validation_fee_torii_ingress_tests {
             }],
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "ValidationFeePayout".to_owned(),
             compiler_fingerprint: "validation-fee-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -44910,6 +44313,7 @@ mod validation_fee_torii_ingress_tests {
             triggers: Vec::new(),
         };
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "ValidationFeePool".to_owned(),
             compiler_fingerprint: "validation-fee-pool-torii-ingress-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -45776,13 +45180,13 @@ mod validation_fee_torii_ingress_tests {
         let body = norito::to_bytes(&payloads).expect("encode transaction batch payloads");
         let router = axum::Router::new()
             .route(
-                iroha_torii_shared::uri::TRANSACTIONS_BATCH,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path(),
                 axum::routing::post(crate::handler_post_transactions_batch),
             )
             .with_state(app);
         let request = axum::http::Request::builder()
             .method(axum::http::Method::POST)
-            .uri(iroha_torii_shared::uri::TRANSACTIONS_BATCH)
+            .uri(iroha_torii_shared::route_catalog::pipeline::TRANSACTIONS_BATCH.path())
             .header(
                 axum::http::header::CONTENT_TYPE,
                 crate::utils::NORITO_MIME_TYPE,
@@ -45811,7 +45215,9 @@ mod validation_fee_torii_ingress_tests {
             .expect("queued transaction");
         let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
         let mut ivm_cache = IvmCache::new();
-        let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let (_, result) = block
+            .validate_transaction(accepted, &mut ivm_cache)
+            .expect("local execution completes");
         match result {
             Ok(_) => "ok".to_string(),
             Err(error) => format!("{error:?}"),
@@ -46413,14 +45819,17 @@ mod lane_admission_metrics_tests {
             state,
             tx,
             telemetry.clone(),
-            iroha_torii_shared::uri::TRANSACTION,
+            iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
         )
         .await
         .expect("ingress succeeds");
         let metrics = telemetry.metrics().await;
         let histogram = metrics
             .torii_lane_admission_latency_seconds
-            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+            .with_label_values(&[
+                "0",
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
+            ]);
         assert!(
             histogram.get_sample_count() >= 1,
             "expected at least one latency observation"
@@ -46669,7 +46078,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("warmup transaction should be admitted");
@@ -46696,7 +46105,7 @@ mod hot_path_load_profile_tests {
                 Arc::clone(&tx_state),
                 tx,
                 tx_telemetry.clone(),
-                iroha_torii_shared::uri::TRANSACTION,
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path(),
             )
             .await
             .expect("transaction should be admitted");
@@ -54647,7 +54056,8 @@ mod prepared_transaction_signature_fixture_tests {
         )
         .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary)
         .with_metadata(metadata)
-        .with_instructions(instructions);
+        .with_instructions(instructions)
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
         builder.set_ttl(Duration::from_secs(3_600));
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
@@ -68178,27 +67588,6 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<impl IntoRespo
     // Serialize the DTO directly so new fields (e.g., SoraNet handshake/Puzzle config)
     // are exposed without hand-maintaining this JSON shape.
     Ok(infallible_pretty_json_response(&dto, "{}"))
-}
-/// Return the exact current lane catalog and optimistic concurrency commitment.
-pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycleStatusV1> {
-    // `State::try_view` retries across the state generation barrier, so catalog and
-    // active incarnations and the protected runtime overlay cannot be mixed across a commit.
-    let view = state
-        .try_view()
-        .map_err(|err| conversion_error(format!("invalid committed runtime catalog: {err}")))?;
-    let runtime_catalog_hash = view
-        .runtime_catalog_hash()
-        .map_err(|err| conversion_error(format!("invalid committed runtime catalog: {err}")))?;
-    LaneLifecycleStatusV1::new(
-        &view.nexus.lane_catalog,
-        &view.lane_incarnations,
-        runtime_catalog_hash,
-    )
-    .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
-}
-#[cfg(test)]
-mod nexus_lane_lifecycle_tests {
-    include!("tests/routing_nexus_lane_lifecycle.rs");
 }
 pub mod block {
     //! Blocks stream handler

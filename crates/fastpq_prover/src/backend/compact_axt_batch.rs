@@ -11,7 +11,9 @@
 //! TODO: Qualify aggregate security, resources and authenticated caller migration
 //! before production admission. This module leaves the existing profile intact.
 
-use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
+use iroha_data_model::nexus::{
+    AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtSourceTransferOccurrenceV1,
+};
 use norito::{NoritoSerialize, codec::Encode};
 
 #[cfg(test)]
@@ -52,6 +54,7 @@ struct BoundAxtBatchContext {
     binding: AxtFastpqBinding,
     metadata: AxtProofContextMirrors,
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
+    source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
 }
 
 #[derive(NoritoSerialize, norito::NoritoSchema)]
@@ -129,6 +132,7 @@ impl AxtTransferBatch {
             intermediate_roots: intermediate_roots.to_vec(),
             binding: axt.binding.clone(),
             metadata: axt.mirrors,
+            source_transfer_occurrences: axt.metadata.source_transfer_occurrences.to_vec(),
             remote_spend_claims: axt
                 .remote_spend_claims
                 .map(<[AxtRemoteSpendClaimV1]>::to_vec),
@@ -751,6 +755,144 @@ mod tests {
         }
     }
 
+    /// Complete quantity-domain public preparation shared by the bridge helpers.
+    type QuantityPrepared<'a> =
+        PreparedPublicTransfers<'a, iroha_data_model::fastpq::FastpqQuantityUnits>;
+
+    /// Every changed expected input or outer mirror is rejected before binding.
+    fn assert_quantity_axt_context_changes_reject(
+        prepared: &QuantityPrepared<'_>,
+        expected: &PublicIO,
+        root_chain: &[[u8; 32]],
+        fixture: &Fixture,
+    ) {
+        use crate::backend::deep_relation::tests as deep;
+
+        for field in 0..7 {
+            assert!(matches!(
+                AxtTransferBatch::new(
+                    prepared,
+                    &deep::changed_input(*expected, field),
+                    root_chain,
+                    context(fixture),
+                    BatchContextLimits::default()
+                ),
+                Err(Error::PublicIoMismatch { .. })
+            ));
+        }
+        for field in 0..5 {
+            let mut changed = context(fixture);
+            match field {
+                0 => changed.mirrors.dsid = DataSpaceId::new(8),
+                1 => changed.mirrors.manifest_root[0] ^= 1,
+                2 => changed.mirrors.da_commitment = None,
+                3 => changed.mirrors.committed_amount = None,
+                4 => changed.mirrors.expiry_slot = None,
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                AxtTransferBatch::new(
+                    prepared,
+                    expected,
+                    root_chain,
+                    changed,
+                    BatchContextLimits::default()
+                ),
+                Err(Error::InvalidAxtBinding { .. })
+            ));
+        }
+    }
+
+    /// A changed outer binding or remote preimage keeps statements but rebinds roots.
+    fn assert_quantity_axt_binding_changes_rebind(
+        prepared: &QuantityPrepared<'_>,
+        expected: &PublicIO,
+        root_chain: &[[u8; 32]],
+        fixture: &Fixture,
+        original: &AxtTransferBatch,
+        original_roots: &[fastpq_isi::GoldilocksDigest384V1],
+    ) {
+        use crate::backend::deep_relation::tests as deep;
+
+        let mut changed_fixture = fixture.clone();
+        changed_fixture.binding.source_receipt_id =
+            "another complete quantity source receipt".into();
+        let changed = AxtTransferBatch::new(
+            prepared,
+            expected,
+            root_chain,
+            context(&changed_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        for (ordinal, root) in original_roots.iter().enumerate() {
+            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
+        }
+        let mut remote_fixture = fixture.clone();
+        let remote = remote_fixture.remote.as_mut().unwrap();
+        remote[0].handle_replay_key.handle_era = 17;
+        recommit(&mut remote_fixture.binding, remote);
+        let changed = AxtTransferBatch::new(
+            prepared,
+            expected,
+            root_chain,
+            context(&remote_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        assert_ne!(
+            original_roots[0],
+            deep::bound_root(&changed.segment(0).unwrap())
+        );
+    }
+
+    /// A longer bundle shares the first statement but binds its whole root chain.
+    fn assert_quantity_axt_longer_chain_rebinds(
+        original: &AxtTransferBatch,
+        original_roots: &[fastpq_isi::GoldilocksDigest384V1],
+    ) {
+        use crate::backend::deep_relation::tests as deep;
+        use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
+
+        let larger_fixture = Fixture::multiple(3, true);
+        let larger_narrow = larger_fixture.prepare(ProofSemantics::AxtTransferClaim);
+        let (larger_rows, larger_claims, larger_inputs) = deep::quantity_copy(&larger_narrow);
+        let larger_prepared = prepare_quantity_public_transfers(
+            &larger_rows,
+            &larger_claims,
+            larger_inputs,
+            ProofSemantics::AxtTransferClaim,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let larger_roots = roots(3);
+        let larger = AxtTransferBatch::new(
+            &larger_prepared,
+            &deep::expected(&larger_prepared),
+            &larger_roots,
+            context(&larger_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], larger.statements()[0]);
+        let larger_root = deep::bound_root(&larger.segment(0).unwrap());
+        assert_ne!(original_roots[0], larger_root);
+        let mut distant_root = larger_roots;
+        distant_root[1][0] ^= 1;
+        let changed = AxtTransferBatch::new(
+            &larger_prepared,
+            &deep::expected(&larger_prepared),
+            &distant_root,
+            context(&larger_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(larger.statements()[0], changed.statements()[0]);
+        assert_ne!(larger_root, deep::bound_root(&changed.segment(0).unwrap()));
+    }
+
     #[test]
     fn deep_quantity_axt_bridge_keeps_all_context_and_routes_separate() {
         use crate::backend::deep_relation::{DeepRelation, tests as deep};
@@ -795,107 +937,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_ne!(original_roots[0], original_roots[1]);
-        for field in 0..7 {
-            assert!(matches!(
-                AxtTransferBatch::new(
-                    &prepared,
-                    &deep::changed_input(expected, field),
-                    &root_chain,
-                    context(&fixture),
-                    BatchContextLimits::default()
-                ),
-                Err(Error::PublicIoMismatch { .. })
-            ));
-        }
-        for field in 0..5 {
-            let mut changed = context(&fixture);
-            match field {
-                0 => changed.mirrors.dsid = DataSpaceId::new(8),
-                1 => changed.mirrors.manifest_root[0] ^= 1,
-                2 => changed.mirrors.da_commitment = None,
-                3 => changed.mirrors.committed_amount = None,
-                4 => changed.mirrors.expiry_slot = None,
-                _ => unreachable!(),
-            }
-            assert!(matches!(
-                AxtTransferBatch::new(
-                    &prepared,
-                    &expected,
-                    &root_chain,
-                    changed,
-                    BatchContextLimits::default()
-                ),
-                Err(Error::InvalidAxtBinding { .. })
-            ));
-        }
-        let mut changed_fixture = fixture.clone();
-        changed_fixture.binding.source_receipt_id =
-            "another complete quantity source receipt".into();
-        let changed = AxtTransferBatch::new(
+        assert_quantity_axt_context_changes_reject(&prepared, &expected, &root_chain, &fixture);
+        assert_quantity_axt_binding_changes_rebind(
             &prepared,
             &expected,
             &root_chain,
-            context(&changed_fixture),
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(original.statements(), changed.statements());
-        for (ordinal, root) in original_roots.iter().enumerate() {
-            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
-        }
-        let mut remote_fixture = fixture.clone();
-        let remote = remote_fixture.remote.as_mut().unwrap();
-        remote[0].handle_replay_key.handle_era = 17;
-        recommit(&mut remote_fixture.binding, remote);
-        let changed = AxtTransferBatch::new(
-            &prepared,
-            &expected,
-            &root_chain,
-            context(&remote_fixture),
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(original.statements(), changed.statements());
-        assert_ne!(
-            original_roots[0],
-            deep::bound_root(&changed.segment(0).unwrap())
+            &fixture,
+            &original,
+            &original_roots,
         );
-
-        let larger_fixture = Fixture::multiple(3, true);
-        let larger_narrow = larger_fixture.prepare(ProofSemantics::AxtTransferClaim);
-        let (larger_rows, larger_claims, larger_inputs) = deep::quantity_copy(&larger_narrow);
-        let larger_prepared = prepare_quantity_public_transfers(
-            &larger_rows,
-            &larger_claims,
-            larger_inputs,
-            ProofSemantics::AxtTransferClaim,
-            PublicTransferLimits::default(),
-        )
-        .unwrap();
-        let larger_roots = roots(3);
-        let larger = AxtTransferBatch::new(
-            &larger_prepared,
-            &deep::expected(&larger_prepared),
-            &larger_roots,
-            context(&larger_fixture),
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(original.statements()[0], larger.statements()[0]);
-        let larger_root = deep::bound_root(&larger.segment(0).unwrap());
-        assert_ne!(original_roots[0], larger_root);
-        let mut distant_root = larger_roots;
-        distant_root[1][0] ^= 1;
-        let changed = AxtTransferBatch::new(
-            &larger_prepared,
-            &deep::expected(&larger_prepared),
-            &distant_root,
-            context(&larger_fixture),
-            BatchContextLimits::default(),
-        )
-        .unwrap();
-        assert_eq!(larger.statements()[0], changed.statements()[0]);
-        assert_ne!(larger_root, deep::bound_root(&changed.segment(0).unwrap()));
+        assert_quantity_axt_longer_chain_rebinds(&original, &original_roots);
 
         let ordinary = prepare_quantity_public_transfers(
             &rows,

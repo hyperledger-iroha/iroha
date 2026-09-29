@@ -65,6 +65,7 @@ fn axt(fixture: &QuantityFixture, frame: Vec<u8>) -> FastpqAxtCompactArtifactV1 
         statement: fixture.model(),
         binding: context.binding.clone(),
         metadata: FastpqAxtPublicMetadataV1 {
+            source_transfer_occurrences: metadata.source_transfer_occurrences.to_vec(),
             parameter: metadata.parameter.to_owned(),
             entry_hash: metadata.entry_hash.try_into().unwrap(),
             committed_amount: metadata.committed_amount.map(|b| b.try_into().unwrap()),
@@ -129,9 +130,11 @@ fn predecessor_quantity_profile() -> FastpqCompactProfileIdV1 {
         compact_geometry_identity: compact_v1::IDENTITY.to_vec(),
         lane_parameter_sha3_256: fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1,
         tape_bytes: core::array::from_fn(|round| {
-            compact_v1::Round::new(round as u8 + 1)
+            let ordinal = u8::try_from(round + 1).expect("predecessor round ordinal fits u8");
+            let bytes = compact_v1::Round::new(ordinal)
                 .expect("predecessor round")
-                .tape_bytes() as u32
+                .tape_bytes();
+            u32::try_from(bytes).expect("predecessor tape bytes fit u32")
         }),
         quantity_value_schema: "fastpq_prover::public_transfer::QuantityValueV1",
         quantity_context_schema: "fastpq_prover::compact_v1::QuantityTransferContextV1",

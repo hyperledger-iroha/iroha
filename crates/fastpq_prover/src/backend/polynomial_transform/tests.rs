@@ -56,7 +56,7 @@ fn explicit_deep_transform_full_four_lane_fft_matches_coefficient_oracle() {
     coefficients[1] = f(7);
     coefficients[TRACE_ROWS - 1] = f(11);
     let evaluated = domain.evaluate(&coefficients, TRACE_ROWS).unwrap();
-    for index in (0..128).chain([65535, 65536, 1048575, LDE_ROWS - 1]) {
+    for index in (0..128).chain([65535, 65536, 1_048_575, LDE_ROWS - 1]) {
         let point = domain.point(index).unwrap();
         let expected = coefficients[0]
             .add(coefficients[1].mul(point))

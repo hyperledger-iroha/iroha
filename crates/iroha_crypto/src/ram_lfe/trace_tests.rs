@@ -7,16 +7,17 @@ use crate::{
     encrypt_identifier_from_seed, ram_lfe_bfv_parameters_v1,
 };
 
+// Fixed public test material. Runtime key generation must use secret entropy.
+const SECRET: [u8; 32] =
+    hex_literal::hex!("31177bbb52caec119f92536239fcfb677f9f5801ac0ce6cdf04c657ddeb938c7");
+const ENCRYPTION_SEED: [u8; 32] =
+    hex_literal::hex!("63190085e6ef1eafb7c576956a8d4f31779e1bd7d53346ffe2ea950a1bbf5d30");
+
 fn fixture(program: &HiddenRamFheProgram) -> (PolicyCommitment, ClientRequest) {
     let params = ram_lfe_bfv_parameters_v1();
-    let (encryption, _, relinearization_key) = derive_identifier_key_material_from_seed(
-        &params,
-        63,
-        b"trace-fixture-secret",
-        b"trace-program",
-    )
-    .unwrap();
-    let ciphertext = encrypt_identifier_from_seed(&encryption, &[2, 3], b"trace-input").unwrap();
+    let (encryption, _, relinearization_key) =
+        derive_identifier_key_material_from_seed(&params, 63, &SECRET, b"trace-program").unwrap();
+    let ciphertext = encrypt_identifier_from_seed(&encryption, &[2, 3], &ENCRYPTION_SEED).unwrap();
     let public = try_bfv_programmed_public_parameters_with_program(
         encryption,
         BfvEvaluationKeyBundle {
@@ -31,7 +32,7 @@ fn fixture(program: &HiddenRamFheProgram) -> (PolicyCommitment, ClientRequest) {
     )
     .unwrap();
     let commitment = bfv_programmed_policy_commitment_with_program(
-        b"trace-fixture-secret",
+        &SECRET,
         &norito::to_bytes(&public).unwrap(),
         program,
     )
@@ -46,12 +47,9 @@ fn fixture(program: &HiddenRamFheProgram) -> (PolicyCommitment, ClientRequest) {
 }
 
 fn program(instructions: Vec<HiddenRamFheInstruction>) -> HiddenRamFheProgram {
-    HiddenRamFheProgram {
-        version: 1,
-        register_count: 4,
-        memory_lane_count: 32,
-        instructions,
-    }
+    let mut builder = HiddenRamFheProgram::builder().unwrap();
+    for instruction in instructions { builder.push(instruction).unwrap(); }
+    builder.finish().unwrap()
 }
 
 #[test]
@@ -72,29 +70,21 @@ fn all_eleven_instructions_match_untraced_execution_and_record_state() {
         Output(0),
     ]);
     let (commitment, request) = fixture(&program);
-    let ordinary = evaluate_commitment_with_hidden_program(
-        b"trace-fixture-secret",
-        &commitment,
-        &request,
-        Some(&program),
-    )
-    .unwrap();
-    let (traced, trace) =
-        evaluate_programmed_with_trace(b"trace-fixture-secret", &commitment, &request, &program)
+    let ordinary =
+        evaluate_commitment_with_hidden_program(&SECRET, &commitment, &request, Some(&program))
             .unwrap();
+    let (traced, trace) =
+        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap();
     assert_eq!(ordinary, traced);
-    assert_eq!(trace.step_count(), program.instructions.len());
+    assert_eq!(trace.step_count(), program.instruction_count());
     assert_eq!(trace.output_count(), 1);
     assert!(trace.snapshot(trace.step_count() + 1).is_none());
     assert!(trace.snapshot(usize::MAX).is_none());
     let initial = trace.snapshot(0).unwrap();
     assert!(initial[..4 * 128].iter().all(|&cell| cell == 0));
-    let residues = initialization::derive_residues(
-        b"trace-fixture-secret",
-        commitment.policy_hash,
-        &request.associated_data,
-    )
-    .unwrap();
+    let residues =
+        initialization::derive_residues(&SECRET, commitment.policy_hash, &request.associated_data)
+            .unwrap();
     for (index, &residue) in residues.iter().enumerate() {
         let lane = &initial[(4 + index) * 128..(5 + index) * 128];
         assert_eq!(lane[0], residue);
@@ -105,13 +95,8 @@ fn all_eleven_instructions_match_untraced_execution_and_record_state() {
     assert_eq!(&after_load[..128], &after_store[5 * 128..6 * 128]);
     let output: BfvIdentifierCiphertext = norito::decode_from_bytes(&traced.output).unwrap();
     let params = ram_lfe_bfv_parameters_v1();
-    let (_, key, _) = derive_identifier_key_material_from_seed(
-        &params,
-        63,
-        b"trace-fixture-secret",
-        b"trace-program",
-    )
-    .unwrap();
+    let (_, key, _) =
+        derive_identifier_key_material_from_seed(&params, 63, &SECRET, b"trace-program").unwrap();
     assert_eq!(
         crate::decrypt(&params, &key, &output.slots[0]).unwrap()[0],
         21
@@ -132,8 +117,7 @@ fn maximum_program_has_exact_bounded_snapshot_and_output_capacity() {
     let program = default_bfv_programmed_hidden_program();
     let (commitment, request) = fixture(&program);
     let (response, trace) =
-        evaluate_programmed_with_trace(b"trace-fixture-secret", &commitment, &request, &program)
-            .unwrap();
+        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap();
     assert_eq!(trace.step_count(), 256);
     assert_eq!(trace.output_count(), 64);
     assert_eq!(
@@ -143,13 +127,8 @@ fn maximum_program_has_exact_bounded_snapshot_and_output_capacity() {
     assert_eq!(trace.instructions.len(), 256 * INSTRUCTION_WIDTH);
     assert_eq!(
         response,
-        evaluate_commitment_with_hidden_program(
-            b"trace-fixture-secret",
-            &commitment,
-            &request,
-            Some(&program),
-        )
-        .unwrap()
+        evaluate_commitment_with_hidden_program(&SECRET, &commitment, &request, Some(&program),)
+            .unwrap()
     );
 }
 
@@ -164,17 +143,13 @@ fn unused_malformed_input_and_oversized_associated_data_reject_before_execution(
         norito::decode_from_bytes(&request.normalized_input).unwrap();
     input.slots.last_mut().unwrap().c0.pop();
     request.normalized_input = norito::to_bytes(&input).unwrap();
-    assert!(
-        evaluate_programmed_with_trace(b"trace-fixture-secret", &commitment, &request, &program)
-            .is_err()
-    );
+    assert!(evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).is_err());
     request
         .associated_data
         .resize(RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES + 1, 0);
     request.normalized_input = vec![0xff];
     let error =
-        evaluate_programmed_with_trace(b"trace-fixture-secret", &commitment, &request, &program)
-            .unwrap_err();
+        evaluate_programmed_with_trace(&SECRET, &commitment, &request, &program).unwrap_err();
     assert!(error.to_string().contains("associated data"));
 }
 

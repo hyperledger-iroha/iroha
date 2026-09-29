@@ -440,7 +440,7 @@ fn authenticated_genesis_uses_the_actual_whole_output_owner() {
             )
         })
         .collect();
-    state.install_lane_manifests(&std::sync::Arc::new(
+    state.install_lane_manifests_for_testing(&std::sync::Arc::new(
         crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
     ));
     let mut block = state.block(source.header());

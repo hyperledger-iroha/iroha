@@ -19,7 +19,7 @@ fn fixture_contribution_commitment(statement_digest: Hash, index: usize, share: 
     Hash::new_from_chunks(&[
         b"bfv-eight-party-test-only-private-share-commitment",
         statement_digest.as_ref(),
-        &[u8::try_from(index).expect("fixture participant index fits u8")],
+        &[u8::try_from(index).expect("eight-party participant index")],
         encoded.as_slice(),
     ])
 }
@@ -35,7 +35,7 @@ fn eight_party_fixture() -> EightPartyFixture {
         let a = common_a.get_or_insert_with(|| public.a.clone());
         let public_key_share_b = poly_neg_mod(&params, &poly_mul_mod(&params, a, &secret.s));
         let signing_key = KeyPair::from_seed(
-            vec![u8::try_from(index).expect("fixture participant index fits u8") + 1; 32],
+            vec![u8::try_from(index + 1).expect("eight-party seed index"); 32],
             Algorithm::Ed25519,
         );
         parties.push((signing_key, secret, public_key_share_b));
@@ -80,7 +80,7 @@ fn eight_party_fixture() -> EightPartyFixture {
             version: BFV_EIGHT_PARTY_DECRYPTION_VERSION_V1,
             session_id: statement.session_id,
             statement_digest: digest,
-            participant_index: u8::try_from(index).expect("fixture participant index fits u8"),
+            participant_index: u8::try_from(index).expect("eight-party participant index"),
             contribution_commitment: fixture_contribution_commitment(digest, index, &private_share),
         };
         private_shares.push(private_share);

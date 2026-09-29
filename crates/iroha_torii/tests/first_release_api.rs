@@ -15,7 +15,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
-use iroha_torii_shared::{ErrorEnvelope, uri};
+use iroha_torii_shared::ErrorEnvelope;
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -196,7 +196,7 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
     )
     .await;
     let mut malformed_accept = Request::builder()
-        .uri(uri::HEALTH)
+        .uri(iroha_torii_shared::route_catalog::core::HEALTH.path())
         .extension(local_connect_info())
         .header("x-request-id", "early-accept-406")
         .body(axum::body::Body::empty())
@@ -280,7 +280,7 @@ async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(uri::HEALTH)
+                    .uri(iroha_torii_shared::route_catalog::core::HEALTH.path())
                     .extension(local_connect_info())
                     .header(ACCEPT, accept)
                     .body(axum::body::Body::empty())

@@ -2307,10 +2307,10 @@ fn fraud_monitoring_config_overrides_and_defaults() {
     assert_eq!(fraud.required_minimum_band, Some(FraudRiskBand::Medium));
 }
 #[test]
-fn sumeragi_v2_explicit_schema_parses() {
+fn sumeragi_explicit_schema_parses() {
     use iroha_config::parameters::actual::NodeRole;
-    let cfg = load_config_from_fixtures("sumeragi_v2.toml")
-        .expect("first-release v2 configuration should parse");
+    let cfg = load_config_from_fixtures("sumeragi.toml")
+        .expect("explicit Sumeragi configuration should parse");
     assert_eq!(
         cfg.network
             .max_total_connections
@@ -2318,66 +2318,16 @@ fn sumeragi_v2_explicit_schema_parses() {
         Some(32)
     );
     assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
-    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
-    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
-    assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
-    assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
-    assert_eq!(
-        cfg.sumeragi
-            .queues
-            .authenticated_non_validator_sources
-            .get(),
-        2
-    );
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 72 * 1024 * 1024);
-    assert_eq!(
-        cfg.sumeragi.queues.body_source_bytes.get(),
-        18 * 1024 * 1024
-    );
-    assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
-    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
     assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
     assert_eq!(cfg.sumeragi.keys.overlap_grace_blocks, 12);
     assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
-    assert_eq!(cfg.kura.lane_history_retention.get(), 8_192);
-    let shared = cfg
-        .sumeragi
-        .v2_config(
-            Duration::from_secs(1),
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-        )
-        .expect("node-local settings must satisfy the v2 runtime contract");
-    assert_eq!(shared.block_cadence_ms, 1_000);
-    assert_eq!(shared.limits.max_queue_scan, 999);
+    assert_eq!(cfg.sumeragi.local.t_base, Some(Duration::from_millis(400)));
+    assert_eq!(cfg.sumeragi.local.sync_batch, Some(64));
+    assert_eq!(cfg.sumeragi.local.max_observers, Some(16));
+    assert_eq!(cfg.sumeragi.local.t_max, None);
 }
 #[test]
-fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
-    for (fixture, expected) in [
-        (
-            "bad.sumeragi_command_queue_too_small.toml",
-            "sumeragi.queues.commands must be at least 8",
-        ),
-        (
-            "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 1048576 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 34833416, configured 16777216)",
-        ),
-        (
-            "bad.sumeragi_body_queue_too_small.toml",
-            "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum 11, configured 9)",
-        ),
-        (
-            "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 106954752, configured 106954751)",
-        ),
-    ] {
-        let report = load_config_from_fixtures(fixture)
-            .expect_err("invalid first-release v2 configuration must fail closed");
-        assert_contains!(format!("{report:?}"), expected);
-    }
-}
-#[test]
-fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
+fn sumeragi_does_not_accept_retired_environment_toggles() {
     let baseline = ConfigReader::new()
         .with_env(MockEnv::new())
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
@@ -2398,22 +2348,12 @@ fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
         .read_and_complete::<UserConfig>()
         .expect("retired environment names are not schema inputs")
         .parse()
-        .expect("retired environment names cannot alter v2 config");
+        .expect("retired environment names cannot alter the Sumeragi config");
+    assert_eq!(baseline.sumeragi.role, with_retired_env.sumeragi.role);
+    assert_eq!(baseline.sumeragi.local, with_retired_env.sumeragi.local);
     assert_eq!(
-        baseline
-            .sumeragi
-            .v2_config(
-                Duration::from_secs(1),
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            )
-            .expect("baseline v2 config"),
-        with_retired_env
-            .sumeragi
-            .v2_config(
-                Duration::from_secs(1),
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            )
-            .expect("v2 config with irrelevant environment"),
+        baseline.sumeragi.keys.allowed_algorithms,
+        with_retired_env.sumeragi.keys.allowed_algorithms
     );
 }
 #[cfg(feature = "gost")]
@@ -2475,7 +2415,6 @@ include!("fixtures/tls_fallback_defaults_test.rs");
 include!("fixtures/trusted_proxy_defaults_test.rs");
 include!("fixtures/torii_internal_api_trust_defaults_test.rs");
 include!("fixtures/network_frame_defaults_test.rs");
-include!("fixtures/sumeragi_v2_default_profile_test.rs");
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;
 

@@ -563,6 +563,75 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
     }
 }
 
+/// Default policies admit one exact plan whose every budget is also a lower bound.
+fn check_default_policy_plan(relation: &impl DeepRelation) {
+    use crate::backend::{
+        compact_protocol::FixedAir,
+        offline_compact::{ProvingLimits, VerificationLimits},
+    };
+    let proving = ProvingLimits::default();
+    let verification = VerificationLimits::default();
+    let limits = ConstructionLimits {
+        digest_execution: proving.digest_execution,
+        max_payload_bytes: proving.max_segment_charge_bytes,
+        max_work_units: proving.max_segment_work_units,
+        max_hash_calls: proving.max_segment_work_units,
+        max_proof_bytes: verification.bundle.segment.max_proof_bytes,
+    };
+    let plan = ProducerPlan::new(relation, limits).unwrap();
+    assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
+    // Preserve the existing resource boundary. Admission must cover the
+    // actual replay and additional quotient/commitment work within it.
+    assert_eq!(
+        proving.max_segment_work_units,
+        usize::try_from(1_u64 << 42).unwrap()
+    );
+    assert!(plan.work_units > plan.replay.work_units);
+    assert!(plan.work_units <= proving.max_segment_work_units);
+    assert!(plan.hash_calls <= proving.max_segment_work_units);
+    assert_eq!(
+        plan.binding
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap(),
+        Context::for_relation(relation)
+            .unwrap()
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap()
+    );
+    assert_ne!(
+        relation.schema().identity,
+        relation.deep_relation().schema().identity
+    );
+    assert_ne!(
+        plan.binding
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap(),
+        Context::for_relation(relation.deep_relation())
+            .unwrap()
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap()
+    );
+    for limited in [
+        ConstructionLimits {
+            max_payload_bytes: plan.payload_bytes - 1,
+            ..limits
+        },
+        ConstructionLimits {
+            max_work_units: plan.work_units - 1,
+            ..limits
+        },
+        ConstructionLimits {
+            max_hash_calls: plan.hash_calls - 1,
+            ..limits
+        },
+    ] {
+        assert!(ProducerPlan::new(relation, limited).is_err());
+    }
+    let mut rng = NoEntropy(0);
+    assert!(plan.build_from_borrowed_for_test(&[], &mut rng).is_err());
+    assert_eq!(rng.0, 0);
+}
+
 #[test]
 fn default_policies_preflight_quantity_relations_without_private_columns_or_entropy() {
     use crate::{
@@ -570,80 +639,14 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
         backend::{
             compact_axt_batch::AxtTransferBatch,
             compact_axt_context::tests::Fixture,
-            compact_protocol::FixedAir,
             compact_public_api::AxtVerificationContext,
             compact_public_batch::{BatchContextLimits, PublicTransferBatch},
             deep_relation::tests as relation_fixture,
-            offline_compact::{ProvingLimits, VerificationLimits},
         },
         gadgets::public_transfer_statement::{
             PublicTransferLimits, prepare_quantity_public_transfers,
         },
     };
-
-    fn check(relation: &impl DeepRelation) {
-        let proving = ProvingLimits::default();
-        let verification = VerificationLimits::default();
-        let limits = ConstructionLimits {
-            digest_execution: proving.digest_execution,
-            max_payload_bytes: proving.max_segment_charge_bytes,
-            max_work_units: proving.max_segment_work_units,
-            max_hash_calls: proving.max_segment_work_units,
-            max_proof_bytes: verification.bundle.segment.max_proof_bytes,
-        };
-        let plan = ProducerPlan::new(relation, limits).unwrap();
-        assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
-        // Preserve the existing resource boundary. Admission must cover the
-        // actual replay and additional quotient/commitment work within it.
-        assert_eq!(
-            proving.max_segment_work_units,
-            usize::try_from(1_u64 << 42).unwrap()
-        );
-        assert!(plan.work_units > plan.replay.work_units);
-        assert!(plan.work_units <= proving.max_segment_work_units);
-        assert!(plan.hash_calls <= proving.max_segment_work_units);
-        assert_eq!(
-            plan.binding
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap(),
-            Context::for_relation(relation)
-                .unwrap()
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap()
-        );
-        assert_ne!(
-            relation.schema().identity,
-            relation.deep_relation().schema().identity
-        );
-        assert_ne!(
-            plan.binding
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap(),
-            Context::for_relation(relation.deep_relation())
-                .unwrap()
-                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
-                .unwrap()
-        );
-        for limited in [
-            ConstructionLimits {
-                max_payload_bytes: plan.payload_bytes - 1,
-                ..limits
-            },
-            ConstructionLimits {
-                max_work_units: plan.work_units - 1,
-                ..limits
-            },
-            ConstructionLimits {
-                max_hash_calls: plan.hash_calls - 1,
-                ..limits
-            },
-        ] {
-            assert!(ProducerPlan::new(relation, limited).is_err());
-        }
-        let mut rng = NoEntropy(0);
-        assert!(plan.build_from_borrowed_for_test(&[], &mut rng).is_err());
-        assert_eq!(rng.0, 0);
-    }
 
     // This fixture constructs only public transfer facts. It never materializes
     // touched-tree paths, a physical witness, coefficient matrices or an LDE.
@@ -673,7 +676,7 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
             )
             .unwrap();
             for index in 0..batch.segment_count() {
-                check(&batch.segment(index).unwrap());
+                check_default_policy_plan(&batch.segment(index).unwrap());
             }
         } else {
             let batch = AxtTransferBatch::new(
@@ -690,7 +693,7 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
             )
             .unwrap();
             for index in 0..batch.segment_count() {
-                check(&batch.segment(index).unwrap());
+                check_default_policy_plan(&batch.segment(index).unwrap());
             }
         }
     }

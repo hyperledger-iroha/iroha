@@ -4,15 +4,16 @@
 //! split bit, the shared key prefix, and its ordered children. Its shape depends
 //! only on the current keys, never insertion order. This is a separate commitment
 //! format from the indexed `MerkleTree` and the full-depth sparse Merkle tree.
-//! Fixed-size node descriptors support authenticated external lookup and updates. The map
-//! defines no wire encoding or durable-storage owner.
+//! Fixed-size node descriptors support authenticated external lookup and updates;
+//! bounded complete-range witnesses cover every matching key. The map defines
+//! no wire encoding or durable-storage owner.
 //!
 //! Clones share immutable nodes. A mutation copies at most one 256-bit search
-//! path; it never scans unrelated entries. Allocator failure is not recoverable
-//! here, so callers must still provide their own aggregate resource admission.
+//! path; it never scans unrelated entries. Each new node is admitted against
+//! the retained original pool before allocation. Refusal preserves the old version.
 //! Keys and tree shape are public: lookup is intentionally not constant-time.
 
-use std::sync::Arc;
+use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedShared, PrepaidSharedError};
 
 use crate::Hash;
 use iroha_schema::IntoSchema;
@@ -20,11 +21,30 @@ use norito::codec::{Decode, Encode};
 
 #[path = "merkle_map/external.rs"]
 mod external;
+#[path = "merkle_map/resident.rs"]
+mod resident;
 pub use external::{
     MerkleMapEdit, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore, MerkleMapReadError,
     MerkleMapRoot, MerkleMapStoreNode, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
     MerkleMapValueRef,
 };
+#[path = "merkle_map/proof.rs"]
+mod proof;
+pub use proof::MerkleMapLookupProof;
+#[path = "merkle_map/ordered_range.rs"]
+mod ordered_range;
+pub use ordered_range::{
+    MAX_NORITO_DOMAIN_BYTES, MAX_NORITO_KEY_BYTES, MAX_NORITO_RANGE_PROOF_BYTES,
+    MAX_NORITO_RANGE_ROWS, MAX_NORITO_TREE_ENTRIES, MAX_NORITO_TREE_PAYLOAD_BYTES,
+    MAX_NORITO_VALUE_BYTES, NoritoKeyDigestRangeProofV1, NoritoKeyDigestRangeTreeV1,
+    NoritoKeyRangeError, NoritoKeyRangeExternalProofV1, NoritoKeyRangeExternalV1,
+    NoritoKeyRangeNodeStoreV1, NoritoKeyRangeProofV1, NoritoKeyRangeTreeV1,
+    NoritoKeyRangeVerifyRequestV1, VerifiedNoritoKeyDigestRangeV1,
+    VerifiedNoritoKeyRangeExternalV1, VerifiedNoritoKeyRangeV1, digest_norito_value_frame_v1,
+};
+#[path = "merkle_map/range_proof.rs"]
+mod range_proof;
+pub use range_proof::{MerkleMapRangeError, MerkleMapRangeProof};
 
 const EMPTY: &[u8] = b"iroha:merkle-map:empty:v1\0";
 const LEAF: &[u8] = b"iroha:merkle-map:leaf:v1\0";
@@ -36,10 +56,11 @@ const ROOT: &[u8] = b"iroha:merkle-map:root:v1\0";
 /// The owner supplies canonical, domain-separated key and value hashes. Updates
 /// compare the expected old value before changing anything; snapshots remain
 /// valid after updates to their descendants. This is not persistence to disk.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MerkleMap {
-    node: Option<Arc<Node>>,
+    node: Option<ChargedShared<Node>>,
     len: u64,
+    budget: AllocationBudget,
 }
 
 /// One sibling on an exact-key membership path through the compressed tree.
@@ -109,7 +130,7 @@ impl MerkleMapProof {
 }
 
 /// A rejected update leaves the entire map and its root unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MerkleMapError {
     /// The caller's preimage does not match this map version.
     #[error("Merkle map preimage mismatch: expected {expected:?}, found {actual:?}")]
@@ -122,6 +143,12 @@ pub enum MerkleMapError {
     /// The number of entries cannot be represented by the commitment format.
     #[error("Merkle map entry count overflow")]
     Capacity,
+    /// The original local pool refused the complete replacement path before allocation.
+    #[error("Merkle map node admission failed: {0}")]
+    Admission(#[source] AllocationRefusal),
+    /// An admitted physical allocation or exact prepaid partition failed locally.
+    #[error("Merkle map node allocation failed: {0}")]
+    Allocation(#[source] PrepaidSharedError),
 }
 
 struct Node {
@@ -135,15 +162,20 @@ enum NodeKind {
     Leaf(Hash),
     Branch {
         bit: u16,
-        left: Arc<Node>,
-        right: Arc<Node>,
+        left: ChargedShared<Node>,
+        right: ChargedShared<Node>,
     },
 }
 
 impl MerkleMap {
-    /// Construct an empty commitment.
-    pub fn new() -> Self {
-        Self::default()
+    /// Construct an empty commitment retaining its caller's original local pool.
+    /// The empty map allocates no nodes; every later mutation uses this same pool.
+    pub fn new(budget: &AllocationBudget) -> Self {
+        Self {
+            node: None,
+            len: 0,
+            budget: budget.clone(),
+        }
     }
 
     /// Number of present keys, including keys whose values hash empty payloads.
@@ -219,8 +251,8 @@ impl MerkleMap {
     /// whole-map reconstruction. Hashing uses the existing portable `Hash` path.
     ///
     /// # Errors
-    /// Rejects a mismatched expected value or an update whose entry count cannot
-    /// be represented by the commitment format.
+    /// Rejects a mismatched expected value, unrepresentable count, or local
+    /// allocation refusal. Local capacity never changes the committed result.
     pub fn replace(
         &mut self,
         key: Hash,
@@ -239,9 +271,12 @@ impl MerkleMap {
             (Some(_), None) => self.len.checked_sub(1).ok_or(MerkleMapError::Capacity)?,
             _ => self.len,
         };
-        let node = replace_node(self.node.as_ref(), key, after);
-        self.node = node;
+        let node = resident::prepare(self.node.as_ref(), key, after, &self.budget)?;
+        let previous = std::mem::replace(&mut self.node, node);
         self.len = len;
+        // A release callback must see the complete new version, never a new root
+        // with the previous count. Older snapshots keep their own node charges.
+        drop(previous);
         Ok(true)
     }
 }
@@ -299,61 +334,10 @@ fn branch_hash(bit: u16, prefix: &[u8; Hash::LENGTH], left: Hash, right: Hash) -
     ])
 }
 
-fn leaf(key: Hash, value: Hash) -> Arc<Node> {
-    Arc::new(Node {
-        hash: leaf_hash(key, value),
-        first: key,
-        kind: NodeKind::Leaf(value),
-    })
-}
-
-fn branch(bit: u16, left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
-    Arc::new(Node {
-        hash: branch_hash(bit, &prefix(&left.first, bit), left.hash, right.hash),
-        first: left.first,
-        kind: NodeKind::Branch { bit, left, right },
-    })
-}
-
-fn replace_node(node: Option<&Arc<Node>>, key: Hash, after: Option<Hash>) -> Option<Arc<Node>> {
-    let Some(node) = node else {
-        return after.map(|value| leaf(key, value));
-    };
-    let shared = common_bits(&key, &node.first);
-    let depth = match &node.kind {
-        NodeKind::Leaf(_) => 256,
-        NodeKind::Branch { bit, .. } => *bit,
-    };
-    if shared < depth {
-        // The validated operation is an insertion outside this subtree's prefix.
-        return after.map(|value| {
-            let new = leaf(key, value);
-            if key_bit(&key, shared) {
-                branch(shared, Arc::clone(node), new)
-            } else {
-                branch(shared, new, Arc::clone(node))
-            }
-        });
-    }
-    match &node.kind {
-        NodeKind::Leaf(_) => after.map(|value| leaf(key, value)),
-        NodeKind::Branch { bit, left, right } => {
-            // A removal collapses its unary branch; no tombstone/history remains.
-            Some(if key_bit(&key, *bit) {
-                replace_node(Some(right), key, after).map_or_else(
-                    || Arc::clone(left),
-                    |new| branch(*bit, Arc::clone(left), new),
-                )
-            } else {
-                replace_node(Some(left), key, after).map_or_else(
-                    || Arc::clone(right),
-                    |new| branch(*bit, new, Arc::clone(right)),
-                )
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "merkle_map_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "merkle_map/resident_tests.rs"]
+mod resident_tests;

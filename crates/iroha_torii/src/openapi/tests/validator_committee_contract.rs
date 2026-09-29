@@ -56,21 +56,35 @@ fn validator_committee_openapi_is_closed_and_retires_epoch_roster_fields() {
             expected
         );
     }
-    for name in [
-        "SumeragiV2HeightContext",
-        "SumeragiV2FinalizedNextEpochSnapshot",
+    for (owner, field) in [
+        ("ValidatorCommitteeStatusV1", "latest_finality"),
+        ("ValidatorCommitteeSelectionStatusV1", "selecting_finality"),
     ] {
-        let properties = schemas
-            .get(name)
-            .unwrap()
-            .get("properties")
-            .and_then(Value::as_object)
-            .unwrap();
-        assert!(properties.contains_key("kagemusha_mint_finality_authority"));
-        assert!(properties.contains_key("kagemusha_mint_finality_authorization"));
-        assert!(!properties.contains_key("kagemusha_mint_finality_epoch_id"));
-        assert!(!properties.contains_key("kagemusha_mint_finality_epoch_roster"));
+        assert_eq!(
+            schemas[owner]["properties"][field]["$ref"].as_str(),
+            Some("#/components/schemas/NativeFinalityArtifact")
+        );
     }
+    let native = &schemas["NativeFinalityArtifact"];
+    assert_eq!(native["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(
+        native["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["block_wire"]
+    );
+    assert_eq!(native["properties"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        native["properties"]["block_wire"]["format"].as_str(),
+        Some("byte")
+    );
+    assert_eq!(
+        native["properties"]["block_wire"]["maxLength"].as_u64(),
+        Some(44_739_244)
+    );
     assert_eq!(
         schemas["ValidatorCommitteeStatusV1"]["properties"]["candidate_keys"]["maxItems"].as_u64(),
         Some(31)

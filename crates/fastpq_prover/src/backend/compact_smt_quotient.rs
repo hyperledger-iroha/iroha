@@ -1,6 +1,6 @@
 //! Fixed-polynomial ledger for the compact SMT program's semantic constraints.
 //!
-//! This module adds no BLAKE2b equations. It binds exact node-domain and input
+//! This module adds no `BLAKE2b` equations. It binds exact node-domain and input
 //! ports, public leaves/roots, and all carried SMT state around 512-row hashes.
 //! The schema is exactly 65,536 rows by 342 cells with active=1. Stable residue
 //! slots do not depend on a queried row label: verifier-known polynomials are
@@ -531,7 +531,7 @@ mod tests {
                     }
                 }
             }
-            if index % PHYSICAL_ROWS_PER_UPDATE == 0 {
+            if index.is_multiple_of(PHYSICAL_ROWS_PER_UPDATE) {
                 for limb in 0..8 {
                     out[LEAF_SLOT + limb] = local.next().unwrap();
                     out[LEAF_SLOT + 8 + limb] = local.next().unwrap();

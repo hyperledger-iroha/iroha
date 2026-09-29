@@ -27,6 +27,8 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -67,7 +69,7 @@ fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let genesis = state
@@ -175,6 +177,8 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes:
+                iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
@@ -215,7 +219,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
     let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let genesis = state

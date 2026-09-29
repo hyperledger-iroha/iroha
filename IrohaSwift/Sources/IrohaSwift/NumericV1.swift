@@ -253,7 +253,8 @@ private enum NumericV1Kind {
 }
 
 private let numericV1MinKnownPointerType: UInt16 = 0x0001
-private let numericV1MaxAssignedPointerType: UInt16 = 0x0012
+private let numericV1MaxAssignedPointerType: UInt16 = 0x0013
+private let numericV1UnassignedPointerType: UInt16 = 0x000C
 // END GENERATED: kotodama-v1-numeric-policy
 
 private enum NumericV1Internal {
@@ -435,7 +436,7 @@ private enum NumericV1Internal {
             throw numericFailure(.truncatedEnvelope, "envelope is truncated")
         }
         let knownAllowedType = (numericV1MinKnownPointerType...numericV1MaxAssignedPointerType)
-            .contains(pointerType)
+            .contains(pointerType) && pointerType != numericV1UnassignedPointerType
         guard knownAllowedType else {
             throw numericFailure(.unknownType, "unknown pointer type")
         }

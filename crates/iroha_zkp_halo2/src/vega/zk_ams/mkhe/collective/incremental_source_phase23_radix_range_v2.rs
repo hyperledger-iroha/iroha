@@ -729,6 +729,10 @@ fn radix_coefficient_witness_v2(
         extract_radix_digits_v2(&RADIX_CENTERING_THRESHOLD_BE_V2, &mut threshold_low);
     let mut prior_borrow = RadixSecretCopyV2::new(0_u16);
     let mut invalid = RadixSecretCopyV2::new(u16::from(u8::from(*threshold_top.as_ref_v2() != 0)));
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "the fixed-count limb loop shape is audited by the materializer source guard test"
+    )]
     for limb in 0..RADIX_LOW_LIMBS_V2 {
         let right = RadixSecretCopyV2::new(threshold_low[limb] + *prior_borrow.as_ref_v2());
         let borrow = RadixSecretCopyV2::new(u16::from(u8::from(

@@ -20,10 +20,9 @@ mod lifecycle;
 
 mod signed_fixture {
     use sorafs_manifest as manifest;
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"
-    ));
+    include!(
+        "../../../../sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"
+    );
 }
 
 fn private_directory() -> tempfile::TempDir {

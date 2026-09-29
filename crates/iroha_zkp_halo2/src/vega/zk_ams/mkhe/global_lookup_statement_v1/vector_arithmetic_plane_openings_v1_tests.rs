@@ -218,9 +218,9 @@ fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
     assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_904_064);
     assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_026_665_600);
     assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_197_141_120);
-    assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
-    assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
-    assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1);
+    const { assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1) };
+    const { assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1) };
+    const { assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1) };
     let context = plane_context_digest_v1(source_axes_v1()).unwrap();
     assert_eq!(
         ConfidentialSpoolLayoutV1::new_v1(
@@ -270,7 +270,7 @@ fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
             .windows(b"shard".len())
             .any(|window| window == b"shard")
     );
-    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }
 
 #[test]
@@ -350,9 +350,9 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
 #[test]
 fn exact_replay_purposes_authorize_only_required_multi_use() {
     let purposes = [
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
-        PlaneOpeningReplayPurposeV1::Statement5Inputs,
-        PlaneOpeningReplayPurposeV1::Statement8Inputs,
+        PlaneOpeningReplayPurposeV1::Statement3,
+        PlaneOpeningReplayPurposeV1::Statement5,
+        PlaneOpeningReplayPurposeV1::Statement8,
     ];
     let counts = purposes.map(|p| replay_plane_count_v1(p).unwrap());
     assert_eq!(counts, [688, 6880, 2064]);
@@ -379,16 +379,16 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (mut owner, context) = test_owner_v1([0x7a; 32]);
     for purpose in [
-        PlaneOpeningReplayPurposeV1::Statement5Inputs,
-        PlaneOpeningReplayPurposeV1::Statement8Inputs,
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
+        PlaneOpeningReplayPurposeV1::Statement5,
+        PlaneOpeningReplayPurposeV1::Statement8,
+        PlaneOpeningReplayPurposeV1::Statement3,
     ] {
         owner = complete_purpose_v1(owner, context, purpose);
     }
     let consumed = owner.finish_v1().unwrap();
     assert_ne!(consumed.binding_digest, [0; 32]);
     assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) > before);
-    assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1);
+    const { assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1) };
 }
 
 #[test]
@@ -396,7 +396,7 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (owner, context) = test_owner_v1([0x81; 32]);
     let mut replay = owner
-        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
+        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, context)
         .unwrap();
     assert_eq!(
         replay.absorb_next_authenticated_plane_v1(1),
@@ -411,19 +411,15 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let (owner, _) = test_owner_v1([0x82; 32]);
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, [0xff; 32])
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, [0xff; 32])
             .is_err()
     );
 
     let (owner, context) = test_owner_v1([0x83; 32]);
-    let owner = complete_purpose_v1(
-        owner,
-        context,
-        PlaneOpeningReplayPurposeV1::Statement3Inputs,
-    );
+    let owner = complete_purpose_v1(owner, context, PlaneOpeningReplayPurposeV1::Statement3);
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3, context)
             .is_err()
     );
 
@@ -445,7 +441,7 @@ fn owner_zeroizes_on_unwind_and_record_context_tampering() {
     owner.live.as_mut().unwrap().record.context_digest = [0x93; 32];
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8Inputs, context)
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8, context)
             .is_err()
     );
     assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) >= before + 2);
@@ -513,5 +509,5 @@ fn production_source_and_release_guards_are_static() {
     ] {
         assert!(!gate);
     }
-    assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }

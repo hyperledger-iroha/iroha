@@ -32,7 +32,7 @@ pub(super) fn install_test_lane_manifests(state: &State) {
             (lane.id, status)
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 }
 fn test_confidential_features(state: &State, height: u64) -> Option<ConfidentialFeatureDigest> {
     let view = state.query_view();

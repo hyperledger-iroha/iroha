@@ -1,9 +1,7 @@
 //! Replacement rewind notices stay with the original acquisition, execution, and capture owners.
 
 use super::*;
-use crate::state::{
-    carrier_preparation, da_hydration, storage_transactions::TransactionsBlockError,
-};
+use crate::state::{da_hydration, storage_transactions::TransactionsBlockError};
 use iroha_data_model::prelude::*;
 use std::{collections::HashSet, num::NonZeroUsize};
 
@@ -42,7 +40,7 @@ fn replacement_rewind_retains_notifications_through_acquisition_execution_and_re
     for (exit, state_write) in
         (0..6).flat_map(|exit| [false, true].map(move |source| (exit, source)))
     {
-        let (state, proposal, _, _) = fixture();
+        let (state, proposal) = fixture();
         let state: Arc<State> = Arc::from(state);
         seed_committed_prefix(&state, proposal.header());
         let journal = membership_probe_before_stage(&state);
@@ -117,17 +115,16 @@ fn replacement_rewind_retains_notifications_through_acquisition_execution_and_re
 }
 
 #[test]
-fn replacement_rewind_retains_notifications_through_carrier_capture_and_admission_unwind() {
+fn replacement_rewind_retains_notifications_through_original_capture_refusal_and_unwind() {
     for (exit, state_write) in
         (0..3).flat_map(|exit| [false, true].map(move |source| (exit, source)))
     {
-        let (state, proposal, topology, context) = fixture();
+        let (state, proposal, topology) = super::super::fixture_with_topology();
         let state: Arc<State> = Arc::from(state);
         let journal = membership_probe_before_stage(&state);
         let callback = membership_probe_callback(&state, journal);
-        let mut carrier =
-            carrier_preparation::tests::prepare(&state, proposal, &topology, &context)
-                .unwrap_or_else(|(_, error)| panic!("actual authenticated carrier: {error}"));
+        let (valid, mut carrier) =
+            super::super::signed_genesis_execution(&state, proposal, &topology);
         let (wait, original_release) = observe_rewind_source(&state, state_write);
         let waker = Waker::from(Arc::clone(&callback));
         let mut task = Context::from_waker(&waker);
@@ -137,7 +134,7 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
         // isolates capture custody on a genuine authenticated ordinary carrier;
         // it does not manufacture replacement or membership authority.
         {
-            let fields = carrier.parts_mut().state.fields.as_mut().unwrap();
+            let fields = carrier.fields.as_mut().unwrap();
             fields.da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
             state
                 .rewind_da_indexes_to_height_with_releases(
@@ -147,33 +144,32 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
                 .unwrap();
         }
         assert_eq!(callback.observations(), [0; 5]);
+        let original = std::ptr::from_ref(&*carrier);
+        carrier
+            .capture_exec_witness()
+            .expect("actual original output capture");
+        assert_eq!(std::ptr::from_ref(&*carrier), original);
+        assert_eq!(callback.observations(), [0; 5]);
+        assert!(Pin::new(&mut future).poll(&mut task).is_pending());
         if exit == 0 {
-            let journals = carrier
-                .prepare_journals(
-                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    |_| Ok::<_, ()>(()),
-                )
-                .unwrap_or_else(|e| panic!("capture original owner: {e}"));
-            assert!(Pin::new(&mut future).poll(&mut task).is_ready());
-            assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
-            drop(journals);
+            drop(carrier);
         } else if exit == 1 {
+            let mut foreign = valid.as_ref().header();
+            foreign.creation_time_ms += 1;
+            let events = carrier.world.external_event_buf.clone();
             let error = carrier
-                .prepare_journals(
-                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    |_| Err::<(), _>("exact admission refusal"),
-                )
-                .err()
-                .unwrap();
+                .prepare_carrier_publication_events(foreign)
+                .unwrap_err();
+            assert!(error.to_string().contains("different carrier"));
+            assert_eq!(carrier.world.external_event_buf, events);
+            assert_eq!(std::ptr::from_ref(&*carrier), original);
             assert_eq!(callback.observations(), [0; 5]);
             assert!(Pin::new(&mut future).poll(&mut task).is_pending());
-            drop(error);
+            drop(carrier);
         } else {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                carrier.prepare_journals(
-                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
-                    |_| -> Result<(), ()> { panic!("actual capture admission unwind") },
-                )
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _original = carrier;
+                panic!("actual original output-capture unwind");
             }));
             assert!(result.is_err());
         }

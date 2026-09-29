@@ -5,6 +5,11 @@ use crate::backend::{
     deep_coefficient_replay::CoefficientLimits,
     merkle_multiproof::{MultiproofLimits, MultiproofPlan},
 };
+/// Narrow one small fixture position or level to its `u32` wire field.
+fn narrow_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixture position fits u32")
+}
+
 fn replay_limits() -> CoefficientLimits {
     CoefficientLimits {
         max_payload_bytes: usize::MAX,
@@ -78,7 +83,7 @@ fn last_fri_root_and_selected_fibers_match_materialized_canonical_tree() {
                 .flat_map(|value| value.to_le_bytes())
                 .collect::<Vec<_>>();
             binding
-                .hash_leaf(Oracle::Fri(4), index as u32, &bytes)
+                .hash_leaf(Oracle::Fri(4), narrow_u32(index), &bytes)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -95,7 +100,13 @@ fn last_fri_root_and_selected_fibers_match_materialized_canonical_tree() {
     .unwrap();
     let parent = |level: usize, index: usize, left, right| {
         binding
-            .hash_parent(Oracle::Fri(4), level as u32, index as u32, left, right)
+            .hash_parent(
+                Oracle::Fri(4),
+                narrow_u32(level),
+                narrow_u32(index),
+                left,
+                right,
+            )
             .map_err(binding_error)
     };
     verifier

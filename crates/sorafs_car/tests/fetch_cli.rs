@@ -603,7 +603,7 @@ fn fetch_cli_reads_manifest_report_from_stdin() {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&spec.digest)),
+                Value::from(hex::encode(spec.digest)),
             );
             Value::Object(obj)
         })
@@ -654,7 +654,7 @@ fn fetch_cli_reads_manifest_report_when_plan_omitted() {
             obj.insert("length".into(), Value::from(spec.length as u64));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&spec.digest)),
+                Value::from(hex::encode(spec.digest)),
             );
             Value::Object(obj)
         })
@@ -975,7 +975,7 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            hex::encode(&council_public_key)
+            hex::encode(council_public_key)
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
@@ -1054,7 +1054,7 @@ fn fetch_cli_requires_network_id_for_advert_and_admission() {
                 .arg(format!("--admission-dir={}", admission_dir.display()))
                 .arg(format!(
                     "--admission-trusted-council-key={}",
-                    hex::encode(&council_public_key)
+                    hex::encode(council_public_key)
                 ))
                 .arg("--admission-signature-threshold=1");
         }
@@ -1092,7 +1092,7 @@ fn fetch_cli_rejects_validly_signed_foreign_admission_and_advert() {
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            hex::encode(&council_public_key)
+            hex::encode(council_public_key)
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")

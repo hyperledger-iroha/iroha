@@ -2,7 +2,7 @@
 
 #[path = "../../../fixtures/sdk/frame_identity_assertions.rs"]
 mod captured;
-pub(crate) use captured::assert_bidirectional;
+pub use captured::assert_bidirectional;
 
 #[test]
 fn original_package_observations_are_complete() {

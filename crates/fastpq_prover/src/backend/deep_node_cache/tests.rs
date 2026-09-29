@@ -15,7 +15,9 @@ fn tree(binding: &Context) -> Vec<Vec<Digest>> {
             .map(|index| {
                 let mut bytes = [0; 128];
                 payload(index, &mut bytes);
-                binding.hash_leaf(oracle, index as u32, &bytes).unwrap()
+                binding
+                    .hash_leaf(oracle, u32::try_from(index).unwrap(), &bytes)
+                    .unwrap()
             })
             .collect::<Vec<_>>(),
     ];
@@ -28,7 +30,13 @@ fn tree(binding: &Context) -> Vec<Vec<Digest>> {
             .enumerate()
             .map(|(index, pair)| {
                 binding
-                    .hash_parent(oracle, level as u32, index as u32, pair[0], pair[1])
+                    .hash_parent(
+                        oracle,
+                        u32::try_from(level).unwrap(),
+                        u32::try_from(index).unwrap(),
+                        pair[0],
+                        pair[1],
+                    )
                     .unwrap()
             })
             .collect();
@@ -48,6 +56,10 @@ fn completed(binding: &Context, levels: &[Vec<Digest>]) -> CompletedNodes {
     }
     pending.finish(levels.last().unwrap()[0]).unwrap()
 }
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "passed directly as the fallible regeneration callback of `open`"
+)]
 fn fill(indices: &[usize], output: &mut [u8]) -> Result<()> {
     for (&index, row) in indices.iter().zip(output.chunks_exact_mut(128)) {
         payload(index, row);
@@ -236,9 +248,7 @@ fn altered_regeneration_cache_nodes_and_partial_callbacks_cannot_publish() {
                 .unwrap()
                 .open(&query, DigestExecutionV1::Cpu, |_, out| {
                     out.fill(91);
-                    if unwind {
-                        panic!("public injected regeneration failure");
-                    }
+                    assert!(!unwind, "public injected regeneration failure");
                     Err(invalid("injected callback failure"))
                 })
         }));
@@ -285,8 +295,8 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
             .unwrap();
         let hash = |level: usize, index: usize, left, right| {
             binding
-                .hash_parent(Oracle::Fri(4), level as u32, index as u32, left, right)
-                .map_err(binding_error)
+                .hash_parent_at(Oracle::Fri(4), level, index, left, right)
+                .map_err(|error| binding_error(&error))
         };
         for stripe in 0..stripes {
             for start in (0..128 / stripes).step_by(3) {

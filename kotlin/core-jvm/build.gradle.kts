@@ -78,13 +78,10 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/crypto/ed25519_public_key_admission_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/account/multisig_wire_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/multisig/instruction_batch_hash_v1.json"))
-    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi_v2/wire_v2.tsv"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi/native_status_v1.tsv"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi/native_execution_evidence_1_lanes_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/sumeragi/native_execution_evidence_4_lanes_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/validator_staking/norito_v1.tsv"))
-    inputs.file(
-        rootProject.layout.projectDirectory
-            .dir("..")
-            .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
-    )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_enrolled_open_selector_v1.json"))
@@ -125,37 +122,13 @@ tasks.test {
     systemProperty("java.library.path", hostNativeDir.absolutePath)
 }
 
-// Device qualification is explicit and must execute against the bridge built by
-// the calling job. A cached result or a missing CUDA device is not qualification.
-val cudaNativeDirectory = providers.environmentVariable("IROHA_NATIVE_LIBRARY_PATH")
-tasks.register<Test>("cudaHardwareTest") {
-    description = "Qualify every Kotlin/Java CUDA operation against CPU reference results."
+// Ordinary native parity may use CPU fallback. It cannot satisfy device evidence.
+// TODO: implement JNI per-family completion receipts and mandatory physical controls.
+tasks.register("cudaHardwareTest") {
+    description = "Report the open Kotlin/JNI CUDA physical qualification gate."
     group = "verification"
-    testClassesDirs = sourceSets["test"].output.classesDirs
-    classpath = sourceSets["test"].runtimeClasspath
-    enableAssertions = true
-    useJUnitPlatform {
-        includeTags("cuda-hardware")
-    }
-    filter {
-        includeTestsMatching("org.hyperledger.iroha.sdk.gpu.CudaAcceleratorsHardwareTest")
-        isFailOnNoMatchingTests = true
-    }
-    maxParallelForks = 1
-    outputs.upToDateWhen { false }
-    outputs.doNotCacheIf("CUDA device state must be qualified on every invocation") { true }
-    doFirst {
-        val nativeDirectory = cudaNativeDirectory.orNull
-        require(!nativeDirectory.isNullOrBlank()) {
-            "cudaHardwareTest requires IROHA_NATIVE_LIBRARY_PATH for the freshly built CUDA bridge"
-        }
-        val directory = File(nativeDirectory)
-        require(directory.isAbsolute && directory.isDirectory) {
-            "IROHA_NATIVE_LIBRARY_PATH must be an absolute existing directory"
-        }
-        val library = directory.resolve(System.mapLibraryName("connect_norito_bridge"))
-        require(library.isFile) { "Fresh CUDA bridge is missing: $library" }
-        systemProperty("iroha.cuda.nativeLibrary", library.absolutePath)
+    doLast {
+        throw GradleException("CUDA JNI qualification is open: per-family completion receipts are not implemented. Ordinary native parity is not device evidence.")
     }
 }
 

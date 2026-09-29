@@ -12,9 +12,7 @@
         reason = "test-only derive expansion materializes the complete data-model type registry as one local array; production code does not allocate it"
     )
 )]
-#[allow(unused_extern_crates)]
-extern crate bech32;
-#[allow(unused_extern_crates)]
+#[cfg(test)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
@@ -119,8 +117,6 @@ pub mod kagemusha;
 pub mod kaigi;
 /// Log-level and severity utilities.
 pub mod level;
-/// Merge-ledger data structures.
-pub mod merge;
 /// Ministry transparency/governance payload types.
 pub mod ministry;
 /// Musubi package registry data types for Kotodama source packages.
@@ -207,9 +203,7 @@ pub mod validation_fee;
 pub mod validator;
 /// Verification helper traits and host bindings.
 pub mod verification;
-/// Visitor traits for traversing data-model structures.
-pub mod visit;
-/// Compiled consensus and block wire-schema identity.
+/// Compiled block wire-schema identity.
 pub mod wire_schema;
 /// Zero-knowledge proof payload types.
 pub mod zk;
@@ -334,11 +328,9 @@ pub mod prelude {
             FeeSponsorProgram, FeeSponsorProgramActivation, FeeSponsorProgramId,
             FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
             FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
-            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig,
-            LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
-            LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
-            LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError, VerifiedFeeSponsorVaultAllocation, VerifiedLaneRelayRecord,
+            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig, LaneStorageProfile,
+            LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+            VerifiedFeeSponsorVaultAllocation,
         },
         nft::prelude::*,
         parameter::prelude::*,

@@ -2509,6 +2509,15 @@ pub(crate) fn transaction_gas_limit(transaction: &SignedTransaction) -> Option<u
         .gas_limit()
         .map(core::num::NonZeroU64::get)
 }
+fn overlay_build_error_to_attempt_validation_fail(
+    state: &mut StateTransaction<'_, '_>,
+    error: crate::pipeline::overlay::OverlayBuildError,
+) -> ValidationFail {
+    match error.execution_deferral() {
+        Some(reason) => state.defer_execution(reason),
+        None => overlay_build_error_to_validation_fail(error),
+    }
+}
 fn overlay_build_error_to_validation_fail(
     error: crate::pipeline::overlay::OverlayBuildError,
 ) -> ValidationFail {
@@ -6002,7 +6011,11 @@ impl Executor {
             .get();
         let mut runtime = summary
             .checkout_runtime(effective_limit, heap_limit)
-            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+            .map_err(|error| {
+                state_transaction.vm_error_to_validation_fail(error, |error| {
+                    ValidationFail::InternalError(error.to_string())
+                })
+            })?;
         runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
         if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
@@ -6068,6 +6081,10 @@ impl Executor {
         };
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
+            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&err) {
+                drop(host);
+                return Err(state_transaction.defer_execution(reason));
+            }
             let error =
                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
             drop(host);
@@ -6193,13 +6210,25 @@ impl Executor {
         authority: &AccountId,
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+        if let Some(reason) = state_transaction.execution_deferral() {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                reason,
+            ));
+        }
         let result =
             self.execute_transaction_body(state_transaction, authority, transaction, ivm_cache);
+        // A local refusal has no completed execution, fee, gas, or effect result.
+        // The transaction overlay remains poisoned until its owner drops it.
+        if let Some(reason) = state_transaction.execution_deferral() {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                reason,
+            ));
+        }
         let effects = state_transaction.finish_execution_effect_budget();
         state_transaction.close_execution_fee_meter();
         effects?;
-        result
+        result.map_err(Into::into)
     }
 
     /// Run one admitted signed body under its actual root effect and fee owners.
@@ -6550,7 +6579,9 @@ impl Executor {
                 transaction.payload(),
                 &summary,
             )
-            .map_err(overlay_build_error_to_validation_fail)?;
+            .map_err(|error| {
+                overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+            })?;
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "self-describing proved raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -6589,7 +6620,9 @@ impl Executor {
                 transaction.payload(),
                 summary.code_hash,
             )
-            .map_err(overlay_build_error_to_validation_fail)?;
+            .map_err(|error| {
+                overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+            })?;
             let mut replay_work = crate::pipeline::overlay::IvmProvedReplayWork::default();
             let replay_result = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
@@ -6614,7 +6647,9 @@ impl Executor {
                     Err(_) => state_transaction.record_execution_fee_vm_work(gas)?,
                 }
             }
-            let replay = replay_result.map_err(overlay_build_error_to_validation_fail)?;
+            let replay = replay_result.map_err(|error| {
+                overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+            })?;
             if observed_gas != Some(replay.gas_used) {
                 return Err(ValidationFail::InternalError(
                     "verified replay lost its actual gas owner".into(),
@@ -6897,7 +6932,11 @@ impl Executor {
                             .get();
                         let mut runtime = ivm_cache
                             .checkout_generic_runtime(&summary, effective_limit, heap_limit)
-                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                            .map_err(|error| {
+                                state_transaction.vm_error_to_validation_fail(error, |error| {
+                                    ValidationFail::InternalError(error.to_string())
+                                })
+                            })?;
                         runtime.set_max_cycles(effective_cycles.get());
                         runtime.set_gas_limit(effective_limit);
                         let accounts = state_transaction.accounts_snapshot();
@@ -6951,6 +6990,12 @@ impl Executor {
                         };
                         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                         if let Err(err) = run_result {
+                            if let Some(reason) =
+                                crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
+                            {
+                                drop(host);
+                                return Err(state_transaction.defer_execution(reason));
+                            }
                             let error =
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
                                     &runtime, &err,
@@ -7011,7 +7056,9 @@ impl Executor {
                     transaction_for_fee.payload(),
                     &summary,
                 )
-                .map_err(overlay_build_error_to_validation_fail)?;
+                .map_err(|error| {
+                    overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+                })?;
                 let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
                     ValidationFail::NotPermitted(
                         "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -7081,7 +7128,11 @@ impl Executor {
                     .get();
                 let mut runtime = summary
                     .checkout_runtime(effective_limit, heap_limit)
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                    .map_err(|error| {
+                        state_transaction.vm_error_to_validation_fail(error, |error| {
+                            ValidationFail::InternalError(error.to_string())
+                        })
+                    })?;
                 runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 if let Some(argument_record) = contract_call_context
@@ -7148,6 +7199,12 @@ impl Executor {
                 };
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 if let Err(err) = run_result {
+                    if let Some(reason) =
+                        crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
+                    {
+                        drop(host);
+                        return Err(state_transaction.defer_execution(reason));
+                    }
                     let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
                         &runtime, &err,
                     );
@@ -7748,7 +7805,7 @@ impl Executor {
         state_ro: &S,
         authority: &AccountId,
         query: &QueryRequest,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         let latest_block = state_ro.latest_block().map(|block| block.header());
         self.validate_query_with_world_parts(state_ro.world(), latest_block, authority, query)
     }
@@ -7768,7 +7825,7 @@ impl Executor {
         latest_block: Option<BlockHeader>,
         authority: &AccountId,
         query: &QueryRequest,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         trace!("Running query validation");
         // This native boundary is mandatory for Initial and user-provided executors alike.
         // A custom executor may further restrict a query, but can never widen these grants.
@@ -7837,7 +7894,7 @@ impl Executor {
                             query = %query_label,
                             "executor validation rejected query"
                         );
-                        Err(err)
+                        Err(err.into())
                     }
                 }
             }
@@ -7869,7 +7926,13 @@ impl Executor {
             return Err(VMError::PermissionDenied);
         }
         // Load new executor bytecode
-        let loaded_executor = LoadedExecutor::load(raw_executor)?;
+        let loaded_executor = LoadedExecutor::load(raw_executor).map_err(|error| {
+            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&error)
+            {
+                state_transaction.defer_execution(reason);
+            }
+            error
+        })?;
         let curr_block = state_transaction._curr_block;
         let context = ExecutorContext {
             authority: authority.clone(),
@@ -7879,8 +7942,17 @@ impl Executor {
         let gas_limit = executor_parameters.fuel().get();
         let heap_limit = executor_parameters.memory().get();
         let maybe_data_model =
-            run_executor_migration(&loaded_executor, &context, gas_limit, heap_limit)
-                .map_err(map_migration_fail_to_vm_error)?;
+            run_executor_migration(&loaded_executor, &context, gas_limit, heap_limit).map_err(
+                |error| match error {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        map_migration_fail_to_vm_error(error)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        state_transaction.defer_execution(reason.clone());
+                        reason.into_vm_error()
+                    }
+                },
+            )?;
         if let Some(data_model) = maybe_data_model {
             debug!("executor migrate entrypoint supplied a new data model");
             state_transaction
@@ -7915,18 +7987,25 @@ fn run_executor_validation<T>(
     verdict_context: &str,
     gas_limit: u64,
     heap_limit: u64,
-) -> Result<ExecutorValidationReport, ValidationFail>
+) -> Result<ExecutorValidationReport, crate::execution_attempt::ExecutionAttemptError<ValidationFail>>
 where
     ValidatePayload<T>: Encode,
 {
     let mut ivm = executor
         .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
-        .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
+        .map_err(|error| {
+            crate::execution_attempt::vm_attempt_error(error, |error| {
+                ValidationFail::InternalError(error.to_string())
+            })
+        })?;
     ivm.set_host(ivm::host::DefaultHost::default());
     let bytes = encode_executor_input(payload)?;
     let ptr = Memory::HEAP_START;
-    ivm.store_bytes(ptr, &bytes)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    ivm.store_bytes(ptr, &bytes).map_err(|error| {
+        crate::execution_attempt::vm_attempt_error(error, |error| {
+            ValidationFail::InternalError(error.to_string())
+        })
+    })?;
     ivm.set_register(10, ptr);
     ivm.set_gas_limit(gas_limit);
     let run_result = ivm.run();
@@ -7938,7 +8017,9 @@ where
                 gas_used,
             });
         }
-        return Err(ValidationFail::InternalError(err.to_string()));
+        return Err(crate::execution_attempt::vm_attempt_error(err, |error| {
+            ValidationFail::InternalError(error.to_string())
+        }));
     }
     let ret_ptr = ivm.register(10);
     let mut slice = executor_output_payload(&ivm, ret_ptr, "validation verdict")?;
@@ -7950,7 +8031,8 @@ where
     if !slice.is_empty() {
         return Err(ValidationFail::InternalError(format!(
             "executor returned a verdict with trailing bytes: {verdict_context}"
-        )));
+        ))
+        .into());
     }
     Ok(ExecutorValidationReport { verdict, gas_used })
 }
@@ -7973,19 +8055,32 @@ fn run_executor_migration(
     context: &ExecutorContext,
     gas_limit: u64,
     heap_limit: u64,
-) -> Result<Option<ExecutorDataModel>, ValidationFail> {
+) -> Result<
+    Option<ExecutorDataModel>,
+    crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+> {
     let mut ivm = executor
         .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
-        .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
+        .map_err(|error| {
+            crate::execution_attempt::vm_attempt_error(error, |error| {
+                ValidationFail::InternalError(error.to_string())
+            })
+        })?;
     ivm.set_host(ivm::host::DefaultHost::default());
     let bytes = encode_executor_input(context)?;
     let ptr = Memory::HEAP_START;
-    ivm.store_bytes(ptr, &bytes)
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    ivm.store_bytes(ptr, &bytes).map_err(|error| {
+        crate::execution_attempt::vm_attempt_error(error, |error| {
+            ValidationFail::InternalError(error.to_string())
+        })
+    })?;
     ivm.set_register(10, ptr);
     ivm.set_gas_limit(gas_limit);
-    ivm.run()
-        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    ivm.run().map_err(|error| {
+        crate::execution_attempt::vm_attempt_error(error, |error| {
+            ValidationFail::InternalError(error.to_string())
+        })
+    })?;
     let ret_ptr = ivm.register(10);
     let payload = executor_output_payload(&ivm, ret_ptr, "migration result")?;
     let mut slice = payload;
@@ -7994,7 +8089,7 @@ fn run_executor_migration(
     {
         return match verdict {
             MigrationResultPayload::Ok(model) => Ok(Some(model)),
-            MigrationResultPayload::Err(fail) => Err(fail),
+            MigrationResultPayload::Err(fail) => Err(fail.into()),
         };
     }
     let mut slice_unit = payload;
@@ -8003,12 +8098,13 @@ fn run_executor_migration(
     {
         return match verdict {
             MigrationUnitPayload::Ok(()) => Ok(None),
-            MigrationUnitPayload::Err(fail) => Err(fail),
+            MigrationUnitPayload::Err(fail) => Err(fail.into()),
         };
     }
     Err(ValidationFail::InternalError(
         "executor migrate entrypoint returned an undecodable or non-canonical result".to_owned(),
-    ))
+    )
+    .into())
 }
 fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
     match fail {
@@ -8088,8 +8184,8 @@ fn dispatch_instruction_with_ivm(
         .executor()
         .memory()
         .get();
-    let report =
-        run_executor_validation(executor, &payload, instruction_id, gas_limit, heap_limit)?;
+    let report = run_executor_validation(executor, &payload, instruction_id, gas_limit, heap_limit)
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
     state_transaction.executor_fuel_remaining = state_transaction
         .executor_fuel_remaining
         .saturating_sub(report.gas_used);
@@ -8426,8 +8522,8 @@ include!("executor_initial_permission_authority.rs");
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
     INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&permission_name)
 }
-/// Parse the WAT-like template used in integration tests to embed a sequence
-/// of Norito-encoded ISIs into linear memory, then execute each instruction.
+/// Return the `Register<AssetDefinition>` carried by `instruction`, whether it is typed,
+/// wrapped in a [`RegisterBox`], or an encoded instruction of that concrete type.
 pub(crate) fn extract_register_asset_definition(
     instruction: &InstructionBox,
 ) -> Option<Register<AssetDefinition>> {
@@ -8492,9 +8588,11 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
 #[debug("LoadedExecutor {{ runtime: <IVM> }}")]
 pub struct LoadedExecutor {
     runtime_pool: Arc<Mutex<ExecutorRuntimePool>>,
-    /// Arc is needed so cloning of executor will be fast.
+    _pool_memory: Arc<ivm::cache_memory::MemoryReservation>,
+    _eviction: ivm::cache_memory::CacheEvictionRegistration,
+    /// Sharing immutable bytecode makes executor clones cheap.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
-    raw_executor: Arc<data_model_executor::Executor>,
+    raw_executor: ivm::cache_memory::SharedValue<data_model_executor::Executor>,
 }
 // Stack sizing and the governed heap ceiling define distinct VM memory
 // authorities. Keep a small bounded LRU so adversarial governance/gas
@@ -8517,8 +8615,8 @@ impl ExecutorRuntimeKey {
     }
 }
 struct ExecutorRuntimeVariant {
-    identity: Arc<()>,
-    available: Option<(Arc<RuntimeTemplate>, IVM)>,
+    identity: ivm::cache_memory::SharedValue<()>,
+    available: Option<(RuntimeTemplate, IVM)>,
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -8545,26 +8643,20 @@ struct ExecutorRuntimePool {
     capacity: usize,
     #[cfg(test)]
     stats: ExecutorRuntimePoolStats,
+    // Release aggregate charges after every owned allocation above is destroyed.
+    index_memory: ivm::cache_memory::MemoryReservation,
 }
 impl ExecutorRuntimePool {
     fn new(
         key: ExecutorRuntimeKey,
-        baseline: Arc<RuntimeTemplate>,
-        vm: IVM,
+        baseline: RuntimeTemplate,
+        mut vm: IVM,
         capacity: usize,
     ) -> Self {
-        let capacity = capacity.max(1);
-        let mut variants = BTreeMap::new();
-        variants.insert(
-            key,
-            ExecutorRuntimeVariant {
-                identity: Arc::new(()),
-                available: Some((baseline, vm)),
-            },
-        );
-        Self {
-            variants,
-            order: VecDeque::from([key]),
+        let mut pool = Self {
+            index_memory: ivm::cache_memory::MemoryReservation::active(0),
+            variants: BTreeMap::new(),
+            order: VecDeque::new(),
             capacity,
             #[cfg(test)]
             stats: ExecutorRuntimePoolStats {
@@ -8572,6 +8664,57 @@ impl ExecutorRuntimePool {
                 template_builds: 1,
                 ..ExecutorRuntimePoolStats::default()
             },
+        };
+        if vm.reset_from_runtime_template(&baseline).is_ok()
+            && baseline.try_retain_cache_allocations()
+            && vm.try_retain_cache_allocations()
+        {
+            let identity = pool.insert_variant(key);
+            if let Some(variant) = pool.variants.get_mut(&key) {
+                debug_assert!(ivm::cache_memory::SharedValue::ptr_eq(
+                    &identity,
+                    &variant.identity
+                ));
+                variant.available = Some((baseline, vm));
+            }
+        }
+        pool
+    }
+    fn clear_storage(&mut self) {
+        #[cfg(test)]
+        {
+            self.stats.evictions = self
+                .stats
+                .evictions
+                .saturating_add(self.variants.len() as u64);
+        }
+        self.variants = BTreeMap::new();
+        self.order = VecDeque::new();
+        self.index_memory.set_known_bytes(0);
+    }
+    fn retain_index_or_clear(&mut self) {
+        let bytes = norito::core::owned_btree_allocation_bytes::<
+            ExecutorRuntimeKey,
+            ExecutorRuntimeVariant,
+        >(self.variants.len())
+        .ok()
+        .and_then(|bytes| {
+            bytes.checked_add(
+                self.order
+                    .capacity()
+                    .checked_mul(core::mem::size_of::<ExecutorRuntimeKey>())?,
+            )
+        });
+        let Some(bytes) = bytes else {
+            self.clear_storage();
+            return;
+        };
+        // BTree removal may retain spare nodes. Preserve the high-water charge
+        // until clear_storage drops the original container allocation.
+        self.index_memory
+            .set_known_bytes(bytes.max(self.index_memory.bytes()));
+        if !self.index_memory.try_retain() {
+            self.clear_storage();
         }
     }
     fn record(&mut self, event: ExecutorRuntimePoolEvent) {
@@ -8605,7 +8748,7 @@ impl ExecutorRuntimePool {
         }
         self.order.push_back(key);
     }
-    fn insert_variant(&mut self, key: ExecutorRuntimeKey) -> Arc<()> {
+    fn insert_variant(&mut self, key: ExecutorRuntimeKey) -> ivm::cache_memory::SharedValue<()> {
         while self.variants.len() >= self.capacity {
             let Some(evicted) = self.order.pop_front() else {
                 break;
@@ -8614,23 +8757,28 @@ impl ExecutorRuntimePool {
                 self.record(ExecutorRuntimePoolEvent::Eviction);
             }
         }
-        let identity = Arc::new(());
+        let identity = ivm::cache_memory::SharedValue::new((), Some(0));
+        if self.capacity == 0 || !identity.try_retain() {
+            return identity;
+        }
         self.variants.insert(
             key,
             ExecutorRuntimeVariant {
-                identity: Arc::clone(&identity),
+                identity: identity.clone(),
                 available: None,
             },
         );
         self.touch(key);
+        self.retain_index_or_clear();
         identity
     }
 }
 struct ExecutorRuntimeLease {
     pool: Arc<Mutex<ExecutorRuntimePool>>,
+    _pool_memory: Arc<ivm::cache_memory::MemoryReservation>,
     key: ExecutorRuntimeKey,
-    variant_identity: Arc<()>,
-    baseline: Arc<RuntimeTemplate>,
+    variant_identity: ivm::cache_memory::SharedValue<()>,
+    baseline: RuntimeTemplate,
     vm: Option<IVM>,
 }
 impl Deref for ExecutorRuntimeLease {
@@ -8656,7 +8804,7 @@ impl Drop for ExecutorRuntimeLease {
         let can_return = {
             let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
             pool.variants.get(&self.key).is_some_and(|variant| {
-                Arc::ptr_eq(&variant.identity, &self.variant_identity)
+                ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, &self.variant_identity)
                     && variant.available.is_none()
             })
         };
@@ -8666,19 +8814,23 @@ impl Drop for ExecutorRuntimeLease {
         if vm.reset_from_runtime_template(&self.baseline).is_err() {
             return;
         }
+        if !self.baseline.try_retain_cache_allocations() || !vm.try_retain_cache_allocations() {
+            return;
+        }
         let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
         let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
-            if !Arc::ptr_eq(&variant.identity, &self.variant_identity)
+            if !ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, &self.variant_identity)
                 || variant.available.is_some()
             {
                 return false;
             }
-            variant.available = Some((Arc::clone(&self.baseline), vm));
+            variant.available = Some((self.baseline.clone(), vm));
             true
         });
         if stored {
             pool.record(ExecutorRuntimePoolEvent::DirtyReset);
             pool.touch(self.key);
+            pool.retain_index_or_clear();
         }
     }
 }
@@ -8691,16 +8843,52 @@ impl LoadedExecutor {
         let gas_limit = default_parameters.fuel().get();
         let heap_limit = default_parameters.memory().get();
         let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
-        let raw_executor = Arc::new(raw_executor);
-        let ivm = Self::load_runtime(raw_executor.as_ref(), gas_limit, heap_limit)?;
-        let baseline = Arc::new(ivm.runtime_template());
+        // Normalize caller spare Vec capacity, then charge the actual owned Vec.
+        let bytecode = raw_executor.bytecode().as_ref().to_vec();
+        let bytecode_capacity = bytecode.capacity();
+        let raw_executor = ivm::cache_memory::SharedValue::new(
+            data_model_executor::Executor::new(
+                iroha_data_model::transaction::IvmBytecode::from_compiled(bytecode),
+            ),
+            Some(bytecode_capacity),
+        );
+        let mut ivm = Self::load_runtime(&raw_executor, gas_limit, heap_limit)?;
+        let baseline = ivm.try_runtime_template()?;
+        let runtime_pool = Arc::new(Mutex::new(ExecutorRuntimePool::new(
+            key,
+            baseline,
+            ivm,
+            EXECUTOR_RUNTIME_VARIANT_CAPACITY,
+        )));
+        let pool_memory = Arc::new(ivm::cache_memory::MemoryReservation::active(
+            norito::core::owned_arc_allocation_bytes::<Mutex<ExecutorRuntimePool>>()
+                .expect("executor pool fits")
+                + norito::core::owned_arc_allocation_bytes::<ivm::cache_memory::MemoryReservation>(
+                )
+                .expect("pool accounting fits"),
+        ));
+        struct PoolControl {
+            weak: std::sync::Weak<Mutex<ExecutorRuntimePool>>,
+            _memory: Arc<ivm::cache_memory::MemoryReservation>,
+        }
+        impl PoolControl {
+            fn clear(&self) {
+                if let Some(pool) = self.weak.upgrade() {
+                    pool.lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clear_storage();
+                }
+            }
+        }
+        let control = PoolControl {
+            weak: Arc::downgrade(&runtime_pool),
+            _memory: Arc::clone(&pool_memory),
+        };
+        let eviction = ivm::cache_memory::register_cache_evictor(move || control.clear());
         Ok(Self {
-            runtime_pool: Arc::new(Mutex::new(ExecutorRuntimePool::new(
-                key,
-                baseline,
-                ivm,
-                EXECUTOR_RUNTIME_VARIANT_CAPACITY,
-            ))),
+            runtime_pool,
+            _pool_memory: pool_memory,
+            _eviction: eviction,
             raw_executor,
         })
     }
@@ -8709,7 +8897,7 @@ impl LoadedExecutor {
         gas_limit: u64,
         heap_limit: u64,
     ) -> Result<IVM, VMError> {
-        let mut vm = IVM::new(gas_limit);
+        let mut vm = IVM::try_new(gas_limit)?;
         vm.memory.set_heap_max_limit(heap_limit)?;
         vm.load_program(raw_executor.bytecode().as_ref())?;
         vm.set_gas_limit(gas_limit);
@@ -8726,36 +8914,28 @@ impl LoadedExecutor {
                 .runtime_pool
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if pool.variants.contains_key(&key) {
-                let (variant_identity, runtime) = {
-                    let variant = pool
-                        .variants
-                        .get_mut(&key)
-                        .expect("checked executor runtime variant exists");
-                    (Arc::clone(&variant.identity), variant.available.take())
-                };
-                if runtime.is_some() {
-                    pool.record(ExecutorRuntimePoolEvent::Hit);
+            if let Some(variant) = pool.variants.get_mut(&key) {
+                let identity = variant.identity.clone();
+                let runtime = variant.available.take();
+                pool.record(if runtime.is_some() {
+                    ExecutorRuntimePoolEvent::Hit
                 } else {
-                    pool.record(ExecutorRuntimePoolEvent::Miss);
-                }
+                    ExecutorRuntimePoolEvent::Miss
+                });
                 pool.touch(key);
-                (variant_identity, runtime)
+                (identity, runtime)
             } else {
                 pool.record(ExecutorRuntimePoolEvent::Miss);
-                let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
-                let baseline = Arc::new(vm.runtime_template());
-                pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
-                pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
-                let variant_identity = pool.insert_variant(key);
-                (variant_identity, Some((baseline, vm)))
+                (pool.insert_variant(key), None)
             }
         };
+        // Runtime allocation and loading never hold the pool lock. In particular,
+        // a nested borrower cannot block its parent behind active memory admission.
         let (baseline, mut vm) = if let Some(runtime) = runtime {
             runtime
         } else {
-            let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
-            let baseline = Arc::new(vm.runtime_template());
+            let mut vm = Self::load_runtime(&self.raw_executor, gas_limit, heap_limit)?;
+            let baseline = vm.try_runtime_template()?;
             let mut pool = self
                 .runtime_pool
                 .lock()
@@ -8764,9 +8944,11 @@ impl LoadedExecutor {
             pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
             (baseline, vm)
         };
+        vm.activate_cached_runtime();
         vm.set_gas_limit(gas_limit);
         Ok(ExecutorRuntimeLease {
             pool: Arc::clone(&self.runtime_pool),
+            _pool_memory: Arc::clone(&self._pool_memory),
             key,
             variant_identity,
             baseline,
@@ -8824,7 +9006,7 @@ pub mod executor_norito {
         match executor {
             Executor::Initial => Ok(iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]])),
             Executor::UserProvided(loaded) => {
-                let raw = crate::state::world_projection::hash_value(loaded.raw_executor.as_ref())?;
+                let raw = crate::state::world_projection::hash_value(&*loaded.raw_executor)?;
                 Ok(iroha_crypto::Hash::new_from_chunks(&[
                     DOMAIN,
                     &[1],
@@ -9094,6 +9276,7 @@ mod tests {
             let mut cache = IvmCache::new();
             crate::executor::Executor::Initial
                 .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("an unpermitted ballot must reject");
             transaction.last_tx_gas_used
         };
@@ -9177,6 +9360,7 @@ mod tests {
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("live batch executes its generic IVM trigger");
         assert_eq!(
             state_tx.last_tx_gas_used,
@@ -9227,6 +9411,7 @@ mod tests {
             .expect("register failing trigger");
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("failing trigger rejects its enclosing live batch");
         assert_eq!(
             state_tx.last_tx_gas_used,
@@ -12585,9 +12770,7 @@ mod tests {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             access_log: None,
-            events_commitment: Hash::new(b"events"),
             gas_used: replay_gas,
-            trace_hash: Hash::new(b"trace"),
         };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -12678,9 +12861,7 @@ mod tests {
                 Some(authorization.clone()),
             )]),
             access_log: None,
-            events_commitment: Hash::new(b"events"),
             gas_used: 0,
-            trace_hash: Hash::new(b"trace"),
         };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -12721,9 +12902,7 @@ mod tests {
             durable_state_overlay: BTreeMap::from([(marker.clone(), Some(stored))]),
             durable_state_authorizations: BTreeMap::new(),
             access_log: None,
-            events_commitment: Hash::new(b"malformed-events"),
             gas_used: 0,
-            trace_hash: Hash::new(b"malformed-trace"),
         };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut malformed_block = state.block(header);
@@ -12779,9 +12958,7 @@ mod tests {
                 Some(authorization.clone()),
             )]),
             access_log: None,
-            events_commitment: Hash::new(b"foreign-events"),
             gas_used: 0,
-            trace_hash: Hash::new(b"foreign-trace"),
         };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut foreign_block = state.block(header);
@@ -12840,9 +13017,7 @@ mod tests {
             durable_state_overlay: BTreeMap::from([(marker.clone(), Some(vec![0xA5]))]),
             durable_state_authorizations: BTreeMap::from([(marker.clone(), None)]),
             access_log: None,
-            events_commitment: Hash::new(b"events"),
             gas_used: 0,
-            trace_hash: Hash::new(b"trace"),
         };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -12939,9 +13114,7 @@ mod tests {
                 durable_state_overlay: BTreeMap::new(),
                 durable_state_authorizations: BTreeMap::new(),
                 access_log: None,
-                events_commitment: Hash::new(b"events"),
                 gas_used: replay_gas,
-                trace_hash: Hash::new(b"supplied replay trace"),
             };
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
@@ -13415,6 +13588,7 @@ mod tests {
                 transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("authenticated genesis execution must not require Nexus fee limits");
     }
     #[test]
@@ -13456,6 +13630,7 @@ mod tests {
                 transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("authenticated genesis generic IVM execution must remain fee-free");
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
@@ -13471,6 +13646,110 @@ mod tests {
             &supply_before,
             "generic IVM genesis execution must not burn fee-asset supply"
         );
+    }
+    #[test]
+    fn local_checkout_deferral_abandons_transaction_without_gas_or_fee() {
+        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let transaction = TransactionBuilder::new_genesis(
+            authority.clone(),
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    fee_asset.clone(),
+                    Quantity::from(2_u32),
+                )],
+                core::num::NonZeroU64::new(1_000_000),
+            ),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let (payer_asset_id, payer_before, supply_before) =
+            configure_direct_genesis_ivm_fee_fixture(
+                &mut state_transaction,
+                &authority,
+                &fee_asset,
+            );
+        let retry_transaction = transaction.clone();
+        let mut ivm_cache = IvmCache::new();
+        let shared_cache = ivm_cache.prepared_contract_cache();
+        shared_cache.set_checkout_refusal_for_test(Some(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        ));
+        let result = super::Executor::Initial.execute_transaction(
+            &mut state_transaction,
+            &authority,
+            transaction,
+            &mut ivm_cache,
+        );
+        assert_eq!(
+            result,
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+            ))
+        );
+        assert_eq!(state_transaction.last_tx_gas_used, 0);
+        assert_eq!(
+            state_transaction.execution_deferral(),
+            Some(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
+        );
+        // Releasing local pressure cannot bless this already incomplete overlay.
+        shared_cache.set_checkout_refusal_for_test(None);
+        assert_eq!(
+            test_asset_balance(&state_transaction, &payer_asset_id),
+            payer_before,
+            "generic IVM genesis execution must not debit its payer"
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .asset_definition(&fee_asset)
+                .expect("direct-fee asset definition")
+                .total_quantity(),
+            &supply_before,
+            "generic IVM genesis execution must not burn fee-asset supply"
+        );
+        drop(state_transaction);
+        let mut retry = block.transaction();
+        configure_direct_genesis_ivm_fee_fixture(&mut retry, &authority, &fee_asset);
+        super::Executor::Initial
+            .execute_transaction(
+                &mut retry,
+                &authority,
+                retry_transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect("fresh attempt executes after local capacity returns");
+        let retry_gas = retry.last_tx_gas_used;
+        let retry_balance = test_asset_balance(&retry, &payer_asset_id);
+        drop(retry);
+        let mut cold = block.transaction();
+        configure_direct_genesis_ivm_fee_fixture(&mut cold, &authority, &fee_asset);
+        super::Executor::Initial
+            .execute_transaction(
+                &mut cold,
+                &authority,
+                retry_transaction,
+                &mut IvmCache::new(),
+            )
+            .expect("cold attempt executes identically");
+        assert_eq!(cold.last_tx_gas_used, retry_gas);
+        assert!(
+            retry_gas > 0,
+            "the compared successful executions actually consumed gas"
+        );
+        assert_eq!(test_asset_balance(&cold, &payer_asset_id), retry_balance);
     }
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
@@ -13567,6 +13846,7 @@ mod tests {
                 transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("authenticated genesis prepared-contract IVM execution must remain fee-free");
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
@@ -15219,16 +15499,65 @@ mod tests {
             message.contains("live authorization") && message.contains("sequential")));
     }
     use std::collections::{BTreeMap, BTreeSet};
-    #[cfg(feature = "zk-preverify")]
+    #[allow(dead_code)]
+    fn encode_load(rd: u8, base: u8, imm12: u16, funct3: u8) -> u32 {
+        let imm = u32::from(imm12 & 0x0fff);
+        (imm << 20)
+            | ((u32::from(base) & 0x1f) << 15)
+            | ((u32::from(funct3) & 0x7) << 12)
+            | ((u32::from(rd) & 0x1f) << 7)
+            | 0x03
+    }
+    #[allow(dead_code)]
+    fn encode_store(base: u8, rs: u8, imm12: u16, funct3: u8) -> u32 {
+        let imm = u32::from(imm12 & 0x0fff);
+        let imm_hi = (imm >> 5) & 0x7f;
+        let imm_lo = imm & 0x1f;
+        (imm_hi << 25)
+            | ((u32::from(rs) & 0x1f) << 20)
+            | ((u32::from(base) & 0x1f) << 15)
+            | ((u32::from(funct3) & 0x7) << 12)
+            | (imm_lo << 7)
+            | 0x23
+    }
+    #[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
+    fn preverify_stark_fixture() -> (
+        String,
+        iroha_data_model::proof::VerifyingKeyBox,
+        iroha_data_model::proof::ProofBox,
+    ) {
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = format!("{backend}:executor-preverify-v1");
+        let key = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        };
+        let vk = iroha_data_model::proof::VerifyingKeyBox::new(
+            backend.into(),
+            norito::encode_canonical(&key).expect("canonical STARK verifier key"),
+        );
+        let proof = crate::zk::prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk,
+            b"executor-preverify-v1",
+            vec![vec![[0x11; 32]]],
+        )
+        .expect("native STARK preverify fixture");
+        (circuit_id, vk, proof)
+    }
+    #[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
     #[test]
     fn preverify_and_dedup_across_transactions_in_block() {
         use iroha_data_model::{
-            proof::{
-                ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
-                VerifyingKeyRecord,
-            },
+            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
             transaction::{Executable, TransactionBuilder},
-            zk::{BackendTag, OpenVerifyEnvelope},
+            zk::BackendTag,
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -15238,23 +15567,26 @@ mod tests {
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut world = World::with([domain], [alice_account], []);
-        let backend: Ident = "halo2/ipa".parse().expect("backend ident");
-        let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
+        let backend: Ident = "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+            .parse()
+            .expect("backend ident");
+        let (circuit_id, vk, proof) = preverify_stark_fixture();
         let vk_id = VerifyingKeyId::new(backend.clone(), "vk_preverify");
         let vk_commitment = crate::zk::hash_vk(&vk);
         let mut vk_record = VerifyingKeyRecord::new_with_owner(
             1,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            circuit_id,
             None,
             "test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pasta",
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            BackendTag::Stark,
+            "goldilocks",
+            iroha_crypto::Hash::new(b"executor-preverify-v1").into(),
             vk_commitment,
         );
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         vk_record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
-        vk_record.max_proof_bytes = 1024;
+        vk_record.max_proof_bytes = u32::try_from(proof.bytes.len()).expect("bounded proof size");
+        vk_record.gas_schedule_id = Some("stark_default".to_owned());
         vk_record.key = Some(vk);
         world.verifying_keys.insert(vk_id.clone(), vk_record);
         let kura = Kura::blank_kura_for_testing();
@@ -15262,19 +15594,6 @@ mod tests {
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
-        // Build attachments with canonical envelope metadata so preverify
-        // exercises deduplication after production-shaped proof admission.
-        let envelope = OpenVerifyEnvelope::new(
-            BackendTag::Halo2IpaPasta,
-            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-            vk_commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
-            vec![1u8, 2, 3],
-        );
-        let proof = ProofBox::new(
-            backend.clone(),
-            norito::encode_canonical(&envelope).expect("encode preverify envelope"),
-        );
         let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         let attachments = ProofAttachmentList::try_from(vec![attachment.clone()])
@@ -15305,27 +15624,26 @@ mod tests {
                 block.transaction_for_fastpq_testing(Hash::from(tx1.hash_as_entrypoint()));
             executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx1, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect("preverify accepted");
         }
         // Second identical proof should be flagged as duplicate by per-block dedup
         {
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx2.hash_as_entrypoint()));
-            let res =
-                executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache);
+            let res = executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             assert!(res.is_err(), "duplicate proof should be rejected");
         }
     }
-    #[cfg(feature = "zk-preverify")]
+    #[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
     #[test]
     fn preverify_attachments_enforce_verifying_key_height_window() {
         use iroha_data_model::{
-            proof::{
-                ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
-                VerifyingKeyRecord,
-            },
+            proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId, VerifyingKeyRecord},
             transaction::{Executable, TransactionBuilder},
-            zk::{BackendTag, OpenVerifyEnvelope},
+            zk::BackendTag,
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -15339,38 +15657,31 @@ mod tests {
             let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
             let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let mut world = World::with([domain], [alice_account], []);
-            let backend: Ident = "halo2/ipa".parse().expect("backend ident");
-            let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
+            let backend: Ident = "stark/fri/poseidon-x7-goldilocks-6x64-v1"
+                .parse()
+                .expect("backend ident");
+            let (circuit_id, vk, proof) = preverify_stark_fixture();
             let vk_id = VerifyingKeyId::new(backend.clone(), "vk_height_window");
             let vk_commitment = crate::zk::hash_vk(&vk);
             let mut vk_record = VerifyingKeyRecord::new_with_owner(
                 1,
-                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+                circuit_id,
                 None,
                 "test",
-                BackendTag::Halo2IpaPasta,
-                "pasta",
-                crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+                BackendTag::Stark,
+                "goldilocks",
+                iroha_crypto::Hash::new(b"executor-preverify-v1").into(),
                 vk_commitment,
             );
             vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
             vk_record.activation_height = activation_height;
             vk_record.withdraw_height = withdraw_height;
             vk_record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
-            vk_record.max_proof_bytes = 1024;
+            vk_record.max_proof_bytes =
+                u32::try_from(proof.bytes.len()).expect("bounded proof size");
+            vk_record.gas_schedule_id = Some("stark_default".to_owned());
             vk_record.key = Some(vk);
             world.verifying_keys.insert(vk_id.clone(), vk_record);
-            let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-                vk_commitment,
-                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
-                vec![1u8, 2, 3],
-            );
-            let proof = ProofBox::new(
-                backend.clone(),
-                norito::encode_canonical(&envelope).expect("encode preverify envelope"),
-            );
             let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
             attachment.vk_commitment = Some(vk_commitment);
             let state = State::new_with_chain(
@@ -15402,7 +15713,9 @@ mod tests {
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let executor = super::Executor::Initial;
             let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-            executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
         }
         for (label, activation_height, withdraw_height, block_height) in [
             ("future", Some(2), None, 1),
@@ -15479,6 +15792,7 @@ mod tests {
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("non-production proof backend label must fail before vk lookup");
             match err {
                 ValidationFail::NotPermitted(msg) => {
@@ -15602,6 +15916,7 @@ mod tests {
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("malformed proof attachment must fail before vk lookup");
             match err {
                 ValidationFail::NotPermitted(msg) => {
@@ -17426,7 +17741,9 @@ mod tests {
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut stx = block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
-        let res = executor.execute_transaction(&mut stx, &bob_id, tx, &mut ivm_cache);
+        let res = executor
+            .execute_transaction(&mut stx, &bob_id, tx, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection);
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny NFT metadata edits by non-domain owners"
@@ -17482,7 +17799,9 @@ mod tests {
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut stx = block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
-        let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
+        let res = executor
+            .execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection);
         match res {
             Err(ValidationFail::NotPermitted(msg)) => assert!(
                 msg.contains("direct signing with multisig accounts is forbidden"),
@@ -17550,6 +17869,88 @@ mod tests {
         LoadedExecutor::load(raw).expect("load executor test program")
     }
     #[test]
+    fn executor_pool_eviction_keeps_active_borrower_and_releases_indexes() {
+        let loaded = LoadedExecutor::load(data_model_executor::Executor::new(
+            IvmBytecode::from_compiled(generate_ok_program()),
+        ))
+        .unwrap();
+        let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+        let mut lease = loaded
+            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .unwrap();
+        {
+            let mut pool = loaded.runtime_pool.lock().unwrap();
+            pool.clear_storage();
+            assert_eq!(pool.index_memory.bytes(), 0);
+            assert_eq!(pool.order.capacity(), 0);
+            assert!(pool.variants.is_empty());
+        }
+        lease.memory.preload_input(0, &[0x5a]).unwrap();
+        assert_eq!(
+            lease.memory.load_region(Memory::INPUT_START, 1).unwrap(),
+            &[0x5a]
+        );
+        drop(lease);
+        assert!(
+            loaded.runtime_pool.lock().unwrap().variants.is_empty(),
+            "an evicted borrower cannot republish its stale pool identity"
+        );
+        loaded
+            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .unwrap();
+    }
+    #[test]
+    fn executor_pool_unwind_returns_reset_runtime_and_zero_capacity_stays_cold() {
+        let loaded = LoadedExecutor::load(data_model_executor::Executor::new(
+            IvmBytecode::from_compiled(generate_ok_program()),
+        ))
+        .unwrap();
+        let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+        assert!(
+            crate::panic_hook::catch_unwind_suppressed(std::panic::AssertUnwindSafe(|| {
+                let mut lease = loaded
+                    .checkout_runtime_for_gas_limit(
+                        parameters.fuel().get(),
+                        parameters.memory().get(),
+                    )
+                    .unwrap();
+                lease.memory.preload_input(0, &[0x5a]).unwrap();
+                panic!("unwind through executor lease");
+            }))
+            .is_err()
+        );
+        let lease = loaded
+            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .unwrap();
+        assert_eq!(
+            lease.memory.load_region(Memory::INPUT_START, 1).unwrap(),
+            &[0]
+        );
+        drop(lease);
+        {
+            let mut pool = loaded.runtime_pool.lock().unwrap();
+            pool.clear_storage();
+            pool.capacity = 0;
+        }
+        for _ in 0..2 {
+            let mut lease = loaded
+                .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+                .unwrap();
+            lease.set_register(10, Memory::OUTPUT_START);
+            lease.run().unwrap();
+            let verdict: Result<(), ValidationFail> = Ok(());
+            assert_eq!(
+                executor_output_payload(&lease, Memory::OUTPUT_START, "verdict").unwrap(),
+                verdict.encode(),
+                "cold execution must still publish the complete encoded verdict"
+            );
+            drop(lease);
+            let pool = loaded.runtime_pool.lock().unwrap();
+            assert!(pool.variants.is_empty());
+            assert_eq!(pool.index_memory.bytes(), 0);
+        }
+    }
+    #[test]
     fn overlapping_executor_runtimes_return_with_their_own_baselines() {
         let verdict: Result<(), ValidationFail> = Ok(());
         let encoded = verdict.encode();
@@ -17559,8 +17960,19 @@ mod tests {
             &encoded,
         );
         let parameters = iroha_data_model::parameter::SmartContractParameters::default();
-        let gas_limit = parameters.fuel().get();
+        // Keep the two immutable baselines and the returned VM within the real
+        // aggregate retention budget while the first VM remains borrowed. The
+        // maximum-stack default can legitimately force this overlap cold.
+        let gas_limit = 10_000;
         let heap_limit = parameters.memory().get();
+        loaded.runtime_pool.lock().unwrap().clear_storage();
+        drop(
+            loaded
+                .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+                .expect("warm bounded-stack executor runtime"),
+        );
+        let (before, variants) = loaded.runtime_pool_snapshot();
+        assert_eq!(variants, 1);
         let first = loaded
             .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
             .expect("first pooled executor runtime");
@@ -17599,11 +18011,11 @@ mod tests {
         );
         let (stats, variants) = loaded.runtime_pool_snapshot();
         assert_eq!(variants, 1);
-        assert_eq!(stats.hits, 2);
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.program_loads, 2);
-        assert_eq!(stats.template_builds, 2);
-        assert_eq!(stats.dirty_resets, 1);
+        assert_eq!(stats.hits - before.hits, 2);
+        assert_eq!(stats.misses - before.misses, 1);
+        assert_eq!(stats.program_loads - before.program_loads, 1);
+        assert_eq!(stats.template_builds - before.template_builds, 1);
+        assert_eq!(stats.dirty_resets - before.dirty_resets, 1);
         drop((third, first));
     }
     fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
@@ -17842,6 +18254,7 @@ mod tests {
             entry_pc: 0,
         };
         let interface = EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "executor-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -17865,7 +18278,7 @@ mod tests {
         };
         let mut program = metadata.encode();
         program.extend_from_slice(&interface_section);
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         (program, expected_entrypoint_pc)
     }
     fn contract_program_with_private_input_entrypoint(
@@ -17893,6 +18306,7 @@ mod tests {
             entry_pc: 0,
         };
         let interface = EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "PrivateInputContract".to_owned(),
             compiler_fingerprint: "executor-private-input-test".to_owned(),
             abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -17920,7 +18334,7 @@ mod tests {
             )
             .to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         program
     }
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
@@ -18063,6 +18477,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("missing entrypoint permission must deny the direct call");
         assert!(
             error.to_string().contains(REQUIRED_PERMISSION),
@@ -18105,6 +18520,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("granted direct contract call must execute");
         assert_eq!(
             ivm::argument_record_decode_count(),
@@ -18173,6 +18589,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("an active Parliament hold must suspend the direct contract call");
         assert!(
             matches!(held, ValidationFail::NotPermitted(ref message)
@@ -18205,6 +18622,7 @@ seiyaku GuardedValue {
                 raw_transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("an active Parliament hold must suspend raw-IVM contract dispatch");
         assert!(
             matches!(held_raw, ValidationFail::NotPermitted(ref message)
@@ -18257,6 +18675,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("a warm cache must not substitute for missing live bytecode");
         assert!(missing_code.to_string().contains("not found in WSV"));
         assert_eq!(ivm::argument_record_decode_count(), 0);
@@ -18289,6 +18708,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("a warm cache must not substitute for a missing live manifest");
         assert!(missing_manifest.to_string().contains("has no manifest"));
         assert_eq!(ivm::argument_record_decode_count(), 0);
@@ -18322,6 +18742,7 @@ seiyaku GuardedValue {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("revoked direct-call permission must deny execution");
         assert!(revoked.to_string().contains(REQUIRED_PERMISSION));
         assert_eq!(
@@ -18392,6 +18813,7 @@ seiyaku GuardedValueRebound {
                 transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("a signed direct call must not cross a live code rebind");
         assert!(
             matches!(rebound, ValidationFail::NotPermitted(ref message)
@@ -18459,6 +18881,7 @@ seiyaku GuardedValueRebound {
         ivm::reset_argument_record_decode_count();
         let deactivated = super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("deactivated direct-call target must deny execution");
         assert!(
             deactivated.to_string().contains("not found"),
@@ -18604,6 +19027,7 @@ seiyaku OrderedBatchGuard {
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("grant-call-revoke batch must execute in order");
         let marker: Name = "mixed_batch_marker".parse().expect("marker name");
         assert!(
@@ -18654,6 +19078,7 @@ seiyaku OrderedBatchGuard {
                 capped_transaction.clone(),
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("contract-emitted ISIs must count toward the mixed-batch overlay cap");
         assert!(
             matches!(instruction_cap_error, ValidationFail::NotPermitted(ref message)
@@ -18679,6 +19104,7 @@ seiyaku OrderedBatchGuard {
                 capped_transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("contract-emitted ISIs must count toward the mixed-batch byte cap");
         assert!(
             matches!(byte_cap_error, ValidationFail::NotPermitted(ref message)
@@ -18726,6 +19152,7 @@ seiyaku OrderedBatchGuard {
                 failing_transaction,
                 &mut ivm_cache,
             )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("the revoked permission must reject the later call");
         assert!(error.to_string().contains("CanInvokeContractEntrypoint"));
         drop(failed_state_tx);
@@ -18934,6 +19361,7 @@ seiyaku IdentityRequired {
             ivm::reset_argument_record_decode_count();
             let error = super::Executor::Initial
                 .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection)
                 .expect_err("identity-less raw contract dispatch must fail closed");
             assert!(
                 error
@@ -19432,6 +19860,7 @@ seiyaku ReviewedValue {
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect("contract-less generic IVM must execute at pc zero");
         state_transaction.apply();
         let mut reserved_metadata = generic_metadata;
@@ -19446,6 +19875,7 @@ seiyaku ReviewedValue {
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("generic IVM must not accept contract metadata");
         assert!(
             error.to_string().contains("reserved `contract_manifest`"),
@@ -19477,6 +19907,7 @@ seiyaku ReviewedValue {
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("a manifest-bound hash must not execute as generic IVM");
         assert!(error.to_string().contains("contract manifest"));
         drop(state_transaction);
@@ -19492,6 +19923,7 @@ seiyaku ReviewedValue {
         state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
+            .map_err(crate::execution_attempt::expect_completed_rejection)
             .expect_err("direct generic IVM must honor the live cycle ceiling");
         assert!(matches!(
             error,

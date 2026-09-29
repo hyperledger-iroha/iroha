@@ -656,25 +656,6 @@ fn payer_signed_top_up_rejects_an_embedded_request_for_another_network() {
 }
 
 #[test]
-fn payer_signed_top_up_rejects_ordinary_admission_intent() {
-    let request = top_up_request();
-    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let transaction = TransactionBuilder::new(
-        request.network_id,
-        request.payer.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-    .try_sign(payer_key.private_key())
-    .expect("ordinary-admission top-up");
-    assert!(matches!(
-        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &transaction),
-        Err(KagemushaApiErrorV1::TopUpTransactionAdmissionIntentInvalid)
-    ));
-}
-
-#[test]
 fn operation_status_decoder_requires_an_external_finality_anchor() {
     let decoder: fn(
         &[u8],

@@ -109,6 +109,7 @@ impl Cluster {
 
     fn config(&self) -> HeightConfig {
         HeightConfig {
+            epoch: Box::new(crate::testing::TEST_EPOCH),
             committee: self.v.committee.clone(),
             params: self.params,
         }
@@ -134,9 +135,12 @@ impl Cluster {
             },
         };
         let t = tip.height;
-        let mut configs = vec![(t + 1, self.config()), (t + 2, self.config())];
+        let mut configs = vec![
+            (t + 1, crate::types::ConfigSlot::Ready(self.config())),
+            (t + 2, crate::types::ConfigSlot::Ready(self.config())),
+        ];
         if t > 0 {
-            configs.push((t, self.config()));
+            configs.push((t, crate::types::ConfigSlot::Ready(self.config())));
         }
         let state = node
             .record
@@ -225,6 +229,18 @@ impl Cluster {
                         self.send(i, key, &msg);
                     }
                 }
+                // The fixture has no application control work: return its explicit
+                // empty response at the current time, as the full simulator does.
+                Action::BuildControlWitness { req, context } => self.schedule(
+                    self.now,
+                    i,
+                    Event::ControlWitnessBuilt {
+                        req,
+                        context,
+                        witness: crate::types::ControlWitness::empty(),
+                        attest: false,
+                    },
+                ),
                 Action::BuildPayload {
                     req, height, view, ..
                 } => {
@@ -280,7 +296,9 @@ impl Cluster {
                             height,
                             block_hash: value.0,
                             header,
-                            config_after_next: self.config(),
+                            config: crate::types::AppliedConfig::Continuation {
+                                after_next: crate::types::ConfigSlot::Ready(self.config()),
+                            },
                         },
                     );
                 }
@@ -352,6 +370,8 @@ impl Cluster {
                 Action::ReportEvidence(_) => self.nodes[i].evidence += 1,
                 Action::Halt(reason) => self.nodes[i].halted = Some(reason),
                 Action::DiscardExecution { .. }
+                | Action::DriveApplicationControl { .. }
+                | Action::ReceiveApplicationControl { .. }
                 | Action::PayloadRejected { .. }
                 | Action::LocalFault(_) => {}
             }

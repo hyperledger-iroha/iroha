@@ -313,7 +313,7 @@ mod tests {
         );
         let absent = json.replace("\"upto_epoch\":0,", "");
         assert!(norito::json::from_str::<PublicLanePreparationRequestV1>(&absent).is_err());
-        let unknown = json.replacen("{", "{\"unexpected\":true,", 1);
+        let unknown = json.replacen('{', "{\"unexpected\":true,", 1);
         assert!(norito::json::from_str::<PublicLanePreparationRequestV1>(&unknown).is_err());
     }
 }

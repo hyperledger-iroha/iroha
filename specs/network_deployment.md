@@ -467,7 +467,7 @@ node_tunable = ["logger.level", "logger.filter"]
 consensus_mode = "npos"
 block_cadence_ms = 5000
 epoch_length_blocks = 3600
-# block_max_transactions, ivm_gas_limit_per_block, npos_seat_band_pct, npos_min_self_bond
+# block_max_transactions, ivm_gas_limit_per_block, npos_min_self_bond
 
 [static]      # consensus-bound, roster-independent -> consensus_digest
 # 155 execution-policy fields (actual.rs:3639-4304), 59 AMX fields (actual.rs:5056-5260), pipeline.gas,

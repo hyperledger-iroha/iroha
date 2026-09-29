@@ -193,6 +193,7 @@ impl Fixture {
         let block = Block {
             header: BlockHeader {
                 instance,
+                epoch: super::super::lane_height_config(&record).unwrap().epoch.id,
                 height,
                 origin_view: 0,
                 parent_hash: parent,
@@ -209,6 +210,7 @@ impl Fixture {
         let qc = Qc {
             kind: VoteKind::Commit,
             instance,
+            epoch: block.header.epoch,
             height,
             view: 0,
             block_hash,
@@ -247,7 +249,6 @@ impl Fixture {
                 transactions: 0,
                 time_floor_ms: floor,
             },
-            None,
         )
         .expect("a merge-only proposal")
     }
@@ -278,6 +279,42 @@ fn global_blocks_merge_fresh_lane_blocks_and_drop_what_they_must_not_execute() {
     fixture.chain.commit(Vec::new());
     let merged = fixture.chain.committed(4);
     assert_eq!(merged.block().merged_entrypoint_count(), 1);
+    let routed_hash = TransactionEntrypoint::External(routed.clone()).hash();
+    let execution = merged
+        .block()
+        .execution_context()
+        .expect("original executed context");
+    let context = execution
+        .external
+        .iter()
+        .find(|context| context.entrypoint_hash == routed_hash)
+        .expect("the exact merged source has an execution context");
+    assert_eq!(
+        context,
+        &ExternalExecutionContext::new(routed_hash, record.lane, record.dataspace)
+    );
+    assert_eq!(
+        context.lane_id, LANE,
+        "retired Nexus defaults cannot remap a merged lane to zero"
+    );
+    let plan = iroha_data_model::block::lane_admission::RoutingPlan::single(
+        iroha_data_model::block::lane_admission::RoutingDecision::new(
+            record.lane,
+            record.dataspace,
+        ),
+    );
+    assert_eq!(context.routing_plan_digest, plan.digest());
+    assert_eq!(context.routing_plan_legs.len(), 1);
+    assert!(context.native_amx_receipt.is_none());
+    assert_eq!(
+        execution
+            .external
+            .iter()
+            .filter(|row| row.entrypoint_hash == routed_hash)
+            .count(),
+        1
+    );
+
     assert!(
         fixture.committed(&routed),
         "the routed transaction executes"
@@ -335,7 +372,7 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
     };
     let expand_with = |merges: &[SumeragiLaneMerge], floor: u64| {
         expand(
-            &fixture.chain.state().view(),
+            fixture.chain.state(),
             &fixture.proposal(merges, floor),
             &*fixture.stores,
             Duration::ZERO,
@@ -389,4 +426,90 @@ fn malformed_merges_are_invalid_and_missing_blocks_pending() {
             time_floor_ms: created + 1,
         }
     );
+}
+
+#[test]
+fn expansion_consumes_only_the_exact_original_proposal() {
+    let fixture = Fixture::start();
+    let proposal = fixture.proposal(&[], 0);
+    let expansion = expand(
+        fixture.chain.state(),
+        &proposal,
+        &*fixture.stores,
+        Duration::ZERO,
+    )
+    .unwrap();
+    let mut foreign = proposal.clone();
+    let mut context = foreign.execution_context().cloned().unwrap_or_default();
+    context
+        .queue_plan_admissions
+        .push(b"changed expansion source".to_vec());
+    foreign.set_execution_context(Some(context));
+    let foreign_hash = foreign.hash();
+    let (returned, reason) = expansion
+        .apply(
+            foreign,
+            fixture.chain.state(),
+            fixture.chain.state().state_view_generation(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        returned.hash(),
+        foreign_hash,
+        "refusal preserves the caller's original"
+    );
+    assert!(matches!(reason, MergeError::Invalid(_)));
+    let expansion = expand(
+        fixture.chain.state(),
+        &proposal,
+        &*fixture.stores,
+        Duration::ZERO,
+    )
+    .unwrap();
+    let expected = proposal.canonical_proposal_wire_hash().unwrap();
+    let (retained, input) = expansion
+        .apply(
+            proposal,
+            fixture.chain.state(),
+            fixture.chain.state().state_view_generation(),
+        )
+        .unwrap();
+    assert_eq!(retained.canonical_proposal_wire_hash().unwrap(), expected);
+    assert!(input.merges.is_empty());
+}
+
+#[test]
+fn expansion_refuses_equivalent_foreign_state_and_changed_publication() {
+    let mut fixture = Fixture::start();
+    let foreign = Fixture::start();
+    let state = std::sync::Arc::clone(fixture.chain.state());
+    let proposal = fixture.proposal(&[], 0);
+    let expected = proposal.canonical_proposal_wire_hash().unwrap();
+    let expansion = expand(&state, &proposal, &*fixture.stores, Duration::ZERO).unwrap();
+    assert_eq!(
+        state.state_view_generation(),
+        foreign.chain.state().state_view_generation()
+    );
+    let (returned, reason) = expansion
+        .apply(
+            proposal,
+            foreign.chain.state(),
+            foreign.chain.state().state_view_generation(),
+        )
+        .unwrap_err();
+    assert!(matches!(reason, MergeError::Pending(_)));
+    assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
+
+    let expansion = expand(&state, &returned, &*fixture.stores, Duration::ZERO).unwrap();
+    let captured = state.state_view_generation();
+    fixture.chain.commit(Vec::new());
+    assert_ne!(state.state_view_generation(), captured);
+    let (returned, reason) = expansion.apply(returned, &state, captured).unwrap_err();
+    assert!(matches!(reason, MergeError::Pending(_)));
+    assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
+
+    let expansion = expand(&state, &returned, &*fixture.stores, Duration::ZERO).unwrap();
+    let (returned, reason) = expansion.apply(returned, &state, captured).unwrap_err();
+    assert!(matches!(reason, MergeError::Pending(_)));
+    assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
 }

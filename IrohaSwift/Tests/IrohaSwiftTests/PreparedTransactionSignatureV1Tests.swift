@@ -218,9 +218,11 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
         expectedNetworkId: faucetVector.networkId
       )
     )
+    var substitutedAssetUUID = Data(repeating: 0xa5, count: 16)
+    substitutedAssetUUID[6] = 0x45
     let substitutedAsset = try XCTUnwrap(
       AssetDefinitionAddressCodec.definitionLiteral(
-        uuidBytes: Data(repeating: 0xa5, count: 16)
+        uuidBytes: substitutedAssetUUID
       )
     )
     let substitutedAssetPolicy = try ToriiAccountFaucetPolicyV1(

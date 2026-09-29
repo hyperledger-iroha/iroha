@@ -675,6 +675,12 @@ mod block {
         LocalStateStorage(#[source] crate::state::StateStorageAdmissionError),
         /// The original prepaid history could not acquire its publication locks.
         MembershipAdmission(#[source] MembershipAdmissionError),
+        /// The original hash publication reader or writer is busy
+        BlockHashesBusy(concread::release::ReleaseWait),
+        /// An original World, runtime or membership publication participant is busy
+        PublicationBusy(concread::release::ReleaseWait),
+        /// Local execution resources refused publication before any effects: {0}
+        ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
         /// `TransactionsBlock::insert_block()` was not called
         MissingInsertBlock,
         /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;
@@ -705,14 +711,19 @@ mod block {
         AxtAssetIncarnation,
         /// Prepared World commit does not match the actual State or target height
         WorldCommitPreparation,
+        /// Staged KAGEMUSHA release authority differs from this block's installed verifier
+        KagemushaVerifierAuthority,
+        /// No finalized governance owner admits a changed KAGEMUSHA verifier registry yet
+        KagemushaGovernanceUnavailable,
         /// The applying State was busy or changed during its complete snapshot observation
         SnapshotObservationChanged,
         /// A stable State snapshot projection or encoding is malformed
         SnapshotProjection,
+        /// This original State publication has already entered terminal recovery
+        PublicationRecoveryRequired,
     }
     impl From<crate::state::LaneLifecycleError> for TransactionsBlockError {
         fn from(error: crate::state::LaneLifecycleError) -> Self {
-            use crate::state::LaneLifecycleError;
             match error {
                 error @ (LaneLifecycleError::Storage(_)
                 | LaneLifecycleError::GeometryStorage(_)
@@ -1681,6 +1692,16 @@ mod membership_projection {
 #[cfg(test)]
 pub(in crate::state) use membership_projection::TransactionsMembershipTransition;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: consume the exact membership projection in the complete State root owner"
+    )
+)]
+#[path = "storage_transactions/authority.rs"]
+pub(in crate::state) mod authority;
+
 #[cfg(test)]
 #[path = "storage_transactions_projection_tests.rs"]
 mod projection_tests;
@@ -1716,10 +1737,26 @@ mod serialization {
         out.push('}');
     }
     fn write_transactions_block_json(block: &TransactionsBlock<'_>, out: &mut String) {
+        let predecessor = block.latest_block_ref.load();
+        write_transactions_cut_json(
+            block.current_block.as_ref(),
+            predecessor.as_deref(),
+            &block.baseline,
+            block.revert,
+            out,
+        );
+    }
+    pub(super) fn write_transactions_cut_json(
+        current: Option<&Tip>,
+        predecessor: Option<&BlockInfo>,
+        baseline: &HistoryReader<'_>,
+        revert: bool,
+        out: &mut String,
+    ) {
         out.push('{');
         json::write_json_string("latest_block", out);
         out.push(':');
-        match block.current_block.as_ref() {
+        match current {
             Some(current) => JsonSerializeTrait::json_serialize(&**current, out),
             None => out.push_str("null"),
         }
@@ -1728,17 +1765,16 @@ mod serialization {
         out.push(':');
         let mut map = BTreeMap::new();
         #[allow(clippy::explicit_iter_loop)]
-        for (key, value) in block.baseline.iter() {
+        for (key, value) in baseline.iter() {
             map.insert(*key, *value);
         }
-        if block.revert {
-            if let Some(current) = block.current_block.as_ref() {
+        if revert {
+            if let Some(current) = current {
                 map.retain(|_, height| *height < current.height);
             }
         } else {
-            let previous = block.latest_block_ref.load();
-            if let Some(previous) = previous.as_ref() {
-                let repeated = block.current_block.as_ref().is_some_and(|current| {
+            if let Some(previous) = predecessor {
+                let repeated = current.is_some_and(|current| {
                     current.height == previous.height
                         && current.transactions == previous.transactions
                 });
@@ -2484,5 +2520,19 @@ mod tests {
         let mut block = storage.block();
         block.insert_block(HashSet::from([key1]), value);
         block.insert_block(HashSet::from([key2]), value);
+    }
+}
+
+#[cfg(test)]
+impl TransactionsStorage {
+    /// Hold the actual native history writer while a caller probes publication.
+    pub(in crate::state) fn with_physical_publication_blocked_for_test<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> R {
+        let blocker = self.released.guard(self.blocks.acquire_writer());
+        let result = action();
+        drop(blocker);
+        result
     }
 }

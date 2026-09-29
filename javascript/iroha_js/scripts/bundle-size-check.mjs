@@ -19,20 +19,20 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node20.19",
     // Norito-heavy validation, Kagemusha, and route governance stay behind the
-    // optional boundary. The reviewed eager path is 806,184 bytes, including
-    // private Torii security state, fail-closed receipts, and immutable native
-    // dependency contexts; the 788 KiB ceiling leaves 728 bytes while every
-    // deferred closure remains independently inventoried below.
+    // optional boundary. The eager path is 798,128 bytes after retiring binding-only
+    // IVM invocation, within the reviewed 806,184-byte baseline. The 788 KiB ceiling
+    // leaves 8,784 bytes; the optional closure includes exact Kagemusha release
+    // governance schemas and remains independently inventoried below.
     limitKb: 788,
     reviewedEagerBytes: 806_184,
-    reviewedCombinedBytes: 1_065_555,
+    reviewedCombinedBytes: 1_101_362,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
         entryPoint: join(ROOT, "src", "toriiOptional.js"),
         edgeCount: 1,
-        reviewedBytes: 186_878,
-        limitKb: 183,
+        reviewedBytes: 222_685,
+        limitKb: 218,
       }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",

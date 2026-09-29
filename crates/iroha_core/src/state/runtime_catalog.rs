@@ -276,7 +276,7 @@ impl StateTransaction<'_, '_> {
         payload: &iroha_data_model::nexus::NexusCatalogTransitionV1,
     ) -> Result<(), LaneLifecycleError> {
         use iroha_data_model::nexus::{
-            LaneLifecycleParameterV1, LaneLifecyclePlan, NexusRuntimeCatalogV1,
+            NexusRuntimeCatalogV1,
         };
 
         payload

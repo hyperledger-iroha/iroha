@@ -17,6 +17,7 @@ impl Core {
             return;
         }
         match msg {
+            WireMessage::ApplicationControl(message) => self.on_application_control(from, message),
             // Rule 2: service messages are never height-filtered.
             WireMessage::Status(status) => self.on_status(from, *status),
             WireMessage::SyncRequest(request) => self.serve_sync(from.clone(), &request),
@@ -130,7 +131,7 @@ impl Core {
         if s.echo.is_none()
             && self.any_unanchored()
             && !self.is_local_key(from)
-            && (self.configs.get(&self.tip.height.saturating_add(2)))
+            && (self.config(self.tip.height.saturating_add(2)))
                 .is_some_and(|next| next.committee.contains(from))
         {
             let low = self.probe.get(from).copied().unwrap_or(u64::MAX);
@@ -236,16 +237,24 @@ impl Core {
         if echo.nonce != self.nonce || !self.any_unanchored() {
             return;
         }
-        let Some(next) = self.configs.get(&self.tip.height.saturating_add(2)) else {
+        let Some(next) = self.config(self.tip.height.saturating_add(2)) else {
             return;
         };
-        if !next.committee.contains(&echo.key) || self.is_local_key(&echo.key) {
+        if !next.committee.contains(&echo.key)
+            || self.is_local_key(&echo.key)
+            || echo.epoch != next.epoch.id
+            || !next.epoch.contains(height)
+        {
             return;
+        }
+        if self.probe_epoch != Some(echo.epoch) {
+            self.probe.clear();
+            self.probe_epoch = Some(echo.epoch);
         }
         if self.probe.get(&echo.key).is_some_and(|low| *low <= height) {
             return;
         }
-        let msg = preimage::echo_preimage(&self.instance, self.nonce, height);
+        let msg = preimage::echo_preimage(&self.instance, &echo.epoch, self.nonce, height);
         if !self.crypto.verify(&echo.key, &msg, &echo.sig) && !cfg!(sumeragi_mutation = "MS31e") {
             return;
         }
@@ -261,9 +270,12 @@ impl Core {
             return;
         }
         let t = self.tip.height;
-        let Some(next) = self.configs.get(&t.saturating_add(2)) else {
+        let Some(next) = self.config(t.saturating_add(2)) else {
             return;
         };
+        if self.probe_epoch != Some(next.epoch.id) {
+            return;
+        }
         let keys: Vec<PublicKey> = self.keys.iter().map(|k| k.pk.clone()).collect();
         if !safety::anchored(&next.committee, |k| keys.contains(k), &self.probe, t) {
             return;
@@ -284,6 +296,12 @@ impl Core {
     fn answer_probe(&mut self, to: &PublicKey, nonce: u64) {
         // The current round height (also while awaiting: the next round's).
         let h = self.tip.height.saturating_add(1);
+        let Some(epoch) = self.config(h).map(|config| *config.epoch) else {
+            return;
+        };
+        if !epoch.contains(h) {
+            return;
+        }
         let blocked = self
             .keys
             .iter()
@@ -311,7 +329,7 @@ impl Core {
         }
         peer.echoed_at = Some(now);
         let mut status = self.status_message();
-        let msg = preimage::echo_preimage(&self.instance, nonce, status.height);
+        let msg = preimage::echo_preimage(&self.instance, &epoch.id, nonce, status.height);
         let Some(key) = self.keys.get(slot) else {
             return;
         };
@@ -319,6 +337,7 @@ impl Core {
             return;
         };
         status.echo = Some(Echo {
+            epoch: epoch.id,
             nonce,
             key: key.pk.clone(),
             sig,

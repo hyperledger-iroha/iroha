@@ -1,7 +1,7 @@
 //! Bounded trace evaluation for the existing unmasked compact candidate.
 //!
 //! For M = B*N, stripe s contains the natural LDE indices s+B*j. Twisting
-//! the N coefficients by (omega*root_M^s)^k and using the existing N-point
+//! the N coefficients by (omega*`root_M^s)^k` and using the existing N-point
 //! FFT gives exactly those evaluations. A next-trace-row rotation by B is
 //! therefore a cyclic next row within the same stripe. Only one stripe is
 //! live at a time; digest trees and scalar/extension oracles have separate
@@ -52,7 +52,7 @@ impl TraceReplayPlan {
         let coefficient_bytes = trace_rows
             .checked_mul(width)
             .and_then(|cells| cells.checked_mul(size_of::<u64>()))
-            .filter(|bytes| *bytes <= isize::MAX as usize)
+            .filter(|bytes| isize::try_from(*bytes).is_ok())
             .ok_or_else(checked)?;
         let peak_trace_bytes = coefficient_bytes.checked_mul(2).ok_or_else(checked)?;
         let maximum_column_transforms = stripes

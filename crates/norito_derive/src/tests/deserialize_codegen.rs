@@ -6,27 +6,26 @@ fn compact(tokens: TokenStream2) -> String {
         .filter(|ch| !ch.is_whitespace())
         .collect()
 }
-#[test]
-fn packed_field_bitset_matches_named_and_unnamed_layouts() {
-    let named: DeriveInput = syn::parse_quote! {
-        struct Named {
-            fixed: u32,
-            framed: Opaque,
-            self_delimiting: Vec<u8>,
-        }
-    };
-    let Data::Struct(named_data) = named.data else {
-        unreachable!("test input is a struct");
-    };
-    assert_eq!(packed_field_bitset(&named_data.fields), vec![0b0000_0010]);
-    let unnamed: DeriveInput = syn::parse_quote! {
-        struct Unnamed(u32, Opaque, Vec<u8>);
-    };
-    let Data::Struct(unnamed_data) = unnamed.data else {
-        unreachable!("test input is a struct");
-    };
-    assert_eq!(packed_field_bitset(&unnamed_data.fields), vec![0b0000_0010]);
-}
+/// Codegen tokens that belong only to the retired packed layouts.
+const RETIRED_LAYOUT_TOKENS: [&str; 17] = [
+    "use_packed_struct",
+    "use_field_bitset",
+    "decode_context_packed_",
+    "decode_context_field_prefix",
+    "decode_context_field_fixed_canonical",
+    "decode_context_byte_array",
+    "PackedField",
+    "write_packed_fields",
+    "mark_field_bitset_used_if_encoding",
+    "SequentialOverrideGuard",
+    "eprintln!",
+    "__norito_packed",
+    "__offs",
+    "__sizes",
+    "__bitset",
+    "__packed_data_len",
+    "__expected_bitset",
+];
 #[test]
 fn context_field_paths_delegate_copy_and_context_setup_to_core() {
     let struct_input: DeriveInput = syn::parse_quote! {
@@ -70,10 +69,15 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         enum_data,
         &enum_input.attrs,
     ));
-    for expansion in [&struct_expansion, &enum_expansion] {
+    for expansion in [&struct_expansion, &tuple_expansion, &enum_expansion] {
         assert!(
-            expansion.contains("norito::core::decode_context_field_"),
-            "generated decoder must call the shared context-field helpers"
+            expansion
+                .contains("norito::core::decode_context_field_canonical::<Opaque>(ptr,&mutoffset)"),
+            "framed fields must use the shared canonical context-field helper"
+        );
+        assert!(
+            expansion.contains("finish_context_fields(ptr,offset)"),
+            "full-consumption validation must remain shared"
         );
         assert!(
             !expansion.contains("std::alloc::alloc("),
@@ -83,87 +87,112 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
             !expansion.contains("PayloadCtxGuard::enter(tmp_slice)"),
             "generated decoder must not inline archived-field context setup"
         );
-    }
-    assert!(
-        struct_expansion.contains("decode_context_field_fixed_canonical::<Opaque>"),
-        "packed framed struct fields must use the exact canonical helper"
-    );
-    assert!(
-        struct_expansion.contains("decode_context_field_canonical::<Opaque>"),
-        "ordinary framed struct fields must use the shared canonical helper"
-    );
-    assert!(
-        enum_expansion.contains("decode_context_field_canonical::<Opaque>"),
-        "framed tuple-enum fields must use the exact canonical helper"
-    );
-    for retired_helper in [
-        "decode_context_field_canonical_or_archived",
-        "decode_context_field_archived::<",
-        "decode_context_field_archived_compat",
-        "decode_context_field_fixed_archived",
-    ] {
-        for expansion in [&struct_expansion, &tuple_expansion, &enum_expansion] {
+        for retired_helper in [
+            "decode_context_field_canonical_or_archived",
+            "decode_context_field_archived::<",
+            "decode_context_field_archived_compat",
+            "decode_context_field_fixed_archived",
+            "payload_slice_from_ptr(ptr)",
+            "read_len_dyn_slice",
+            "try_read_len_ptr_unchecked",
+            "__fallback",
+        ] {
             assert!(
                 !expansion.contains(retired_helper),
                 "generated decoders must not retry retired field encodings via {retired_helper}"
             );
         }
+        for retired in RETIRED_LAYOUT_TOKENS {
+            assert!(
+                !expansion.contains(retired),
+                "generated decoders must not carry packed-layout code: {retired}"
+            );
+        }
     }
+    assert!(
+        enum_expansion.contains("decode_context_field_canonical::<u64>(ptr,&mutoffset)"),
+        "fixed-size enum fields keep their length-prefixed frame"
+    );
+    assert!(
+        enum_expansion.contains("decode_context_field_canonical::<Vec<u32>>(ptr,&mutoffset)"),
+        "self-delimiting enum fields keep their length-prefixed frame"
+    );
     assert!(
         !enum_expansion.contains("decode_context_field_flexible"),
         "enum fields must not consume bytes beyond their declared frame"
     );
     assert!(
-        enum_expansion.contains("decode_context_field_prefix::<Vec<u32>>"),
-        "self-delimiting Vec fields must retain their consumed-prefix path"
-    );
-    for expansion in [&struct_expansion, &enum_expansion] {
-        assert!(
-            expansion.contains("finish_context_fields(ptr,offset)"),
-            "full-consumption validation must remain shared"
-        );
-    }
-    for expansion in [&struct_expansion, &tuple_expansion] {
-        assert!(
-            expansion.contains("decode_context_packed_header(ptr,__count,__expected_bitset"),
-            "packed-struct headers must delegate bounded bitset and size decoding to core"
-        );
-        assert!(
-            expansion.contains("decode_context_packed_offsets(ptr,__count)"),
-            "packed-struct offset tables must delegate bounded decoding to core"
-        );
-        assert!(
-            !expansion.contains("payload_slice_from_ptr(ptr)"),
-            "generated decoders must not duplicate payload-bound setup"
-        );
-        assert!(
-            !expansion.contains("read_len_dyn_slice"),
-            "generated decoders must not duplicate dynamic size parsing"
-        );
-        assert!(
-            !expansion.contains("try_read_len_ptr_unchecked"),
-            "generated size-header loops must not perform pointer reads"
-        );
-        assert!(
-            !expansion.contains("__fallback"),
-            "a compact zero length must never be reinterpreted as fixed-width"
-        );
-    }
-    assert!(
         enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
         "enum tags must use the bounded payload helper"
     );
-    for struct_only_token in [
-        "decode_packed_offsets_slice",
-        "__sizes",
-        "__bitset",
-        "__packed_data_len",
-    ] {
+    assert!(
+        struct_expansion.contains(
+            "ifnorito::debug_trace_enabled(){norito::trace_struct_decode(stringify!(Record),ptr);}"
+        ),
+        "the named-struct trace must stay behind the debug toggle in the cold norito helper"
+    );
+}
+#[test]
+fn binary_codegen_emits_only_the_length_prefixed_layout() {
+    let inputs: [DeriveInput; 3] = [
+        syn::parse_quote! {
+            struct Named {
+                #[norito(flatten)]
+                inner: Inner,
+                raw: [u8; 32],
+                maybe: Option<u64>,
+                values: Vec<u32>,
+                #[norito(skip)]
+                cache: Cache,
+            }
+        },
+        syn::parse_quote! { struct Tuple(Payload, [u8; 8], u16); },
+        syn::parse_quote! {
+            enum Message {
+                Unit,
+                Tuple(Payload, [u8; 8], u16),
+                Named { raw: [u8; 32], values: Vec<u32> },
+            }
+        },
+    ];
+    for input in inputs {
+        let (serialize, deserialize) = match &input.data {
+            Data::Struct(data) => (
+                derive_struct_serialize(
+                    &input.ident,
+                    &input.generics,
+                    &data.fields,
+                    &input.attrs,
+                    true,
+                ),
+                derive_struct_deserialize(
+                    &input.ident,
+                    &input.generics,
+                    &data.fields,
+                    &input.attrs,
+                ),
+            ),
+            Data::Enum(data) => (
+                derive_enum_serialize(&input.ident, &input.generics, data, &input.attrs, true),
+                derive_enum_deserialize(&input.ident, &input.generics, data, &input.attrs),
+            ),
+            Data::Union(_) => unreachable!("test inputs are structs or enums"),
+        };
+        let serialize = compact(serialize);
         assert!(
-            !enum_expansion.contains(struct_only_token),
-            "enum codegen must not inherit packed-struct offset/size loops: \
-             {struct_only_token}"
+            serialize.contains("norito::core::write_len_prefixed(writer,"),
+            "{name} fields must stream into length-prefixed frames",
+            name = input.ident,
         );
+        for expansion in [serialize, compact(deserialize)] {
+            for retired in RETIRED_LAYOUT_TOKENS {
+                assert!(
+                    !expansion.contains(retired),
+                    "{name} expansion must not carry packed-layout code: {retired}",
+                    name = input.ident,
+                );
+            }
+        }
     }
 }
 #[test]
@@ -287,93 +316,6 @@ fn generated_serializers_use_two_argument_field_writers_without_scratch_buffers(
             assert_eq!(arguments.split(',').count(), 2, "{arguments}");
         }
     }
-}
-#[test]
-fn packed_struct_codegen_delegates_measurement_and_streaming_to_one_owner() {
-    let input: DeriveInput = syn::parse_quote! {
-        struct Envelope {
-            named: Vec<u8>,
-            other: String,
-        }
-    };
-    let Data::Struct(data) = &input.data else {
-        unreachable!();
-    };
-    let expansion = compact(derive_struct_serialize(
-        &input.ident,
-        &input.generics,
-        &data.fields,
-        &input.attrs,
-        true,
-    ));
-    assert_eq!(expansion.matches("write_packed_fields(").count(), 2);
-    assert_eq!(
-        expansion.matches("PackedField::Value(&self.named)").count(),
-        2
-    );
-    assert_eq!(
-        expansion.matches("PackedField::Value(&self.other)").count(),
-        2
-    );
-    assert!(!expansion.contains("encoded_payload_len("));
-    assert!(!expansion.contains("serialize_to_writer_exact("));
-    assert!(!expansion.contains("serialize_to_buffer("));
-    assert!(!expansion.contains("__field_bufs"));
-    assert!(!expansion.contains("__field_lens"));
-}
-#[test]
-fn packed_struct_descriptors_preserve_raw_arrays_and_omit_skipped_fields() {
-    let input: DeriveInput = syn::parse_quote! {
-        struct Envelope {
-            raw: [u8; 32],
-            nested: Payload,
-            #[norito(skip)]
-            ignored: Cache,
-        }
-    };
-    let Data::Struct(data) = &input.data else {
-        unreachable!();
-    };
-    let expansion = compact(derive_struct_serialize(
-        &input.ident,
-        &input.generics,
-        &data.fields,
-        &input.attrs,
-        true,
-    ));
-    assert_eq!(
-        expansion.matches("PackedField::Bytes(&self.raw)").count(),
-        2
-    );
-    assert_eq!(
-        expansion
-            .matches("PackedField::Value(&self.nested)")
-            .count(),
-        2
-    );
-    assert!(!expansion.contains("PackedField::Value(&self.raw)"));
-    assert!(!expansion.contains("&self.ignored"));
-    assert!(expansion.contains("Some(&[2u8])"));
-}
-#[test]
-fn packed_tuple_descriptors_keep_field_order() {
-    let input: DeriveInput = syn::parse_quote! {
-        struct Envelope(Payload, [u8; 8], u16);
-    };
-    let Data::Struct(data) = &input.data else {
-        unreachable!();
-    };
-    let expansion = compact(derive_struct_serialize(
-        &input.ident,
-        &input.generics,
-        &data.fields,
-        &input.attrs,
-        true,
-    ));
-    assert_eq!(
-        expansion.matches("&[norito::core::PackedField::Value(&self.0),norito::core::PackedField::Bytes(&self.1),norito::core::PackedField::Value(&self.2)]").count(),
-        2,
-    );
 }
 #[test]
 fn ordinary_enum_fields_use_counted_length_streaming() {

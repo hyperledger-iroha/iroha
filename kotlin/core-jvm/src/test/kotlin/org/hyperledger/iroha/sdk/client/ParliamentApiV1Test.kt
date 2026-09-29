@@ -14,6 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
+import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -219,7 +220,7 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() {
+    fun attemptBuilderAdmitsExactlyTheThirteenFirstReleaseProposalKinds() {
         ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
             val request = objectValue(
                 ParliamentApiV1.attemptDraftRequestJson(
@@ -229,7 +230,7 @@ class ParliamentApiV1Test {
             )
             assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
         }
-        assertEquals(10, ParliamentApiV1.PROPOSAL_KINDS.size)
+        assertEquals(13, ParliamentApiV1.PROPOSAL_KINDS.size)
 
         val fullU64Policy = validProposal("ValidationFeePolicy")
         @Suppress("UNCHECKED_CAST")
@@ -432,6 +433,179 @@ class ParliamentApiV1Test {
         action["action"] = "delegate"
         assertFailsWith<IllegalArgumentException> {
             ParliamentApiV1.Proposal.fromJson(encode(malformed))
+        }
+    }
+
+    @Test
+    fun kagemushaPolicyInstallRequiresExactEmptyPredecessorAndOrderedTrustedSigners() {
+        val accepted = validProposal("KagemushaVerifierPolicyInstall")
+        ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        @Suppress("UNCHECKED_CAST")
+        val payload = accepted["payload"] as MutableMap<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val predecessor = payload["expected_predecessor"] as MutableMap<String, Any?>
+        predecessor["active_release_id"] = List(32) { 1 }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+        predecessor["active_release_id"] = null
+
+        @Suppress("UNCHECKED_CAST")
+        val policy = payload["authority_policy"] as MutableMap<String, Any?>
+        policy["authority_set_id"] = List(32) { 0 }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+        policy["authority_set_id"] = List(32) { 0x41 }
+        policy["threshold"] = 2
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+        policy["threshold"] = 1
+        @Suppress("UNCHECKED_CAST")
+        val signers = policy["authorized_signers"] as MutableList<String>
+        signers += signers[0]
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+        signers.clear()
+        signers.addAll(
+            listOf(
+                encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(8)),
+                encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(9)),
+            ).sortedDescending(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+        signers.sort()
+        ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        policy["unexpected"] = true
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(accepted))
+        }
+    }
+
+    @Test
+    fun kagemushaReleaseInstallUsesExactNestedFixtureAndRejectsMutations() {
+        val fixture = "kagemusha_verifier_release_install_v1.json"
+        ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
+
+        assertReleaseMutationRejected(fixture, "missing network identity") { proposal ->
+            releaseNested(proposal, "manifest").remove("network_id")
+        }
+        assertReleaseMutationRejected(fixture, "missing release purpose") { proposal ->
+            releaseNested(proposal, "manifest").remove("purpose")
+        }
+        assertReleaseMutationRejected(fixture, "unknown release purpose") { proposal ->
+            releaseNested(releaseNested(proposal, "manifest"), "purpose")["kind"] = "unknown"
+        }
+        assertReleaseMutationRejected(fixture, "production purpose requires explicit null") { proposal ->
+            releaseNested(releaseNested(proposal, "manifest"), "purpose").remove("value")
+        }
+        assertReleaseMutationRejected(fixture, "unknown manifest field") { proposal ->
+            val manifest = releaseNested(proposal, "manifest")
+            manifest["retired"] = true
+        }
+        assertReleaseMutationRejected(fixture, "missing receipt field") { proposal ->
+            releaseNested(proposal, "receipt").remove("fuzz_cases")
+        }
+        assertReleaseMutationRejected(fixture, "short nested digest") { proposal ->
+            releaseNested(proposal, "receipt")["source_tree_digest"] = List(31) { 1 }
+        }
+        assertReleaseMutationRejected(fixture, "retired artifact role") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val artifacts = releaseNested(proposal, "manifest")["artifacts"] as MutableList<MutableMap<String, Any?>>
+            releaseNested(artifacts[0], "role")["role"] = "retired_artifact"
+        }
+        assertReleaseMutationRejected(fixture, "missing tagged null") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val helpers = releaseNested(proposal, "manifest")["helper_protocols"] as MutableList<MutableMap<String, Any?>>
+            releaseNested(helpers[0], "helper").remove("value")
+        }
+        assertReleaseMutationRejected(fixture, "invalid P-256 point") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val profiles = releaseNested(proposal, "manifest")["enabled_profiles"] as MutableList<MutableMap<String, Any?>>
+            releaseNested(profiles[0], "hardware_profile")["governance_credential_public_key"] =
+                listOf("04" + "00".repeat(64))
+        }
+        assertReleaseMutationRejected(fixture, "high-S P-256 signature") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val providers = releaseNested(proposal, "receipt")["provider_policy"] as MutableList<MutableMap<String, Any?>>
+            val original = (providers[0]["issuer_signature"] as List<*>)[0] as String
+            providers[0]["issuer_signature"] = listOf(
+                original.take(64) + "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632550",
+            )
+        }
+        assertReleaseMutationRejected(fixture, "inexact receipt integer") { proposal ->
+            releaseNested(proposal, "receipt")["fuzz_cases"] = 9_007_199_254_740_992L
+        }
+        assertReleaseMutationRejected(fixture, "ungoverned predecessor") { proposal ->
+            releaseNested(proposal, "expected_predecessor")["authority_policy"] = null
+        }
+    }
+
+    @Test
+    fun kagemushaReleasePurposeAcceptsExactTestnetScopeAndRejectsDrift() {
+        val payload = releaseProposalPayload("kagemusha_verifier_release_install_v1.json")
+        val scope = linkedMapOf<String, Any?>(
+            "asset_identity_digest" to List(32) { 1 },
+            "asset_incarnation" to List(32) { 2 },
+            "asset_scale" to 28,
+            "liability_pool_id" to List(32) { 3 },
+        )
+        val purpose = linkedMapOf<String, Any?>("kind" to "testnet_experiment", "value" to scope)
+        releaseNested(payload, "manifest")["purpose"] = purpose
+        KagemushaVerifierProposalValidatorV1.install(payload)
+        scope["asset_scale"] = 29
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
+        }
+        scope["asset_scale"] = 28
+        scope["retired"] = null
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
+        }
+        scope.remove("retired")
+        purpose["value"] = null
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(payload)
+        }
+    }
+
+    @Test
+    fun kagemushaReleaseActivateRequiresSoleInactiveStandby() {
+        val fixture = "kagemusha_verifier_release_activate_v1.json"
+        ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
+
+        assertReleaseMutationRejected(fixture, "short successor id") { proposal ->
+            proposal["successor_release_id"] = List(31) { 1 }
+        }
+        assertReleaseMutationRejected(fixture, "missing successor id") { proposal ->
+            proposal.remove("successor_release_id")
+        }
+        assertReleaseMutationRejected(fixture, "active predecessor") { proposal ->
+            releaseNested(proposal, "expected_predecessor")["active_release_id"] = "AA".repeat(32)
+        }
+        assertReleaseMutationRejected(fixture, "unknown successor") { proposal ->
+            proposal["successor_release_id"] = List(32) { 99 }
+        }
+        assertReleaseMutationRejected(fixture, "nonstandby target") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val rows = releaseNested(proposal, "expected_predecessor")["releases"] as MutableList<MutableMap<String, Any?>>
+            rows[0]["status"] = 3
+        }
+        assertReleaseMutationRejected(fixture, "second standby row") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val rows = releaseNested(proposal, "expected_predecessor")["releases"] as MutableList<MutableMap<String, Any?>>
+            val second = LinkedHashMap(rows[0])
+            second["release_id"] = List(32) { 255 }
+            rows.add(second)
+        }
+        assertReleaseMutationRejected(fixture, "unknown nested release field") { proposal ->
+            @Suppress("UNCHECKED_CAST")
+            val rows = releaseNested(proposal, "expected_predecessor")["releases"] as MutableList<MutableMap<String, Any?>>
+            rows[0]["retired_alias"] = true
         }
     }
 
@@ -1604,6 +1778,30 @@ class ParliamentApiV1Test {
                 "authority" to account(4),
                 "action" to linkedMapOf("action" to "grant", "value" to null),
             )
+            "KagemushaVerifierPolicyInstall" -> linkedMapOf(
+                "proposal_operator" to account(1),
+                "network_id" to networkId(),
+                "expected_predecessor" to linkedMapOf(
+                    "version" to 1,
+                    "authority_policy" to null,
+                    "active_release_id" to null,
+                    "releases" to emptyList<Any?>(),
+                ),
+                "authority_policy" to linkedMapOf(
+                    "version" to 1,
+                    "authority_set_id" to List(32) { 0x41 },
+                    "threshold" to 1,
+                    "authorized_signers" to mutableListOf(
+                        encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(8)),
+                    ),
+                ),
+            )
+            "KagemushaVerifierReleaseInstall" -> releaseProposalPayload(
+                "kagemusha_verifier_release_install_v1.json",
+            )
+            "KagemushaVerifierReleaseActivate" -> releaseProposalPayload(
+                "kagemusha_verifier_release_activate_v1.json",
+            )
             else -> error("unsupported fixture kind $kind")
         }
         return linkedMapOf("kind" to kind, "payload" to payload)
@@ -1705,6 +1903,30 @@ class ParliamentApiV1Test {
         }
         error("fixtures/governance/parliament_api_v1.json was not found")
     }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun releaseNested(parent: MutableMap<String, Any?>, key: String): MutableMap<String, Any?> =
+        parent[key] as MutableMap<String, Any?>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertReleaseMutationRejected(
+        fixture: String,
+        label: String,
+        mutate: (MutableMap<String, Any?>) -> Unit,
+    ) {
+        val proposal = JsonParser.parse(
+            String(Files.readAllBytes(fixturePath().resolveSibling(fixture)), StandardCharsets.UTF_8),
+        ) as MutableMap<String, Any?>
+        mutate(releaseNested(proposal, "payload"))
+        assertFailsWith<IllegalArgumentException>("accepted $label") {
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun releaseProposalPayload(name: String): MutableMap<String, Any?> =
+        objectValue(Files.readAllBytes(fixturePath().resolveSibling(name)))["payload"]
+            as MutableMap<String, Any?>
 
     @Suppress("UNCHECKED_CAST")
     private fun objectValue(bytes: ByteArray): Map<String, Any?> =

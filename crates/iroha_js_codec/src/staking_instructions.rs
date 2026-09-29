@@ -16,7 +16,7 @@ fn safe_json_numbers(value: &Value) -> CodecResult<()> {
                 .is_some_and(|value| value > crate::json_u64::MAX_SAFE_INTEGER)
                 || number
                     .as_i64()
-                    .is_some_and(|value| value < -(crate::json_u64::MAX_SAFE_INTEGER as i64))
+                    .is_some_and(|value| value < crate::json_u64::MIN_SAFE_INTEGER)
             {
                 return Err(CodecError::new(
                     CodecErrorKind::InvalidArgument,
@@ -41,7 +41,7 @@ fn safe_json_numbers(value: &Value) -> CodecResult<()> {
 
 macro_rules! staking_codec {
     ($($ty:ident),+ $(,)?) => {
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(fields) = value else { return None; };
             $(if let Some(payload) = fields.get(stringify!($ty)) {
                 return Some((|| {
@@ -53,7 +53,7 @@ macro_rules! staking_codec {
             })+
             None
         }
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             $(if let Some(typed) = instruction.as_any().downcast_ref::<$ty>() {
                 return Some((|| {
                     let payload = json::to_value(typed).map_err(crate::codec_error)?;
@@ -68,7 +68,7 @@ macro_rules! staking_codec {
             })+
             None
         }
-        pub(super) fn is_staking_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_staking_instruction(instruction: &InstructionBox) -> bool {
             false $(|| instruction.as_any().is::<$ty>())+
         }
     };
@@ -176,12 +176,7 @@ mod tests {
         payload.insert("unexpected".into(), Value::Bool(true));
         assert!(crate::value_to_instruction(value).is_err());
         assert!(safe_json_numbers(&Value::from(crate::json_u64::MAX_SAFE_INTEGER + 1)).is_err());
-        assert!(
-            safe_json_numbers(&Value::from(
-                -((crate::json_u64::MAX_SAFE_INTEGER + 1) as i64)
-            ))
-            .is_err()
-        );
+        assert!(safe_json_numbers(&Value::from(crate::json_u64::MIN_SAFE_INTEGER - 1)).is_err());
     }
 
     #[test]
@@ -192,7 +187,7 @@ mod tests {
         for replacement in [
             None,
             Some(Value::Null),
-            Some(Value::Object(Default::default())),
+            Some(Value::Object(json::Map::new())),
         ] {
             let mut altered = value.clone();
             let registration = altered

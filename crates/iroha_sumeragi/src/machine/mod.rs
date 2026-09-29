@@ -20,6 +20,7 @@
 //! its own pools last through `pool_insert` / `timeout_insert`, because forming a certificate
 //! may commit and move to the next height.
 
+mod control;
 mod intake;
 mod proposal;
 mod propose;
@@ -69,6 +70,8 @@ pub struct Core {
     /// While a key is unanchored: the lowest height reported per member key of
     /// `C_{tip.height+2}` in a fresh, verified echo (§6.11).
     probe: BTreeMap<PublicKey, u64>,
+    /// The exact epoch whose authenticated echoes populate `probe`.
+    probe_epoch: Option<crate::types::EpochId>,
     /// When the last probe round was sent (§6.11).
     last_probe: Millis,
     halted: Option<HaltReason>,
@@ -77,7 +80,7 @@ pub struct Core {
     // Committed chain (consensus view of it).
     tip: Tip,
     applied: u64,
-    configs: BTreeMap<u64, HeightConfig>,
+    configs: BTreeMap<u64, crate::types::ConfigSlot>,
     recent_headers: VecDeque<BlockHeader>,
     pending_apply: VecDeque<PendingApply>,
     awaiting: bool,
@@ -110,6 +113,11 @@ pub struct Core {
     mine: Mine,
     retx: [Option<Retx>; 2],
     build: Build,
+    /// At most one independent control response and one transaction response for a fresh block.
+    fresh_build: Option<FreshBuild>,
+    /// Bounded cadence for every member's single application producer.
+    control_drive: Option<(crate::api::ApplicationControlContext, Millis)>,
+    control_received: BTreeMap<PublicKey, Millis>,
     repropose: bool,
     resend_recorded: Option<Hash32>,
     proposal_sent_at: Option<Millis>,
@@ -237,6 +245,14 @@ struct Retx {
     k: u32,
     /// First send (vote-to-QC latency sample, §9.1).
     sent: Millis,
+}
+
+/// Original exact source and the two independently completed parts of one fresh proposal.
+struct FreshBuild {
+    req: u64,
+    context: crate::api::ControlWitnessContext,
+    control: Option<(crate::types::ControlWitness, bool)>,
+    payload: Option<(Vec<u8>, bool)>,
 }
 
 /// The leader's payload build state (§6.10). `req` is the outstanding request id (§6.0 `build`).
@@ -431,6 +447,17 @@ impl Core {
                 attest,
             } => self.on_payload_built(req, payload, attest),
             Event::PayloadReady { req } => self.on_payload_ready(req),
+            Event::ControlWitnessBuilt {
+                req,
+                context,
+                witness,
+                attest,
+            } => {
+                self.on_control_witness_built(req, context, &witness, attest);
+            }
+            Event::ApplicationControlBuilt { message } => {
+                self.on_application_control_built(message)
+            }
             Event::Executed {
                 block_hash,
                 req,
@@ -441,9 +468,15 @@ impl Core {
                 height,
                 block_hash,
                 header,
-                config_after_next,
-            } => self.on_block_applied(height, block_hash, *header, config_after_next),
+                config,
+            } => self.on_block_applied(height, block_hash, *header, config),
             Event::ApplyDiverged { height, .. } => self.halt(HaltReason::ApplyDiverged { height }),
+            Event::PublicationRecoveryRequired { height } => {
+                // MS42: an irreversibly failed original publication is treated as retryable.
+                if !cfg!(sumeragi_mutation = "MS42") {
+                    self.halt(HaltReason::PublicationRecoveryRequired { height });
+                }
+            }
         }
         self.finish_call();
         std::mem::take(&mut self.out)
@@ -458,7 +491,14 @@ impl Core {
         }
         if self.halted.is_none() {
             self.request_proposal();
+            self.drive_application_control();
         }
+    }
+
+    /// The driver may retain view-specific control builds only for this live signing round.
+    /// This allocation-free guard cancels stale retries after view advance, abstention or halt.
+    pub fn control_work_round(&self) -> Option<(u64, u64)> {
+        (self.halted.is_none() && self.signer().is_some()).then_some((self.height, self.view))
     }
 
     /// Read-only diagnostics (§12.1 `status()`).
@@ -536,6 +576,12 @@ impl Core {
         Footprint {
             votes: self.votes.len(),
             timeouts: self.timeouts.iter().flatten().count(),
+            fresh_payloads: usize::from(
+                self.fresh_build
+                    .as_ref()
+                    .is_some_and(|build| build.payload.is_some()),
+            ),
+            control_peers: self.control_received.len(),
             blocks: self.blocks.len(),
             exec_entries: self.exec.len(),
             wants: self.wants.len(),
@@ -644,7 +690,7 @@ impl Core {
             .filter_map(|index| self.member_key(*index))
             .filter(|key| !self.is_local_key(key))
             .collect();
-        if joiners && let Some(next) = self.configs.get(&self.height.saturating_add(1)) {
+        if joiners && let Some(next) = self.config(self.height.saturating_add(1)) {
             out.extend(
                 next.committee
                     .members()
@@ -726,8 +772,24 @@ impl Core {
 
     // ---- certificate verification with the cache (§6.1 rule 5) ---------------------------
 
+    /// Installed authority only. A pending epoch never supplies voters or leader randomness.
+    fn config(&self, height: u64) -> Option<&HeightConfig> {
+        self.configs
+            .get(&height)
+            .and_then(crate::types::ConfigSlot::ready)
+    }
+
     /// Verify a QC under `C_{qc.height}` (SR15), using and filling the cache.
     fn verify_qc_cached(&mut self, qc: &Qc) -> bool {
+        let Some(active) = self.config(qc.height) else {
+            return false;
+        };
+        if qc.epoch != active.epoch.id
+            || !active.epoch.contains(qc.height)
+            || (qc.height == active.epoch.last_height && !qc.attest)
+        {
+            return false;
+        }
         let digest = qc.digest(&*self.crypto);
         if self.cert_cache.hit(&digest) {
             return true;
@@ -736,13 +798,14 @@ impl Core {
         let config_height = qc.height;
         #[cfg(sumeragi_mutation = "MS15")]
         let config_height = self.tip.height;
-        let Some(config) = self.configs.get(&config_height) else {
+        let Some(config) = self.config(config_height) else {
             return false;
         };
         let ok = verify_qc(
             &*self.crypto,
             &*self.attestation.verifier,
             &self.instance,
+            &config.epoch.id,
             &config.committee,
             qc,
         )
@@ -755,7 +818,12 @@ impl Core {
 
     /// Verify a TC of the current height under `C_h`, using and filling the cache.
     fn verify_tc_cached(&mut self, tc: &TimeoutCert) -> bool {
-        if tc.height != self.height {
+        if self.awaiting
+            || tc.height != self.height
+            || tc.epoch != self.cfg.epoch.id
+            || (tc.height == self.cfg.epoch.last_height
+                && tc.high_pqc.as_ref().is_some_and(|qc| !qc.attest))
+        {
             return false;
         }
         let digest = tc.digest(&*self.crypto);
@@ -768,9 +836,23 @@ impl Core {
             .is_some_and(|qc| self.cert_cache.contains(&qc.digest(&*self.crypto)));
         let committee = &self.cfg.committee;
         let ok = if high_cached {
-            verify_tc_with_verified_high_qc(&*self.crypto, &self.instance, committee, tc).is_ok()
+            verify_tc_with_verified_high_qc(
+                &*self.crypto,
+                &self.instance,
+                &self.cfg.epoch.id,
+                committee,
+                tc,
+            )
+            .is_ok()
         } else {
-            verify_tc(&*self.crypto, &self.instance, committee, tc).is_ok()
+            verify_tc(
+                &*self.crypto,
+                &self.instance,
+                &self.cfg.epoch.id,
+                committee,
+                tc,
+            )
+            .is_ok()
         };
         if ok {
             if let Some(qc) = &tc.high_pqc {
@@ -789,8 +871,7 @@ impl Core {
 
     /// Keys of a certificate's signers in `C_h` (want sources).
     fn signer_keys(&self, qc: &Qc) -> Vec<PublicKey> {
-        self.configs
-            .get(&qc.height)
+        self.config(qc.height)
             .and_then(|config| config.committee.keys_of(&qc.signers))
             .map(|keys| keys.into_iter().cloned().collect())
             .unwrap_or_default()

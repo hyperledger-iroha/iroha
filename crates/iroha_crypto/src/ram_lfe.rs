@@ -47,6 +47,8 @@ pub use initialization::{
 pub use trace::RamLfeProgramExecutionTrace;
 use trace::{OwnedCiphertext, OwnedCiphertexts};
 mod policy_secret;
+mod program;
+pub use program::{HiddenRamFheProgram, HiddenRamFheProgramBuilder, RAM_LFE_HIDDEN_PROGRAM_MAX_BYTES};
 
 const POLICY_DOMAIN: &[u8] = b"iroha.ram_lfe.policy.v1";
 const HKDF_SALT_DOMAIN: &[u8] = b"iroha.ram_lfe.hkdf_salt.hkdf_sha3_512_prf.v1";
@@ -282,43 +284,6 @@ pub enum HiddenRamFheInstruction {
     SelectEqZero(u16, u16, u16, u16),
     /// Append one register to the plaintext output blob.
     Output(u16),
-}
-/// Canonical hidden program executed by the programmed BFV backend.
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_crypto::ram_lfe::HiddenRamFheProgram")]
-pub struct HiddenRamFheProgram {
-    /// Stable program format version.
-    pub version: u8,
-    /// Number of registers the program expects.
-    pub register_count: u16,
-    /// Number of persisted memory lanes the program expects.
-    pub memory_lane_count: u16,
-    /// Fixed-step branchless instruction tape.
-    pub instructions: Vec<HiddenRamFheInstruction>,
-}
-impl HiddenRamFheProgram {
-    /// Encode the program into canonical Norito bytes.
-    ///
-    /// # Errors
-    /// Returns the underlying Norito encoding error when serialization fails.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(self)
-    }
-    /// Return the stable digest published by programmed policies.
-    ///
-    /// The private tape streams into a clearing BLAKE3 commitment owner. The
-    /// outer Iroha hash covers only that public commitment and its domain.
-    ///
-    /// # Errors
-    /// Returns the underlying Norito encoding error when serialization fails.
-    pub fn digest(&self) -> Result<Hash, norito::core::Error> {
-        let commitment = policy_secret::commit_canonical(policy_secret::PROGRAM_CONTEXT, self)?;
-        Ok(Hash::new_from_chunks(&[
-            BFV_PROGRAM_DIGEST_DOMAIN,
-            &commitment,
-        ]))
-    }
 }
 /// Public parameter bundle published by programmed BFV policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -662,23 +627,19 @@ pub fn bfv_program_profile() -> BfvRamProgramProfile {
 /// Return the canonical hidden program used by the historical identifier-programmed backend.
 #[must_use]
 pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
-    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16)
-        .flat_map(|slot| {
-            let lane = slot % BFV_PROGRAM_STATE_WIDTH_U16;
-            [
-                HiddenRamFheInstruction::LoadInput(0, slot),
-                HiddenRamFheInstruction::LoadState(1, lane),
-                HiddenRamFheInstruction::Add(2, 0, 1),
-                HiddenRamFheInstruction::Output(2),
-            ]
-        })
-        .collect();
-    HiddenRamFheProgram {
-        version: 1,
-        register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-        memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-        instructions,
+    let mut builder = HiddenRamFheProgram::builder().expect("bounded default program allocation");
+    for slot in 0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16 {
+        let lane = slot % BFV_PROGRAM_STATE_WIDTH_U16;
+        for instruction in [
+            HiddenRamFheInstruction::LoadInput(0, slot),
+            HiddenRamFheInstruction::LoadState(1, lane),
+            HiddenRamFheInstruction::Add(2, 0, 1),
+            HiddenRamFheInstruction::Output(2),
+        ] {
+            builder.push(instruction).expect("fixed default program capacity");
+        }
     }
+    builder.finish().expect("compiled default program is valid")
 }
 /// Hash arbitrary RAM-LFE output bytes into a stable digest.
 #[must_use]
@@ -1324,15 +1285,15 @@ fn execute_hidden_program(
     mut trace: Option<&mut RamLfeProgramExecutionTrace>,
 ) -> Result<Vec<u8>, RamLfeError> {
     validate_hidden_program(program)?;
-    let mut machine = HiddenProgramMachine::new(execution, program.register_count, inputs, state)?;
+    let mut machine = HiddenProgramMachine::new(execution, program.register_count(), inputs, state)?;
     if let Some(trace) = trace.as_mut() {
         trace.record(None, &machine.registers, machine.state, 0)?;
     }
-    for instruction in &program.instructions {
-        machine.execute_instruction(*instruction)?;
+    for instruction in program.instructions() {
+        machine.execute_instruction(instruction)?;
         if let Some(trace) = trace.as_mut() {
             trace.record(
-                Some(*instruction),
+                Some(instruction),
                 &machine.registers,
                 machine.state,
                 machine.output_registers.len(),
@@ -1589,32 +1550,30 @@ impl<'a> HiddenProgramMachine<'a> {
     }
 }
 fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
-    if program.version != 1 {
+    if program.version() != 1 {
         return Err(invalid_program_error("unsupported hidden program version"));
     }
-    if usize::from(program.register_count) != BFV_PROGRAM_REGISTER_COUNT {
+    if usize::from(program.register_count()) != BFV_PROGRAM_REGISTER_COUNT {
         return Err(invalid_program_error(
             "register_count does not match RAM-FHE profile",
         ));
     }
-    if usize::from(program.memory_lane_count) != BFV_PROGRAM_STATE_WIDTH {
+    if usize::from(program.memory_lane_count()) != BFV_PROGRAM_STATE_WIDTH {
         return Err(invalid_program_error(
             "memory_lane_count does not match RAM-FHE profile",
         ));
     }
-    if program.instructions.is_empty() {
+    if program.instruction_count() == 0 {
         return Err(invalid_program_error(
             "program instruction tape must not be empty",
         ));
     }
-    if program.instructions.len() > BFV_PROGRAM_MAX_INSTRUCTIONS {
+    if program.instruction_count() > BFV_PROGRAM_MAX_INSTRUCTIONS {
         return Err(invalid_program_error(&format!(
             "program instruction tape exceeds maximum {BFV_PROGRAM_MAX_INSTRUCTIONS} instructions"
         )));
     }
-    if !program
-        .instructions
-        .iter()
+    if !program.instructions()
         .any(|instruction| matches!(instruction, HiddenRamFheInstruction::Output(..)))
     {
         return Err(invalid_program_error(
@@ -1628,10 +1587,10 @@ fn validate_hidden_program_instruction_tape(
     program: &HiddenRamFheProgram,
 ) -> Result<(), RamLfeError> {
     let budget = u16::from(bfv_program_profile().ciphertext_mul_per_step);
-    let mut register_depths = Zeroizing::new(vec![0_u16; usize::from(program.register_count)]);
-    let mut state_depths = Zeroizing::new(vec![0_u16; usize::from(program.memory_lane_count)]);
+    let mut register_depths = Zeroizing::new(vec![0_u16; usize::from(program.register_count())]);
+    let mut state_depths = Zeroizing::new(vec![0_u16; usize::from(program.memory_lane_count())]);
     let mut output_count = 0_usize;
-    for (pc, instruction) in program.instructions.iter().copied().enumerate() {
+    for (pc, instruction) in program.instructions().enumerate() {
         let next_depth = match instruction {
             HiddenRamFheInstruction::LoadInput(dst, input_index) => {
                 validate_program_register_index(program, dst, pc)?;
@@ -1731,7 +1690,7 @@ fn validate_hidden_program_input_slots(
     max_input_bytes: u16,
 ) -> Result<(), RamLfeError> {
     let max_slot_index = usize::from(max_input_bytes);
-    for (pc, instruction) in program.instructions.iter().copied().enumerate() {
+    for (pc, instruction) in program.instructions().enumerate() {
         if let HiddenRamFheInstruction::LoadInput(_, input_index) = instruction
             && usize::from(input_index) > max_slot_index
         {
@@ -1747,7 +1706,7 @@ fn validate_program_register_index(
     register: u16,
     pc: usize,
 ) -> Result<(), RamLfeError> {
-    if usize::from(register) >= usize::from(program.register_count) {
+    if usize::from(register) >= usize::from(program.register_count()) {
         return Err(invalid_program_error(&format!(
             "instruction {pc} register {register} out of bounds"
         )));
@@ -1850,6 +1809,10 @@ fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn program_for_test(version: u8, registers: u16, lanes: u16, instructions: Vec<HiddenRamFheInstruction>) -> HiddenRamFheProgram {
+        program::from_public_test_parts(version, registers, lanes, instructions)
+    }
+
     use crate::{
         BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
         BfvParameters, bootstrap_key_from_seed, decrypt, derive_identifier_key_material_from_seed,
@@ -2065,11 +2028,10 @@ mod tests {
         let secret = b"resolver-secret-rns-runtime";
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"rns-runtime";
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadInput(1, 2),
                 HiddenRamFheInstruction::Add(2, 0, 1),
@@ -2079,8 +2041,7 @@ mod tests {
                 HiddenRamFheInstruction::Output(2),
                 HiddenRamFheInstruction::Output(3),
                 HiddenRamFheInstruction::Output(1),
-            ],
-        };
+            ]);
         validate_hidden_ram_fhe_program(&program).expect("custom RNS program validates");
         let (public_parameters, secret_key, relinearization_key) =
             derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
@@ -2165,15 +2126,13 @@ mod tests {
         let secret = b"resolver-secret-program-input-bounds";
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"program-input-bounds";
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
         let (mut public_parameters, _, relinearization_key) =
             derive_identifier_key_material_from_seed(
@@ -2209,15 +2168,13 @@ mod tests {
         let secret = b"resolver-secret-program-immediate";
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"program-immediate";
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadConst(0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
             &params,
             RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
@@ -2248,15 +2205,13 @@ mod tests {
         let secret = b"resolver-secret-program-input-policy";
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"program-input-policy";
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         validate_hidden_ram_fhe_program(&program).expect("profile-wide program shape validates");
         let (mut public_parameters, _, relinearization_key) =
             derive_identifier_key_material_from_seed(
@@ -2338,12 +2293,10 @@ mod tests {
             instructions.push(HiddenRamFheInstruction::Mul(0, 0, 1));
         }
         instructions.push(HiddenRamFheInstruction::Output(0));
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
-        };
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+instructions);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("chained multiplications must exceed the profile depth budget");
         assert!(err.to_string().contains("multiplicative-depth budget"));
@@ -2352,73 +2305,67 @@ mod tests {
     fn default_bfv_programmed_hidden_program_uses_profile_indexes() {
         let program = default_bfv_programmed_hidden_program();
         validate_hidden_ram_fhe_program(&program).expect("default program validates");
-        assert_eq!(program.register_count, BFV_PROGRAM_REGISTER_COUNT_U16);
-        assert_eq!(program.memory_lane_count, BFV_PROGRAM_STATE_WIDTH_U16);
+        assert_eq!(program.register_count(), BFV_PROGRAM_REGISTER_COUNT_U16);
+        assert_eq!(program.memory_lane_count(), BFV_PROGRAM_STATE_WIDTH_U16);
         assert_eq!(
-            program.instructions.len(),
+            program.instruction_count(),
             BFV_PROGRAM_IDENTIFIER_SLOT_COUNT * 4
         );
         assert_eq!(
-            program.instructions.first(),
-            Some(&HiddenRamFheInstruction::LoadInput(0, 0))
+            program.instruction(0),
+            Some(HiddenRamFheInstruction::LoadInput(0, 0))
         );
         assert_eq!(
-            program.instructions.get(4),
-            Some(&HiddenRamFheInstruction::LoadInput(0, 1))
+            program.instruction(4),
+            Some(HiddenRamFheInstruction::LoadInput(0, 1))
         );
         assert_eq!(
-            program.instructions.get(4 * BFV_PROGRAM_STATE_WIDTH),
-            Some(&HiddenRamFheInstruction::LoadInput(
+            program.instruction(4 * BFV_PROGRAM_STATE_WIDTH),
+            Some(HiddenRamFheInstruction::LoadInput(
                 0,
                 BFV_PROGRAM_STATE_WIDTH_U16
             ))
         );
         assert_eq!(
-            program.instructions.last(),
-            Some(&HiddenRamFheInstruction::Output(2))
+            program.instructions().last(),
+            Some(HiddenRamFheInstruction::Output(2))
         );
     }
     #[test]
     fn hidden_program_validation_rejects_static_index_overflow() {
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadInput(0, BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range input slot must be rejected before execution");
         assert!(err.to_string().contains("input slot"));
     }
     #[test]
     fn hidden_program_validation_rejects_static_memory_lane_overflow() {
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadState(0, BFV_PROGRAM_STATE_WIDTH_U16),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range memory lane must be rejected before execution");
         assert!(err.to_string().contains("memory lane"));
     }
     #[test]
     fn hidden_program_validation_rejects_static_register_overflow() {
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadConst(BFV_PROGRAM_REGISTER_COUNT_U16, 1),
                 HiddenRamFheInstruction::Output(0),
-            ],
-        };
+            ]);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range register must be rejected before execution");
         assert!(err.to_string().contains("register"));
@@ -2431,12 +2378,10 @@ mod tests {
             HiddenRamFheInstruction::SubPlain(0, 0, u64::MAX),
             HiddenRamFheInstruction::MulPlain(0, 0, RAM_LFE_BFV_PLAINTEXT_MODULUS + 1),
         ] {
-            let program = HiddenRamFheProgram {
-                version: 1,
-                register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-                memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-                instructions: vec![instruction, HiddenRamFheInstruction::Output(0)],
-            };
+            let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![instruction, HiddenRamFheInstruction::Output(0)]);
             let err = validate_hidden_ram_fhe_program(&program)
                 .expect_err("noncanonical plaintext immediate must be rejected before execution");
             assert!(
@@ -2451,27 +2396,23 @@ mod tests {
         instructions.extend(
             (0..=BFV_PROGRAM_IDENTIFIER_SLOT_COUNT).map(|_| HiddenRamFheInstruction::Output(0)),
         );
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
-        };
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+instructions);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("programs cannot emit more output slots than the profile admits");
         assert!(err.to_string().contains("too many output slots"));
     }
     #[test]
     fn hidden_program_validation_rejects_oversized_instruction_tape() {
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadConst(0, 1);
                 BFV_PROGRAM_MAX_INSTRUCTIONS + 1
-            ],
-        };
+            ]);
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("oversized instruction tapes must be rejected before execution");
         assert!(err.to_string().contains("maximum"));
@@ -2480,57 +2421,47 @@ mod tests {
     fn hidden_program_validation_rejects_adversarial_program_shapes() {
         let cases = [
             (
-                HiddenRamFheProgram {
-                    version: 2,
-                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-                    instructions: vec![
+                program_for_test(2,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
-                    ],
-                },
+                    ]),
                 "version",
             ),
             (
-                HiddenRamFheProgram {
-                    version: 1,
-                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16 - 1,
-                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-                    instructions: vec![
+                program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16 - 1,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
-                    ],
-                },
+                    ]),
                 "register_count",
             ),
             (
-                HiddenRamFheProgram {
-                    version: 1,
-                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16 - 1,
-                    instructions: vec![
+                program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16 - 1,
+vec![
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
-                    ],
-                },
+                    ]),
                 "memory_lane_count",
             ),
             (
-                HiddenRamFheProgram {
-                    version: 1,
-                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-                    instructions: Vec::new(),
-                },
+                program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+Vec::new()),
                 "instruction tape",
             ),
             (
-                HiddenRamFheProgram {
-                    version: 1,
-                    register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-                    memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-                    instructions: vec![HiddenRamFheInstruction::LoadConst(0, 1)],
-                },
+                program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![HiddenRamFheInstruction::LoadConst(0, 1)]),
                 "at least one output",
             ),
         ];
@@ -2856,18 +2787,16 @@ mod tests {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"phone#retail";
-        let program = HiddenRamFheProgram {
-            version: 1,
-            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
-            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions: vec![
+        let program = program_for_test(1,
+BFV_PROGRAM_REGISTER_COUNT_U16,
+BFV_PROGRAM_STATE_WIDTH_U16,
+vec![
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadConst(1, 42),
                 HiddenRamFheInstruction::LoadConst(2, 7),
                 HiddenRamFheInstruction::SelectEqZero(3, 0, 1, 2),
                 HiddenRamFheInstruction::Output(3),
-            ],
-        };
+            ]);
         validate_hidden_ram_fhe_program(&program).expect("select program validates");
         let (public_parameters, secret_key, relinearization_key) =
             derive_identifier_key_material_from_seed(

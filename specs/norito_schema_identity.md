@@ -17,10 +17,10 @@ including the captured revocation preimage. These captures are not a full
 workspace or release qualification. See the
 [current cutover evidence](#active-identity-cutover-2026-09-09).
 
-The concrete model fixtures now preserve six owned records and two
-encoding-only projections: Action, DataEvent, the smart-contract and executor
-contexts, block subscriptions/messages, the block-send adapter and reputation
-event-ID material. Their 48 root/container frames and three adapter projections
+The concrete model fixtures now preserve five owned records and two
+encoding-only projections: Action, DataEvent, the executor context, block
+subscriptions/messages, the block-send adapter and reputation event-ID
+material. Their 44 root/container frames and three adapter projections
 are documented in
 [`model_concrete_identity_frames.md`](../crates/iroha_data_model/tests/fixtures/model_concrete_identity_frames.md).
 The borrowed adapters retain their owning decoders and exact projected bytes.

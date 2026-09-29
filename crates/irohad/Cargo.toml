@@ -21,8 +21,9 @@ categories.workspace = true
 workspace = true
 
 [features]
-# Shipping daemon builds retain the Core accelerator. Test/recovery corridors
-# can select `daemon` explicitly to exercise identical node semantics portably.
+# Portable daemon defaults retain automatic SIMD and target-appropriate Metal.
+# The canonical Linux release builder adds `ivm-cuda`, requiring the signed PTX
+# bundle while keeping nvcc and the driver out of build/startup dependencies.
 default = ["daemon", "iroha_core/simd"]
 daemon = [
     "telemetry",
@@ -41,6 +42,11 @@ daemon = [
 external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
+# Canonical Linux daemon release feature: IVM CUDA alone uses a runtime driver
+# loader and an embedded, signed PTX bundle.
+ivm-cuda = ["ivm/cuda"]
+# Explicit toolkit-coupled helper bundle; these helpers still require separate
+# nvcc/cudart qualification and are not part of driverless daemon defaults.
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
 # Test-network-only fault injection. This feature is never enabled by a
 # production/default build; `iroha_test_network` builds a separate daemon binary
@@ -147,6 +153,8 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 iroha_model_base = { workspace = true }
+iroha_musubi_service = { workspace = true }
+iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }
@@ -161,6 +169,7 @@ iroha_sccp_rpc = { workspace = true }
 iroha_torii = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }
 iroha_genesis = { workspace = true }
+iroha_version = { workspace = true }
 ivm = { workspace = true }
 iroha_p2p = { workspace = true }
 mv = { workspace = true }
@@ -187,6 +196,11 @@ toml = { workspace = true }
 norito = { workspace = true, default-features = false }
 iroha_i18n = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+bytes = { workspace = true }
+hyper = { version = "1.7.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+http-body-util = { workspace = true }
+tokio-rustls = { workspace = true, features = ["ring"] }
 rand = { workspace = true }
 blake3 = { workspace = true }
 
@@ -199,6 +213,7 @@ tempfile = { workspace = true }
 assertables = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
+rcgen = "0.14.5"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }

@@ -9,6 +9,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 use zeroize::{Zeroize, Zeroizing};
+use super::program::instruction_fields;
 
 const COEFFICIENTS_PER_CIPHERTEXT: usize = 128;
 const SNAPSHOT_WIDTH: usize =
@@ -274,22 +275,6 @@ fn allocation_error(error: std::collections::TryReserveError) -> RamLfeError {
     invalid_program_error(&format!("private interpreter allocation failed: {error}"))
 }
 
-fn instruction_fields(instruction: HiddenRamFheInstruction) -> [u64; INSTRUCTION_WIDTH] {
-    use HiddenRamFheInstruction::*;
-    match instruction {
-        LoadInput(a, b) => [0, a.into(), b.into(), 0, 0, 0],
-        LoadState(a, b) => [1, a.into(), b.into(), 0, 0, 0],
-        StoreState(a, b) => [2, a.into(), b.into(), 0, 0, 0],
-        LoadConst(a, b) => [3, a.into(), b, 0, 0, 0],
-        Add(a, b, c) => [4, a.into(), b.into(), c.into(), 0, 0],
-        AddPlain(a, b, c) => [5, a.into(), b.into(), c, 0, 0],
-        SubPlain(a, b, c) => [6, a.into(), b.into(), c, 0, 0],
-        MulPlain(a, b, c) => [7, a.into(), b.into(), c, 0, 0],
-        Mul(a, b, c) => [8, a.into(), b.into(), c.into(), 0, 0],
-        SelectEqZero(a, b, c, d) => [9, a.into(), b.into(), c.into(), d.into(), 0],
-        Output(a) => [10, a.into(), 0, 0, 0, 0],
-    }
-}
 
 #[cfg(test)]
 thread_local! {

@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use crate::fs_flags::set_directory_no_follow_flags;
+use crate::fs_flags::set_no_follow_flag;
 use crate::{
     FencedPrivacyPublicationDispositionV1, FencedPrivacyPublicationReceiptV1,
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
@@ -20,6 +23,7 @@ use norito::{
     core::DecodeLimits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
+use sorafs_car::validate_output_path;
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
     GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1, GOVERNANCE_DAG_BLOCK_ENVELOPE_MAX_BYTES_V1,
@@ -44,7 +48,7 @@ use sorafs_manifest::{
     validate_governance_dag_head_against_rotatable_chain_v1,
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::{
@@ -2566,11 +2570,11 @@ impl FilesystemGovernancePublisher {
         root: PathBuf,
         publication_lock: Arc<Mutex<()>>,
     ) -> io::Result<Self> {
-        validate_atomic_output_path(&root.join(".governance-root-probe"))?;
+        validate_output_path(&root.join(".governance-root-probe"))?;
         fs::create_dir_all(&root)?;
         let root_guard = GovernanceFilesystemRootGuard::capture_writer(&root)?;
         let root = root_guard.root().to_path_buf();
-        validate_atomic_output_path(&root.join(".governance-root-probe"))?;
+        validate_output_path(&root.join(".governance-root-probe"))?;
         let root_lock = acquire_governance_publisher_lock(&root)?;
         root_guard.revalidate()?;
         reject_governance_publication_recovery_quarantine(&root_guard).map_err(|error| {
@@ -3336,7 +3340,7 @@ impl FilesystemGovernancePublisher {
 }
 fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
     let lock_path = root.join(GOVERNANCE_PUBLISHER_LOCK_FILE);
-    validate_atomic_output_path(&lock_path)?;
+    validate_output_path(&lock_path)?;
     let before_open = match fs::symlink_metadata(&lock_path) {
         Ok(metadata) => {
             validate_governance_lock_metadata(&lock_path, &metadata)?;
@@ -3368,7 +3372,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
             lock_path.display()
         )));
     }
-    validate_atomic_output_path(&lock_path)?;
+    validate_output_path(&lock_path)?;
     match file.try_lock() {
         Ok(()) => {
             let locked_path_metadata = fs::symlink_metadata(&lock_path)?;
@@ -3379,7 +3383,7 @@ fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
                     lock_path.display()
                 )));
             }
-            validate_atomic_output_path(&lock_path)?;
+            validate_output_path(&lock_path)?;
             Ok(file)
         }
         Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
@@ -4255,7 +4259,7 @@ where
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("missing parent directory"))?;
-    validate_atomic_output_path(path)?;
+    validate_output_path(path)?;
     fs::create_dir_all(parent).map_err(|err| {
         io::Error::new(
             err.kind(),
@@ -4265,7 +4269,7 @@ where
             ),
         )
     })?;
-    validate_atomic_output_path(path)?;
+    validate_output_path(path)?;
     let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = temp_path_for_atomic(path, std::process::id(), counter);
     let write_result = (|| -> io::Result<()> {
@@ -4273,7 +4277,7 @@ where
         file.write_all(data)?;
         file.sync_all()?;
         drop(file);
-        validate_atomic_output_path(path)?;
+        validate_output_path(path)?;
         fs::rename(&tmp_path, path)?;
         sync_parent(parent)?;
         Ok(())
@@ -4346,223 +4350,6 @@ fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
         )));
     }
     Ok(file)
-}
-fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(io::Error::other(format!(
-                    "output `{}` must not be a symlink",
-                    path.display()
-                )));
-            }
-            if metadata.is_dir() {
-                return Err(io::Error::other(format!(
-                    "output `{}` must not be a directory",
-                    path.display()
-                )));
-            }
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(io::Error::new(
-                err.kind(),
-                format!("failed to inspect output `{}`: {err}", path.display()),
-            ));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
-            }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        )));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        )));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "failed to inspect output parent `{}`: {err}",
-                            ancestor.display()
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(unix)]
-fn set_directory_no_follow_flags(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!("Governance DAG filesystem flags are not qualified for this Android architecture");
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("Governance DAG filesystem flags are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-fn platform_directory_only_flag() -> i32 {
-    0x200000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x4000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-fn platform_directory_only_flag() -> i32 {
-    0x10000
-}
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn platform_directory_only_flag() -> i32 {
-    0x0010_0000
-}
-#[cfg(target_os = "freebsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "dragonfly")]
-fn platform_directory_only_flag() -> i32 {
-    0x0800_0000
-}
-#[cfg(target_os = "openbsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0002_0000
-}
-#[cfg(target_os = "netbsd")]
-fn platform_directory_only_flag() -> i32 {
-    0x0020_0000
 }
 fn current_unix_timestamp_seconds() -> u64 {
     SystemTime::now()
@@ -5132,7 +4919,7 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
 fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     let max_bytes_u64 = u64::try_from(max_bytes)
         .map_err(|_| io::Error::other("governance state byte limit exceeds u64"))?;
-    validate_atomic_output_path(path)?;
+    validate_output_path(path)?;
     let before_open = fs::symlink_metadata(path)?;
     validate_governance_state_metadata(path, &before_open)?;
     let mut options = fs::OpenOptions::new();
@@ -5184,7 +4971,7 @@ fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Resu
             path.display()
         )));
     }
-    validate_atomic_output_path(path)?;
+    validate_output_path(path)?;
     Ok(bytes)
 }
 fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {

@@ -77,7 +77,7 @@ def run_receipt(value: PublicRunProjection, raw_sha256: str, cap: int) -> bytes:
         original_deadline_ns=value.original_deadline_ns,
         raw_run_sha256=raw_sha256,
         generation=dict(network_id=generation.network_id, genesis_hash=generation.genesis_hash,
-            context_id=generation.context_id, genesis_public_key=generation.genesis_public_key,
+            genesis_epoch_context_id=generation.genesis_epoch_context_id, genesis_public_key=generation.genesis_public_key,
             chain_discriminant=generation.chain_discriminant, anchors_sha256=generation.anchors_sha256,
             generator_sha256=generation.generator_sha256, process=generation.process,
             accounts=tuple(dict(index=item.index, account_id=item.account_id) for item in generation.accounts)),

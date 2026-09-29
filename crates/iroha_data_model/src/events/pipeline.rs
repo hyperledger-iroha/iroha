@@ -2,7 +2,6 @@
 pub use self::model::*;
 use crate::{
     block::{BlockHeader, consensus::ExecWitnessMsg},
-    merge::MergeLedgerEntry,
     transaction::SignedTransaction,
 };
 use iroha_crypto::HashOf;
@@ -25,8 +24,6 @@ mod model {
         Block(BlockEvent),
         /// Warning emitted by the pipeline (non-forking informational signal).
         Warning(PipelineWarning),
-        /// Merge-ledger entry committed by the merge committee.
-        Merge(MergeLedgerEvent),
         /// Execution witness produced after block execution.
         Witness(super::ExecWitnessMsg),
     }
@@ -103,13 +100,6 @@ mod model {
         /// Human-readable details.
         pub details: String,
     }
-    /// Merge-ledger entry that was appended to persistent storage.
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::events::pipeline::model::MergeLedgerEvent")]
-    pub struct MergeLedgerEvent {
-        /// Merge-ledger entry payload.
-        pub entry: MergeLedgerEntry,
-    }
     /// Report of transaction's status in the pipeline
     #[derive(
         Debug,
@@ -151,7 +141,6 @@ mod model {
     pub enum PipelineEventFilterBox {
         Transaction(TransactionEventFilter),
         Block(BlockEventFilter),
-        Merge(MergeLedgerEventFilter),
         Witness(WitnessEventFilter),
     }
     #[derive(
@@ -203,26 +192,6 @@ mod model {
         #[getset(get = "pub")]
         pub status: Option<TransactionStatus>,
     }
-    /// Filter merge-ledger events by epoch.
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Default,
-        Getters,
-        Decode,
-        Encode,
-        IntoSchema,
-        norito::NoritoSchema,
-    )]
-    #[norito_schema(name = "iroha_data_model::events::pipeline::model::MergeLedgerEventFilter")]
-    pub struct MergeLedgerEventFilter {
-        #[getset(get_copy = "pub")]
-        pub epoch_id: Option<u64>,
-    }
     /// Filter witness events by block metadata.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
@@ -239,14 +208,6 @@ mod model {
         #[getset(get_copy = "pub")]
         /// Optional view filter.
         pub view: Option<u64>,
-    }
-    impl MergeLedgerEventFilter {
-        /// Match only merge-ledger events for the given epoch identifier.
-        #[must_use]
-        pub fn for_epoch(mut self, epoch_id: u64) -> Self {
-            self.epoch_id = Some(epoch_id);
-            self
-        }
     }
     impl WitnessEventFilter {
         /// Match only witnesses for the given block hash.
@@ -288,8 +249,6 @@ impl_json_via_norito_bytes!(
     PipelineEventFilterBox,
     BlockEventFilter,
     TransactionEventFilter,
-    MergeLedgerEvent,
-    MergeLedgerEventFilter,
     ExecWitnessMsg,
     WitnessEventFilter
 );
@@ -451,9 +410,6 @@ impl super::EventFilter for PipelineEventFilterBox {
             ]
             .into_iter()
             .all(core::convert::identity),
-            (Self::Merge(merge_filter), PipelineEventBox::Merge(merge_event)) => merge_filter
-                .epoch_id
-                .is_none_or(|epoch| epoch == merge_event.entry.epoch_id),
             (Self::Witness(filter), PipelineEventBox::Witness(event)) => filter.matches(event),
             _ => false,
         }
@@ -462,20 +418,16 @@ impl super::EventFilter for PipelineEventFilterBox {
 /// Exports common structs and enums from this module.
 pub mod prelude {
     pub use super::{
-        BlockEvent, BlockStatus, MergeLedgerEvent, MergeLedgerEventFilter, PipelineEventBox,
-        PipelineEventFilterBox, TransactionEvent, TransactionStatus, WitnessEventFilter,
+        BlockEvent, BlockStatus, PipelineEventBox, PipelineEventFilterBox, TransactionEvent,
+        TransactionStatus, WitnessEventFilter,
     };
 }
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
     use super::{super::EventFilter, *};
-    use crate::{
-        ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
-        transaction::error::TransactionRejectionReason::*,
-    };
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_model_base::peer::PeerId;
+    use crate::{ValidationFail, transaction::error::TransactionRejectionReason::*};
+    use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
     use std::vec::Vec;
     impl BlockHeader {
@@ -497,87 +449,7 @@ mod tests {
             }
         }
     }
-    fn sample_merge_entry() -> MergeLedgerEntry {
-        let mut lane_validators: Vec<_> = (1_u8..=4)
-            .map(|seed| {
-                PeerId::new(
-                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                        .expect("BLS lane committee fixture keypair")
-                        .public_key()
-                        .clone(),
-                )
-            })
-            .collect();
-        lane_validators.sort();
-        let lane_incarnation = Hash::new(b"pipeline-event-lane-incarnation");
-        let settlement_commitment = LaneBlockCommitment {
-            block_height: 9,
-            lane_id: LaneId::SINGLE,
-            lane_incarnation,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            tx_count: 0,
-            total_local_amount: "0".parse().expect("valid settlement quantity"),
-            total_xor_due: "0".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        MergeLedgerEntry {
-            version: MergeLedgerEntry::VERSION,
-            epoch_id: 42,
-            lane_catalog_hash: Hash::new(b"pipeline-event-catalog"),
-            active_lanes: vec![crate::merge::MergeLaneBinding {
-                lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                lane_config_hash: Hash::new(b"pipeline-event-lane-config"),
-                incarnation: lane_incarnation,
-                activation_height: 0,
-            }],
-            lane_authority_catalog:
-                crate::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&[lane_validators])
-                    .expect("canonical pipeline event lane authority"),
-            incarnation_root: Hash::new(b"pipeline-event-incarnation-root"),
-            activation_root: Hash::new(b"pipeline-event-activation-root"),
-            lane_snapshots: vec![crate::merge::MergeLaneSnapshot {
-                lane_id: LaneId::SINGLE,
-                lane_incarnation,
-                incarnation_activation_height: 0,
-                proposal_height: 9,
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                lane_block_height: 9,
-                tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
-                merge_hint_root: Hash::new(b"hint"),
-                settlement_hash: crate::nexus::compute_settlement_hash(&settlement_commitment)
-                    .expect("sample settlement should hash canonically"),
-                settlement_commitment,
-                relay_envelope: None,
-            }],
-            execution_batch: None,
-            lane_drain_certificates: Vec::new(),
-            global_state_root: Hash::new(b"global"),
-            merge_qc: MergeQuorumCertificate::new(
-                7,
-                42,
-                43,
-                HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                    b"chain",
-                ))),
-                1,
-                HashOf::new(&Vec::<PeerId>::new()),
-                Vec::new(),
-                vec![0x01],
-                Vec::new(),
-                vec![0xAA],
-                Hash::new(b"digest"),
-            ),
-        }
-    }
     fn sample_pipeline_events() -> Vec<PipelineEventBox> {
-        let merge_entry = sample_merge_entry();
         let tx_queued: PipelineEventBox = TransactionEvent {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
             block_height: None,
@@ -607,7 +479,6 @@ mod tests {
             status: BlockStatus::Committed,
         }
         .into();
-        let merge_event: PipelineEventBox = MergeLedgerEvent { entry: merge_entry }.into();
         let witness_event: PipelineEventBox = ExecWitnessMsg {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([4_u8; Hash::LENGTH])),
             height: 2,
@@ -626,7 +497,6 @@ mod tests {
             tx_rejected.clone(),
             tx_approved.clone(),
             block_committed.clone(),
-            merge_event.clone(),
             witness_event.clone(),
         ];
         events
@@ -671,13 +541,6 @@ mod tests {
         assert_eq!(matched, vec![events[2].clone()]);
     }
     #[test]
-    fn merge_filters_match_epoch() {
-        let events = sample_pipeline_events();
-        let filter: PipelineEventFilterBox = MergeLedgerEventFilter::default().for_epoch(42).into();
-        let matched = apply_filter(&events, &filter);
-        assert_eq!(matched, vec![events[4].clone()]);
-    }
-    #[test]
     fn witness_filters_match_metadata() {
         let events = sample_pipeline_events();
         let filter: PipelineEventFilterBox = WitnessEventFilter::default()
@@ -688,7 +551,7 @@ mod tests {
             .for_view(1)
             .into();
         let matched = apply_filter(&events, &filter);
-        assert_eq!(matched, vec![events[5].clone()]);
+        assert_eq!(matched, vec![events[4].clone()]);
     }
 }
 

@@ -1,14 +1,6 @@
 pub fn keccak_f1600(state: &mut [u64; 25]) {
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    {
-        if crate::vector::metal_keccak_f1600(state) {
-            return;
-        }
-    }
-    #[cfg(feature = "cuda")]
-    if crate::cuda::keccak_f1600_cuda(state) {
-        return;
-    }
+    // One 200-byte state cannot amortize a GPU transfer and kernel launch.
+    // Direct backend entrypoints remain available for hardware qualification.
     keccak_f1600_impl(state);
 }
 pub fn keccak_f1600_impl(state: &mut [u64; 25]) {

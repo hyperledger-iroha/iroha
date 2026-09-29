@@ -114,6 +114,7 @@ fn file_stores_survive_disk_errors() {
             &*records,
             &*crypto,
             &instance,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(key.clone(), false)],
             0,
             assertion.as_ref(),
@@ -134,6 +135,7 @@ fn file_stores_survive_disk_errors() {
         .unwrap(),
     );
     let config = HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
         committee: Committee::new(vec![key.clone()]).unwrap(),
         params: ChainParams {
             block_time: 10,
@@ -150,7 +152,10 @@ fn file_stores_survive_disk_errors() {
         genesis,
         128,
         found,
-        vec![(1, config.clone()), (2, config.clone())],
+        vec![
+            (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            (2, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+        ],
         7,
     )
     .unwrap();
@@ -168,6 +173,7 @@ fn file_stores_survive_disk_errors() {
     .spawn(
         DriverConfig::default(),
         DriverStart {
+            allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
             local: LocalParams::default(),
             init,
             signers: vec![Box::new(signer)],

@@ -89,7 +89,9 @@ fn fixture_with_effects(
             )
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
@@ -379,9 +381,7 @@ fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_ord
 #[test]
 fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
     let _guard = crate::exec_witness::exec_witness_guard();
-    let _fee_guard = crate::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     crate::status::reset_nexus_economics_for_tests();
     let (state, mut source, _, _) = fixture_with_effects(false, true);
     let gas_fee = |index| {

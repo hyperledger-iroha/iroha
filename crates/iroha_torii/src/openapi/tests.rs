@@ -3,7 +3,7 @@
 use super::*;
 use crate::utils;
 use iroha_torii_shared::{
-    route_catalog::{ApiSurface, musubi as musubi_routes},
+    route_catalog::{self, ApiSurface, musubi as musubi_routes},
     sorafs_hedging_billing_api::{
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
         BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
@@ -13,7 +13,6 @@ use iroha_torii_shared::{
         SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
         SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1,
     },
-    uri,
 };
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -426,10 +425,10 @@ fn expected_operator_operation(method: &str, path: &str) -> bool {
         return false;
     }
     path.starts_with("/v1/operator/")
+        || path == route_catalog::core::CONFIGURATION_GET.path()
         || matches!(
             path,
-            uri::CONFIGURATION
-                | "/v1/internal/torii/proxy"
+            "/v1/internal/torii/proxy"
                 | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/gov/protected-namespaces"
@@ -438,11 +437,11 @@ fn expected_operator_operation(method: &str, path: &str) -> bool {
 fn expected_read_operation(method: &str, path: &str) -> bool {
     matches!(method, "get" | "head" | "options")
         || (method == "post" && path.starts_with("/v1/musubi/queries/"))
+        || (method == "post" && path == route_catalog::pipeline::QUERY.path())
         || (method == "post"
             && matches!(
                 path,
-                uri::QUERY
-                    | "/v1/accounts/query"
+                "/v1/accounts/query"
                     | "/v1/accounts/faucet/prepare"
                     | "/v1/accounts/onboard/plan"
                     | "/v1/accounts/onboard/prepare"
@@ -3061,6 +3060,5 @@ fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
 
 #[path = "tests/privacy_release_qualification.rs"]
 mod privacy_release_qualification;
-
 #[path = "tests/validator_committee_contract.rs"]
 mod validator_committee_contract;

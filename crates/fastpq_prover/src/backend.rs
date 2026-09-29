@@ -1438,11 +1438,10 @@ fn digest_domain_prefix_v1<'a>(
     level: usize,
     counter: u64,
 ) -> Result<GoldilocksDigest384DomainPrefixV1<'a>> {
-    GoldilocksDigest384DomainPrefixV1::new(digest_domain_v1(role, phase, level, 0, counter)?).ok_or(
-        Error::PayloadLengthOverflow {
+    GoldilocksDigest384DomainPrefixV1::new(digest_domain_v1(role, phase, level, 0, counter)?)
+        .ok_or_else(|| Error::PayloadLengthOverflow {
             length: role.len().saturating_add(phase.len()),
-        },
-    )
+        })
 }
 
 #[cfg(any(test, feature = "dev-tools"))]
@@ -1612,6 +1611,9 @@ fn hash_air_trace_rows_with_mode(
     columns: &[Vec<u64>],
     mode: ExecutionMode,
 ) -> Result<Vec<GoldilocksDigest384V1>> {
+    // Keep fewer than two 16-row jobs sequential. This avoids scheduling tiny
+    // batches and reuses each job's canonical byte buffer across several hashes.
+    const ROWS_PER_JOB: usize = 16;
     // Digest384 remains CPU-only for every requested mode. The caller reports
     // the requested policy and actual CPU route before building these leaves.
     let _ = mode;
@@ -1644,9 +1646,6 @@ fn hash_air_trace_rows_with_mode(
         }
         hash_at_prefix_v1(&prefix, row_index, &[bytes.as_slice()])
     };
-    // Keep fewer than two 16-row jobs sequential. This avoids scheduling tiny
-    // batches and reuses each job's canonical byte buffer across several hashes.
-    const ROWS_PER_JOB: usize = 16;
     if row_count < 2 * ROWS_PER_JOB {
         let mut bytes = Vec::with_capacity(row_bytes);
         return (0..row_count)
@@ -2652,22 +2651,21 @@ fn merkle_root_with_execution_v1(
     execution: crate::digest_executor::DigestExecutionV1,
 ) -> Result<GoldilocksDigest384V1> {
     let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
-    match levels.last().and_then(|level| level.first()).copied() {
-        Some(root) => Ok(root),
-        None => {
-            let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
-                digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
-                &[],
-            )
-            .ok_or(Error::PayloadLengthOverflow { length: 0 })?;
-            let result = crate::digest_executor::execute_digest384_frames_v1(&[frame], execution)?;
-            Ok(result[0])
-        }
+    if let Some(root) = levels.last().and_then(|level| level.first()).copied() {
+        Ok(root)
+    } else {
+        let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+            digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
+            &[],
+        )
+        .ok_or(Error::PayloadLengthOverflow { length: 0 })?;
+        let result = crate::digest_executor::execute_digest384_frames_v1(&[frame], execution)?;
+        Ok(result[0])
     }
 }
 
 #[cfg(test)]
-pub(crate) fn merkle_root_for_role(
+pub fn merkle_root_for_role(
     leaves: &[GoldilocksDigest384V1],
     role: MerkleTreeRoleV1,
 ) -> Result<GoldilocksDigest384V1> {
@@ -2772,6 +2770,7 @@ pub fn fold_with_fri(
         transcript.append_fri_final(root);
         return Ok((vec![root], Vec::new()));
     }
+    let leaf_arity = arity;
     let arity = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations
@@ -2789,7 +2788,7 @@ pub fn fold_with_fri(
     {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
-        let leaves = hash_fri_leaves_with_mode(round, &current, arity as u32, ExecutionMode::Cpu)?;
+        let leaves = hash_fri_leaves_with_mode(round, &current, leaf_arity, ExecutionMode::Cpu)?;
         let root = merkle_root_with_mode(
             &leaves,
             MerkleTreeRoleV1::Fri(
@@ -3928,7 +3927,7 @@ impl Transcript {
             params.grinding_bits,
             field_and_hash,
             polynomial_profile,
-            public_io.clone(),
+            *public_io,
         ))?;
         let state = hash_bytes_v1(
             TRANSCRIPT_ROLE_V1,

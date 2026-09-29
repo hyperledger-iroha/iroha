@@ -320,8 +320,8 @@ fn run() -> Result<(), String> {
             if spec.digest != chunk.digest {
                 return Err(format!(
                     "chunk fetch spec digest {} does not match computed digest {} for chunk {}",
-                    hex::encode(&spec.digest),
-                    hex::encode(&chunk.digest),
+                    hex::encode(spec.digest),
+                    hex::encode(chunk.digest),
                     index
                 ));
             }
@@ -704,7 +704,7 @@ fn run() -> Result<(), String> {
         obj.insert("suite".into(), Value::from(hybrid.envelope.suite.clone()));
         obj.insert(
             "nonce_hex".into(),
-            Value::from(hex::encode(&hybrid.envelope.nonce)),
+            Value::from(hex::encode(hybrid.envelope.nonce)),
         );
         obj.insert(
             "ciphertext_len".into(),
@@ -843,7 +843,7 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
             obj.insert("length".into(), Value::from(chunk.length));
             obj.insert(
                 "digest_blake3".into(),
-                Value::from(hex::encode(&chunk.digest)),
+                Value::from(hex::encode(chunk.digest)),
             );
             Value::Object(obj)
         })
@@ -944,15 +944,15 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     );
     manifest_obj.insert(
         "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex::encode(&ctx.manifest.chunk_digest_sha3_256)),
+        Value::from(hex::encode(ctx.manifest.chunk_digest_sha3_256)),
     );
     manifest_obj.insert(
         "por_root_hex".into(),
-        Value::from(hex::encode(&ctx.manifest.por_root)),
+        Value::from(hex::encode(ctx.manifest.por_root)),
     );
     manifest_obj.insert(
         "car_digest_hex".into(),
-        Value::from(hex::encode(&ctx.manifest.car_digest)),
+        Value::from(hex::encode(ctx.manifest.car_digest)),
     );
     manifest_obj.insert(
         "car_cid_hex".into(),
@@ -981,7 +981,7 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
         .iter()
         .map(|sig| {
             let mut obj = Map::new();
-            obj.insert("signer_hex".into(), Value::from(hex::encode(&sig.signer)));
+            obj.insert("signer_hex".into(), Value::from(hex::encode(sig.signer)));
             obj.insert(
                 "signature_hex".into(),
                 Value::from(hex::encode(&sig.signature)),
@@ -1749,7 +1749,7 @@ fn verify_manifest_signatures_file(
         .ok_or_else(|| {
             "manifest signatures file missing `chunk_digest_sha3_256` field".to_string()
         })?;
-    let expected_chunk_hex = hex::encode(&chunk_digest_sha3);
+    let expected_chunk_hex = hex::encode(chunk_digest_sha3);
     if chunk_hex != expected_chunk_hex {
         return Err(format!(
             "manifest signatures chunk digest `{chunk_hex}` does not match computed `{expected_chunk_hex}`"
@@ -1828,11 +1828,11 @@ fn write_manifest_signatures_file(
     );
     root.insert(
         "chunk_digest_sha3_256".to_owned(),
-        Value::from(hex::encode(&chunk_digest_sha3)),
+        Value::from(hex::encode(chunk_digest_sha3)),
     );
     let mut signature_entries = Vec::new();
     for sig in &manifest.governance.council_signatures {
-        let signer_hex = hex::encode(&sig.signer);
+        let signer_hex = hex::encode(sig.signer);
         let signature_hex = hex::encode(&sig.signature);
         let signer_multihash = PublicKey::from_bytes(Algorithm::Ed25519, &sig.signer)
             .map_err(|err| format!("invalid council signature signer `{signer_hex}`: {err}"))?
@@ -2194,8 +2194,8 @@ mod tests {
             .expect("test signer public key should parse");
         let mut entry = Map::new();
         entry.insert("algorithm".to_owned(), Value::from("ed25519"));
-        entry.insert("signer".to_owned(), Value::from(hex::encode(&signer_bytes)));
-        entry.insert("signature".to_owned(), Value::from(hex::encode(&[0u8; 64])));
+        entry.insert("signer".to_owned(), Value::from(hex::encode(signer_bytes)));
+        entry.insert("signature".to_owned(), Value::from(hex::encode([0u8; 64])));
         entry.insert(
             "signer_multihash".to_owned(),
             Value::from(public_key.to_string()),
@@ -2213,7 +2213,7 @@ mod tests {
         );
         root.insert(
             "chunk_digest_sha3_256".to_owned(),
-            Value::from(hex::encode(&chunk_digest_sha3)),
+            Value::from(hex::encode(chunk_digest_sha3)),
         );
         root.insert(
             "signatures".to_owned(),
@@ -2253,8 +2253,8 @@ mod tests {
             signature[..32].copy_from_slice(&replacement_r);
             let mut entry = Map::new();
             entry.insert("algorithm".to_owned(), Value::from("ed25519"));
-            entry.insert("signer".to_owned(), Value::from(hex::encode(&signer_bytes)));
-            entry.insert("signature".to_owned(), Value::from(hex::encode(&signature)));
+            entry.insert("signer".to_owned(), Value::from(hex::encode(signer_bytes)));
+            entry.insert("signature".to_owned(), Value::from(hex::encode(signature)));
             entry.insert(
                 "signer_multihash".to_owned(),
                 Value::from(public_key.to_string()),
@@ -2272,7 +2272,7 @@ mod tests {
             );
             root.insert(
                 "chunk_digest_sha3_256".to_owned(),
-                Value::from(hex::encode(&chunk_digest_sha3)),
+                Value::from(hex::encode(chunk_digest_sha3)),
             );
             root.insert(
                 "signatures".to_owned(),
@@ -2310,11 +2310,11 @@ mod tests {
             ("small-order", SMALL_ORDER_ED25519),
             ("noncanonical", NONCANONICAL_ED25519_IDENTITY),
         ] {
-            let signer_hex = hex::encode(&signer_bytes);
+            let signer_hex = hex::encode(signer_bytes);
             let mut entry = Map::new();
             entry.insert("algorithm".to_owned(), Value::from("ed25519"));
             entry.insert("signer".to_owned(), Value::from(signer_hex.clone()));
-            entry.insert("signature".to_owned(), Value::from(hex::encode(&signature)));
+            entry.insert("signature".to_owned(), Value::from(hex::encode(signature)));
             entry.insert(
                 "signer_multihash".to_owned(),
                 Value::from(format!("hex:{signer_hex}")),
@@ -2332,7 +2332,7 @@ mod tests {
             );
             root.insert(
                 "chunk_digest_sha3_256".to_owned(),
-                Value::from(hex::encode(&chunk_digest_sha3)),
+                Value::from(hex::encode(chunk_digest_sha3)),
             );
             root.insert(
                 "signatures".to_owned(),

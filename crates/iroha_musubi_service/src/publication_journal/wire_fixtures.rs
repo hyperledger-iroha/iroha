@@ -3,7 +3,7 @@
 use super::*;
 use crate::{MusubiSeedIngressStageRequestV1, tests::wire_fixtures::record};
 
-pub(crate) fn check_identities(fixtures: &[norito::json::Value]) {
+pub fn check_identities(fixtures: &[norito::json::Value]) {
     use crate::tests::wire_fixtures::check_identity;
     check_identity::<DurableMusubiPublicationServiceJournalLimitsV1>(fixtures);
     check_identity::<DurablePublicationOperationRecordV1>(fixtures);
@@ -17,7 +17,7 @@ pub(crate) fn check_identities(fixtures: &[norito::json::Value]) {
     check_identity::<Vec<DurablePublicationAuthorizationRecordV1>>(fixtures);
 }
 
-pub(crate) fn records(seed: &MusubiSeedIngressStageRequestV1) -> Vec<norito::json::Value> {
+pub fn records(seed: &MusubiSeedIngressStageRequestV1) -> Vec<norito::json::Value> {
     let deployment = MusubiPublicationServiceJournalBindingV1 {
         network_id: seed.binding.network_id,
         ingress_broker: seed.binding.ingress_broker.clone(),
@@ -72,6 +72,45 @@ pub(crate) fn records(seed: &MusubiSeedIngressStageRequestV1) -> Vec<norito::jso
     );
     let envelope = DurablePublicationJournalEnvelopeV1::new(complete.clone()).unwrap();
     envelope.validate_digest().unwrap();
+    let mut records = vec![
+        record("journal.limits", &limits),
+        record("journal.deployment", &deployment),
+        record("journal.operation_binding", &binding),
+        record("journal.idempotency_key", &key),
+        record("journal.operation_record", &complete.operations[0]),
+        record("journal.authorization_record", &complete.authorizations[0]),
+        record("journal.operation_records", &complete.operations),
+        record("journal.authorization_records", &complete.authorizations),
+        record("journal.result_records", &complete.results),
+        record("journal.pending_state", &pending),
+        record("journal.complete_state", &complete),
+        record("journal.envelope", &envelope),
+        norito::json!({
+            "specimen": "journal.digests",
+            "pending_state_digest": (hex::encode(pending.digest().unwrap())),
+            "complete_state_digest": (hex::encode(complete.digest().unwrap())),
+        }),
+    ];
+    records.extend(result_variant_records(
+        &mut journal,
+        &deployment,
+        limits,
+        key,
+        request_digest,
+        response,
+    ));
+    records
+}
+
+/// Capture every retained result variant as its state, record and restored snapshot frames.
+fn result_variant_records(
+    journal: &mut InMemoryMusubiPublicationServiceJournalV1,
+    deployment: &MusubiPublicationServiceJournalBindingV1,
+    limits: DurableMusubiPublicationServiceJournalLimitsV1,
+    key: MusubiPublicationIdempotencyKeyV1,
+    request_digest: [u8; 32],
+    response: Vec<u8>,
+) -> Vec<norito::json::Value> {
     let variants = [
         (
             "pending",
@@ -96,31 +135,13 @@ pub(crate) fn records(seed: &MusubiSeedIngressStageRequestV1) -> Vec<norito::jso
             },
         ),
     ];
-    let mut records = vec![
-        record("journal.limits", &limits),
-        record("journal.deployment", &deployment),
-        record("journal.operation_binding", &binding),
-        record("journal.idempotency_key", &key),
-        record("journal.operation_record", &complete.operations[0]),
-        record("journal.authorization_record", &complete.authorizations[0]),
-        record("journal.operation_records", &complete.operations),
-        record("journal.authorization_records", &complete.authorizations),
-        record("journal.result_records", &complete.results),
-        record("journal.pending_state", &pending),
-        record("journal.complete_state", &complete),
-        record("journal.envelope", &envelope),
-        norito::json!({
-            "specimen": "journal.digests",
-            "pending_state_digest": (hex::encode(pending.digest().unwrap())),
-            "complete_state_digest": (hex::encode(complete.digest().unwrap())),
-        }),
-    ];
+    let mut records = Vec::new();
     for (label, result) in variants {
         journal.results.insert(key, result);
-        let snapshot = state_from_journal(&journal, &deployment, limits, 5).unwrap();
-        let restored = journal_from_state(&snapshot, &deployment, limits).unwrap();
+        let snapshot = state_from_journal(journal, deployment, limits, 5).unwrap();
+        let restored = journal_from_state(&snapshot, deployment, limits).unwrap();
         assert_eq!(
-            state_from_journal(&restored, &deployment, limits, 5).unwrap(),
+            state_from_journal(&restored, deployment, limits, 5).unwrap(),
             snapshot
         );
         records.push(record(

@@ -1,3 +1,4 @@
+//! Strict deterministic signature verification for IVM execution.
 use curve25519_dalek::edwards::CompressedEdwardsY;
 /// Digital signature verification helpers used by the VM.
 ///
@@ -31,11 +32,22 @@ pub enum Ed25519BatchError {
     /// Request contained no entries.
     Empty,
     /// Request exceeded the configured maximum entry count.
-    TooMany { max: usize, actual: usize },
+    TooMany {
+        /// Maximum admitted entry count.
+        max: usize,
+        /// Submitted entry count.
+        actual: usize,
+    },
     /// Entry failed structural validation (e.g. malformed public key).
-    InvalidEntry { index: usize },
+    InvalidEntry {
+        /// First structurally invalid entry.
+        index: usize,
+    },
     /// Signature verification failed for the entry at `index`.
-    SignatureFailed { index: usize },
+    SignatureFailed {
+        /// First entry whose signature failed verification.
+        index: usize,
+    },
 }
 /// Supported signature schemes.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +93,7 @@ pub(crate) fn parse_ed25519_public_key_for_verification(
     Ed25519VerifyingKey::from_bytes(parsed.as_bytes()).ok()
 }
 /// Returns true when Ed25519 public-key bytes must not reach a verifier.
+#[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal"), test))]
 #[must_use]
 pub(crate) fn ed25519_public_key_bytes_are_invalid(public_key: &[u8; 32]) -> bool {
     parse_ed25519_public_key_for_verification(public_key).is_none()
@@ -218,120 +231,16 @@ pub fn verify_ed25519_batch(
     }
     Ok(())
 }
-/// Verify a batch of Ed25519 signatures. Entries that fail to parse are marked
-/// as invalid. Tries the CUDA per-signature path when available, otherwise
-/// falls back to deterministic CPU verification.
-pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
-    if items.is_empty() {
-        return Vec::new();
-    }
-    #[cfg(feature = "cuda")]
-    let maybe_cuda = crate::cuda::cuda_available() && !crate::cuda::cuda_disabled();
-    #[cfg(feature = "cuda")]
-    let mut cuda_inputs = if maybe_cuda {
-        Some((Vec::new(), Vec::new(), Vec::new(), Vec::new()))
-    } else {
-        None
-    };
-    let mut parsed = Vec::with_capacity(items.len());
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    let mut metal_inputs = if crate::vector::metal_available() {
-        Some((Vec::new(), Vec::new(), Vec::new(), Vec::new()))
-    } else {
-        None
-    };
-    for item in items {
-        if signature_bytes_are_all_zero(&item.signature) {
-            parsed.push(None);
-            continue;
-        }
-        if signature_has_invalid_ed25519_r(&item.signature) {
-            parsed.push(None);
-            continue;
-        }
-        let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
-            parsed.push(None);
-            continue;
-        };
-        let Some(pk) = parse_ed25519_public_key_for_verification(&item.public_key) else {
-            parsed.push(None);
-            continue;
-        };
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        if let Some((ref mut sigs, ref mut pks, ref mut hrams, ref mut map)) = metal_inputs {
-            hrams.push(ed25519_challenge_scalar_bytes(
-                &item.signature,
-                pk.as_bytes(),
-                item.message,
-            ));
-            sigs.push(item.signature);
-            pks.push(item.public_key);
-            map.push(parsed.len());
-        }
-        #[cfg(feature = "cuda")]
-        if let Some((ref mut sigs, ref mut pks, ref mut hrams, ref mut map)) = cuda_inputs {
-            hrams.push(ed25519_challenge_scalar_bytes(
-                &item.signature,
-                pk.as_bytes(),
-                item.message,
-            ));
-            sigs.push(item.signature);
-            pks.push(item.public_key);
-            map.push(parsed.len());
-        }
-        parsed.push(Some((sig, pk)));
-    }
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some((sigs, pks, hrams, map)) = metal_inputs
-        && !sigs.is_empty()
-        && let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams)
-        && out.len() == map.len()
-    {
-        let mut results = vec![false; items.len()];
-        for (idx, ok) in map.into_iter().zip(out.into_iter()) {
-            results[idx] = ok;
-        }
-        return results;
-    }
-    #[cfg(feature = "cuda")]
-    if let Some((sigs, pks, hrams, map)) = cuda_inputs
-        && !sigs.is_empty()
-        && let Some(out) = crate::cuda::ed25519_verify_batch_cuda(&sigs, &pks, &hrams)
-        && out.len() == map.len()
-    {
-        let mut results = vec![false; items.len()];
-        for (idx, ok) in map.into_iter().zip(out.into_iter()) {
-            results[idx] = ok;
-        }
-        return results;
-    }
-    let mut results = Vec::with_capacity(items.len());
-    for (idx, parsed_item) in parsed.into_iter().enumerate() {
-        let Some((sig, pk)) = parsed_item else {
-            results.push(false);
-            continue;
-        };
-        #[cfg(feature = "cuda")]
-        if maybe_cuda
-            && let Some(res) = crate::cuda::ed25519_verify_cuda(
-                items[idx].message,
-                &items[idx].signature,
-                &items[idx].public_key,
-            )
-        {
-            results.push(res);
-            continue;
-        }
-        results.push(pk.verify_strict(items[idx].message, &sig).is_ok());
-    }
-    results
-}
+mod batch;
+#[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal")))]
+pub(crate) use batch::BatchInput;
+pub use batch::verify_ed25519_batch_items_into;
 #[cfg(test)]
 mod tests {
     use super::{
         Ed25519BatchEntry, Ed25519BatchError, Ed25519BatchItem, Ed25519BatchRequest,
         SignatureScheme, ed25519_challenge_scalar_bytes, verify_ed25519_batch,
-        verify_ed25519_batch_items, verify_signature,
+        verify_ed25519_batch_items_into, verify_signature,
     };
     use ed25519_dalek::{Signer, SigningKey};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
@@ -444,7 +353,15 @@ mod tests {
             signature,
             public_key: weak_public_key,
         }];
-        assert_eq!(verify_ed25519_batch_items(&items), vec![false]);
+        assert_eq!(
+            {
+                let items = &items;
+                let mut output = vec![false; items.len()];
+                assert!(verify_ed25519_batch_items_into(items, &mut output));
+                output
+            },
+            vec![false]
+        );
     }
     #[test]
     fn ed25519_verifiers_reject_noncanonical_or_small_order_public_key_material() {
@@ -481,7 +398,12 @@ mod tests {
                 public_key,
             }];
             assert_eq!(
-                verify_ed25519_batch_items(&items),
+                {
+                    let items = &items;
+                    let mut output = vec![false; items.len()];
+                    assert!(verify_ed25519_batch_items_into(items, &mut output));
+                    output
+                },
                 vec![false],
                 "{label} public key must reject in item batch verification"
             );
@@ -520,7 +442,12 @@ mod tests {
                 public_key,
             }];
             assert_eq!(
-                verify_ed25519_batch_items(&items),
+                {
+                    let items = &items;
+                    let mut output = vec![false; items.len()];
+                    assert!(verify_ed25519_batch_items_into(items, &mut output));
+                    output
+                },
                 vec![false],
                 "{label} signature R must reject in item batch verification"
             );

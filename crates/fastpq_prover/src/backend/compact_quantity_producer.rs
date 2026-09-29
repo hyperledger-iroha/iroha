@@ -108,7 +108,7 @@ fn check_statement(
     // Reject every known fixed-geometry/carrier deficit before canonical
     // statement encoding, public preparation or private-tree construction.
     quantity_artifact_resources(count, 0)?.check_proving_limits(proving, verification)?;
-    decode_policy::preflight_decode_policy(count, verification)?;
+    decode_policy::preflight_decode_policy(count, &verification)?;
     // Canonical framing is measured before allocating an encoded statement.
     // Public preparation below separately charges keys, paths, rows and claims.
     let length = norito::core::encoded_frame_len(statement)?;
@@ -126,6 +126,11 @@ fn check_statement(
     Ok(count)
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one short-lived artifact exists per proving call; boxing the AXT payload would \
+              add an allocation and change the payload type the sibling tests frame directly"
+)]
 enum Artifact {
     Ordinary(FastpqOrdinaryCompactArtifactV1),
     Axt(FastpqAxtCompactArtifactV1),
@@ -137,22 +142,26 @@ impl Artifact {
         axt: Option<ExpectedAxtContext<'_>>,
     ) -> Self {
         let profile_id = super::offline_compact::quantity_profile_id();
-        match axt {
-            None => Self::Ordinary(FastpqOrdinaryCompactArtifactV1 {
-                profile_id,
-                statement: statement.clone(),
-                bundle_frame: Vec::new(),
-            }),
-            Some(axt) => Self::Axt(FastpqAxtCompactArtifactV1 {
-                profile_id,
-                statement: statement.clone(),
-                binding: axt.binding.clone(),
-                metadata: axt.metadata.clone(),
-                mirrors: axt.mirrors,
-                remote_spend_claims: axt.remote_spend_claims.map(<[_]>::to_vec),
-                bundle_frame: Vec::new(),
-            }),
-        }
+        axt.map_or_else(
+            || {
+                Self::Ordinary(FastpqOrdinaryCompactArtifactV1 {
+                    profile_id,
+                    statement: statement.clone(),
+                    bundle_frame: Vec::new(),
+                })
+            },
+            |axt| {
+                Self::Axt(FastpqAxtCompactArtifactV1 {
+                    profile_id,
+                    statement: statement.clone(),
+                    binding: axt.binding.clone(),
+                    metadata: axt.metadata.clone(),
+                    mirrors: axt.mirrors,
+                    remote_spend_claims: axt.remote_spend_claims.map(<[_]>::to_vec),
+                    bundle_frame: Vec::new(),
+                })
+            },
+        )
     }
 
     fn preflight(&self, count: usize, limits: VerificationLimits) -> Result<()> {
@@ -190,17 +199,17 @@ impl Artifact {
         match &mut self {
             Self::Ordinary(value) => {
                 value.bundle_frame = bundle;
-                encode_artifact(value, limits)
+                encode_artifact(value, &limits)
             }
             Self::Axt(value) => {
                 value.bundle_frame = bundle;
-                encode_artifact(value, limits)
+                encode_artifact(value, &limits)
             }
         }
     }
 }
 
-fn encode_artifact<T: NoritoSerialize>(value: &T, limits: VerificationLimits) -> Result<Vec<u8>> {
+fn encode_artifact<T: NoritoSerialize>(value: &T, limits: &VerificationLimits) -> Result<Vec<u8>> {
     check(
         "max_compact_producer_artifact_bytes",
         norito::core::encoded_frame_len(value)?,
@@ -238,7 +247,7 @@ fn columns(
 
 fn construction_limits(
     proving: ProvingLimits,
-    verification: VerificationLimits,
+    verification: &VerificationLimits,
 ) -> ConstructionLimits {
     ConstructionLimits {
         digest_execution: proving.digest_execution,
@@ -265,7 +274,7 @@ fn segments<R: DeepRelation>(
     for ordinal in 0..statements.len() {
         let relation = relation(ordinal)?;
         deep_engine::preflight(&relation, MAX_FRAME_BYTES, verification.bundle.segment)?;
-        ProducerPlan::new(&relation, construction_limits(proving, verification))?;
+        ProducerPlan::new(&relation, construction_limits(proving, &verification))?;
         check_segment_charge(
             relation.statement_bytes().len(),
             SHARED_FRAME_BOUND,
@@ -277,7 +286,7 @@ fn segments<R: DeepRelation>(
     for (ordinal, (statement, private)) in statements.iter().zip(private).enumerate() {
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
-        let proof = ProducerPlan::new(&relation, construction_limits(proving, verification))?
+        let proof = ProducerPlan::new(&relation, construction_limits(proving, &verification))?
             .build(columns, &mut rand::rngs::OsRng)?;
         let length = proof.len();
         check(
@@ -406,11 +415,11 @@ pub(super) fn prove(
     expected: ExpectedStatement,
     axt: Option<ExpectedAxtContext<'_>>,
     proving: ProvingLimits,
-    verification: VerificationLimits,
+    verification: &VerificationLimits,
 ) -> std::result::Result<Vec<u8>, ProvingError> {
     let _exclusive = acquire(&PRODUCER)?;
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    check_statement(statement, expected, proving, verification)?;
+    check_statement(statement, expected, proving, *verification)?;
     crate::digest384_batch::preflight_last_fields_execution(proving.digest_execution)?;
     let semantics = if axt.is_some() {
         ProofSemantics::AxtTransferClaim
@@ -422,7 +431,7 @@ pub(super) fn prove(
         &expected.internal(),
         semantics,
         verification.public_statement,
-        |prepared| prepare_and_prove(prepared, statement, expected, axt, proving, verification),
+        |prepared| prepare_and_prove(prepared, statement, expected, axt, proving, *verification),
     )?;
     match axt {
         Some(context) => {
@@ -430,14 +439,14 @@ pub(super) fn prove(
                 &bytes,
                 expected,
                 context,
-                verification,
+                *verification,
             )?;
         }
         None => {
             super::offline_compact::verify_quantity_ordinary_artifact(
                 &bytes,
                 expected,
-                verification,
+                *verification,
             )?;
         }
     }

@@ -1,6 +1,6 @@
 //! Crash-safe time-floor persistence for the private Musubi publication service.
 #[cfg(test)]
-pub(super) mod wire_fixtures;
+pub mod wire_fixtures;
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -8,13 +8,17 @@ use super::{
     MusubiPublicationSystemClockV1,
 };
 #[cfg(unix)]
-use iroha_primitives::fs::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
+use iroha_primitives::fs::secure_directory_open_flags;
+#[cfg(unix)]
+use rustix::fs::{AtFlags, FileType, Mode, OFlags, Stat};
+#[cfg(not(unix))]
+use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     fmt,
     fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 const CLOCK_STATE_FILE: &str = "clock-floor-v1.norito";
@@ -153,8 +157,8 @@ impl DurableClockEnvelopeV1 {
 ///
 /// V1 fails closed on non-Unix platforms until an equivalently race-safe replacement primitive
 /// is qualified there.
-// TODO: Bind the floor/revision to a deployment-sealed monotonic CAS and replace pathname child
-// mutation with qualified directory-relative primitives before production rollout.
+// TODO: Bind the floor/revision to a deployment-sealed monotonic CAS and authoritative finalized
+// lineage before production rollout.
 pub struct DurableMusubiPublicationServiceClockV1 {
     source: Box<dyn MusubiPublicationServiceClockV1>,
     root: PathBuf,
@@ -231,9 +235,9 @@ impl DurableMusubiPublicationServiceClockV1 {
         }
         let (root, root_handle, root_identity, root_owner) = open_private_root(root)?;
         let initialization_sample = if initialize {
-            ensure_empty_initialization_root(&root)?;
+            ensure_empty_initialization_root(&root, &root_handle)?;
             let sampled = sample_startup_source(source.as_mut())?;
-            ensure_empty_initialization_root(&root)?;
+            ensure_empty_initialization_root(&root, &root_handle)?;
             Some(sampled)
         } else {
             None
@@ -243,7 +247,8 @@ impl DurableMusubiPublicationServiceClockV1 {
         } else {
             ClockLockOpenMode::Existing
         };
-        let (lock_handle, lock_identity) = open_and_lock(&root, root_owner, lock_mode)?;
+        let (lock_handle, lock_identity) =
+            open_and_lock(&root, &root_handle, root_owner, lock_mode)?;
         let storage = ClockStorageContext {
             root: &root,
             root_handle: &root_handle,
@@ -260,8 +265,7 @@ impl DurableMusubiPublicationServiceClockV1 {
             &lock_handle,
             lock_identity,
         )?;
-        let state_path = root.join(CLOCK_STATE_FILE);
-        let loaded = read_state(&state_path, root_owner)?;
+        let loaded = read_state(&root, &root_handle, CLOCK_STATE_FILE, root_owner)?;
         if initialize && loaded.is_some() {
             return Err(DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized);
         }
@@ -464,26 +468,20 @@ enum ClockLockOpenMode {
 }
 fn ensure_empty_initialization_root(
     root: &Path,
+    root_handle: &File,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
-    let mut entries = fs::read_dir(root)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
-    if entries
-        .next()
-        .transpose()
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?
-        .is_some()
-    {
+    if !clock_directory_names(root, root_handle)?.is_empty() {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized);
     }
     Ok(())
 }
 fn open_and_lock(
     root: &Path,
+    root_handle: &File,
     root_owner: u32,
     mode: ClockLockOpenMode,
 ) -> Result<(File, PrivateFileIdentity), DurableMusubiPublicationServiceClockOpenErrorV1> {
-    let path = root.join(CLOCK_LOCK_FILE);
-    let before = optional_metadata(&path)?;
+    let before = clock_child_metadata(root, root_handle, CLOCK_LOCK_FILE)?;
     match (mode, before.is_some()) {
         (ClockLockOpenMode::Existing, false) => {
             return Err(DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized);
@@ -499,29 +497,46 @@ fn open_and_lock(
             return Err(DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState);
         }
     }
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).truncate(false);
-    match mode {
-        ClockLockOpenMode::Existing => {}
-        ClockLockOpenMode::CreateNew => {
+    #[cfg(unix)]
+    let file = {
+        let mut flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        if matches!(mode, ClockLockOpenMode::CreateNew) {
+            flags |= OFlags::CREATE | OFlags::EXCL;
+        }
+        File::from(
+            rustix::fs::openat(root_handle, CLOCK_LOCK_FILE, flags, Mode::RUSR | Mode::WUSR)
+                .map_err(|error| match (mode, error) {
+                    (ClockLockOpenMode::Existing, rustix::io::Errno::NOENT) => {
+                        DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized
+                    }
+                    (ClockLockOpenMode::CreateNew, rustix::io::Errno::EXIST) => {
+                        DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized
+                    }
+                    _ => DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable,
+                })?,
+        )
+    };
+    #[cfg(not(unix))]
+    let file = {
+        let _ = root_handle;
+        let path = root.join(CLOCK_LOCK_FILE);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).truncate(false);
+        if matches!(mode, ClockLockOpenMode::CreateNew) {
             options.create_new(true);
         }
-    }
-    #[cfg(unix)]
-    options
-        .mode(0o600)
-        .custom_flags(secure_no_follow_nonblocking_flags());
-    let file = options
-        .open(&path)
-        .map_err(|error| match (mode, error.kind()) {
-            (ClockLockOpenMode::Existing, io::ErrorKind::NotFound) => {
-                DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized
-            }
-            (ClockLockOpenMode::CreateNew, io::ErrorKind::AlreadyExists) => {
-                DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized
-            }
-            _ => DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable,
-        })?;
+        options
+            .open(&path)
+            .map_err(|error| match (mode, error.kind()) {
+                (ClockLockOpenMode::Existing, io::ErrorKind::NotFound) => {
+                    DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized
+                }
+                (ClockLockOpenMode::CreateNew, io::ErrorKind::AlreadyExists) => {
+                    DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized
+                }
+                _ => DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable,
+            })?
+    };
     if before.is_none() {
         #[cfg(unix)]
         file.set_permissions(fs::Permissions::from_mode(0o600))
@@ -540,8 +555,8 @@ fn open_and_lock(
     {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
-    let named = fs::symlink_metadata(&path)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let named = clock_child_metadata(root, root_handle, CLOCK_LOCK_FILE)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_private_file(&named, root_owner)?;
     if named.len() != 0 || !same_file(&opened, &named) {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
@@ -552,8 +567,8 @@ fn open_and_lock(
             DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable
         }
     })?;
-    let after = fs::symlink_metadata(&path)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let after = clock_child_metadata(root, root_handle, CLOCK_LOCK_FILE)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_private_file(&after, root_owner)?;
     if after.len() != 0 || !same_file(&opened, &after) {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
@@ -569,20 +584,15 @@ fn reconcile_directory(
     lock_identity: PrivateFileIdentity,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
     let mut remove_next = false;
-    for entry in fs::read_dir(root)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?
-    {
-        let entry = entry
-            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
-        let name = entry.file_name();
+    for name in clock_directory_names(root, root_handle)? {
         if name == CLOCK_LOCK_FILE || name == CLOCK_STATE_FILE {
             continue;
         }
         if name == CLOCK_NEXT_FILE && !remove_next {
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+            let metadata = clock_child_metadata(root, root_handle, CLOCK_NEXT_FILE)?
+                .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
             validate_private_file(&metadata, root_owner)?;
             if usize::try_from(metadata.len())
                 .ok()
@@ -596,27 +606,61 @@ fn reconcile_directory(
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
     }
     if remove_next {
-        let path = root.join(CLOCK_NEXT_FILE);
-        let before = fs::symlink_metadata(&path)
-            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+        let before = clock_child_metadata(root, root_handle, CLOCK_NEXT_FILE)?
+            .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
         validate_private_file(&before, root_owner)?;
-        fs::remove_file(&path)
-            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+        remove_clock_next(root, root_handle)?;
         root_handle
             .sync_all()
             .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     }
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)
+}
+fn remove_clock_next(
+    root: &Path,
+    root_handle: &File,
+) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
+    #[cfg(unix)]
+    {
+        let _ = root;
+        rustix::fs::unlinkat(root_handle, CLOCK_NEXT_FILE, AtFlags::empty())
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root_handle;
+        fs::remove_file(root.join(CLOCK_NEXT_FILE))
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)
+    }
+}
+fn replace_clock_state(
+    root: &Path,
+    root_handle: &File,
+) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
+    #[cfg(unix)]
+    {
+        let _ = root;
+        rustix::fs::renameat(root_handle, CLOCK_NEXT_FILE, root_handle, CLOCK_STATE_FILE)
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root_handle;
+        fs::rename(root.join(CLOCK_NEXT_FILE), root.join(CLOCK_STATE_FILE))
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)
+    }
 }
 fn read_state(
-    path: &Path,
+    root: &Path,
+    root_handle: &File,
+    name: &str,
     root_owner: u32,
 ) -> Result<
     Option<(DurableClockStateV1, PrivateFileIdentity)>,
     DurableMusubiPublicationServiceClockOpenErrorV1,
 > {
-    let Some(named_before) = optional_metadata(path)? else {
+    let Some(named_before) = clock_child_metadata(root, root_handle, name)? else {
         return Ok(None);
     };
     validate_private_file(&named_before, root_owner)?;
@@ -627,13 +671,8 @@ fn read_state(
     {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState);
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(secure_no_follow_nonblocking_flags());
-    let mut file = options
-        .open(path)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let mut file = open_clock_child(root, root_handle, name)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     let opened_before = file
         .metadata()
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
@@ -658,8 +697,8 @@ fn read_state(
     let opened_after = file
         .metadata()
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
-    let named_after = fs::symlink_metadata(path)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let named_after = clock_child_metadata(root, root_handle, name)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_private_file(&opened_after, root_owner)?;
     validate_private_file(&named_after, root_owner)?;
     if bytes.len() > MAX_CLOCK_STATE_BYTES
@@ -696,16 +735,15 @@ fn write_state(
     } = storage;
     state.validate()?;
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
     let envelope = DurableClockEnvelopeV1::new(state.clone())?;
     let bytes = norito::encode_canonical(&envelope)
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState)?;
     if bytes.is_empty() || bytes.len() > MAX_CLOCK_STATE_BYTES {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState);
     }
-    let target = root.join(CLOCK_STATE_FILE);
-    validate_persisted_state(&target, expected_state_identity, expected_state, root_owner)?;
-    let mut pending = PrivateTemporaryFile::create(root, root_owner)?;
+    validate_persisted_state(storage, expected_state_identity, expected_state)?;
+    let mut pending = PrivateTemporaryFile::create(root, root_handle, root_owner)?;
     pending
         .file
         .write_all(&bytes)
@@ -714,14 +752,13 @@ fn write_state(
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_pending_state(&pending, state, root_owner)?;
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
-    validate_persisted_state(&target, expected_state_identity, expected_state, root_owner)?;
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
+    validate_persisted_state(storage, expected_state_identity, expected_state)?;
     validate_pending_state(&pending, state, root_owner)?;
-    fs::rename(&pending.path, &target)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    replace_clock_state(root, root_handle)?;
     pending.disarm();
-    let installed = fs::symlink_metadata(&target)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let installed = clock_child_metadata(root, root_handle, CLOCK_STATE_FILE)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_private_file(&installed, root_owner)?;
     if !pending.identity.matches(&installed)
         || installed.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
@@ -729,13 +766,15 @@ fn write_state(
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable);
     }
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
     root_handle
         .sync_all()
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
-    let Some((final_state, final_identity)) = read_state(&target, root_owner)? else {
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
+    let Some((final_state, final_identity)) =
+        read_state(root, root_handle, CLOCK_STATE_FILE, root_owner)?
+    else {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable);
     };
     if final_state != *state || final_identity != pending.identity {
@@ -749,7 +788,16 @@ fn validate_pending_state(
     root_owner: u32,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
     pending.validate(root_owner)?;
-    let Some((actual_state, actual_identity)) = read_state(&pending.path, root_owner)? else {
+    let Some((actual_state, actual_identity)) = read_state(
+        pending
+            .path
+            .parent()
+            .expect("pending clock state has parent"),
+        &pending.root_handle,
+        CLOCK_NEXT_FILE,
+        root_owner,
+    )?
+    else {
         return Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable);
     };
     if actual_identity != pending.identity || actual_state != *expected_state {
@@ -758,18 +806,25 @@ fn validate_pending_state(
     Ok(())
 }
 fn validate_persisted_state(
-    path: &Path,
+    storage: ClockStorageContext<'_>,
     expected: Option<PrivateFileIdentity>,
     expected_state: Option<&DurableClockStateV1>,
-    root_owner: u32,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
     match (expected, expected_state) {
-        (None, None) => match fs::symlink_metadata(path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            _ => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
-        },
+        (None, None)
+            if clock_child_metadata(storage.root, storage.root_handle, CLOCK_STATE_FILE)?
+                .is_none() =>
+        {
+            Ok(())
+        }
         (Some(expected), Some(expected_state)) => {
-            let Some((actual_state, actual_identity)) = read_state(path, root_owner)? else {
+            let Some((actual_state, actual_identity)) = read_state(
+                storage.root,
+                storage.root_handle,
+                CLOCK_STATE_FILE,
+                storage.root_owner,
+            )?
+            else {
                 return Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable);
             };
             if actual_identity == expected && actual_state == *expected_state {
@@ -783,13 +838,13 @@ fn validate_persisted_state(
 }
 fn validate_lock_identity(
     root: &Path,
+    root_handle: &File,
     lock_handle: &File,
     identity: PrivateFileIdentity,
     root_owner: u32,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
-    let path = root.join(CLOCK_LOCK_FILE);
-    let named = fs::symlink_metadata(&path)
-        .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+    let named = clock_child_metadata(root, root_handle, CLOCK_LOCK_FILE)?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
     let opened = lock_handle
         .metadata()
         .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
@@ -819,13 +874,8 @@ fn validate_live_state(
         lock_identity,
     } = storage;
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, lock_handle, lock_identity, root_owner)?;
-    validate_persisted_state(
-        &root.join(CLOCK_STATE_FILE),
-        Some(state_identity),
-        Some(expected_state),
-        root_owner,
-    )
+    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
+    validate_persisted_state(storage, Some(state_identity), Some(expected_state))
 }
 fn validate_root_identity(
     root: &Path,
@@ -849,13 +899,92 @@ fn validate_root_identity(
     }
     Ok(())
 }
-fn optional_metadata(
-    path: &Path,
+fn open_clock_child(
+    root: &Path,
+    root_handle: &File,
+    name: &str,
+) -> Result<Option<File>, DurableMusubiPublicationServiceClockOpenErrorV1> {
+    #[cfg(unix)]
+    {
+        let _ = root;
+        match rustix::fs::openat(
+            root_handle,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(file) => Ok(Some(File::from(file))),
+            Err(rustix::io::Errno::NOENT) => Ok(None),
+            Err(_) => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root_handle;
+        match File::open(root.join(name)) {
+            Ok(file) => Ok(Some(file)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
+        }
+    }
+}
+fn clock_child_metadata(
+    root: &Path,
+    root_handle: &File,
+    name: &str,
 ) -> Result<Option<fs::Metadata>, DurableMusubiPublicationServiceClockOpenErrorV1> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
+    open_clock_child(root, root_handle, name)?
+        .map(|file| {
+            file.metadata()
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)
+        })
+        .transpose()
+}
+fn clock_directory_names(
+    root: &Path,
+    root_handle: &File,
+) -> Result<Vec<String>, DurableMusubiPublicationServiceClockOpenErrorV1> {
+    #[cfg(unix)]
+    {
+        let _ = root;
+        let entries = rustix::fs::Dir::read_from(root_handle)
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+            let bytes = entry.file_name().to_bytes();
+            if matches!(bytes, b"." | b"..") {
+                continue;
+            }
+            let name = std::str::from_utf8(bytes)
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot)?;
+            if names.len() == 3 {
+                return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
+            }
+            names.push(name.to_owned());
+        }
+        Ok(names)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root_handle;
+        let mut names = Vec::new();
+        for entry in fs::read_dir(root)
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?
+        {
+            let entry = entry
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot)?;
+            if names.len() == 3 {
+                return Err(DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot);
+            }
+            names.push(name);
+        }
+        Ok(names)
     }
 }
 fn validate_private_root(
@@ -888,22 +1017,44 @@ fn validate_private_file(
 struct PrivateTemporaryFile {
     path: PathBuf,
     file: File,
+    root_handle: File,
     identity: PrivateFileIdentity,
     armed: bool,
 }
 impl PrivateTemporaryFile {
     fn create(
         root: &Path,
+        root_handle: &File,
         root_owner: u32,
     ) -> Result<Self, DurableMusubiPublicationServiceClockOpenErrorV1> {
         let path = root.join(CLOCK_NEXT_FILE);
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let file = options
-            .open(&path)
+        let pinned_root_handle = root_handle
+            .try_clone()
             .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+        #[cfg(unix)]
+        let file = File::from(
+            rustix::fs::openat(
+                root_handle,
+                CLOCK_NEXT_FILE,
+                OFlags::WRONLY
+                    | OFlags::CREATE
+                    | OFlags::EXCL
+                    | OFlags::NOFOLLOW
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?,
+        );
+        #[cfg(not(unix))]
+        let file = {
+            let _ = root_handle;
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            options
+                .open(&path)
+                .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?
+        };
         #[cfg(unix)]
         file.set_permissions(fs::Permissions::from_mode(0o600))
             .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
@@ -913,6 +1064,7 @@ impl PrivateTemporaryFile {
         let pending = Self {
             path,
             file,
+            root_handle: pinned_root_handle,
             identity: PrivateFileIdentity::from_metadata(&metadata),
             armed: true,
         };
@@ -927,8 +1079,12 @@ impl PrivateTemporaryFile {
             .file
             .metadata()
             .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
-        let named = fs::symlink_metadata(&self.path)
-            .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
+        let named = clock_child_metadata(
+            self.path.parent().expect("pending clock state has parent"),
+            &self.root_handle,
+            CLOCK_NEXT_FILE,
+        )?
+        .ok_or(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable)?;
         validate_private_file(&opened, root_owner)?;
         validate_private_file(&named, root_owner)?;
         if !self.identity.matches(&opened)
@@ -948,14 +1104,33 @@ impl Drop for PrivateTemporaryFile {
         if !self.armed {
             return;
         }
-        let Ok(metadata) = fs::symlink_metadata(&self.path) else {
-            return;
-        };
-        if metadata.is_file()
-            && !metadata.file_type().is_symlink()
-            && self.identity.matches(&metadata)
+        #[cfg(unix)]
         {
-            let _ = fs::remove_file(&self.path);
+            let Ok(stat) = rustix::fs::statat(
+                &self.root_handle,
+                CLOCK_NEXT_FILE,
+                AtFlags::SYMLINK_NOFOLLOW,
+            ) else {
+                return;
+            };
+            if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+                && stat.st_nlink == 1
+                && self.identity.matches_stat(&stat)
+            {
+                let _ = rustix::fs::unlinkat(&self.root_handle, CLOCK_NEXT_FILE, AtFlags::empty());
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let Ok(metadata) = fs::symlink_metadata(&self.path) else {
+                return;
+            };
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && self.identity.matches(&metadata)
+            {
+                let _ = fs::remove_file(&self.path);
+            }
         }
     }
 }
@@ -975,6 +1150,9 @@ impl PrivateFileIdentity {
     }
     fn matches(self, metadata: &fs::Metadata) -> bool {
         self.device == metadata.dev() && self.inode == metadata.ino()
+    }
+    fn matches_stat(self, stat: &Stat) -> bool {
+        u64::try_from(stat.st_dev).ok() == Some(self.device) && self.inode == stat.st_ino
     }
 }
 #[cfg(not(unix))]
@@ -1051,6 +1229,90 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("set private state-root permissions");
         root
+    }
+    #[test]
+    fn clock_child_mutations_remain_bound_to_open_directory_after_path_replacement() {
+        let workspace = private_tempdir();
+        let configured = workspace.path().join("clock");
+        let displaced = workspace.path().join("displaced-clock");
+        fs::create_dir(&configured).expect("private clock directory");
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700))
+            .expect("private clock mode");
+        let root_handle = OpenOptions::new()
+            .read(true)
+            .custom_flags(secure_directory_open_flags())
+            .open(&configured)
+            .expect("pin original clock directory");
+        let owner = root_handle.metadata().expect("root metadata").uid();
+        let mut pending = PrivateTemporaryFile::create(&configured, &root_handle, owner)
+            .expect("create pinned pending clock state");
+        let original_state = DurableClockStateV1::new(123);
+        let original_bytes = norito::encode_canonical(
+            &DurableClockEnvelopeV1::new(original_state.clone()).expect("clock envelope"),
+        )
+        .expect("clock encoding");
+        pending
+            .file
+            .write_all(&original_bytes)
+            .expect("write original pending state");
+
+        fs::rename(&configured, &displaced).expect("move configured pathname");
+        fs::create_dir(&configured).expect("substitute configured pathname");
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700))
+            .expect("replacement mode");
+        fs::write(configured.join(CLOCK_NEXT_FILE), b"replacement")
+            .expect("replacement pending file");
+        fs::write(configured.join("replacement-only"), b"replacement")
+            .expect("replacement-only child");
+        assert_eq!(
+            clock_directory_names(&configured, &root_handle).expect("enumerate pinned root"),
+            vec![CLOCK_NEXT_FILE.to_owned()]
+        );
+        assert_eq!(
+            read_state(&configured, &root_handle, CLOCK_NEXT_FILE, owner)
+                .expect("read pinned child")
+                .expect("original child")
+                .0,
+            original_state
+        );
+        validate_pending_state(&pending, &original_state, owner)
+            .expect("pending validation uses pinned directory");
+        drop(pending);
+        assert!(!displaced.join(CLOCK_NEXT_FILE).exists());
+        assert_eq!(
+            fs::read(configured.join(CLOCK_NEXT_FILE)).expect("replacement remains"),
+            b"replacement"
+        );
+
+        let (lock, _) = open_and_lock(
+            &configured,
+            &root_handle,
+            owner,
+            ClockLockOpenMode::CreateNew,
+        )
+        .expect("lock original directory through pinned handle");
+        drop(lock);
+        assert!(displaced.join(CLOCK_LOCK_FILE).is_file());
+        assert!(!configured.join(CLOCK_LOCK_FILE).exists());
+
+        fs::write(displaced.join(CLOCK_NEXT_FILE), b"pinned").expect("pending original state");
+        replace_clock_state(&configured, &root_handle).expect("rename in original directory");
+        assert_eq!(
+            fs::read(displaced.join(CLOCK_STATE_FILE)).expect("original installed state"),
+            b"pinned"
+        );
+        assert!(!configured.join(CLOCK_STATE_FILE).exists());
+        assert_eq!(
+            fs::read(configured.join(CLOCK_NEXT_FILE)).expect("replacement pending remains"),
+            b"replacement"
+        );
+        fs::write(displaced.join(CLOCK_NEXT_FILE), b"stale").expect("stale original pending file");
+        remove_clock_next(&configured, &root_handle).expect("unlink in original directory");
+        assert!(!displaced.join(CLOCK_NEXT_FILE).exists());
+        assert_eq!(
+            fs::read(configured.join(CLOCK_NEXT_FILE)).expect("replacement remains after unlink"),
+            b"replacement"
+        );
     }
     impl MusubiPublicationServiceClockV1 for TestClock {
         fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {

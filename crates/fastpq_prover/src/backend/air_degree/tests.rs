@@ -57,10 +57,10 @@ fn symbolic_graph_keeps_equal_degree_inputs_distinct_and_rejects_bad_topology() 
 
 #[test]
 fn graph_bounds_cover_independent_dense_polynomial_products_and_cancellations() {
-    for left_degree in 0..6 {
-        for right_degree in 0..6 {
-            let left = (0..=left_degree).map(|i| 1 + i as u64).collect::<Vec<_>>();
-            let right = (0..=right_degree).map(|i| 7 + i as u64).collect::<Vec<_>>();
+    for left_degree in 0_u64..6 {
+        for right_degree in 0_u64..6 {
+            let left = (0..=left_degree).map(|i| 1 + i).collect::<Vec<_>>();
+            let right = (0..=right_degree).map(|i| 7 + i).collect::<Vec<_>>();
             let a = PolynomialDegree::from_exclusive(left.len());
             let b = PolynomialDegree::from_exclusive(right.len());
             let multiplied = product(&left, &right);

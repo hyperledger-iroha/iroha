@@ -15,6 +15,9 @@
 //! or crossbeam library components.
 //! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
+mod results;
+use results::CloneAdmissionResult;
+
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 use std::alloc::Layout;
@@ -39,6 +42,99 @@ struct Allocation<T, Charge> {
     // Never release custody through automatic field drop: the enclosing Box has
     // not yet been deallocated then, and a payload destructor may unwind.
     charge: ManuallyDrop<Charge>,
+}
+
+/// Unique prepaid physical EBR backing before any payload is constructed.
+///
+/// Initialization moves the payload once into this same allocation. Dropping an
+/// unused reservation frees its backing before returning the original charge.
+/// Neither construction nor abandonment pins the epoch collector.
+#[must_use = "initialize or abandon this exact original EBR backing"]
+pub struct ReservedEbrCell<T, Charge> {
+    pointer: NonNull<Allocation<T, Charge>>,
+}
+
+// The uninitialized payload is inaccessible; only its original charge is live.
+unsafe impl<T: Send, Charge: Send> Send for ReservedEbrCell<T, Charge> {}
+unsafe impl<T: Sync, Charge: Sync> Sync for ReservedEbrCell<T, Charge> {}
+
+impl<T, Charge> ReservedEbrCell<T, Charge> {
+    /// Exact requested layout, including padding and retained charge custody.
+    pub fn allocation_layout() -> Layout {
+        Layout::new::<Allocation<T, Charge>>()
+    }
+
+    /// Allocate physical backing, returning the same charge on allocator refusal.
+    /// The caller owns logical admission and nested payload allocation separately.
+    pub fn try_new(charge: Charge) -> Result<Self, (Charge, Layout)> {
+        let layout = Self::allocation_layout();
+        let pointer: NonNull<Allocation<T, Charge>> = if layout.size() == 0 {
+            NonNull::dangling()
+        } else {
+            // SAFETY: sized nonzero layout and the same allocator used on drop.
+            let Some(pointer) = NonNull::new(unsafe { std::alloc::alloc(layout) }.cast()) else {
+                return Err((charge, layout));
+            };
+            pointer
+        };
+        // SAFETY: only the charge becomes initialized. No T reference is formed.
+        unsafe {
+            std::ptr::addr_of_mut!((*pointer.as_ptr()).charge).write(ManuallyDrop::new(charge));
+        }
+        Ok(Self { pointer })
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static> ReservedEbrCell<T, Charge> {
+    /// Move the original value into its reserved allocation without another allocation.
+    pub fn initialize(self, value: T) -> EbrCell<T, Charge> {
+        let mut original = self.initialize_owned(value);
+        EbrCell {
+            write: Mutex::new(()),
+            active: Atomic::from(original.data.take().expect("original initialized backing")),
+        }
+    }
+
+    /// Initialize one original detached generation without a Cell or epoch pin.
+    pub fn initialize_owned(self, value: T) -> EbrCellOwned<T, Charge> {
+        let original = ManuallyDrop::new(self);
+        // SAFETY: unique reserved backing receives its only payload. Owned adopts
+        // the same Box-compatible allocation and retains its initialized charge.
+        let data = unsafe {
+            std::ptr::addr_of_mut!((*original.pointer.as_ptr()).value).write(value);
+            Owned::from_raw(original.pointer.as_ptr())
+        };
+        EbrCellOwned { data: Some(data) }
+    }
+}
+
+impl<T, Charge> ReservedEbrCell<T, Charge> {
+    /// Free unused physical backing and return its unchanged original charge.
+    /// No logical capacity is refunded; the caller still owns the same admission.
+    pub fn into_charge(self) -> Charge {
+        let original = ManuallyDrop::new(self);
+        // SAFETY: self was consumed without initializing or exposing its payload.
+        unsafe { Self::free_uninitialized(original.pointer) }
+    }
+
+    unsafe fn free_uninitialized(pointer: NonNull<Allocation<T, Charge>>) -> Charge {
+        // SAFETY: caller uniquely owns uninitialized payload backing with one
+        // initialized charge. Read it without forming a reference to an invalid T.
+        let charge = unsafe { std::ptr::addr_of!((*pointer.as_ptr()).charge).read() };
+        let layout = Self::allocation_layout();
+        if layout.size() != 0 {
+            // SAFETY: same original physical allocation and exact requested layout.
+            unsafe { std::alloc::dealloc(pointer.as_ptr().cast(), layout) };
+        }
+        ManuallyDrop::into_inner(charge)
+    }
+}
+
+impl<T, Charge> Drop for ReservedEbrCell<T, Charge> {
+    fn drop(&mut self) {
+        // SAFETY: this unique unused reservation owns the only live charge.
+        drop(unsafe { Self::free_uninitialized(self.pointer) });
+    }
 }
 
 fn reclaim<T, Charge>(mut allocation: Owned<Allocation<T, Charge>>) {
@@ -96,7 +192,7 @@ impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
     pub fn try_clone_charged<E>(
         self,
         admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,
-    ) -> Result<(Self, EbrCellOwned<T, Charge>), (Self, EbrCellWriterAdmissionError<E>)> {
+    ) -> CloneAdmissionResult<'a, T, Charge, E> {
         if self.is_poisoned() {
             return Err((self, EbrCellWriterAdmissionError::Poisoned));
         }
@@ -121,6 +217,39 @@ impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
             EbrCellOwned {
                 data: Some(allocation),
             },
+        ))
+    }
+
+    /// Clone into already owned backing without allocating an outer generation.
+    /// Poison returns both exact original owners. Nested clone allocations remain
+    /// the caller's obligation; clone unwind conservatively retains its backing
+    /// and charge because user Clone may leak partially constructed payloads.
+    pub fn try_clone_reserved(
+        self,
+        backing: ReservedEbrCell<T, Charge>,
+    ) -> Result<
+        (Self, EbrCellOwned<T, Charge>),
+        (
+            Self,
+            ReservedEbrCell<T, Charge>,
+            EbrCellWriterAdmissionError<std::convert::Infallible>,
+        ),
+    > {
+        if self.is_poisoned() {
+            return Err((self, backing, EbrCellWriterAdmissionError::Poisoned));
+        }
+        // SAFETY: the original physical writer excludes replacement and cell
+        // destruction for the complete clone, without pinning the collector.
+        let current = self
+            .caller
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() });
+        let current = unsafe { current.deref() };
+        let backing = ManuallyDrop::new(backing);
+        let value = current.value.clone();
+        Ok((
+            self,
+            ManuallyDrop::into_inner(backing).initialize_owned(value),
         ))
     }
 

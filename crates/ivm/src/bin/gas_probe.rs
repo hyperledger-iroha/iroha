@@ -57,6 +57,7 @@ fn main() {
     // Ensure acceleration policy is applied consistently (defaults enable all backends
     // and auto-detect hardware; golden self-tests preserve determinism).
     ivm::set_acceleration_config(ivm::AccelerationConfig {
+        resource_limits: iroha_accel::RegistryLimits::STANDARD,
         enable_simd: true,
         enable_metal: true,
         enable_cuda: true,

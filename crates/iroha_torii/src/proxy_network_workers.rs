@@ -20,13 +20,6 @@ pub(super) struct RequestWork {
     transport: PeerMessageRetentionGuard,
 }
 
-/// One bounded publication with its exact transport reservation.
-pub(super) struct PublicationWork {
-    peer: Peer,
-    publication: Arc<QueuePlanAdmissionPublicationV1>,
-    transport: PeerMessageRetentionGuard,
-}
-
 /// Validate the executor before publishing any child or channel endpoint.
 fn runtime() -> Result<Handle, &'static str> {
     let handle =

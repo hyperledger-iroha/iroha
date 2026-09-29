@@ -646,7 +646,7 @@ where
     invoke_with_progress(args, &mut |_| {})
 }
 /// Execute with an explicit human-progress sink while preserving one-document JSON output.
-pub(crate) fn invoke_with_progress<I, T>(args: I, progress: &mut dyn FnMut(&str)) -> Invocation
+pub fn invoke_with_progress<I, T>(args: I, progress: &mut dyn FnMut(&str)) -> Invocation
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -1397,10 +1397,10 @@ fn read_optional_publication_lock(workspace: &Workspace) -> Result<Option<Lockfi
     Ok(lock)
 }
 fn read_optional_lock(path: &Path) -> Result<Option<LockfileV1>, Diagnostic> {
-    let metadata = match fs::symlink_metadata(&path) {
+    let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io_diagnostic("inspect lockfile", &path, &error)),
+        Err(error) => return Err(io_diagnostic("inspect lockfile", path, &error)),
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(Diagnostic::new(
@@ -1409,9 +1409,9 @@ fn read_optional_lock(path: &Path) -> Result<Option<LockfileV1>, Diagnostic> {
         )
         .with_context("path", path.display().to_string()));
     }
-    LockfileV1::read(&path)
+    LockfileV1::read(path)
         .map(Some)
-        .map_err(|error| lockfile_diagnostic(&path, &error))
+        .map_err(|error| lockfile_diagnostic(path, &error))
 }
 fn lockfile_diagnostic(path: &Path, error: &LockfileError) -> Diagnostic {
     let code = if matches!(error, LockfileError::Legacy) {
@@ -1798,18 +1798,14 @@ fn resolve_and_persist_graph(
             account_chain_discriminant,
         )
     } else {
-        let (registry, config_image) = match public_config {
-            Some(image) => {
-                let reader =
-                    RegistryReadClientV1::load_from_config_bytes(image.path(), image.bytes())
-                        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
-                (reader, image)
-            }
-            None => {
-                let (reader, image) = RegistryReadClientV1::load_with_config_image(None)
-                    .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
-                (reader, std::sync::Arc::new(image))
-            }
+        let (registry, config_image) = if let Some(image) = public_config {
+            let reader = RegistryReadClientV1::load_from_config_bytes(image.path(), image.bytes())
+                .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+            (reader, image)
+        } else {
+            let (reader, image) = RegistryReadClientV1::load_with_config_image(None)
+                .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+            (reader, std::sync::Arc::new(image))
         };
         if let Some(expected) = expected_network_id {
             ensure_network_identity(expected, registry.network_id())?;

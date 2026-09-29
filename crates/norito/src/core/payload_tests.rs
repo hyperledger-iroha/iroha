@@ -3,6 +3,49 @@
 use super::*;
 use crate::codec::Encode as _;
 
+#[test]
+fn borrowed_bytes_match_owned_payload_and_borrow_the_decoded_backing() {
+    for flags in [0, default_encode_flags()] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for bytes in [b"".as_slice(), b"bytes", &[0, 0xff, 0x80]] {
+            let mut payload = Vec::new();
+            serialize_to_buffer(&bytes, &mut payload).unwrap();
+            let mut owned_payload = Vec::new();
+            serialize_to_buffer(&bytes.to_vec(), &mut owned_payload).unwrap();
+            let mut golden = u64::try_from(bytes.len()).unwrap().to_le_bytes().to_vec();
+            golden.extend_from_slice(bytes);
+            assert_eq!(payload, golden);
+            assert_eq!(payload, owned_payload);
+            assert_eq!(bytes.encoded_len_hint(), Some(payload.len()));
+            assert_eq!(bytes.encoded_len_exact(), Some(payload.len()));
+            let (decoded, used) = <&[u8] as DecodeFromSlice>::decode_from_slice(&payload).unwrap();
+            assert_eq!(decoded, bytes);
+            assert_eq!(used, payload.len());
+            assert_eq!(decoded.as_ptr(), payload[8..].as_ptr());
+        }
+    }
+}
+
+#[test]
+fn borrowed_bytes_reject_truncation_and_enforce_sequence_limits() {
+    let bytes = b"bytes".as_slice();
+    let payload = bytes.encode();
+    for flags in [0, default_encode_flags()] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for length in 0..payload.len() {
+            assert!(<&[u8] as DecodeFromSlice>::decode_from_slice(&payload[..length]).is_err());
+        }
+        let limits = DecodeLimits::new(4, usize::MAX, usize::MAX, usize::MAX, 16);
+        assert!(
+            with_decode_limits_scope(limits, || {
+                <&[u8] as DecodeFromSlice>::decode_from_slice(&payload)
+            })
+            .is_err()
+        );
+        assert!(<&[u8] as DecodeFromSlice>::decode_from_slice(b"\x05bytes").is_err());
+    }
+}
+
 struct Leaf(u32);
 
 impl SerializePayload for Leaf {

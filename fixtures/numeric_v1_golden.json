@@ -152,8 +152,15 @@
     {
       "decode_as": "int",
       "expected": "unknown_type",
-      "hex": "0013020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "hex": "000c020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
       "id": "unassigned_pointer_type",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "wrong_type",
+      "hex": "0013020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "anchored_axt_pointer_type",
       "input": "envelope"
     },
     {

@@ -38,7 +38,7 @@ pub const HEADER_MODE: u32 = 1 | 16 | 32;
 /// Config parameters every epoch needs: election timings, catchain and current validators.
 pub const EPOCH_CONFIG_PARAMS: [i32; 3] = [15, 28, 34];
 
-fn lite(error: LiteClientError) -> BuildError {
+fn lite(error: &LiteClientError) -> BuildError {
     BuildError::Unavailable(format!("liteserver: {error}"))
 }
 
@@ -103,7 +103,10 @@ impl TonBuilder {
     }
 
     fn header(&self, id: BlockIdExt) -> Result<Vec<u8>, BuildError> {
-        let header = self.lite.get_block_header(id, HEADER_MODE).map_err(lite)?;
+        let header = self
+            .lite
+            .get_block_header(id, HEADER_MODE)
+            .map_err(|error| lite(&error))?;
         canonical(&header.header_proof, "block header")
     }
 
@@ -111,7 +114,7 @@ impl TonBuilder {
         let config = self
             .lite
             .get_config_params(0, id, EPOCH_CONFIG_PARAMS.to_vec())
-            .map_err(lite)?;
+            .map_err(|error| lite(&error))?;
         canonical(&config.config_proof, "config")
     }
 
@@ -123,7 +126,7 @@ impl TonBuilder {
                 crate::ton::BlockId::masterchain(seqno),
                 crate::ton::LookupKey::Seqno,
             )
-            .map_err(lite)?
+            .map_err(|error| lite(&error))?
             .id)
     }
 
@@ -133,7 +136,11 @@ impl TonBuilder {
     ///
     /// Any liteserver failure or malformed answer.
     pub fn newest_key_block(&self) -> Result<u32, BuildError> {
-        let last = self.lite.get_masterchain_info().map_err(lite)?.last;
+        let last = self
+            .lite
+            .get_masterchain_info()
+            .map_err(|error| lite(&error))?
+            .last;
         // The last block is a key block or names the newest one in `prev_key_block_seqno`.
         newest_key_block_seqno(&self.header(last)?)
     }
@@ -200,7 +207,10 @@ impl TonBuilder {
         let mut hops = Vec::new();
         let mut from = known;
         while hops.len() < max_hops {
-            let proof = self.lite.get_block_proof(from, None).map_err(lite)?;
+            let proof = self
+                .lite
+                .get_block_proof(from, None)
+                .map_err(|error| lite(&error))?;
             let mut advanced = false;
             for step in &proof.steps {
                 let BlockLink::Forward(link) = step else {
@@ -254,7 +264,7 @@ impl TonBuilder {
         let list = self
             .lite
             .get_transactions(1, account, lt, hash)
-            .map_err(lite)?;
+            .map_err(|error| lite(&error))?;
         let block = *list
             .ids
             .first()
@@ -262,7 +272,7 @@ impl TonBuilder {
         let transaction = self
             .lite
             .get_one_transaction(block, account, lt)
-            .map_err(lite)?;
+            .map_err(|error| lite(&error))?;
         iroha_sccp::ton_sccp_transfer_payload_v1(
             &transaction.transaction,
             minter,
@@ -296,7 +306,7 @@ impl TonBuilder {
         let list = self
             .lite
             .get_transactions(1, account, lt, hash)
-            .map_err(lite)?;
+            .map_err(|error| lite(&error))?;
         let event_block = *list
             .ids
             .first()
@@ -304,13 +314,16 @@ impl TonBuilder {
         let transaction = self
             .lite
             .get_one_transaction(event_block, account, lt)
-            .map_err(lite)?;
-        let walk = self.lite.get_shard_block_proof(event_block).map_err(lite)?;
+            .map_err(|error| lite(&error))?;
+        let walk = self
+            .lite
+            .get_shard_block_proof(event_block)
+            .map_err(|error| lite(&error))?;
         let key = self.masterchain_block(known_key_block)?;
         let signed = self
             .lite
             .get_block_proof(key, Some(walk.masterchain_id))
-            .map_err(lite)?
+            .map_err(|error| lite(&error))?
             .steps
             .into_iter()
             .rev()

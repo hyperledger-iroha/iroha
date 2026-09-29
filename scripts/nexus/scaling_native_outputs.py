@@ -26,10 +26,10 @@ MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _DIRECTORY = _READ | os.O_DIRECTORY
 _HEX = re.compile(r'[0-9a-f]{64}')
-_STEPS = (('collection', ('finality', 'queries')), ('facts', ('facts',)),
+_STEPS = (('collection', ('carrier', 'queries')), ('facts', ('facts',)),
           ('prepare', ('request', 'bundle')), ('export', ('proof',)))
 _ROLES = tuple(role for _, roles in _STEPS for role in roles)
-_STAGES = {role: '.collecting' if role in ('finality', 'queries') else '.publishing' for role in _ROLES}
+_STAGES = {role: '.publishing' for role in _ROLES}
 
 
 class NativeOutputError(ValueError):
@@ -62,7 +62,7 @@ def _integer(value, minimum, maximum):
 @dataclass(frozen=True, slots=True)
 class NativeOutputBudget:
     """Independent per-file caps and total allocation for one complete run."""
-    finality: int
+    carrier: int
     queries: int
     facts: int
     request: int

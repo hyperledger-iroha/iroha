@@ -32,7 +32,7 @@ use crate::{
     crypto::{Attestation, Crypto, Signer},
     message::{Block, Qc, TrafficClass, WireMessage},
     safety::SafetyRecord,
-    types::{Hash32, HeightConfig, Millis, PublicKey},
+    types::{AppliedConfig, Hash32, Millis, PublicKey},
 };
 
 /// A device operation of a host that owns its driver scheduling ([`Host::owns_io`]). `op` is
@@ -154,7 +154,7 @@ pub enum Done {
         /// Operation id.
         op: u64,
         /// Configuration of `height + 2` scheduled by the state after the block.
-        config_after_next: HeightConfig,
+        config: AppliedConfig,
     },
 }
 
@@ -657,6 +657,8 @@ mod tests {
         let crypto = SimCrypto::new();
         let block_at = |height: u64, parent: Hash32, parent_result: Hash32| Block {
             header: BlockHeader {
+                control_witness: crate::types::ControlWitness::empty(),
+                epoch: crate::testing::TEST_EPOCH.id,
                 instance: inst.id,
                 height,
                 origin_view: 0,
@@ -677,6 +679,8 @@ mod tests {
         };
         let orphan = block_at(2, Hash32([9; 32]), Hash32([9; 32]));
         let qc = Qc {
+            attestation_witness: None,
+            epoch: crate::testing::TEST_EPOCH.id,
             kind: VoteKind::Commit,
             instance: inst.id,
             height: 1,
@@ -696,7 +700,8 @@ mod tests {
             (std::mem::take(&mut s.done), std::mem::take(&mut s.events))
         };
         // Writes and executions.
-        let record = SafetyRecord::fresh(inst.id, key.clone(), 5, None);
+        let record =
+            SafetyRecord::fresh(inst.id, crate::testing::TEST_EPOCH.id, key.clone(), 5, None);
         let (done, _) = step(
             &mut world,
             vec![
@@ -792,7 +797,7 @@ mod tests {
         assert!(done.contains(&Done::Written { op: 7, ok: true }));
         assert!(done.iter().any(|d| matches!(
             d,
-            Done::Committed { op: 8, config_after_next } if *config_after_next == inst.config(3)
+            Done::Committed { op: 8, config } if *config == inst.applied_config(1)
         )));
         assert!(
             events
@@ -805,7 +810,8 @@ mod tests {
         assert!(rep.bodies.is_empty(), "applied bodies are pruned");
         // A failing device reports the failure and stores nothing.
         world.machines[0].profile.write_fail_ppm = 1_000_000;
-        let later = SafetyRecord::fresh(inst.id, key.clone(), 9, None);
+        let later =
+            SafetyRecord::fresh(inst.id, crate::testing::TEST_EPOCH.id, key.clone(), 9, None);
         let (done, _) = step(
             &mut world,
             vec![Op::WriteRecord {

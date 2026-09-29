@@ -16,7 +16,6 @@ impl StateTransaction<'_, '_> {
                 ExecutionOutputPlanState::Sealed(_)
                     | ExecutionOutputPlanState::Authorized(_)
                     | ExecutionOutputPlanState::Finalized(_)
-                    | ExecutionOutputPlanState::Captured
                     | ExecutionOutputPlanState::Poisoned
             )
         ) {

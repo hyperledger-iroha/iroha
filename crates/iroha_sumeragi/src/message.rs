@@ -7,7 +7,7 @@ use crate::{
     crypto::Crypto,
     preimage,
     types::{
-        AggregateSignature, Bitmap, Hash32, MAX_COMMITTEE_SIZE, PublicKey, Signature,
+        AggregateSignature, Bitmap, EpochId, Hash32, MAX_COMMITTEE_SIZE, PublicKey, Signature,
         ValidatorIndex,
     },
 };
@@ -20,12 +20,15 @@ pub const MAX_SYNC_ENTRIES: usize = 1024;
 /// Largest signer bitmap in bytes.
 pub const MAX_BITMAP_BYTES: usize = MAX_COMMITTEE_SIZE.div_ceil(8);
 
-/// Largest attestation (§3.7) in bytes, in a Commit vote or a `CommitQC`.
-pub const MAX_ATTESTATION_BYTES: usize = 4096;
+mod attestation;
+pub use attestation::{
+    AttestationSignature, CommitAttestation, MAX_ATTESTATION_SIGNATURE_BYTES,
+    MAX_RESULT_WITNESS_BYTES, ResultWitness, WitnessAdmissionError,
+};
 
 /// The wire-format version of [`WireMessage`] for the P2P handshake (§3.5). Every incompatible
-/// change of a wire type changes it; the retired v2 runtime used 4.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// change replaces this layout directly; no alternate decoder is accepted.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// Vote / certificate kind (§3.3).
 #[derive(
@@ -54,6 +57,8 @@ impl VoteKind {
 pub struct BlockHeader {
     /// Instance id `I`.
     pub instance: Hash32,
+    /// Scheduling epoch and complete authenticated context bound by every signature.
+    pub epoch: EpochId,
     /// Height `h`.
     pub height: u64,
     /// View in which this block was first (freshly) proposed.
@@ -70,8 +75,13 @@ pub struct BlockHeader {
     pub proposer: ValidatorIndex,
     /// `[L(h, x) for x in 0..min(origin_view, a_h)]`.
     pub skipped_leaders: Vec<PublicKey>,
+    /// Bounded canonical application control, signed independently of transaction payload.
+    /// Preserved unchanged on EMPTY, locked reproposals, sync and restart.
+    pub control_witness: crate::types::ControlWitness,
     /// Application flag (§3.7): Commit votes for this block carry attestations. Set from the
-    /// payload builder, checked by execution; proposals always carry nonempty work.
+    /// independent transaction/control builders and checked by execution; proposals always carry
+    /// nonempty work. The final height of an authenticated epoch requires this flag so the
+    /// application certifies the boundary transition.
     pub attest: bool,
 }
 
@@ -141,6 +151,7 @@ impl Proposal {
     pub fn signing_preimage(&self, crypto: &dyn Crypto) -> Vec<u8> {
         preimage::prop_preimage(
             &self.instance,
+            &self.header.epoch,
             self.height,
             self.view,
             &self.block_hash(crypto),
@@ -165,6 +176,8 @@ pub struct Vote {
     pub kind: VoteKind,
     /// Instance id.
     pub instance: Hash32,
+    /// Scheduling epoch and complete authenticated context bound by every signature.
+    pub epoch: EpochId,
     /// Height.
     pub height: u64,
     /// View.
@@ -182,7 +195,7 @@ pub struct Vote {
     pub sig: Signature,
     /// The signer's attestation of `att_preimage(height, block_hash, result)`: present iff
     /// `kind == Commit` and `attest` (§3.7 A3). Not covered by `sig`.
-    pub attestation: Option<Vec<u8>>,
+    pub attestation: Option<CommitAttestation>,
 }
 
 impl Vote {
@@ -191,6 +204,7 @@ impl Vote {
         preimage::vote_preimage(
             self.kind,
             &self.instance,
+            &self.epoch,
             self.height,
             self.view,
             &self.block_hash,
@@ -212,7 +226,13 @@ impl Vote {
     /// The commit statement `att_preimage(height, block_hash, result)` this vote's attestation
     /// covers (§3.7).
     pub fn statement(&self) -> Vec<u8> {
-        preimage::att_preimage(&self.instance, self.height, &self.block_hash, &self.result)
+        preimage::att_preimage(
+            &self.instance,
+            &self.epoch,
+            self.height,
+            &self.block_hash,
+            &self.result,
+        )
     }
 }
 
@@ -222,6 +242,8 @@ impl Vote {
 pub struct TimeoutVote {
     /// Instance id.
     pub instance: Hash32,
+    /// Scheduling epoch and complete authenticated context bound by every signature.
+    pub epoch: EpochId,
     /// Height.
     pub height: u64,
     /// The view being timed out.
@@ -242,7 +264,13 @@ impl TimeoutVote {
 
     /// The signing preimage of this timeout.
     pub fn preimage(&self) -> Vec<u8> {
-        preimage::tmo_preimage(&self.instance, self.height, self.view, self.hq())
+        preimage::tmo_preimage(
+            &self.instance,
+            &self.epoch,
+            self.height,
+            self.view,
+            self.hq(),
+        )
     }
 }
 
@@ -254,6 +282,8 @@ pub struct Qc {
     pub kind: VoteKind,
     /// Instance id.
     pub instance: Hash32,
+    /// Scheduling epoch and complete authenticated context bound by every signature.
+    pub epoch: EpochId,
     /// Height.
     pub height: u64,
     /// View.
@@ -270,15 +300,34 @@ pub struct Qc {
     pub agg_sig: AggregateSignature,
     /// A `CommitQC` with `attest`: one attestation per signer, in ascending signer order
     /// (§3.7 A4); empty otherwise.
-    pub attestations: Vec<Vec<u8>>,
+    pub attestations: Vec<AttestationSignature>,
+    /// One canonical result preimage shared by all required attestations; absent otherwise.
+    pub attestation_witness: Option<ResultWitness>,
 }
 
 impl Qc {
+    /// Admit the shared result witness before retaining this decoded certificate in production.
+    /// The canonical certificate is unchanged; admitted same-pool clones share the real owner.
+    ///
+    /// # Errors
+    /// Returns a foreign-source or actual original-pool allocation refusal without replacing
+    /// the original witness. The caller must preserve the source and retry local refusals.
+    pub fn admit_attestation_witness(
+        &mut self,
+        budget: &mv::allocation::AllocationBudget,
+    ) -> Result<(), WitnessAdmissionError> {
+        if let Some(witness) = &mut self.attestation_witness {
+            witness.admit(budget)?;
+        }
+        Ok(())
+    }
+
     /// The vote preimage every signer signed.
     pub fn preimage(&self) -> Vec<u8> {
         preimage::vote_preimage(
             self.kind,
             &self.instance,
+            &self.epoch,
             self.height,
             self.view,
             &self.block_hash,
@@ -294,7 +343,13 @@ impl Qc {
 
     /// The commit statement `att_preimage(height, block_hash, result)` its attestations cover.
     pub fn statement(&self) -> Vec<u8> {
-        preimage::att_preimage(&self.instance, self.height, &self.block_hash, &self.result)
+        preimage::att_preimage(
+            &self.instance,
+            &self.epoch,
+            self.height,
+            &self.block_hash,
+            &self.result,
+        )
     }
 
     /// `qc_digest(self)` (§3.3).
@@ -323,6 +378,8 @@ pub struct TcEntry {
 pub struct TimeoutCert {
     /// Instance id.
     pub instance: Hash32,
+    /// Scheduling epoch and complete authenticated context bound by every signature.
+    pub epoch: EpochId,
     /// Height.
     pub height: u64,
     /// The timed-out view.
@@ -383,6 +440,8 @@ pub struct Status {
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Echo")]
 pub struct Echo {
+    /// Authenticated epoch authorizing the replier's reported height.
+    pub epoch: EpochId,
     /// The probe nonce this `Status` answers.
     pub nonce: u64,
     /// The replier's signing key at its height, else its first configured key.
@@ -443,6 +502,16 @@ pub struct BlockResponse {
     pub block: Block,
 }
 
+/// One bounded application partial tied to an exact applied parent and scheduling context.
+/// The application authenticates its contents and the P2P sender before changing producer state.
+#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+pub struct ApplicationControl {
+    /// Complete view-independent source of this partial.
+    pub context: crate::api::ApplicationControlContext,
+    /// Sole canonical application partial frame; empty sideframes are rejected.
+    pub bytes: crate::types::ControlWitness,
+}
+
 /// Everything that travels between nodes (§3.5).
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::WireMessage")]
@@ -467,9 +536,113 @@ pub enum WireMessage {
     BlockRequest(BlockRequest),
     /// Service message: body response.
     BlockResponse(BlockResponse),
+    /// Bounded source-bound application partial, independently verified by the application.
+    ApplicationControl(ApplicationControl),
 }
 
 impl WireMessage {
+    /// Whether every present result witness already belongs to this exact original pool.
+    ///
+    /// This performs no allocation and does not validate signatures or require a witness
+    /// where the protocol demands one; those remain independent cryptographic checks.
+    #[must_use]
+    pub fn attestation_witnesses_admitted_to(
+        &self,
+        budget: &mv::allocation::AllocationBudget,
+    ) -> bool {
+        let qc = |value: &Qc| {
+            value
+                .attestation_witness
+                .as_ref()
+                .is_none_or(|w| w.admitted_to(budget))
+        };
+        let optional = |value: &Option<Qc>| value.as_ref().is_none_or(qc);
+        let tc = |value: &TimeoutCert| optional(&value.high_pqc);
+        match self {
+            Self::Vote(value) => value
+                .attestation
+                .as_ref()
+                .is_none_or(|a| a.witness.admitted_to(budget)),
+            Self::Qc(value) => qc(value),
+            Self::Proposal(value) => {
+                optional(&value.parent_qc) && value.justify.as_ref().is_none_or(tc)
+            }
+            Self::Timeout(value) => optional(&value.high_pqc),
+            Self::Tc(value) => tc(value),
+            Self::Status(value) => {
+                optional(&value.committed_qc)
+                    && optional(&value.high_pqc)
+                    && value.high_tc.as_ref().is_none_or(tc)
+            }
+            Self::SyncResponse(value) => value.blocks.iter().all(|entry| qc(&entry.commit_qc)),
+            Self::SyncRequest(_)
+            | Self::BlockRequest(_)
+            | Self::BlockResponse(_)
+            | Self::ApplicationControl(_) => true,
+        }
+    }
+
+    /// Admit every result witness before a production message is retained by consensus.
+    /// This changes ownership only, never canonical bytes. Completed admissions remain attached
+    /// on refusal, so retrying this same message shares those exact owners.
+    ///
+    /// # Errors
+    /// Rejects foreign admitted storage or an original-pool allocation refusal. The caller must
+    /// not retain this message in the production ingress until every witness is admitted.
+    pub fn admit_attestation_witnesses(
+        &mut self,
+        budget: &mv::allocation::AllocationBudget,
+    ) -> Result<(), WitnessAdmissionError> {
+        fn optional_qc(
+            value: &mut Option<Qc>,
+            budget: &mv::allocation::AllocationBudget,
+        ) -> Result<(), WitnessAdmissionError> {
+            if let Some(value) = value {
+                value.admit_attestation_witness(budget)?;
+            }
+            Ok(())
+        }
+        fn tc(
+            value: &mut TimeoutCert,
+            budget: &mv::allocation::AllocationBudget,
+        ) -> Result<(), WitnessAdmissionError> {
+            optional_qc(&mut value.high_pqc, budget)
+        }
+        match self {
+            Self::Vote(vote) => {
+                if let Some(share) = &mut vote.attestation {
+                    share.witness.admit(budget)?;
+                }
+            }
+            Self::Qc(value) => value.admit_attestation_witness(budget)?,
+            Self::Proposal(value) => {
+                optional_qc(&mut value.parent_qc, budget)?;
+                if let Some(value) = &mut value.justify {
+                    tc(value, budget)?;
+                }
+            }
+            Self::Timeout(value) => optional_qc(&mut value.high_pqc, budget)?,
+            Self::Tc(value) => tc(value, budget)?,
+            Self::Status(value) => {
+                optional_qc(&mut value.committed_qc, budget)?;
+                optional_qc(&mut value.high_pqc, budget)?;
+                if let Some(value) = &mut value.high_tc {
+                    tc(value, budget)?;
+                }
+            }
+            Self::SyncResponse(value) => {
+                for entry in &mut value.blocks {
+                    entry.commit_qc.admit_attestation_witness(budget)?;
+                }
+            }
+            Self::SyncRequest(_)
+            | Self::BlockRequest(_)
+            | Self::BlockResponse(_)
+            | Self::ApplicationControl(_) => {}
+        }
+        Ok(())
+    }
+
     /// The instance id the message claims.
     pub fn instance(&self) -> &Hash32 {
         match self {
@@ -483,6 +656,7 @@ impl WireMessage {
             Self::SyncResponse(r) => &r.instance,
             Self::BlockRequest(r) => &r.instance,
             Self::BlockResponse(r) => &r.instance,
+            Self::ApplicationControl(m) => &m.context.instance,
         }
     }
 
@@ -499,11 +673,12 @@ impl WireMessage {
             | Self::SyncRequest(_)
             | Self::SyncResponse(_)
             | Self::BlockRequest(_)
-            | Self::BlockResponse(_) => None,
+            | Self::BlockResponse(_)
+            | Self::ApplicationControl(_) => None,
         }
     }
 
-    /// The Norito enum tag of this message: its position in §3.5, 0 to 9.
+    /// The Norito enum tag of this message: its position in §3.5, 0 to 10.
     pub fn wire_tag(&self) -> u32 {
         match self {
             Self::Proposal(_) => 0,
@@ -516,6 +691,7 @@ impl WireMessage {
             Self::SyncResponse(_) => 7,
             Self::BlockRequest(_) => 8,
             Self::BlockResponse(_) => 9,
+            Self::ApplicationControl(_) => 10,
         }
     }
 
@@ -561,7 +737,9 @@ impl WireMessage {
     pub fn check_limits(&self) -> Result<(), CodecError> {
         match self {
             Self::Proposal(p) => check_proposal(p),
-            Self::Vote(x) => check_attestation(x.attestation.as_deref()),
+            Self::Vote(x) => {
+                check_attestation(x.attestation.as_ref().map(|a| a.signature.as_slice()))
+            }
             Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
             Self::Qc(c) => check_qc(c),
             Self::Timeout(t) => check_opt_qc(t.high_pqc.as_ref()),
@@ -584,6 +762,13 @@ impl WireMessage {
                 })
             }
             Self::BlockResponse(r) => check_header(&r.block.header),
+            Self::ApplicationControl(m) => {
+                if m.bytes.is_empty() {
+                    Err(CodecError::Limit("empty application control"))
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 }
@@ -597,11 +782,11 @@ pub(crate) fn check_qc(qc: &Qc) -> Result<(), CodecError> {
     }
     qc.attestations
         .iter()
-        .try_for_each(|a| check_attestation(Some(a)))
+        .try_for_each(|a| check_attestation(Some(a.as_slice())))
 }
 
 fn check_attestation(attestation: Option<&[u8]>) -> Result<(), CodecError> {
-    if attestation.is_some_and(|a| a.len() > MAX_ATTESTATION_BYTES) {
+    if attestation.is_some_and(|a| a.len() > MAX_ATTESTATION_SIGNATURE_BYTES) {
         return Err(CodecError::Limit("attestation"));
     }
     Ok(())
@@ -655,7 +840,7 @@ pub enum TrafficClass {
 fn class_of_tag(tag: u32, payload: bool) -> Option<TrafficClass> {
     match tag {
         0 if payload => Some(TrafficClass::Proposal),
-        0..=6 | 8 => Some(TrafficClass::Control),
+        0..=6 | 8 | 10 => Some(TrafficClass::Control),
         7 => Some(TrafficClass::Bulk),
         9 => Some(TrafficClass::Proposal),
         _ => None,
@@ -780,6 +965,10 @@ pub enum Defect {
     HeaderInstance,
     /// `header.height ≠ height`.
     HeaderHeight,
+    /// Header names a different scheduling epoch or complete context.
+    EpochContext,
+    /// An epoch boundary omits mandatory current-authority attestation.
+    BoundaryAttestation,
     /// `header.parent_hash ≠ tip.block_hash`.
     ParentHash,
     /// `header.parent_result ≠ tip.result`.
@@ -801,6 +990,7 @@ pub enum Defect {
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
 #[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
+#[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {
     /// Same `(I, h, v)`, both signed by `L(h, v)`, different `(bh, ad)`.
     ProposalEquivocation(Box<Proposal>, Box<Proposal>),
@@ -834,6 +1024,8 @@ mod tests {
 
     fn sample_header() -> BlockHeader {
         BlockHeader {
+            control_witness: crate::types::ControlWitness::empty(),
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: h(1),
             height: 9,
             origin_view: 2,
@@ -849,6 +1041,8 @@ mod tests {
 
     fn sample_qc(kind: VoteKind, view: u64) -> Qc {
         Qc {
+            attestation_witness: None,
+            epoch: crate::testing::TEST_EPOCH.id,
             kind,
             instance: h(1),
             height: 9,
@@ -864,6 +1058,7 @@ mod tests {
 
     fn sample_tc() -> TimeoutCert {
         TimeoutCert {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: h(1),
             height: 9,
             view: 3,
@@ -888,6 +1083,7 @@ mod tests {
 
     fn sample_vote(kind: VoteKind) -> Vote {
         Vote {
+            epoch: crate::testing::TEST_EPOCH.id,
             kind,
             instance: h(1),
             height: 9,
@@ -903,6 +1099,7 @@ mod tests {
 
     fn sample_timeout() -> TimeoutVote {
         TimeoutVote {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: h(1),
             height: 9,
             view: 3,
@@ -937,6 +1134,7 @@ mod tests {
             want_proposal: true,
             probe: Some(0xdead_beef),
             echo: Some(Echo {
+                epoch: crate::testing::TEST_EPOCH.id,
                 nonce: 0x0102_0304,
                 key: key(3),
                 sig: Signature([15; SIGNATURE_LEN]),
@@ -1017,6 +1215,17 @@ mod tests {
             WireMessage::BlockResponse(BlockResponse {
                 instance: h(1),
                 block,
+            }),
+            WireMessage::ApplicationControl(ApplicationControl {
+                context: crate::api::ApplicationControlContext {
+                    instance: h(1),
+                    epoch: crate::testing::TEST_EPOCH.id,
+                    height: 9,
+                    parent_hash: h(2),
+                    parent_result: h(3),
+                },
+                bytes: crate::types::ControlWitness::try_from_slice(b"canonical partial fixture")
+                    .unwrap(),
             }),
         ]
     }
@@ -1131,7 +1340,7 @@ mod tests {
         let heights: Vec<_> = messages.iter().map(WireMessage::round_height).collect();
         assert_eq!(&heights[..10], &[Some(9); 10]);
         assert!(heights[10..].iter().all(Option::is_none));
-        assert_eq!(heights.len(), 17);
+        assert_eq!(heights.len(), 18);
 
         let tc = sample_tc();
         assert_eq!(tc.max_hq(), Some(2));
@@ -1166,6 +1375,7 @@ mod tests {
             proposal.signing_preimage(&crypto),
             preimage::prop_preimage(
                 &proposal.instance,
+                &crate::testing::TEST_EPOCH.id,
                 9,
                 4,
                 &block.hash(&crypto),
@@ -1198,7 +1408,7 @@ mod tests {
             signers: Bitmap::from_bytes(vec![0; MAX_BITMAP_BYTES + 1]),
             ..sample_qc(VoteKind::Commit, 0)
         };
-        let cases = [
+        let cases = vec![
             WireMessage::Qc(big_bitmap.clone()),
             WireMessage::Timeout(Box::new(TimeoutVote {
                 high_pqc: Some(big_bitmap.clone()),
@@ -1235,6 +1445,7 @@ mod tests {
             })),
             WireMessage::Status(Box::new(Status {
                 echo: Some(Echo {
+                    epoch: crate::testing::TEST_EPOCH.id,
                     nonce: 1,
                     key: PublicKey::unchecked(vec![]),
                     sig: Signature([0; SIGNATURE_LEN]),
@@ -1378,7 +1589,7 @@ mod tests {
     #[test]
     fn wire_tags_and_classes_pinned() {
         use TrafficClass::{Bulk, Control, Proposal as Prop};
-        let expected: [(&str, u32, TrafficClass); 17] = [
+        let expected: [(&str, u32, TrafficClass); 18] = [
             ("proposal with payload", 0, Prop),
             ("proposal without payload", 0, Control),
             ("prepare vote", 1, Control),
@@ -1396,6 +1607,7 @@ mod tests {
             ("sync response", 7, Bulk),
             ("block request", 8, Control),
             ("block response", 9, Prop),
+            ("application control", 10, Control),
         ];
         let messages = all_wire_messages();
         assert_eq!(messages.len(), expected.len());
@@ -1414,11 +1626,149 @@ mod tests {
                 "{name}: raw frame"
             );
         }
-        assert_eq!(PROTOCOL_VERSION, 5);
+        assert_eq!(PROTOCOL_VERSION, 8);
         assert!(TrafficClass::Control < TrafficClass::Proposal);
         assert!(TrafficClass::Proposal < TrafficClass::Bulk);
-        assert_eq!(class_of_tag(10, false), None);
+        assert_eq!(class_of_tag(11, false), None);
         assert_eq!(class_of_tag(u32::MAX, true), None);
+    }
+
+    #[test]
+    fn every_nested_witness_is_admitted_before_retention_and_retry_preserves_wire() {
+        use mv::allocation::{AllocationBudget, ChargedBuffer};
+        let witness = ResultWitness::from_untrusted(vec![7; 200]).unwrap();
+        let qc = Qc {
+            attestation_witness: Some(witness.clone()),
+            ..sample_qc(VoteKind::Commit, 0)
+        };
+        let tc = TimeoutCert {
+            high_pqc: Some(qc.clone()),
+            ..sample_tc()
+        };
+        let messages = vec![
+            WireMessage::Vote(Vote {
+                attestation: Some(CommitAttestation {
+                    witness: witness.clone(),
+                    signature: AttestationSignature::empty(),
+                }),
+                ..sample_vote(VoteKind::Commit)
+            }),
+            WireMessage::Qc(qc.clone()),
+            WireMessage::Proposal(Box::new(Proposal {
+                parent_qc: Some(qc.clone()),
+                justify: Some(tc.clone()),
+                ..sample_proposal()
+            })),
+            WireMessage::Timeout(Box::new(TimeoutVote {
+                high_pqc: Some(qc.clone()),
+                ..sample_timeout()
+            })),
+            WireMessage::Tc(Box::new(tc.clone())),
+            WireMessage::Status(Box::new(Status {
+                committed_qc: Some(qc.clone()),
+                high_pqc: Some(qc.clone()),
+                high_tc: Some(tc),
+                ..sample_status()
+            })),
+            WireMessage::SyncResponse(SyncResponse {
+                instance: qc.instance,
+                blocks: vec![SyncEntry {
+                    block: Block {
+                        header: sample_header(),
+                        payload: Vec::new(),
+                    },
+                    commit_qc: qc,
+                }],
+            }),
+        ];
+        for mut message in messages {
+            let before = message.encode().unwrap();
+            let budget = AllocationBudget::new(4096);
+            assert!(!message.attestation_witnesses_admitted_to(&budget));
+            let occupied = ChargedBuffer::<u8>::new(4096, &budget).unwrap();
+            assert!(
+                message
+                    .admit_attestation_witnesses(&budget)
+                    .unwrap_err()
+                    .is_local_refusal()
+            );
+            assert_eq!(message.encode().unwrap(), before);
+            drop(occupied);
+            message.admit_attestation_witnesses(&budget).unwrap();
+            assert!(message.attestation_witnesses_admitted_to(&budget));
+            let reserved = budget.reserved_bytes();
+            assert!(reserved >= 200);
+            let mut clone = message.clone();
+            clone.admit_attestation_witnesses(&budget).unwrap();
+            assert_eq!(
+                budget.reserved_bytes(),
+                reserved,
+                "same pool clones share actual owners"
+            );
+            assert_eq!(clone.encode().unwrap(), before);
+            let foreign = AllocationBudget::new(4096);
+            assert!(!message.attestation_witnesses_admitted_to(&foreign));
+            assert!(matches!(
+                clone.admit_attestation_witnesses(&foreign),
+                Err(WitnessAdmissionError::ForeignBudget)
+            ));
+            drop(message);
+            assert_eq!(budget.reserved_bytes(), reserved);
+            drop(clone);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn source_complete_maximum_certificate_and_header_fit_declared_frame_allowance() {
+        let count = MAX_COMMITTEE_SIZE;
+        let witness = ResultWitness::from_untrusted(vec![7; MAX_RESULT_WITNESS_BYTES]).unwrap();
+        let mut header = sample_header();
+        header.skipped_leaders = (0..count)
+            .map(|i| {
+                let mut bytes = vec![5; crate::types::MAX_PUBLIC_KEY_LEN];
+                bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                PublicKey::new(bytes).unwrap()
+            })
+            .collect();
+        header.control_witness = crate::types::ControlWitness::try_from_slice(
+            &[3; crate::types::MAX_CONTROL_WITNESS_BYTES],
+        )
+        .unwrap();
+        let parent = Qc {
+            attest: true,
+            signers: Bitmap::from_indices(count, (0..count).map(crate::types::index_of)).unwrap(),
+            attestations: vec![
+                AttestationSignature::try_from_slice(
+                    &[9; MAX_ATTESTATION_SIGNATURE_BYTES]
+                )
+                .unwrap();
+                count
+            ],
+            attestation_witness: Some(witness),
+            ..sample_qc(VoteKind::Commit, 0)
+        };
+        let mut tc = sample_tc();
+        tc.entries = (0..count)
+            .map(|i| TcEntry {
+                signer: crate::types::index_of(i),
+                hq: Some(2),
+            })
+            .collect();
+        let proposal = WireMessage::Proposal(Box::new(Proposal {
+            header,
+            parent_qc: Some(parent),
+            justify: Some(tc),
+            payload: Some(Vec::new()),
+            ..sample_proposal()
+        }));
+        let frame = proposal.encode().unwrap();
+        assert!(
+            frame.len() <= crate::pacemaker::FRAME_OVERHEAD as usize,
+            "{} bytes exceed allowance",
+            frame.len()
+        );
+        assert!(WireMessage::decode(&frame, crate::pacemaker::FRAME_OVERHEAD as usize).is_ok());
     }
 
     /// The raw classifier refuses what is not a canonical `WireMessage` frame.
@@ -1442,7 +1792,7 @@ mod tests {
         let mut unknown = WireMessage::Vote(sample_vote(VoteKind::Prepare))
             .encode()
             .unwrap();
-        unknown[40] = 10;
+        unknown[40] = u8::MAX; // Every defined first-release message tag is distinct from this.
         cases.push(unknown);
         // Another Norito type (a `Status` struct frame, not a `WireMessage`).
         cases.push(norito::encode_canonical(&sample_status()).unwrap());
@@ -1482,7 +1832,10 @@ mod tests {
         })));
         messages.push(WireMessage::Vote(Vote {
             attest: true,
-            attestation: Some(vec![1; 200]),
+            attestation: Some(CommitAttestation {
+                witness: ResultWitness::from_untrusted(vec![1; 200]).unwrap(),
+                signature: AttestationSignature::try_from_slice(&[1; 200]).unwrap(),
+            }),
             ..sample_vote(VoteKind::Commit)
         }));
         let frames: Vec<Vec<u8>> = messages.iter().map(|m| m.encode().unwrap()).collect();
@@ -1523,46 +1876,48 @@ mod tests {
     /// Decode limits of the attestation fields (§3.7).
     #[test]
     fn attestation_limits() {
+        let witness = ResultWitness::from_untrusted(vec![7; MAX_RESULT_WITNESS_BYTES]).unwrap();
+        let signature =
+            AttestationSignature::try_from_slice(&[0; MAX_ATTESTATION_SIGNATURE_BYTES]).unwrap();
         let vote = Vote {
             attest: true,
-            attestation: Some(vec![0; MAX_ATTESTATION_BYTES]),
+            attestation: Some(CommitAttestation {
+                witness: witness.clone(),
+                signature,
+            }),
             ..sample_vote(VoteKind::Commit)
         };
         assert_eq!(WireMessage::Vote(vote.clone()).check_limits(), Ok(()));
-        let too_big = Vote {
-            attestation: Some(vec![0; MAX_ATTESTATION_BYTES + 1]),
-            ..vote
-        };
+        assert!(
+            AttestationSignature::try_from_slice(&[0; MAX_ATTESTATION_SIGNATURE_BYTES + 1])
+                .is_err()
+        );
+        assert!(ResultWitness::from_untrusted(vec![0; MAX_RESULT_WITNESS_BYTES + 1]).is_err());
+        let vote_bytes = WireMessage::Vote(vote.clone()).encode().unwrap();
         assert_eq!(
-            WireMessage::Vote(too_big).check_limits(),
-            Err(CodecError::Limit("attestation"))
+            WireMessage::decode(&vote_bytes, vote_bytes.len()).unwrap(),
+            WireMessage::Vote(vote)
         );
         let qc = Qc {
             attest: true,
-            attestations: vec![vec![0; MAX_ATTESTATION_BYTES]; 3],
+            attestation_witness: Some(witness),
+            attestations: vec![signature; 3],
             ..sample_qc(VoteKind::Commit, 0)
         };
         assert_eq!(WireMessage::Qc(qc.clone()).check_limits(), Ok(()));
-        for bad in [
-            Qc {
-                attestations: vec![vec![0; MAX_ATTESTATION_BYTES + 1]],
-                ..qc.clone()
-            },
-            Qc {
-                attestations: vec![Vec::new(); MAX_COMMITTEE_SIZE + 1],
-                ..qc.clone()
-            },
-        ] {
-            assert!(matches!(
-                WireMessage::Qc(bad.clone()).check_limits(),
-                Err(CodecError::Limit(_))
-            ));
-            let bytes = WireMessage::Qc(bad).encode().unwrap();
-            assert!(matches!(
-                WireMessage::decode(&bytes, usize::MAX),
-                Err(CodecError::Limit(_))
-            ));
-        }
+        let bad = Qc {
+            attestations: vec![AttestationSignature::empty(); MAX_COMMITTEE_SIZE + 1],
+            ..qc.clone()
+        };
+        assert!(matches!(
+            WireMessage::Qc(bad.clone()).check_limits(),
+            Err(CodecError::Limit(_))
+        ));
+        let bytes = WireMessage::Qc(bad).encode().unwrap();
+        assert!(matches!(
+            WireMessage::decode(&bytes, usize::MAX),
+            Err(CodecError::Limit(_))
+        ));
         // Round trip with attestations, and the accessors.
         let bytes = WireMessage::Qc(qc.clone()).encode().unwrap();
         assert_eq!(
@@ -1580,7 +1935,13 @@ mod tests {
         );
         assert_eq!(
             qc.statement(),
-            preimage::att_preimage(&qc.instance, qc.height, &qc.block_hash, &qc.result)
+            preimage::att_preimage(
+                &qc.instance,
+                &crate::testing::TEST_EPOCH.id,
+                qc.height,
+                &qc.block_hash,
+                &qc.result
+            )
         );
         let commit = sample_vote(VoteKind::Commit);
         assert!(!commit.needs_attestation());
@@ -1624,5 +1985,32 @@ mod tests {
             // header and per-field length prefixes.
             assert!(size < 1_000, "{name}: {size}");
         }
+    }
+    #[test]
+    fn application_control_frame_is_bounded_classified_and_not_an_empty_default() {
+        let mut message = all_wire_messages().pop().unwrap();
+        assert!(matches!(message, WireMessage::ApplicationControl(_)));
+        let WireMessage::ApplicationControl(ref mut partial) = message else {
+            unreachable!()
+        };
+        partial.bytes = crate::types::ControlWitness::try_from_slice(
+            &[0xAB; crate::types::MAX_CONTROL_WITNESS_BYTES],
+        )
+        .unwrap();
+        let bytes = message.encode().unwrap();
+        assert_eq!(traffic_class_of_frame(&bytes), Some(TrafficClass::Control));
+        assert_eq!(WireMessage::decode(&bytes, bytes.len()).unwrap(), message);
+        assert!(matches!(
+            WireMessage::decode(&bytes, bytes.len() - 1),
+            Err(CodecError::TooLarge { .. })
+        ));
+        let WireMessage::ApplicationControl(ref mut partial) = message else {
+            unreachable!()
+        };
+        partial.bytes = crate::types::ControlWitness::empty();
+        assert_eq!(
+            message.check_limits(),
+            Err(CodecError::Limit("empty application control"))
+        );
     }
 }

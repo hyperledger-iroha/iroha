@@ -15,6 +15,13 @@ use std::str::FromStr;
 /// Produce exact native instruction JSON, metadata and proposal hash.
 /// Inputs must come from the caller's independently pinned contract release and
 /// exact user intent. This pure codec does not authenticate a ledger projection.
+///
+/// # Errors
+///
+/// Returns an error when the input exceeds 4 MiB or is not the exact input object,
+/// when any account, contract address, alias, code hash, argument record or payload
+/// is missing or noncanonical, or when the native multisig call cannot be built or
+/// rendered.
 pub fn build_canonical_multisig_contract_call_json(
     input: &str,
     network_prefix: u16,
@@ -65,37 +72,8 @@ pub fn build_canonical_multisig_contract_call_json(
     if alias.to_string() != alias_literal {
         return Err(CodecError::failure("noncanonical contract alias"));
     }
-    let code = string("code_hash_hex")?;
-    if code.len() != 64
-        || !code
-            .bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-    {
-        return Err(CodecError::failure(
-            "code_hash_hex requires exact lower-case 32-byte hexadecimal",
-        ));
-    }
-    let code_hash = Hash::from_str(&code.to_ascii_uppercase()).map_err(codec_error)?;
-    let arguments = match object.get("arguments_hex") {
-        Some(json::Value::Null) => None,
-        Some(json::Value::String(literal))
-            if literal.len() <= 2 * 1024 * 1024
-                && literal.len() % 2 == 0
-                && literal
-                    .bytes()
-                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
-        {
-            Some(
-                ContractArgumentRecord::try_new(hex::decode(literal).map_err(codec_error)?)
-                    .map_err(codec_error)?,
-            )
-        }
-        _ => {
-            return Err(CodecError::failure(
-                "arguments_hex requires bounded exact native argument-record bytes or null",
-            ));
-        }
-    };
+    let code_hash = parse_code_hash_hex(string("code_hash_hex")?)?;
+    let arguments = parse_arguments_hex(object.get("arguments_hex"))?;
     let payload = match object.get("payload") {
         Some(value @ json::Value::Object(_)) => Json::new(value.clone()),
         _ => {
@@ -128,6 +106,42 @@ pub fn build_canonical_multisig_contract_call_json(
         json::to_value(&call.metadata).map_err(codec_error)?,
     );
     json::to_json(&json::Value::Object(output)).map_err(codec_error)
+}
+
+/// Admit exact lower-case 32-byte hexadecimal as a native code hash.
+fn parse_code_hash_hex(code: &str) -> CodecResult<Hash> {
+    if code.len() != 64
+        || !code
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err(CodecError::failure(
+            "code_hash_hex requires exact lower-case 32-byte hexadecimal",
+        ));
+    }
+    Hash::from_str(&code.to_ascii_uppercase()).map_err(codec_error)
+}
+
+/// Admit bounded exact lower-case argument-record hexadecimal, or `null` for none.
+fn parse_arguments_hex(value: Option<&json::Value>) -> CodecResult<Option<ContractArgumentRecord>> {
+    match value {
+        Some(json::Value::Null) => Ok(None),
+        Some(json::Value::String(literal))
+            if literal.len() <= 2 * 1024 * 1024
+                && literal.len() % 2 == 0
+                && literal
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
+        {
+            Ok(Some(
+                ContractArgumentRecord::try_new(hex::decode(literal).map_err(codec_error)?)
+                    .map_err(codec_error)?,
+            ))
+        }
+        _ => Err(CodecError::failure(
+            "arguments_hex requires bounded exact native argument-record bytes or null",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +208,38 @@ mod tests {
             value["metadata"],
             json::to_value(&expected.metadata).expect("native metadata"),
         );
+    }
+
+    #[test]
+    fn code_hash_hex_admits_only_exact_lower_case_digests() {
+        let code_hash = Hash::new(b"reviewed-artifact");
+        let literal = hex::encode(code_hash.as_ref());
+        assert_eq!(parse_code_hash_hex(&literal).expect("digest"), code_hash);
+        let upper = literal.to_ascii_uppercase();
+        assert_ne!(upper, literal, "fixture digest must contain hex letters");
+        for invalid in [upper, literal[..62].to_owned(), format!("{literal}00")] {
+            assert!(parse_code_hash_hex(&invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn arguments_hex_admits_null_or_exact_lower_case_record_bytes() {
+        assert!(
+            parse_arguments_hex(Some(&json::Value::Null))
+                .expect("null arguments")
+                .is_none()
+        );
+        let record = parse_arguments_hex(Some(&json::Value::String("0a0b".to_owned())))
+            .expect("argument bytes")
+            .expect("argument record");
+        assert_eq!(record.into_bytes(), vec![0x0a, 0x0b]);
+        for invalid in [
+            None,
+            Some(json::Value::Bool(false)),
+            Some(json::Value::String("0A0B".to_owned())),
+            Some(json::Value::String("abc".to_owned())),
+        ] {
+            assert!(parse_arguments_hex(invalid.as_ref()).is_err());
+        }
     }
 }

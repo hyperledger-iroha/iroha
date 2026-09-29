@@ -425,7 +425,13 @@ pub mod isi {
     ) -> Result<(), Error> {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
-            Executable::IvmProved(proved) => proved.bytecode.as_ref(),
+            Executable::IvmProved(_) => {
+                return Err(Error::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "proof-backed IVM triggers are unavailable".into(),
+                    ),
+                ));
+            }
             Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
                 return Ok(());
             }
@@ -1170,6 +1176,28 @@ pub mod isi {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    mod admission_tests {
+        use super::*;
+
+        #[test]
+        fn proved_ivm_trigger_policy_rejects_before_bytecode_admission() {
+            let executable =
+                Executable::IvmProved(iroha_data_model::transaction::executable::IvmProved {
+                    bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(Vec::new()),
+                    overlay: Vec::<InstructionBox>::new().into(),
+                    events_commitment: iroha_crypto::Hash::new(b"trigger-events"),
+                    gas_policy_commitment: iroha_crypto::Hash::new(b"trigger-gas"),
+                });
+            let bound = core::num::NonZeroU64::new(1).expect("nonzero bound");
+            assert!(matches!(
+                enforce_ivm_trigger_program_policy(&executable, &Metadata::default(), bound, bound),
+                Err(Error::InvalidParameter(InvalidParameterError::SmartContract(message)))
+                    if message == "proof-backed IVM triggers are unavailable"
+            ));
+        }
+    }
 }
 pub mod query {
     //! Queries associated to triggers.
@@ -1223,6 +1251,7 @@ pub mod query {
     #[cfg(test)]
     mod tests {
         use super::*;
+
         #[test]
         fn trigger_candidate_ids_are_intersected() {
             let rose_id: TriggerId = "intersect_rose".parse().unwrap();

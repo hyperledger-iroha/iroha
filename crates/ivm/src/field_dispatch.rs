@@ -85,18 +85,21 @@ fn backend_from_choice(choice: SimdChoice) -> &'static dyn FieldArithmetic {
 /// Override field dispatch in opt-in tests and benchmarks.
 #[cfg(any(test, feature = "bench", feature = "ivm_zk_tests"))]
 pub fn set_field_impl_for_tests(backend: &'static dyn FieldArithmetic) {
-    let id = if core::ptr::eq(backend, &ScalarField as &dyn FieldArithmetic) {
+    // Trait-object vtables can be duplicated across codegen units. Select by
+    // concrete implementation identity, not a wide-pointer address.
+    let kind = backend.type_id();
+    let id = if kind == std::any::TypeId::of::<ScalarField>() {
         1
-    } else if core::ptr::eq(backend, &Sse2Field as &dyn FieldArithmetic) {
+    } else if kind == std::any::TypeId::of::<Sse2Field>() {
         2
-    } else if core::ptr::eq(backend, &Avx2Field as &dyn FieldArithmetic) {
+    } else if kind == std::any::TypeId::of::<Avx2Field>() {
         3
-    } else if core::ptr::eq(backend, &Avx512Field as &dyn FieldArithmetic) {
+    } else if kind == std::any::TypeId::of::<Avx512Field>() {
         4
     } else {
         #[cfg(target_arch = "aarch64")]
         {
-            if core::ptr::eq(backend, &NeonField as &dyn FieldArithmetic) {
+            if kind == std::any::TypeId::of::<NeonField>() {
                 5
             } else {
                 1
@@ -126,14 +129,14 @@ mod tests {
         clear_field_impl_for_tests();
         let detected = field_impl();
         let override_backend: &'static dyn FieldArithmetic =
-            if core::ptr::eq(detected, &ScalarField as &dyn FieldArithmetic) {
+            if detected.type_id() == std::any::TypeId::of::<ScalarField>() {
                 &Sse2Field
             } else {
                 &ScalarField
             };
         set_field_impl_for_tests(override_backend);
-        assert!(core::ptr::eq(field_impl(), override_backend));
+        assert_eq!(field_impl().type_id(), override_backend.type_id());
         clear_field_impl_for_tests();
-        assert!(core::ptr::eq(field_impl(), detected));
+        assert_eq!(field_impl().type_id(), detected.type_id());
     }
 }

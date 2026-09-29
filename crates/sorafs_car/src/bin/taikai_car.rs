@@ -16,12 +16,14 @@ use sorafs_car::taikai::{
 };
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
+#[path = "../taikai/output_file.rs"]
+mod output_file;
 #[path = "../taikai/output_fs.rs"]
 mod output_fs;
+use output_file::write_output_bytes;
 use output_fs::{ensure_parent_dir, validate_output_writable};
 use sorafs_car::set_no_follow_flag;
 #[derive(Parser, Debug)]
@@ -1105,32 +1107,6 @@ fn write_summary_json(path: &Path, value: &Value) -> Result<()> {
     let rendered = json::to_json_pretty(value)
         .map_err(|err| eyre!("failed to render bundle summary JSON: {err}"))?;
     write_output_bytes(path, "bundle summary", rendered.as_bytes())
-}
-fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
-    let mut file = open_output_file(path, label)?;
-    file.write_all(bytes)
-        .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
-}
-fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
-    validate_output_writable(path)?;
-    ensure_parent_dir(path)?;
-    validate_output_writable(path)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    set_no_follow_flag(&mut options);
-    let file = options
-        .open(path)
-        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
-    let metadata = file
-        .metadata()
-        .wrap_err_with(|| format!("failed to inspect {label} `{}` after open", path.display()))?;
-    if !metadata.is_file() {
-        return Err(eyre!(
-            "failed to write {label} `{}`: output must be a regular file",
-            path.display()
-        ));
-    }
-    Ok(file)
 }
 fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes) -> Map {
     let mut time_key = Map::new();

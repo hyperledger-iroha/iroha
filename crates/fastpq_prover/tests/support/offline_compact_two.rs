@@ -277,19 +277,34 @@ fn mark_controls_passed(receipt: &Path, work: &str) -> io::Result<()> {
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn produce_two(is_axt: bool) {
+    produce_fixture(
+        is_axt,
+        if is_axt { "axt" } else { "ordinary" },
+        capture::CaptureFixture::new,
+        "application_shape=repeated-two-key-continuity\n",
+    );
+}
+
+/// Run the same normal facade, retention and mutation controls for fixed caller facts.
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+pub(super) fn produce_fixture(
+    is_axt: bool,
+    label: &str,
+    fixture: impl FnOnce() -> capture::CaptureFixture,
+    shape_facts: &str,
+) {
     use fastpq_prover::{Digest384GpuBackendV1, DigestExecutionV1};
     fastpq_prover::preflight_digest384_continuation_v1(Digest384GpuBackendV1::Metal).unwrap();
-    let fixture = capture::CaptureFixture::new();
+    let fixture = fixture();
     let proving = ProvingLimits {
         digest_execution: DigestExecutionV1::Device(Digest384GpuBackendV1::Metal),
         ..ProvingLimits::default()
     };
     let limits = VerificationLimits::default();
-    let label = if is_axt { "axt" } else { "ordinary" };
     // All receipt facts come from the independently prepared caller, never from
     // decoding an output proof. The artifact already contains the public context.
     let public_facts = format!(
-        "required_device=Metal\npublic_statement_canonical_hex={}\nexpected_statement_digest={}\nmaximum_segment_charge_bytes={}\nmaximum_segment_work_units={}\nmaximum_child_frame_bytes={}\nmaximum_artifact_bytes={}\nmaximum_total_queries={}\n",
+        "{shape_facts}required_device=Metal\npublic_statement_canonical_hex={}\nexpected_statement_digest={}\nmaximum_segment_charge_bytes={}\nmaximum_segment_work_units={}\nmaximum_child_frame_bytes={}\nmaximum_artifact_bytes={}\nmaximum_total_queries={}\n",
         hex::encode(norito::encode_canonical(&fixture.statement).unwrap()),
         hex::encode(fixture.expected.public_statement_digest),
         proving.max_segment_charge_bytes,
@@ -372,6 +387,16 @@ fn replay_two(is_axt: bool) {
     } else {
         ("FASTPQ_TEST_ORDINARY_TWO_ARTIFACT", "ordinary")
     };
+    replay_fixture(is_axt, label, variable, fixture);
+}
+
+/// Verify retained public bytes using fixture facts selected before artifact access.
+pub(super) fn replay_fixture(
+    is_axt: bool,
+    label: &str,
+    variable: &str,
+    fixture: capture::CaptureFixture,
+) {
     let path = PathBuf::from(std::env::var_os(variable).expect(variable));
     let bytes = read_addressed(
         &path,

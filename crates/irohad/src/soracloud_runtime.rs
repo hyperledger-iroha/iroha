@@ -1927,7 +1927,7 @@ impl SoracloudPreparedRuntimeCounters {
 }
 struct PooledSoracloudIvm {
     vm: IVM,
-    template: Arc<RuntimeTemplate>,
+    template: RuntimeTemplate,
     previously_used: bool,
 }
 struct SoracloudPreparedContractEntry {
@@ -2117,7 +2117,15 @@ impl SoracloudPreparedRuntimeCache {
                 )
             })?;
         SoracloudPreparedRuntimeCounters::increment(&self.counters.contract_preparations);
-        let mut vm = IVM::new(u64::MAX);
+        let mut vm = IVM::try_new(u64::MAX).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                vm_error_kind(&error),
+                format!(
+                    "allocate Soracloud prepared runtime: {}",
+                    vm_error_label(&error)
+                ),
+            )
+        })?;
         // SoraCloud execution is not a proof-production boundary. Formal trace
         // collection must be explicitly enabled only by a proof owner because
         // witness logs can retain private register and memory values.
@@ -2125,7 +2133,7 @@ impl SoracloudPreparedRuntimeCache {
         SoracloudPreparedRuntimeCounters::increment(&self.counters.runtime_allocations);
         vm.load_prepared(&prepared).map_err(|error| {
             SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
+                vm_error_kind(&error),
                 format!(
                     "load prepared Soracloud contract artifact {}: {}",
                     cache_path.display(),
@@ -2134,7 +2142,15 @@ impl SoracloudPreparedRuntimeCache {
             )
         })?;
         SoracloudPreparedRuntimeCounters::increment(&self.counters.prepared_loads);
-        let template = Arc::new(vm.runtime_template());
+        let template = vm.try_runtime_template().map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                vm_error_kind(&error),
+                format!(
+                    "capture Soracloud prepared runtime: {}",
+                    vm_error_label(&error)
+                ),
+            )
+        })?;
         SoracloudPreparedRuntimeCounters::increment(&self.counters.template_builds);
         // The descriptor used for the read must still name the file that was
         // hashed. A replacement between read and insertion is invalidated and
@@ -2218,11 +2234,19 @@ impl SoracloudPreparedRuntimeCache {
             }
             (pooled.vm, pooled.template)
         } else {
-            let mut vm = IVM::new(u64::MAX);
+            let mut vm = IVM::try_new(u64::MAX).map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    vm_error_kind(&error),
+                    format!(
+                        "allocate cached Soracloud runtime: {}",
+                        vm_error_label(&error)
+                    ),
+                )
+            })?;
             SoracloudPreparedRuntimeCounters::increment(&self.counters.runtime_allocations);
             vm.load_prepared(&prepared.prepared).map_err(|error| {
                 SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    vm_error_kind(&error),
                     format!(
                         "load cached prepared Soracloud contract: {}",
                         vm_error_label(&error)
@@ -2230,7 +2254,15 @@ impl SoracloudPreparedRuntimeCache {
                 )
             })?;
             SoracloudPreparedRuntimeCounters::increment(&self.counters.prepared_loads);
-            let template = Arc::new(vm.runtime_template());
+            let template = vm.try_runtime_template().map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    vm_error_kind(&error),
+                    format!(
+                        "capture cached Soracloud runtime: {}",
+                        vm_error_label(&error)
+                    ),
+                )
+            })?;
             SoracloudPreparedRuntimeCounters::increment(&self.counters.template_builds);
             (vm, template)
         };
@@ -2242,7 +2274,7 @@ impl SoracloudPreparedRuntimeCache {
             vm: Some(vm),
         })
     }
-    fn return_runtime(&self, key: Hash, generation: u64, template: Arc<RuntimeTemplate>, vm: IVM) {
+    fn return_runtime(&self, key: Hash, generation: u64, template: RuntimeTemplate, vm: IVM) {
         let mut state = self.state.lock();
         let tick = state.next_tick();
         let Some(entry) = state
@@ -2298,7 +2330,7 @@ struct SoracloudIvmRuntimeLease<'cache> {
     cache: &'cache SoracloudPreparedRuntimeCache,
     key: Hash,
     generation: u64,
-    template: Arc<RuntimeTemplate>,
+    template: RuntimeTemplate,
     vm: Option<IVM>,
 }
 impl Deref for SoracloudIvmRuntimeLease<'_> {
@@ -2322,7 +2354,7 @@ impl Drop for SoracloudIvmRuntimeLease<'_> {
         }
         SoracloudPreparedRuntimeCounters::increment(&self.cache.counters.dirty_resets);
         self.cache
-            .return_runtime(self.key, self.generation, Arc::clone(&self.template), vm);
+            .return_runtime(self.key, self.generation, self.template.clone(), vm);
     }
 }
 #[cfg(test)]
@@ -2444,14 +2476,12 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         {
             Ok(prepared) => prepared,
             Err(error) => {
-                let failure = if error.kind == SoracloudRuntimeExecutionErrorKind::Unavailable {
-                    "bundle_unavailable"
-                } else {
-                    "invalid_bundle"
-                };
+                if error.kind == SoracloudRuntimeExecutionErrorKind::Unavailable {
+                    return Err(error);
+                }
                 return Ok(deterministic_mailbox_failure_result_with_message(
                     request,
-                    failure,
+                    "invalid_bundle",
                     error.message,
                     SoraServiceHealthStatusV1::Degraded,
                 ));
@@ -2473,6 +2503,9 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         let mut vm = match self.ivm_runtime_cache.checkout(&prepared) {
             Ok(vm) => vm,
             Err(error) => {
+                if error.kind == SoracloudRuntimeExecutionErrorKind::Unavailable {
+                    return Err(error);
+                }
                 return Ok(deterministic_mailbox_failure_result_with_message(
                     request,
                     "invalid_bundle",
@@ -2484,13 +2517,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         let mailbox_payload_tlv =
             match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
                 Ok(tlv_bytes) => tlv_bytes,
-                Err(error) => {
-                    return Ok(deterministic_mailbox_failure_result(
-                        request,
-                        vm_error_label(&error),
-                        SoraServiceHealthStatusV1::Degraded,
-                    ));
-                }
+                Err(error) => return ordered_mailbox_vm_failure(request, &error),
             };
         let public_inputs = match ordered_mailbox_public_inputs(
             &mailbox_payload_tlv,
@@ -2498,13 +2525,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             request.observed_height,
         ) {
             Ok(public_inputs) => public_inputs,
-            Err(error) => {
-                return Ok(deterministic_mailbox_failure_result(
-                    request,
-                    vm_error_label(&error),
-                    SoraServiceHealthStatusV1::Degraded,
-                ));
-            }
+            Err(error) => return ordered_mailbox_vm_failure(request, &error),
         };
         let committed_entries = collect_committed_service_state_entries(
             &self.state.view(),
@@ -2514,30 +2535,16 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             .with_public_inputs(public_inputs);
         vm.set_host(host);
         if let Err(error) = vm.set_program_counter(entry_pc) {
-            return Ok(deterministic_mailbox_failure_result(
-                request,
-                vm_error_label(&error),
-                SoraServiceHealthStatusV1::Degraded,
-            ));
+            return ordered_mailbox_vm_failure(request, &error);
         }
         match vm.alloc_host_tlv(&mailbox_payload_tlv) {
             Ok(ptr) => vm.set_register(10, ptr),
-            Err(error) => {
-                return Ok(deterministic_mailbox_failure_result(
-                    request,
-                    vm_error_label(&error),
-                    SoraServiceHealthStatusV1::Degraded,
-                ));
-            }
+            Err(error) => return ordered_mailbox_vm_failure(request, &error),
         };
         vm.set_register(11, request.observed_sequence);
         vm.set_register(12, request.observed_height);
         if let Err(error) = vm.run() {
-            return Ok(deterministic_mailbox_failure_result(
-                request,
-                vm_error_label(&error),
-                SoraServiceHealthStatusV1::Degraded,
-            ));
+            return ordered_mailbox_vm_failure(request, &error);
         }
         let (response_bytes, content_type) = match decode_ordered_mailbox_vm_output(&vm, &request) {
             Ok(response) => response,
@@ -8969,7 +8976,7 @@ fn execute_query_local_read(
     vm.set_host(host);
     vm.set_program_counter(entry_pc).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
+            vm_error_kind(&error),
             format!(
                 "position Soracloud query bundle entrypoint `{}` for service `{}` revision `{}`: {}",
                 context.handler.entrypoint,
@@ -8981,7 +8988,7 @@ fn execute_query_local_read(
     })?;
     let body_ptr = vm.alloc_host_tlv(&body_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
+            vm_error_kind(&error),
             format!(
                 "stage Soracloud query body for service `{}` handler `{}`: {}",
                 request.service_name,
@@ -8992,7 +8999,7 @@ fn execute_query_local_read(
     })?;
     let metadata_ptr = vm.alloc_host_tlv(&metadata_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
+            vm_error_kind(&error),
             format!(
                 "stage Soracloud query metadata for service `{}` handler `{}`: {}",
                 request.service_name,
@@ -9014,7 +9021,7 @@ fn execute_query_local_read(
                 |syscall| format!("{error_label}(0x{syscall:02x})"),
             );
         SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
+            vm_error_kind(&error),
             format!(
                 "execute Soracloud query handler `{}` on service `{}` revision `{}`: {}",
                 context.handler.handler_name,
@@ -10938,6 +10945,24 @@ fn collect_committed_service_state_entries(
         .map(|((_service, binding, key), entry)| ((binding.clone(), key.clone()), entry.clone()))
         .collect()
 }
+fn ordered_mailbox_vm_failure(
+    request: SoracloudOrderedMailboxExecutionRequest,
+    error: &VMError,
+) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
+    if vm_error_kind(error) == SoracloudRuntimeExecutionErrorKind::Unavailable {
+        // Resource admission is local. It cannot create a committed degraded
+        // runtime receipt or change the message's protocol validity.
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            vm_error_label(error),
+        ));
+    }
+    Ok(deterministic_mailbox_failure_result(
+        request,
+        vm_error_label(error),
+        SoraServiceHealthStatusV1::Degraded,
+    ))
+}
 fn deterministic_mailbox_failure_result(
     request: SoracloudOrderedMailboxExecutionRequest,
     outcome_label: &str,
@@ -11157,6 +11182,8 @@ fn make_pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 fn vm_error_label(error: &VMError) -> &'static str {
     match error.as_unmetered() {
+        VMError::ExecutionDeferred(_) => "execution_deferred",
+        VMError::AllocationDeferred(_) => "allocation_deferred",
         VMError::OutOfGas => "out_of_gas",
         VMError::OutOfMemory => "out_of_memory",
         VMError::MemoryAccessViolation { .. } => "memory_access_violation",
@@ -11196,6 +11223,14 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",
         VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
         VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
+    }
+}
+fn vm_error_kind(error: &VMError) -> SoracloudRuntimeExecutionErrorKind {
+    match error.as_unmetered() {
+        VMError::ExecutionDeferred(_) | VMError::AllocationDeferred(_) => {
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        }
+        _ => SoracloudRuntimeExecutionErrorKind::Internal,
     }
 }
 fn persist_staged_runtime_artifact(

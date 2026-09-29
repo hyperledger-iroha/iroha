@@ -95,14 +95,17 @@ pub use axt_binding::{
     AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY,
     AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY,
     AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY, AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY,
-    AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY, AxtVerifiedProof,
+    AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY,
+    AXT_FASTPQ_SOURCE_TRANSFER_OCCURRENCES_METADATA_KEY, AxtVerifiedProof,
     DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
     axt_proof_blob_from_bound_batch, axt_proof_envelope_from_bound_batch, batch_manifest_sha256,
     bind_axt_batch, bind_axt_batch_with_committed_amount, bind_axt_batch_with_proof_metadata,
     canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload, prove_axt_bound_batch,
-    set_axt_remote_spend_claims, transition_batch_from_model, transition_batch_to_model,
-    validate_axt_transfer_claim_binding, verify_axt_bound_batch, verify_axt_proof_blob,
-    verify_axt_proof_envelope, verify_axt_proof_envelope_with_outer_metadata,
+    set_axt_remote_spend_claims, set_axt_source_transfer_occurrences, transition_batch_from_model,
+    transition_batch_to_model, validate_axt_transfer_claim_binding, verify_axt_bound_batch,
+    verify_axt_proof_blob, verify_axt_proof_envelope,
+    verify_axt_proof_envelope_against_anchor_and_claimed_source_v1,
+    verify_axt_proof_envelope_with_outer_metadata,
 };
 /// Canonical masked quantity-artifact production and bounded verification.
 pub use backend::offline_compact;

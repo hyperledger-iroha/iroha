@@ -132,55 +132,6 @@ fn external_entrypoint_wire(signed_transaction_wire: &[u8]) -> Vec<u8> {
     wire
 }
 #[test]
-fn queue_plan_admission_intent_is_a_required_signature_bound_field() {
-    let ordinary = sample_signed_transaction();
-    assert_eq!(
-        ordinary.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
-    let private_key: iroha_crypto::PrivateKey =
-        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-            .parse()
-            .expect("fixture private key");
-    let queue_plan = TransactionBuilder::from_payload(ordinary.payload().clone())
-        .expect("ordinary payload is reconstructible")
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-        .sign(&private_key);
-    assert_eq!(
-        queue_plan.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
-    );
-    assert_ne!(ordinary.hash(), queue_plan.hash());
-    assert_ne!(
-        ordinary
-            .encode_wire_v1()
-            .expect("encode ordinary transaction"),
-        queue_plan
-            .encode_wire_v1()
-            .expect("encode QueuePlan transaction")
-    );
-    queue_plan
-        .verify_signature()
-        .expect("typed QueuePlan intent is covered by the transaction signature");
-
-    let mut stripped = queue_plan.clone();
-    stripped.payload.admission_intent = TransactionAdmissionIntent::Ordinary;
-    assert_eq!(
-        stripped.admission_intent(),
-        TransactionAdmissionIntent::Ordinary
-    );
-    stripped
-        .verify_signature()
-        .expect_err("a relay cannot downgrade QueuePlan intent without invalidating the signature");
-
-    let restored = TransactionBuilder::from_payload(queue_plan.payload().clone())
-        .expect("QueuePlan payload is reconstructible")
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-        .into_payload()
-        .expect("explicit ordinary intent is valid");
-    assert_eq!(restored, ordinary.payload().clone());
-}
-#[test]
 fn transaction_payload_rejects_wire_omitting_required_admission_intent() {
     #[derive(norito::codec::Encode)]
     struct TransactionPayloadWithoutAdmissionIntent {

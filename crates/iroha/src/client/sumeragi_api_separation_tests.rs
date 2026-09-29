@@ -23,7 +23,7 @@ fn get_sumeragi_status_rejects_unknown_json_fields() {
     );
     assert!(result.is_err(), "unknown status fields must be rejected");
 
-    let (diagnostics, _) = sample_sumeragi_status_with_relay();
+    let diagnostics = sample_sumeragi_diagnostics();
     let response = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", APPLICATION_JSON)
@@ -66,12 +66,12 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
         "structurally invalid json payload should be rejected"
     );
 
-    let (diagnostics, _) = sample_sumeragi_status_with_relay();
+    let diagnostics = sample_sumeragi_diagnostics();
     let mut value = norito::json::to_value(&diagnostics).expect("serialize diagnostics fixture");
     value
         .as_object_mut()
         .expect("diagnostics object")
-        .remove("autonomous_lane_executions");
+        .remove("lane_governance");
     let response = HttpResponse::builder()
         .status(StatusCode::OK)
         .header("content-type", APPLICATION_JSON)
@@ -88,7 +88,7 @@ fn get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields() {
     );
     assert!(
         result.is_err(),
-        "the first-release autonomous diagnostics vector is required"
+        "the first-release lane governance diagnostics vector is required"
     );
 
     let response = HttpResponse::builder()
@@ -133,13 +133,15 @@ async fn async_diagnostics_uses_async_transport_and_preserves_strict_evidence_va
             Box::pin(async move { Ok(response) })
         }
     }
-    let (status, _) = sample_sumeragi_status_with_relay();
+    let status = sample_sumeragi_diagnostics();
     for content_type in [APPLICATION_NORITO, APPLICATION_JSON] {
         for tampered in [false, true] {
             let mut status = status.clone();
             if tampered {
-                status.lane_relay_envelopes[0].settlement_hash =
-                    HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; Hash::LENGTH]));
+                status.npos = Some(iroha_data_model::block::consensus::SumeragiNposDiagnostics {
+                    epoch_length_blocks: std::num::NonZeroU64::new(100).unwrap(),
+                    epoch_seed: [0; 32],
+                });
             }
             let requests = Arc::new(Mutex::new(Vec::new()));
             let transport = Arc::new(DiagnosticsTransport {
@@ -160,9 +162,9 @@ async fn async_diagnostics_uses_async_transport_and_preserves_strict_evidence_va
             if tampered {
                 assert!(
                     result
-                        .expect_err("same strict relay validation applies asynchronously")
+                        .expect_err("same strict NPoS validation applies asynchronously")
                         .to_string()
-                        .contains("Invalid lane relay envelope")
+                        .contains("epoch seed must be non-zero")
                 );
             } else {
                 assert_eq!(result.expect("typed async diagnostics"), status);

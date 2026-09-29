@@ -169,3 +169,8 @@ python3 scripts/run_sumeragi_soak_matrix.py \
 The old 4/6-peer report in `specs/generated/sumeragi_da_report.md` predates
 revision 4 and is retained only as historical telemetry. It is not current
 qualification evidence; a fresh 4/7/10 matrix must supply that evidence.
+
+
+## Native signed control witness
+
+The native protocol7 header carries at most 2048 occupied control bytes, independently of the transaction payload. Header hashing binds the exact bytes and length. Forced EMPTY changes only transactions; a locked reproposal, sync response or restart preserves the original control bytes. This field does not replace mandatory DA/RBC body validation. Native frame admission uses the exported `iroha_sumeragi::pacemaker::FRAME_OVERHEAD` (64 KiB + 2048 + 16), and sync memory accounting includes the full inline capacity. The application validates the unique finalized pulse against pristine applied State and matches the same pulse in R.

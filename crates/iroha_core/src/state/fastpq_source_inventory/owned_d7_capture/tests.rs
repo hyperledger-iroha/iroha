@@ -394,7 +394,7 @@ fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
 }
 
 #[test]
-fn unrelated_header_fields_and_later_replay_bookkeeping_do_not_rewrite_d7_inputs() {
+fn unrelated_header_fields_do_not_rewrite_d7_inputs() {
     let _guard = exec_witness::exec_witness_guard();
     exec_witness::start_block();
     let state = state();
@@ -409,13 +409,10 @@ fn unrelated_header_fields_and_later_replay_bookkeeping_do_not_rewrite_d7_inputs
         .into_parts();
     block._curr_block.view_change_index += 1;
     assert!(context.verify_current(&block).is_ok());
-    block.authenticated_replay_commit = true;
-    assert!(context.verify_current(&block).is_ok());
-    assert_eq!(
+    assert!(
         block
             .prepare_owned_fastpq_d7_capture(&TranscriptMap::new(), limits())
-            .unwrap_err(),
-        "authenticated replay cannot prepare new ordinary FASTPQ D7 facts"
+            .is_ok()
     );
     assert_unpublished(&block);
 }

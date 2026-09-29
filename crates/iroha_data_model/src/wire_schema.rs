@@ -1,14 +1,14 @@
 //! Compiled wire-schema identity shared by release manifests and `/status.build`.
 //!
 //! The identity hashes a canonical rendering of the compiled [`iroha_schema`]
-//! description of every consensus message ([`ConsensusMessageV2`]) and the block
-//! wire ([`SignedBlock`]), together with the IVM ABI hash. Two binaries that
-//! report equal hashes decode the same consensus and block layouts and admit
-//! the same contract ABI. The value is independent of the compilation target
-//! and of process-local `TypeId` values, but it depends on the enabled features:
-//! for example `PublicKey`'s `Algorithm` lists its `bls`, `gost` and `sm`
-//! variants only when those features are compiled in. Release tooling must read
-//! it from a build with the release feature set.
+//! description of the block wire ([`SignedBlock`]), together with the IVM ABI
+//! hash. Two binaries that report equal hashes decode the same block layouts and
+//! admit the same contract ABI. Consensus messages are not covered yet; their
+//! frames carry their own Norito schema hash. The value is independent of the
+//! compilation target and of process-local `TypeId` values, but it depends on
+//! the enabled features: for example `PublicKey`'s `Algorithm` lists its `bls`,
+//! `gost` and `sm` variants only when those features are compiled in. Release
+//! tooling must read it from a build with the release feature set.
 //!
 //! `ivm_abi` depends on this crate, so the IVM ABI hash is an explicit input
 //! rather than computed here. Executables obtain it from
@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use iroha_schema::{IntoSchema, MetaMap, Metadata};
 
-use crate::block::{SignedBlock, consensus_v2::ConsensusMessageV2};
+use crate::block::SignedBlock;
 
 /// Domain separator of the first-release wire-schema identity.
 pub const WIRE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"iroha.wire_schema.v1\0";
@@ -27,12 +27,17 @@ pub const WIRE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"iroha.wire_schema.v1\0";
 #[must_use]
 pub fn covered_wire_schema() -> MetaMap {
     let mut schema = MetaMap::new();
-    <ConsensusMessageV2 as IntoSchema>::update_schema_map(&mut schema);
+    // TODO(sumeragi): cover the live consensus wire (`iroha_sumeragi::message::WireMessage`)
+    // again. The retired `ConsensusMessageV2` root was removed with the old runtime; the new
+    // core's message derives only `norito::NoritoSchema` (its frames carry
+    // `norito::schema::identity::frame_hash::<WireMessage>()`), not `iroha_schema::IntoSchema`,
+    // so it must gain a compiled schema description (or its Norito schema identity must be bound
+    // into this preimage) before this identity covers consensus messages.
     <SignedBlock as IntoSchema>::update_schema_map(&mut schema);
     schema
 }
 
-/// Deterministic 32-byte identity of the compiled consensus and block wire plus the IVM ABI.
+/// Deterministic 32-byte identity of the compiled block wire plus the IVM ABI.
 ///
 /// Pass the IVM ABI hash of the policy this binary executes
 /// (`ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`).
@@ -205,7 +210,7 @@ mod tests {
     use iroha_schema::{Declaration, NamedFieldsMeta};
 
     use super::*;
-    use crate::block::consensus_v2::{HeightContext, SumeragiV2Status};
+    use crate::{block::BlockHeader, sumeragi::SumeragiStatus};
 
     const ABI: [u8; 32] = [0xA1; 32];
 
@@ -240,9 +245,8 @@ mod tests {
     #[test]
     fn covered_schema_is_closed_over_consensus_and_block_wire() {
         let schema = covered_wire_schema();
-        assert!(schema.contains_key::<ConsensusMessageV2>());
         assert!(schema.contains_key::<SignedBlock>());
-        assert!(schema.contains_key::<HeightContext>());
+        assert!(schema.contains_key::<BlockHeader>());
         let registered: std::collections::BTreeSet<_> = schema.iter().map(|(id, _)| *id).collect();
         for (_, entry) in schema.iter() {
             for reference in references(&entry.metadata) {
@@ -316,8 +320,8 @@ mod tests {
         let baseline = covered_wire_schema();
         let expected = wire_schema_hash_of(&baseline, ABI);
 
-        let Some(Metadata::Struct(fields)) = baseline.get::<HeightContext>().cloned() else {
-            panic!("HeightContext is a named-field structure");
+        let Some(Metadata::Struct(fields)) = baseline.get::<BlockHeader>().cloned() else {
+            panic!("BlockHeader is a named-field structure");
         };
         let mut widened = baseline.clone();
         let mut declarations = fields.declarations.clone();
@@ -325,7 +329,7 @@ mod tests {
             name: "hypothetical_field".to_owned(),
             ty: core::any::TypeId::of::<u64>(),
         });
-        widened.insert::<HeightContext>(Metadata::Struct(NamedFieldsMeta { declarations }));
+        widened.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
             wire_schema_hash_of(&widened, ABI),
             expected,
@@ -335,7 +339,7 @@ mod tests {
         let mut renamed = baseline.clone();
         let mut declarations = fields.declarations.clone();
         declarations[0].name.push('_');
-        renamed.insert::<HeightContext>(Metadata::Struct(NamedFieldsMeta { declarations }));
+        renamed.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
             wire_schema_hash_of(&renamed, ABI),
             expected,
@@ -345,7 +349,7 @@ mod tests {
         let mut reordered = baseline.clone();
         let mut declarations = fields.declarations;
         declarations.swap(0, 1);
-        reordered.insert::<HeightContext>(Metadata::Struct(NamedFieldsMeta { declarations }));
+        reordered.insert::<BlockHeader>(Metadata::Struct(NamedFieldsMeta { declarations }));
         assert_ne!(
             wire_schema_hash_of(&reordered, ABI),
             expected,
@@ -353,7 +357,7 @@ mod tests {
         );
 
         let mut extended = baseline;
-        <SumeragiV2Status as IntoSchema>::update_schema_map(&mut extended);
+        <SumeragiStatus as IntoSchema>::update_schema_map(&mut extended);
         assert_ne!(
             wire_schema_hash_of(&extended, ABI),
             expected,

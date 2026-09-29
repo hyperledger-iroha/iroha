@@ -1,24 +1,24 @@
 //! Full-width conversion of a BLAKE2b-256 result into the Iroha hash encoding.
 //!
 //! Iroha preserves the first 32 digest bytes except for byte 31's least
-//! significant bit, which is set to one. With little-endian BLAKE2b words this
+//! significant bit, which is set to one. With little-endian `BLAKE2b` words this
 //! is bit 248, not bit zero. Every other bit remains bound to its hash output.
 //! The 255 remaining variable bits must be accounted for in commitment security.
 //!
-//! The input words must come from a separately constrained BLAKE2b computation
+//! The input words must come from a separately constrained `BLAKE2b` computation
 //! initialized for a **32-byte** digest. Truncating BLAKE2b-512 is not equivalent.
 //! These relations enforce only output conversion, not initialization, message
 //! framing, compression, hash chaining or authorization. The upstream hash AIR
 //! must enforce activated Booleanity of every input bit and all eight final
 //! compression words. This module has no proof-admission call site yet.
 //!
-//! TODO: Link these output bits to the complete committed BLAKE2b schedule and
+//! TODO: Link these output bits to the complete committed `BLAKE2b` schedule and
 //! every SMT leaf, sibling, internal-node and public-root relation before
 //! replacing replay. Do not substitute a scalar projection of this digest.
 
 use super::{arx64_air::BitWord64, transfer_integer_air::IntegerAirField};
 
-/// Number of 64-bit words returned by BLAKE2b configured for a 32-byte digest.
+/// Number of 64-bit words returned by `BLAKE2b` configured for a 32-byte digest.
 pub const DIGEST_WORDS: usize = 4;
 /// Exact number of output bits, including the fixed Iroha marker.
 pub const DIGEST_BITS: usize = DIGEST_WORDS * 64;
@@ -39,7 +39,7 @@ pub struct IrohaHashOutput<F = u64> {
 impl IrohaHashOutput<u64> {
     /// Generate the marker conversion from the first four final hash words.
     ///
-    /// This constructor does not establish that the words came from BLAKE2b.
+    /// This constructor does not establish that the words came from `BLAKE2b`.
     #[must_use]
     pub fn from_blake2b_256_words(words: [u64; DIGEST_WORDS]) -> Self {
         let mut output = Self {
@@ -107,7 +107,8 @@ mod tests {
     fn bytes(output: &IrohaHashOutput) -> [u8; 32] {
         core::array::from_fn(|byte| {
             (0..8).fold(0_u8, |value, bit| {
-                value | ((output.words[byte / 8].bits[(byte % 8) * 8 + bit] as u8) << bit)
+                let cell = output.words[byte / 8].bits[(byte % 8) * 8 + bit];
+                value | (u8::try_from(cell).expect("bit cell") << bit)
             })
         })
     }

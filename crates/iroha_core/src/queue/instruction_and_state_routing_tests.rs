@@ -72,23 +72,6 @@ fn accepted_tx_with(
         None,
     )
 }
-fn accepted_queue_plan_tx_with(
-    account_id: AccountId,
-    key_pair: &KeyPair,
-    time_source: &TimeSource,
-    instructions: Vec<InstructionBox>,
-    metadata: Metadata,
-) -> AcceptedTransaction<'static> {
-    accepted_tx_with_attachments_and_intent(
-        account_id,
-        key_pair,
-        time_source,
-        instructions,
-        metadata,
-        None,
-        TransactionAdmissionIntent::QueuePlanSynced,
-    )
-}
 fn accepted_tx_with_attachments(
     account_id: AccountId,
     key_pair: &KeyPair,
@@ -230,9 +213,6 @@ struct NexusRoutingFixture {
     authority_id: AccountId,
     authority_keypair: KeyPair,
 }
-fn nexus_routing_fixture() -> NexusRoutingFixture {
-    nexus_routing_fixture_with_nexus(Nexus::default())
-}
 fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -251,7 +231,6 @@ fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
 }
 include!("gossip_routing_metadata_tests.rs");
 include!("gossip_route_validation_tests.rs");
-include!("drain_revalidation_tests.rs");
 #[test]
 fn route_for_gossip_with_state_falls_back_to_view_router_path() {
     struct ViewOnlyRouter {
@@ -540,80 +519,6 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
     );
 }
 #[test]
-fn resolve_routing_plan_rejects_stale_native_amx_participant_legs() {
-    let coordinator = RoutingDecision::default();
-    let participant_lane = LaneId::new(2);
-    let participant_dataspace = DataSpaceId::new(8);
-    let mismatched_dataspace = DataSpaceId::new(9);
-    let unknown_dataspace = DataSpaceId::new(77);
-    let unknown_lane = LaneId::new(99);
-    let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
-        (coordinator.lane_id, coordinator.dataspace_id),
-        (participant_lane, participant_dataspace),
-        (LaneId::new(3), mismatched_dataspace),
-    ]);
-    let stale_lane_plan = RoutingPlan::native_amx(
-        coordinator,
-        vec![RouteLeg::new(
-            RoutingDecision::new(unknown_lane, participant_dataspace),
-            RouteLegRole::Participant,
-        )],
-    );
-    let stale_lane_err = resolve_routing_plan_against_catalogs(
-        stale_lane_plan,
-        lane_catalog.as_ref(),
-        dataspace_catalog.as_ref(),
-    )
-    .expect_err("stale participant lane must be rejected");
-    assert_eq!(stale_lane_err.as_label(), "unknown_lane");
-    assert!(matches!(
-        stale_lane_err,
-        RoutingResolveError::UnknownLane { lane_id } if lane_id == unknown_lane
-    ));
-    let unknown_dataspace_plan = RoutingPlan::native_amx(
-        coordinator,
-        vec![RouteLeg::new(
-            RoutingDecision::new(participant_lane, unknown_dataspace),
-            RouteLegRole::Participant,
-        )],
-    );
-    let unknown_dataspace_err = resolve_routing_plan_against_catalogs(
-        unknown_dataspace_plan,
-        lane_catalog.as_ref(),
-        dataspace_catalog.as_ref(),
-    )
-    .expect_err("stale participant dataspace must be rejected");
-    assert_eq!(unknown_dataspace_err.as_label(), "unknown_dataspace");
-    assert!(matches!(
-        unknown_dataspace_err,
-        RoutingResolveError::UnknownDataspace { dataspace_id } if dataspace_id == unknown_dataspace
-    ));
-    let mismatch_plan = RoutingPlan::native_amx(
-        coordinator,
-        vec![RouteLeg::new(
-            RoutingDecision::new(participant_lane, mismatched_dataspace),
-            RouteLegRole::Participant,
-        )],
-    );
-    let mismatch_err = resolve_routing_plan_against_catalogs(
-        mismatch_plan,
-        lane_catalog.as_ref(),
-        dataspace_catalog.as_ref(),
-    )
-    .expect_err("stale participant lane/dataspace binding must be rejected");
-    assert_eq!(mismatch_err.as_label(), "lane_dataspace_mismatch");
-    assert!(matches!(
-        mismatch_err,
-        RoutingResolveError::LaneDataspaceMismatch {
-            lane_id,
-            lane_dataspace_id,
-            dataspace_id,
-        } if lane_id == participant_lane
-            && lane_dataspace_id == participant_dataspace
-            && dataspace_id == mismatched_dataspace
-    ));
-}
-#[test]
 fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
     struct ViewOnlyRouter {
         lane: LaneId,
@@ -670,58 +575,4 @@ fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
         .coordinator_route();
     assert_eq!(routing.lane_id, expected_lane);
     assert_eq!(routing.dataspace_id, expected_dataspace);
-}
-#[test]
-fn reconfiguration_ignores_state_free_future_lane_hint_for_pending_work() {
-    let state = state_with_future_created_autoscale_lane(7, 6);
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Queue::test(config_factory(), &time_source);
-    let tx = accepted_tx_by_someone(&time_source);
-    let hash = tx.hash_as_entrypoint();
-    queue
-        .push(tx, state.view())
-        .expect("initial live route should enqueue on active default lane");
-    assert_eq!(queue.active_len(), 1);
-    assert_eq!(
-        queue
-            .routing_plans
-            .get(&hash)
-            .expect("initial plan")
-            .coordinator_route(),
-        RoutingDecision::default()
-    );
-    let router: Arc<dyn LaneRouter> = Arc::new(FutureCreatedNoStateRouter);
-    let nexus = state.nexus_snapshot();
-    queue.revalidate_pending_transactions_with_state(
-        &router,
-        &state,
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-        true,
-    );
-    assert_eq!(queue.active_len(), 1);
-    assert_eq!(queue.queued_len(), 1);
-    assert!(queue.txs.get(&hash).is_some());
-    assert_eq!(
-        queue
-            .routing_plans
-            .get(&hash)
-            .map(|entry| entry.value().coordinator_route()),
-        Some(RoutingDecision::default())
-    );
-    assert_eq!(
-        queue
-            .routing_plans
-            .get(&hash)
-            .map(|entry| entry.coordinator_route()),
-        Some(RoutingDecision::default())
-    );
-    assert_eq!(
-        queue
-            .routing_plan_hint(&hash)
-            .map(|plan| plan.coordinator_route()),
-        Some(RoutingDecision::default()),
-        "replacement router hints must not rewrite the admitted queue plan"
-    );
-    assert!(!queue.accepted_work_validation_faulted());
 }

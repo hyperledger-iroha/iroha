@@ -137,12 +137,8 @@ fn sccp_genesis_height_context_is_frozen_only_for_a_genesis_that_initialized_scc
 
 #[test]
 fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
-    use crate::smartcontracts::isi::sccp::{
-        height::{SccpHeightInputsV1, sumeragi_epoch},
-        hook::observed,
-    };
+    use crate::smartcontracts::isi::sccp::{height::SccpHeightInputsV1, hook::observed};
     use crate::sumeragi::{
-        payload::{self, Assembly},
         startup::GENESIS_HEIGHT,
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
@@ -159,29 +155,36 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         block.commit();
     }
     let _ = observed::take();
-    let chain =
+    let mut chain =
         CertifiedTestChain::start(TestChainConfig::new(world, 10_000)).expect("the chain starts");
     let state = chain.state();
     let expected = |height: u64| {
         let view = state.view();
         let schedule = view.world().consensus_schedule();
-        let scheduled = schedule.get(height).expect("a scheduled height");
-        let (epoch, epoch_end_height) =
-            sumeragi_epoch(height, GENESIS_HEIGHT, scheduled.params.epoch_length_blocks)
-                .expect("a valid epoch length");
+        let scheduled = schedule.ready(height).expect("a scheduled height");
+        let epoch = scheduled.epoch.authorization.epoch;
+        let epoch_end_height = scheduled.epoch.authorization.last_height;
         let next_roster = (height == epoch_end_height).then(|| {
             schedule
-                .get(height + 1)
+                .ready(height + 1)
                 .expect("the next scheduled height")
+                .epoch
                 .committee
-                .clone()
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect()
         });
         SccpHeightInputsV1 {
             mode: ConsensusMode::Permissioned,
             height,
             epoch,
             epoch_end_height,
-            roster: scheduled.committee.clone(),
+            roster: scheduled
+                .epoch
+                .committee
+                .iter()
+                .map(|member| member.validator.clone())
+                .collect(),
             next_roster,
         }
     };
@@ -203,7 +206,7 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
     let scheduled = view
         .world()
         .consensus_schedule()
-        .get(GENESIS_HEIGHT + 1)
+        .ready(GENESIS_HEIGHT + 1)
         .cloned()
         .expect("the schedule covers the next height");
     drop(view);
@@ -217,50 +220,11 @@ fn sccp_hook_receives_scheduled_height_inputs_on_the_sumeragi_core_path() {
         ))],
         u64::try_from(block_time.as_millis()).expect("fixture time fits") - 1,
     );
-    let (_, time_source) = TimeSource::new_mock(block_time);
-    let accepted = AcceptedTransaction::accept_with_time_source(
-        transaction,
-        &chain.network_id(),
-        Duration::from_secs(1),
-        state.view().world().parameters().transaction(),
-        &iroha_config::parameters::actual::Crypto::default(),
-        &time_source,
-    )
-    .expect("the signed fixture transaction is accepted");
-    let router = crate::queue::Queue::from_config(
-        iroha_config::parameters::actual::Queue::default(),
-        tokio::sync::broadcast::channel(16).0,
-    );
-    let plan = router
-        .route_plan_with_state(&accepted, state)
-        .expect("the signed fixture transaction routes");
-    let block = payload::assemble(
-        state,
-        Assembly {
-            parent: &parent,
-            view: 0,
-            cadence,
-        },
-        &[(accepted, plan)],
-    )
-    .expect("the canonical nonempty block");
-    assert_eq!(block.network_entrypoint_count(), 1);
-    let topology = Topology::new(scheduled.committee.clone());
-    let executed = ValidBlock::validate_sumeragi_block(
-        block,
-        &topology,
-        chain.genesis_account(),
-        cadence,
-        ConsensusMode::Permissioned,
-        crate::sumeragi::lanes::merge::LaneStepInput::default(),
-        state,
-    )
-    .unpack(|_| {})
-    .unwrap_or_else(|(_, error)| panic!("the Sumeragi block executes: {error}"));
-    drop(executed);
+    let expected_next = expected(GENESIS_HEIGHT + 1);
+    chain.commit(vec![transaction]);
     assert_eq!(
         observed::take(),
-        vec![(GENESIS_HEIGHT + 1, Some(expected(GENESIS_HEIGHT + 1)))],
+        vec![(GENESIS_HEIGHT + 1, Some(expected_next))],
         "a Sumeragi-core block never reaches the hook without height inputs"
     );
 }
@@ -344,7 +308,7 @@ fn sccp_hook_receives_the_nodes_own_frozen_v2_genesis_context() {
         );
         let state = Box::new(state);
         let snapshot = state.nexus_snapshot();
-        state.install_lane_manifests(&Arc::new(
+        state.install_lane_manifests_for_testing(&Arc::new(
             crate::governance::manifest::LaneManifestRegistry::empty()
                 .rebind(&snapshot.lane_catalog, &snapshot.governance),
         ));

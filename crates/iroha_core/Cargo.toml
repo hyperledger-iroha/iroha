@@ -22,11 +22,6 @@ path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "pk2_bridge_finality_verify"
-path = "src/bin/pk2_bridge_finality_verify.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
@@ -100,7 +95,7 @@ sm-ffi-openssl = [
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []
 # Support lightweight telemetry, including diagnostics
-telemetry = ["ivm/telemetry"]
+telemetry = []
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable stable fixed-width Core kernels and primitives SIMD backends.
@@ -213,6 +208,7 @@ halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.
 halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
 snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
+iroha_zkp_poseidon = { workspace = true }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
 orchard = { git = "https://github.com/zcash/orchard.git", rev = "9d07047d32c4787e1b7964b4cf4fa0286c93824c", default-features = false, features = ["circuit", "multicore", "std"] }
 incrementalmerkletree = "=0.8.2"
@@ -248,6 +244,7 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+crossbeam-epoch = "=0.9.20"
 futures = { workspace = true, features = ["std", "async-await"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
 tokio = { workspace = true, features = ["test-util"] }
@@ -385,3 +382,12 @@ required-features = ["iroha-core-tests"]
 name = "iroha_core_group_05"
 path = "tests/grouped/group_05.rs"
 required-features = ["iroha-core-tests"]
+
+# Isolated allocator injection must not affect the grouped integration harnesses.
+[[test]]
+name = "world_original_shell"
+path = "tests/world_original_shell.rs"
+
+[[test]]
+name = "scalar_snapshot_allocation"
+path = "tests/scalar_snapshot_allocation.rs"

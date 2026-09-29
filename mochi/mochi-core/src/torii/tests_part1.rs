@@ -160,14 +160,14 @@ fn stream_endpoints_and_default_event_filters_match_torii_contract() {
             .block_stream_endpoint()
             .expect("block endpoint")
             .path(),
-        torii_uri::BLOCKS_STREAM
+        torii_routes::streaming::BLOCKS_WS.path()
     );
     assert_eq!(
         client
             .events_stream_endpoint()
             .expect("events endpoint")
             .path(),
-        torii_uri::SUBSCRIPTION
+        torii_routes::streaming::SUBSCRIPTION_WS.path()
     );
     let filters = canonical_event_filters();
     assert_eq!(filters.len(), 8);

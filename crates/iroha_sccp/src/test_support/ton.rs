@@ -163,7 +163,7 @@ impl CellArenaV1 {
                 data[index / 8] |= 0x80 >> (index % 8);
             }
         }
-        if bits.len() % 8 != 0 {
+        if !bits.len().is_multiple_of(8) {
             data[full] |= 0x80 >> (bits.len() % 8);
         }
         self.insert(TonBocCell {
@@ -860,13 +860,9 @@ impl SyntheticTonChainV1 {
         )
     }
 
-    fn transaction(
-        arena: &mut CellArenaV1,
-        minter: &[u8; 32],
-        lt: u64,
-        event: &SyntheticTonEventV1,
-        succeed: bool,
-    ) -> usize {
+    /// The external-out message body of `event`; a transfer's payload rides in a chain of
+    /// 127-byte cells referenced from the body.
+    fn event_body(arena: &mut CellArenaV1, event: &SyntheticTonEventV1) -> usize {
         let mut body = BitsV1::new();
         let mut body_refs = Vec::new();
         match event {
@@ -903,7 +899,17 @@ impl SyntheticTonChainV1 {
                     .uint(u128::from(*count), 16);
             }
         }
-        let body = arena.cell(&body, &body_refs);
+        arena.cell(&body, &body_refs)
+    }
+
+    fn transaction(
+        arena: &mut CellArenaV1,
+        minter: &[u8; 32],
+        lt: u64,
+        event: &SyntheticTonEventV1,
+        succeed: bool,
+    ) -> usize {
+        let body = Self::event_body(arena, event);
         let mut message = BitsV1::new();
         message
             .uint(0b11, 2)
@@ -1005,11 +1011,11 @@ impl SyntheticTonChainV1 {
         previous: &TonBlockIdExtV1,
         master_ref: &TonBlockIdExtV1,
         minter: &[u8; 32],
-        event: Option<(u64, SyntheticTonEventV1, bool)>,
+        event: Option<&(u64, SyntheticTonEventV1, bool)>,
     ) -> SyntheticShardBlockV1 {
         let mut arena = CellArenaV1::new();
         let mut transaction_boc = None;
-        let account_blocks = match &event {
+        let account_blocks = match event {
             None => Self::empty_account_blocks(&mut arena),
             Some((lt, event, succeed)) => {
                 let transaction = Self::transaction(&mut arena, minter, *lt, event, *succeed);

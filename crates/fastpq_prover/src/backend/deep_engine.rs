@@ -72,7 +72,7 @@ impl VerifiedDeepProof {
 
 /// Check caller ceilings against fixed geometry before decoding or private proving.
 ///
-/// `proof_bytes` may be MAX_FRAME_BYTES for conservative producer preflight.
+/// `proof_bytes` may be `MAX_FRAME_BYTES` for conservative producer preflight.
 /// Transition count belongs to the enclosing prepared public bundle and remains
 /// checked there before constructing a segment; it cannot be read from proof bytes.
 /// AIR rows have 301 retained values, quotient chunks have two Fp4 values, and
@@ -191,9 +191,12 @@ fn verify_decoded(
         .map_err(binding_error)?;
     let lambda = fields(&mut transcript, 1)?[0];
     let mut betas = [F::ZERO; 5];
-    for (round, beta) in betas.iter_mut().enumerate() {
+    for (round, beta) in (0_u8..).zip(betas.iter_mut()) {
         transcript
-            .commit_root(Oracle::Fri(round as u8), proof.fri_roots[round].as_fastpq())
+            .commit_root(
+                Oracle::Fri(round),
+                proof.fri_roots[usize::from(round)].as_fastpq(),
+            )
             .map_err(binding_error)?;
         *beta = fields(&mut transcript, 1)?[0];
     }
@@ -283,7 +286,10 @@ fn authenticate(
     )?;
     let mut leaves = rows.len() + pairs.len();
     for (round, opening) in proof.rounds.iter().enumerate() {
-        let oracle = Oracle::Fri(round as u8);
+        // Preflight admits exactly five rounds, so the ordinal always fits.
+        let oracle = Oracle::Fri(
+            u8::try_from(round).map_err(|_| shape("DEEP FRI round ordinal exceeds u8"))?,
+        );
         let groups = opening
             .groups
             .iter()
@@ -341,8 +347,12 @@ fn verify_tree(
         leaves,
         &siblings,
         |level, index, left, right| {
+            let level =
+                u32::try_from(level).map_err(|_| shape("DEEP Merkle parent level exceeds u32"))?;
+            let index =
+                u32::try_from(index).map_err(|_| shape("DEEP Merkle parent index exceeds u32"))?;
             binding
-                .hash_parent(oracle, level as u32, index as u32, left, right)
+                .hash_parent(oracle, level, index, left, right)
                 .map_err(binding_error)
         },
     )?;
@@ -389,9 +399,11 @@ fn check_chains(
             let next_len = FRI_LENGTHS[round + 1];
             let group_index = index % next_len;
             let coordinate = index / next_len;
+            let group_key = u32::try_from(group_index)
+                .map_err(|_| shape("DEEP FRI group index exceeds u32"))?;
             let position = proof.rounds[round]
                 .groups
-                .binary_search_by_key(&(group_index as u32), |group| group.index)
+                .binary_search_by_key(&group_key, |group| group.index)
                 .map_err(|_| shape("DEEP authenticated FRI fiber is missing"))?;
             let group = &proof.rounds[round].groups[position];
             if group.values[coordinate] != value {
@@ -425,6 +437,10 @@ fn check_terminal_degree(domain: super::FriDomain, terminal: &[F]) -> Result<()>
     Ok(())
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "point-free `Result::map_err` adapter, which always hands the error over by value"
+)]
 fn binding_error(error: BindingError) -> Error {
     Error::InvalidTraceShape {
         details: format!("DEEP binding: {error}"),

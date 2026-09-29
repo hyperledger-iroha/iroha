@@ -1,21 +1,14 @@
-"""Collect exact native finality/query vectors from the stopped original peer.
+"""Collect exact native carrier/query vectors from the stopped original peer.
 
-This owner invokes only the current native CLI collector. Native code owns Norito,
-cryptography, complete-store scheduling and leaf reconciliation. The mandatory
-runtime callback binds the original peer3 clean stop, exact stopped tip and peer0
-liveness; this component alone never proves those lifecycle facts or a release.
-Keep original ReadinessInputs and NativeOutputs open through later facts/replay.
-
-TODO: retain the original complete Native context-witness archive and forward its
-path, raw SHA-256 and byte reservation to collect-scaling-inputs. The canonical
-collector requires that archive; genesis-only contexts and finality proofs cannot
-replace it. The fixed trial cannot qualify collection until this producer joins
-the stopped-peer input owner.
+The pinned Kagami offline collector owns canonical Norito, native certificates,
+original archived context verification and complete actual input/output proofs.
+The mandatory runtime callback binds original peer3 clean stop, exact stopped tip
+and peer0 liveness. Keep original ReadinessInputs and NativeOutputs open through
+facts/replay; collection alone does not establish useful work or release readiness.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -32,9 +25,9 @@ from scaling_readiness_inputs import ReadinessInputs
 
 _MIB = 1024 * 1024
 _HEX = re.compile(r'[0-9a-f]{64}')
-_FIELDS = frozenset(('version', 'operation', 'invocation_id', 'client_config_sha256',
-    'committed_height', 'finality_count', 'query_count', 'context_sha256', 'context_bytes',
-    'finality_sha256', 'finality_bytes', 'queries_sha256', 'queries_bytes'))
+_FIELDS = frozenset(('version', 'operation', 'invocation_id', 'genesis_sha256', 'genesis_bytes',
+    'committed_height', 'carrier_count', 'query_count', 'context_sha256', 'context_bytes',
+    'carrier_sha256', 'carrier_bytes', 'queries_sha256', 'queries_bytes'))
 
 
 class VectorCollectionError(ValueError):
@@ -64,13 +57,13 @@ def _digest(value):
 
 @dataclass(frozen=True, slots=True)
 class CollectionLimits:
-    """Independent query/context/client allocations, admitted before dispatch.
+    """Independent query/context/genesis allocations, admitted before dispatch.
 
     The canonical StoppedReader carries stopped-store geometry and reader caps.
-    NativeOutputs carries the independently admitted finality/query file caps.
-    total_max_bytes reserves original client + context + both output file caps.
+    NativeOutputs carries the independently admitted carrier/query file caps.
+    total_max_bytes reserves original genesis + context + both output file caps.
     """
-    client_config_max_bytes: int
+    signed_genesis_max_bytes: int
     context_max_bytes: int
     total_max_bytes: int
     reply_max_bytes: int
@@ -82,8 +75,8 @@ class CollectionLimits:
 def _limits(value):
     _require(type(value) is CollectionLimits)
     result = tuple(getattr(value, key) for key in value.__dataclass_fields__)
-    client, context, total, reply, leaves, carrier_leaves, decode = result
-    _integer(client, 1, _MIB)
+    genesis, context, total, reply, leaves, carrier_leaves, decode = result
+    _integer(genesis, 1, 32 * _MIB)
     _integer(context, 1, 8 * _MIB)
     _integer(total, 1, 256 * _MIB)
     _integer(reply, 1, 4096)
@@ -124,15 +117,16 @@ class VectorCollectionReceipt:
     """Public native result; the original owners retain all input/output FDs."""
     invocation_id: str
     process: ProcessIdentity
-    cli_sha256: str
+    kagami_sha256: str
     anchors_sha256: str
-    client_config_sha256: str
+    genesis_sha256: str
+    genesis_bytes: int
     context_sha256: str
     context_bytes: int
     stopped_height: int
-    finality_count: int
+    carrier_count: int
     query_count: int
-    finality: RetainedOutput
+    carrier: RetainedOutput
     queries: RetainedOutput
 
 
@@ -152,10 +146,10 @@ class NativeVectorCollection:
             # cannot retarget native commands or increase these original reservations.
             self._store, self._merge, self._reader_args = _reader_snapshot(stopped)
             self._limits = _limits(limits)
-            first, last, blocks, data, carrier, merge_bytes, frames, input_bytes, value_decode, uid = self._reader_args
-            _require(first == 1 and uid == os.geteuid())
+            first, last, blocks, data, carrier_limit, merge_bytes, frames, input_bytes, value_decode, uid = self._reader_args
+            _require(first == 1 and last >= 2 and uid == os.geteuid())
             _integer(data, 1, 2 * 1024 * _MIB)
-            _integer(carrier, 1, 32 * _MIB)
+            _integer(carrier_limit, 1, 32 * _MIB)
             _integer(merge_bytes, 1, 256 * _MIB)
             _integer(frames, 1, blocks)
             _integer(input_bytes, 1, 256 * _MIB)
@@ -166,8 +160,8 @@ class NativeVectorCollection:
             self._guard = verify_original_runtime
             self._image_binding = (image.path, image.fd, image.identity, image.sha256, image.uuids)
             self._input_binding = self._snapshot_inputs()
-            self._output_binding = (outputs.directory, outputs.path('finality'), outputs.path('queries'),
-                                    outputs.allocation('finality'), outputs.allocation('queries'))
+            self._output_binding = (outputs.directory, outputs.path('carrier'), outputs.path('queries'),
+                                    outputs.allocation('carrier'), outputs.allocation('queries'))
             _require(self._store == str(inputs.roles[3].primary_block_store)
                      and self._merge == str(inputs.roles[3].primary_merge_log))
             _require(outputs.directory != inputs.input_directory
@@ -176,12 +170,11 @@ class NativeVectorCollection:
             _require(image.path != outputs.directory and outputs.directory not in image.path.parents)
             artifacts = {item.path: item for item in inputs.generation.artifacts}
             context = artifacts['genesis-context.nrt']
-            client = artifacts[inputs.roles[0].client_config.name]
-            _require(client.sha256 == inputs.roles[0].client_config_sha256)
+            genesis = artifacts['genesis.signed.nrt']
             self._context = (inputs.input_directory / context.path, _digest(context.sha256),
                              _integer(context.bytes, 1, self._limits[1]))
-            self._client = (inputs.roles[0].client_config, _digest(client.sha256),
-                            _integer(client.bytes, 1, self._limits[0]), inputs.client_fd(0))
+            self._genesis = (inputs.input_directory / genesis.path, _digest(genesis.sha256),
+                            _integer(genesis.bytes, 1, self._limits[0]))
             _require(self._limits[0] + self._limits[1] + sum(self._output_binding[3:]) <= self._limits[2])
             self._phase, self._receipt = 'admitted', None
             self._commands = BoundedCommand(image, reader, trial_deadline_ns, self._verify)
@@ -192,9 +185,10 @@ class NativeVectorCollection:
         inputs = self._inputs
         inputs.validate()
         return (inputs.input_directory, inputs.anchors_sha256, inputs.genesis_hash,
-                inputs.context_id, inputs.network_id,
+                inputs.genesis_epoch_context_id, inputs.network_id,
                 tuple(tuple(getattr(role, field) for field in role.__dataclass_fields__) for role in inputs.roles),
-                tuple((item.path, item.sha256, item.bytes) for item in inputs.generation.artifacts))
+                tuple((item.path, item.sha256, item.bytes) for item in inputs.generation.artifacts),
+                inputs.generation.chain_id)
 
     def _check(self):
         _require(self._phase in ('collecting', 'collected') and self._end == self._original_end
@@ -205,10 +199,8 @@ class NativeVectorCollection:
         image.validate()
         _require(self._snapshot_inputs() == self._input_binding)
         self._outputs.validate()
-        _require((self._outputs.directory, self._outputs.path('finality'), self._outputs.path('queries'),
-                  self._outputs.allocation('finality'), self._outputs.allocation('queries')) == self._output_binding)
-        _require(self._inputs.client_fd(0) == self._client[3]
-                 and fcntl.fcntl(self._client[3], fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+        _require((self._outputs.directory, self._outputs.path('carrier'), self._outputs.path('queries'),
+                  self._outputs.allocation('carrier'), self._outputs.allocation('queries')) == self._output_binding)
 
     def _verify(self):
         self._check()
@@ -216,24 +208,26 @@ class NativeVectorCollection:
         self._check()
 
     def _argv(self, invocation):
-        _, last, blocks, data, carrier, merge_bytes, frames, input_bytes, value_decode, _ = self._reader_args
-        client_cap, context_cap, total, reply, leaves, carrier_leaves, decode = self._limits
+        first, last, blocks, data, carrier_limit, merge_bytes, frames, input_bytes, value_decode, uid = self._reader_args
+        genesis_cap, context_cap, total, reply, leaves, carrier_leaves, _ = self._limits
         context, context_sha, _ = self._context
-        client, client_sha, _, fd = self._client
-        _, finality, queries, finality_cap, queries_cap = self._output_binding
-        fields = (('invocation-id', invocation), ('network-id', self._input_binding[4]),
-            ('client-config-sha256', client_sha), ('client-config-max-bytes', client_cap),
-            ('deadline-monotonic-ns', self._original_end), ('block-store', self._store), ('merge-log', self._merge),
+        genesis, genesis_sha, _ = self._genesis
+        _, carrier, queries, carrier_cap, queries_cap = self._output_binding
+        fields = (('invocation-id', invocation), ('chain-id', self._input_binding[7]),
+            ('network-id', self._input_binding[4]), ('genesis-epoch-context-id', self._input_binding[3]),
+            ('signed-genesis', genesis), ('signed-genesis-sha256', genesis_sha),
+            ('signed-genesis-max-bytes', genesis_cap), ('block-store', self._store), ('merge-log', self._merge),
             ('context', context), ('context-sha256', context_sha), ('context-max-bytes', context_cap),
-            ('finality-out', finality), ('queries-out', queries), ('finality-max-bytes', finality_cap),
+            ('carrier-out', carrier), ('queries-out', queries), ('carrier-max-bytes', carrier_cap),
             ('queries-max-bytes', queries_cap), ('total-max-bytes', total), ('reply-max-bytes', reply),
-            ('last-height', last), ('max-committed-blocks', blocks), ('max-store-data-bytes', data),
-            ('max-carrier-bytes', carrier), ('max-merge-log-bytes', merge_bytes), ('max-merge-frames', frames),
-            ('max-input-bytes', input_bytes), ('max-total-leaves', leaves),
-            ('max-leaves-per-carrier', carrier_leaves), ('max-decode-bytes', decode),
-            ('max-value-decode-bytes', value_decode))
-        return (str(self._image_binding[0]), '--machine', '--config-fd', str(fd),
-            '--config-source-path', str(client), '--output-format', 'json', 'tx', 'collect-scaling-inputs',
+            ('first-height', first), ('last-height', last), ('max-committed-blocks', blocks),
+            ('max-store-data-bytes', data), ('max-carrier-bytes', carrier_limit),
+            ('max-merge-log-bytes', merge_bytes), ('max-merge-frames', frames),
+            ('reader-max-output-bytes', input_bytes), ('max-total-leaves', leaves),
+            ('max-leaves-per-carrier', carrier_leaves), ('max-decode-allocation-bytes', value_decode),
+            ('owner-uid', uid))
+        return (str(self._image_binding[0]), '--ui-mode', 'plain', 'advanced', 'kura',
+            'scaling-evidence', 'collect',
             *(part for flag, value in fields for part in ('--' + flag, str(value))))
 
     def run(self) -> VectorCollectionReceipt:
@@ -246,27 +240,28 @@ class NativeVectorCollection:
             _require(invocation != '0' * 64)
             argv = self._argv(invocation)
             self._outputs.begin('collection')
-            result = self._commands.run('vector-collection', argv, (self._client[3],), self._limits[3])
+            result = self._commands.run('vector-collection', argv, (), self._limits[3])
             self._verify()
             value = _reply(result.stdout, self._limits[3])
             _require(type(value['version']) is int and value['version'] == 1
-                     and value['operation'] == 'collect_scaling_inputs' and value['invocation_id'] == invocation
-                     and value['client_config_sha256'] == self._client[1]
+                     and value['operation'] == 'collect_native_inputs' and value['invocation_id'] == invocation
+                     and value['genesis_sha256'] == self._genesis[1]
+                     and type(value['genesis_bytes']) is int and value['genesis_bytes'] == self._genesis[2]
                      and value['context_sha256'] == self._context[1]
                      and type(value['context_bytes']) is int and value['context_bytes'] == self._context[2])
             last = self._reader_args[1]
             _require(type(value['committed_height']) is int and value['committed_height'] == last
-                     and type(value['finality_count']) is int and value['finality_count'] == last)
+                     and type(value['carrier_count']) is int and value['carrier_count'] == last)
             query_count = _integer(value['query_count'], 0, self._limits[4])
             replies = tuple(PublishedIdentity(role, _digest(value[role + '_sha256']),
                 _integer(value[role + '_bytes'], 1, self._output_binding[3 + index]))
-                for index, role in enumerate(('finality', 'queries')))
+                for index, role in enumerate(('carrier', 'queries')))
             self._verify()
-            finality, queries = self._outputs.complete(replies)
+            carrier, queries = self._outputs.complete(replies)
             self._verify()
             receipt = VectorCollectionReceipt(invocation, result.process, self._image_binding[3],
-                self._input_binding[1], self._client[1], self._context[1], self._context[2], last,
-                last, query_count, finality, queries)
+                self._input_binding[1], self._genesis[1], self._genesis[2], self._context[1], self._context[2], last,
+                last, query_count, carrier, queries)
             self._receipt, self._phase = receipt, 'collected'
             return receipt
         except BaseException as error:
@@ -278,7 +273,7 @@ class NativeVectorCollection:
         try:
             _require(self._phase == 'collected' and self._receipt is not None)
             self._verify()
-            _require(self._outputs.artifact('finality') == self._receipt.finality
+            _require(self._outputs.artifact('carrier') == self._receipt.carrier
                      and self._outputs.artifact('queries') == self._receipt.queries)
         except BaseException as error:
             self._phase = 'failed'

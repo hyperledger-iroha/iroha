@@ -11,7 +11,10 @@ use crate::{
         transfer,
     },
 };
-use iroha_data_model::{asset::id::AssetDefinitionId, fastpq::TransferTranscript};
+use iroha_data_model::{
+    asset::id::AssetDefinitionId,
+    fastpq::{TransferSmtWitness, TransferTranscript},
+};
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
@@ -38,8 +41,8 @@ fn delta(sender: Quantity, receiver: Quantity, amount: Quantity) -> TransferDelt
         from_balance_after: d.from_balance_after,
         to_balance_before: d.to_balance_before,
         to_balance_after: d.to_balance_after,
-        from_smt_witness: Default::default(),
-        to_smt_witness: Default::default(),
+        from_smt_witness: TransferSmtWitness::default(),
+        to_smt_witness: TransferSmtWitness::default(),
     }
 }
 
@@ -160,7 +163,7 @@ fn pending_borrows_original_and_drop_preserves_empty_state() {
         let pending = validator
             .prepare(&d, digest(std::slice::from_ref(&d)))
             .unwrap();
-        assert!(std::ptr::eq(pending.delta(), &d));
+        assert!(std::ptr::eq(pending.delta(), &raw const d));
         assert_eq!(pending.count(), 1);
         assert_eq!(pending.unique_keys(), 2);
     }

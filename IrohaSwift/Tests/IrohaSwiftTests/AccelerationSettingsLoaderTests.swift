@@ -2,15 +2,14 @@ import XCTest
 @testable import IrohaSwift
 
 final class AccelerationSettingsLoaderTests: XCTestCase {
-    func testLoadsSettingsFromEnvironmentPath() throws {
+    func testLoadsSettingsFromExplicitFile() throws {
         let url = try makeTemporaryConfig("""
         {"accel":{"enable_metal":false,"max_gpus":2}}
         """)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let settings = AccelerationSettingsLoader.load(
-            environmentKey: "CUSTOM_ACCEL",
-            environment: ["CUSTOM_ACCEL": url.path],
+        let settings = try AccelerationSettingsLoader.load(
+            configurationURL: url,
             bundle: nil
         )
 
@@ -18,32 +17,38 @@ final class AccelerationSettingsLoaderTests: XCTestCase {
         XCTAssertEqual(settings.maxGPUs, 2)
     }
 
-    func testLoadsSettingsFromEnvironmentFileURL() throws {
+    func testExplicitFileKeepsLiteralZeroLimits() throws {
         let url = try makeTemporaryConfig("""
-        {"accel":{"enable_metal":true,"merkle_min_leaves_metal":512}}
+        {"accel":{"enable_metal":true,"merkle_min_leaves_metal":0,"resource_limits":{"device_bytes":0}}}
         """)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let settings = AccelerationSettingsLoader.load(
-            environmentKey: "CUSTOM_ACCEL",
-            environment: ["CUSTOM_ACCEL": url.absoluteString],
+        let settings = try AccelerationSettingsLoader.load(
+            configurationURL: url,
             bundle: nil
         )
 
         XCTAssertTrue(settings.enableMetal)
-        XCTAssertEqual(settings.merkleMinLeavesMetal, 512)
+        XCTAssertEqual(settings.merkleMinLeavesMetal, 0)
+        XCTAssertEqual(settings.resourceLimits.deviceBytes, 0)
     }
 
-    func testLoadsBundleResourceWhenEnvironmentIsEmpty() {
-        let settings = AccelerationSettingsLoader.load(environment: [:], bundle: Bundle.module)
+    func testLoadsBundleResourceWhenNoExplicitFile() throws {
+        let settings = try AccelerationSettingsLoader.load(bundle: Bundle.module)
         XCTAssertFalse(settings.enableMetal)
         XCTAssertEqual(settings.merkleMinLeavesGPU, 128)
     }
 
-    func testDefaultsWhenNoConfigFound() {
-        let settings = AccelerationSettingsLoader.load(environment: [:], bundle: nil)
+    func testDefaultsWhenNoConfigFound() throws {
+        let settings = try AccelerationSettingsLoader.load(bundle: nil)
         XCTAssertTrue(settings.enableMetal)
         XCTAssertNil(settings.merkleMinLeavesGPU)
+    }
+
+    func testInvalidSelectedFileCannotFallBackToEnabledDefaults() throws {
+        let url = try makeTemporaryConfig(#"{"accel":{"resource_limits":{"device_bytes":-1}}}"#)
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertThrowsError(try AccelerationSettingsLoader.load(configurationURL: url, bundle: Bundle.module))
     }
 
     private func makeTemporaryConfig(_ contents: String) throws -> URL {

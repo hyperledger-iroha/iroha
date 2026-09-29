@@ -21,7 +21,11 @@ fn keccak_parity_cuda_vs_scalar() {
 #[cfg(feature = "cuda")]
 #[test]
 fn aes_parity_cuda_vs_cpu_round() {
-    // AES CUDA helpers currently forward to CPU implementation; parity should hold regardless of device.
+    if !ivm::cuda_available() {
+        eprintln!("CUDA unavailable; skipping native AES parity test");
+        return;
+    }
+    let before = ivm::cuda_completed_dispatches();
     let state = [
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
         0xff,
@@ -36,4 +40,8 @@ fn aes_parity_cuda_vs_cpu_round() {
     let cpu_dec = ivm::aesdec(cpu_enc, rk);
     let cuda_dec = ivm::aesdec_cuda(cuda_enc, rk).expect("aesdec_cuda should return Some");
     assert_eq!(cpu_dec, cuda_dec, "AESDEC parity");
+    assert!(
+        ivm::cuda_completed_dispatches() > before,
+        "native parity requires a completed CUDA dispatch"
+    );
 }

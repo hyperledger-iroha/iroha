@@ -1194,6 +1194,30 @@ impl ProviderAdvertCache {
             .get(provider_id)
             .and_then(|fp| self.records.get(fp))
     }
+    /// Return an advert only while its retained council admission and signed payload are valid.
+    ///
+    /// A cache hit alone is insufficient after expiry or an admission-record replacement. The
+    /// caller must still bind this advert to its own network, finalized State provider and exact
+    /// transport origin before using it for a provider-specific operation.
+    #[must_use]
+    pub fn admitted_record_by_provider(
+        &self,
+        provider_id: &[u8; 32],
+        now_unix_seconds: u64,
+    ) -> Option<&AdvertRecord> {
+        if self.replay_checkpoint_poisoned {
+            return None;
+        }
+        let record = self.record_by_provider(provider_id)?;
+        let advert = record.advert();
+        let admission = self.admission.entry(provider_id)?;
+        (admission.is_council_verified()
+            && advert.signature_strict
+            && advert.validate_with_body(now_unix_seconds).is_ok()
+            && verify_signature(advert).is_ok()
+            && verify_advert_against_envelope(advert, &admission).is_ok())
+        .then_some(record)
+    }
     /// Iterate over all stored adverts.
     pub fn records(&self) -> impl Iterator<Item = &AdvertRecord> {
         self.records.values()

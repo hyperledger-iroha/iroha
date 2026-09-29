@@ -55,6 +55,46 @@ pub(crate) use startup_recovery::{StartupRecoveryPublisher, channel as startup_r
 pub use errors::TryReadError;
 use errors::TryWriteError;
 
+#[cfg(test)]
+mod state_snapshot_decode_error_tests {
+    use super::*;
+    use crate::state::deserialize::StateRestoreError;
+
+    #[test]
+    fn snapshot_reader_preserves_local_resource_errors_and_format_errors() {
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::Serialization(json::Error::InvalidUtf8)),
+            TryReadError::Serialization(json::Error::InvalidUtf8)
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::VmInitialization(
+                ivm::VMError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                )
+            )),
+            TryReadError::StateVmInitialization(_)
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::Admission(
+                crate::state::StateAdmissionError::History(
+                    crate::state::BlockHashAdmissionError::Capacity(
+                        mv::allocation::AllocationRefusal::DemandOverflow
+                    )
+                )
+            )),
+            TryReadError::StateAdmission(crate::state::StateAdmissionError::History(_))
+        ));
+        assert!(matches!(
+            TryReadError::from(StateRestoreError::ExecutionDeferred(
+                crate::execution_attempt::ExecutionDeferred::from(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable
+                )
+            )),
+            TryReadError::StateExecutionDeferred(_)
+        ));
+    }
+}
+
 /// A finite snapshot observation failed before it acquired immutable bytes.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SnapshotCaptureError {
@@ -82,15 +122,6 @@ impl SnapshotCaptureError {
     /// Whether the caller should reacquire its observation rather than reject input.
     pub(crate) fn is_observation_changed(&self) -> bool {
         matches!(self, Self::Busy | Self::Changed)
-    }
-}
-impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
-    fn from(error: SnapshotCaptureError) -> Self {
-        if error.is_observation_changed() {
-            Self::ExecutionObservationChanged
-        } else {
-            Self::ExecutionStatePublication(error.to_string())
-        }
     }
 }
 impl From<SnapshotCaptureError> for crate::state::storage_transactions::TransactionsBlockError {
@@ -305,10 +336,6 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
-    out.push(',');
-    json::write_json_string("lane_consensus_contexts", out);
-    out.push(':');
-    json::JsonSerialize::json_serialize(&state.lane_consensus_contexts, out);
     out.push('}');
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
@@ -384,10 +411,6 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
-    out.push(',');
-    json::write_json_string("lane_consensus_contexts", out);
-    out.push(':');
-    json::JsonSerialize::json_serialize(&state.lane_consensus_contexts, out);
     out.push('}');
 }
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
@@ -1732,21 +1755,6 @@ impl BoundSnapshotGeneration {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SnapshotPayloadAuthority {
-    NormallySigned,
-    ExactAuditedDigestBypass,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SnapshotBootstrapLineageAuthorityKind {
-    ExactAuditedBoundary,
-    NormallySignedCarriedLineage,
-}
-/// Non-forgeable proof that the snapshot reader authenticated the outer payload.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SnapshotBootstrapLineageAuthority {
-    kind: SnapshotBootstrapLineageAuthorityKind,
-}
 impl SnapshotBootstrapLineageAuthority {
     fn exact_audited_boundary() -> Self {
         Self {
@@ -1765,16 +1773,6 @@ impl SnapshotBootstrapLineageAuthority {
     pub(crate) fn permits_carried_lineage(self) -> bool {
         self.kind == SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage
     }
-}
-/// Authenticated snapshot bootstrap record and the exact signed block-hash vector.
-///
-/// Fields and construction stay private to this module so raw decoded snapshot
-/// bytes cannot authorize provisional Kura mutation.
-#[derive(Clone, Debug)]
-pub(crate) struct AuthenticatedSnapshotBootstrapPayload {
-    record: SnapshotV2BootstrapRecord,
-    block_hashes: Vec<HashOf<BlockHeader>>,
-    authority: SnapshotBootstrapLineageAuthority,
 }
 impl AuthenticatedSnapshotBootstrapPayload {
     fn new(
@@ -2790,6 +2788,7 @@ fn validate_snapshot_wsv_checkpoint(
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle<F>(
+    execution_budget: &AllocationBudget,
     generation: &BoundSnapshotGeneration,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -2890,6 +2889,7 @@ where
         )?;
         let seed = KuraSeed {
             operation_index_budget: operation_index_budget.clone(),
+            execution_budget: execution_budget.clone(),
             kura: Arc::clone(kura),
             lane_manifests: Arc::clone(lane_manifests),
             query_handle: live_query_store.clone(),
@@ -2974,6 +2974,7 @@ where
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     let seed = KuraSeed {
         operation_index_budget: operation_index_budget.clone(),
+        execution_budget: execution_budget.clone(),
         kura: Arc::clone(kura),
         lane_manifests: Arc::clone(lane_manifests),
         query_handle: live_query_store.clone(),
@@ -3112,6 +3113,9 @@ where
 ///
 /// # Errors
 ///
+/// The execution pool is the startup owner later retained by State; snapshot
+/// read-buffer custody remains separately admitted.
+///
 /// Returns all ordinary snapshot read errors, plus
 /// [`TryReadError::ZkConfigInstall`] when the decoded committed confidential-policy transitions
 /// are incompatible with the actual configured limits.
@@ -3119,6 +3123,7 @@ where
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn try_read_snapshot(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3135,6 +3140,7 @@ pub fn try_read_snapshot(
 ) -> Result<Box<State>, TryReadError> {
     let bootstrap_policy = SnapshotBootstrapPolicy::default();
     try_read_snapshot_with_bootstrap_policy(
+        execution_budget,
         store_dir,
         kura,
         lane_manifests,
@@ -3155,6 +3161,8 @@ pub fn try_read_snapshot(
     )
 }
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
+/// The caller supplies the original execution pool before State exists; restore
+/// and its subsequent runtime caches retain that exact owner.
 ///
 /// The policy is fail-closed: a bootstrap envelope or signature bypass is accepted only when the
 /// payload's exact SHA-256 digest and terminal height match the configured authorization.
@@ -3162,6 +3170,7 @@ pub fn try_read_snapshot(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn try_read_snapshot_with_bootstrap_policy(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3180,6 +3189,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
+        execution_budget,
         store_dir,
         kura,
         lane_manifests,
@@ -3207,6 +3217,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
 fn try_read_snapshot_with_initializer<F>(
+    execution_budget: &AllocationBudget,
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
@@ -3253,6 +3264,7 @@ where
         };
         let live_query_store = live_query_store_lazy();
         let outcome = try_read_snapshot_bundle(
+            execution_budget,
             &generation,
             kura,
             lane_manifests,
@@ -3505,6 +3517,11 @@ fn snapshot_generation_is_canonical_for_gc(
         Err(TryReadError::PayloadAllocatorFailure { requested_bytes }) => {
             Err(TryWriteError::PayloadAllocatorFailure { requested_bytes })
         }
+        Err(
+            error @ (TryReadError::StateVmInitialization(_)
+            | TryReadError::StateAdmission(_)
+            | TryReadError::StateExecutionDeferred(_)),
+        ) => Err(TryWriteError::RestartValidation(error)),
         Err(_) => Ok(false),
     }
 }
@@ -4427,6 +4444,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     let seed = KuraSeed {
         operation_index_budget: state.world.operation_index_budget().clone(),
+        execution_budget: state.ivm_execution_budget(),
         kura: state.kura_handle(),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: state.query_handle.clone(),
@@ -4941,121 +4959,7 @@ fn geometry_checkpoint_from_snapshot(
         smart_contract_state,
     })
 }
-type SnapshotLaneGeometryProjection = (
-    iroha_config::parameters::actual::LaneConfig,
-    BTreeMap<LaneId, Hash>,
-    BTreeMap<LaneId, u64>,
-    Hash,
-);
 
-// Both reads belong to one decoded immutable snapshot Cell. None is the MV
-// encoding of an unchanged last block, so its actual H-1 value is current.
-// A changed last block must use its retained undo, never a later State view.
-fn snapshot_lane_geometry_images(
-    runtime: &Cell<SnapshotNexusRuntime>,
-    height: u64,
-    network_id: &NetworkId,
-) -> Result<
-    (
-        SnapshotLaneGeometryProjection,
-        Option<SnapshotLaneGeometryProjection>,
-    ),
-    TryWriteError,
-> {
-    let current = runtime.view();
-    let predecessor = runtime.predecessor_view();
-    let recovery = if height == 0 {
-        None
-    } else {
-        Some(snapshot_lane_geometry_projection(
-            predecessor
-                .get()
-                .as_ref()
-                .unwrap_or_else(|| current.get())
-                .clone(),
-            height - 1,
-            network_id,
-        )?)
-    };
-    Ok((
-        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
-        recovery,
-    ))
-}
-
-#[cfg(test)]
-mod geometry_projection_tests;
-
-// Project each actual MV image independently; restart validation already checks
-// policy and sample-history coherence before this snapshot can become durable.
-fn snapshot_lane_geometry_projection(
-    runtime: SnapshotNexusRuntime,
-    height: u64,
-    network_id: &NetworkId,
-) -> Result<SnapshotLaneGeometryProjection, TryWriteError> {
-    if runtime.version != SnapshotNexusRuntime::VERSION
-        || runtime.autoscale_last_transition_height > height
-        || runtime
-            .autoscale_sample_history
-            .last()
-            .is_some_and(|sample| sample.block_height > height)
-    {
-        return Err(TryWriteError::Serialization(json::Error::Message(
-            "snapshot Nexus runtime version or height cannot prove lane geometry".to_owned(),
-        )));
-    }
-    let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
-        TryWriteError::Serialization(json::Error::Message(
-            "snapshot Nexus lane count is zero".to_owned(),
-        ))
-    })?;
-    let lane_catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| {
-        TryWriteError::Serialization(json::Error::Message(format!(
-            "snapshot Nexus lane catalog is invalid: {error}"
-        )))
-    })?;
-    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-    let mut lineage = BTreeMap::new();
-    let mut latest_hashes = BTreeSet::new();
-    for entry in runtime.lane_incarnation_lineage {
-        let lineage_entry = LaneIncarnationLineage {
-            generation: entry.generation,
-            incarnation: entry.incarnation,
-            activation_height: entry.activation_height,
-        };
-        if lineage_entry
-            .incarnation
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-            || lineage_entry.activation_height > height
-            || !latest_hashes.insert(lineage_entry.incarnation)
-            || lineage.insert(entry.lane_id, lineage_entry).is_some()
-        {
-            return Err(TryWriteError::Serialization(json::Error::Message(
-                "snapshot Nexus runtime contains invalid lane incarnation lineage".to_owned(),
-            )));
-        }
-    }
-    let mut incarnations = BTreeMap::new();
-    let mut activation_heights = BTreeMap::new();
-    for lane in lane_catalog.lanes() {
-        let entry = lineage.get(&lane.id).ok_or_else(|| {
-            TryWriteError::Serialization(json::Error::Message(format!(
-                "snapshot Nexus runtime is missing active lane {} lineage",
-                lane.id
-            )))
-        })?;
-        incarnations.insert(lane.id, entry.incarnation);
-        activation_heights.insert(lane.id, entry.activation_height);
-    }
-    Ok((
-        lane_config,
-        incarnations,
-        activation_heights,
-        lane_incarnation_lineage_root(network_id, &lineage),
-    ))
-}
 fn required_snapshot_object_field<'a>(
     object: &'a str,
     field: &str,

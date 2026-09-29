@@ -16,6 +16,9 @@ mod consensus_threshold;
 mod envelope;
 #[cfg(unix)]
 mod journal;
+#[cfg(unix)]
+mod musubi_attestation;
+mod musubi_subject;
 mod protocol;
 #[cfg(unix)]
 mod runtime_adapters;
@@ -60,6 +63,8 @@ pub use envelope::{
 };
 #[cfg(unix)]
 pub use journal::SoftwareSignerJournalErrorV1;
+#[cfg(unix)]
+pub use musubi_attestation::ExternalSoftwareSignerMusubiProviderAttestationAdapterV1;
 pub use protocol::{
     ExternalSignerBackendV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1, SignerKeyAlgorithmV1,
     SignerPurposeBindingV1, SignerRoleV1, SignerValueParseErrorV1, SoftwareSignerLiveProvenanceV1,

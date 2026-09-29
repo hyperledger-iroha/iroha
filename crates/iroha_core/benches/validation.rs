@@ -58,6 +58,9 @@ fn build_test_and_transient_state() -> State {
     let query_handle = LiveQueryStore::start_test();
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
     let state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
             let account = Account::new(account_id.clone()).build(&account_id);
@@ -70,9 +73,17 @@ fn build_test_and_transient_state() -> State {
     )
     .expect("benchmark State startup must validate");
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
+    state
+        .install_materialized_lane_manifests_for_catalog(
+            &Arc::new(LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                &nexus.registry,
+            )),
+            &nexus.lane_catalog,
+            &nexus.governance,
+        )
+        .expect("benchmark lane manifest source must be materialized");
     {
         let network_id = *state.network_id_ref();
         let transaction = TransactionBuilder::new(
@@ -102,7 +113,9 @@ fn build_test_and_transient_state() -> State {
         .sign(key_pair.private_key())
         .unpack(|_| {});
         let signed_block = Arc::new(SignedBlock::from(unverified_block.clone()));
-        let mut state_block = state.block(unverified_block.header());
+        let mut state_block = state
+            .try_block(unverified_block.header())
+            .expect("benchmark persisted runtime ABI must validate");
         let mut state_transaction = state_block.transaction();
         let path_to_executor =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
@@ -238,11 +251,14 @@ fn validate_transaction(criterion: &mut Criterion) {
     let mut success_count = 0;
     let mut failure_count = 0;
     let mut ivm_cache = IvmCache::new();
-    let mut state_block = state.block(unverified_block.header());
+    let mut state_block = state
+        .try_block(unverified_block.header())
+        .expect("benchmark persisted runtime ABI must validate");
     let _ = criterion.bench_function("validate", |b| {
         b.iter(|| {
             match state_block
                 .validate_transaction(transaction.clone(), &mut ivm_cache)
+                .expect("local execution completes")
                 .1
             {
                 Ok(_) => success_count += 1,
@@ -290,6 +306,9 @@ fn sign_blocks(criterion: &mut Criterion) {
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let state = State::try_new(
+        crate::state::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         World::new(),
         kura,
         query_handle,

@@ -22,24 +22,21 @@ use iroha_sccp::v1::{
     signature::{address_of, verify_signature},
 };
 
-/// Return the current epoch of `height` from the Sumeragi core's schedule, whose epochs are
-/// fixed-length runs after the genesis height (`specs/sumeragi.md` §11.7).
+/// Return the authenticated scheduling epoch of `height`; pending successor slots provide
+/// no bridge-key authority before their incumbent boundary is certified.
 #[must_use]
 pub fn current_epoch(world: &(impl WorldReadOnly + ?Sized), height: u64) -> Option<u64> {
-    let config = world.consensus_schedule().get(height)?;
-    super::height::sumeragi_epoch(height, 1, config.params.epoch_length_blocks)
-        .ok()
-        .map(|(epoch, _)| epoch)
+    let config = world.consensus_schedule().ready(height).ok()?;
+    Some(config.epoch.authorization.epoch)
 }
 
 /// Return the epoch of the first height of the Sumeragi core's committed schedule window, the
 /// deterministic "current epoch" of fee decisions made without a block height.
 #[must_use]
 pub fn schedule_epoch(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
-    let first = world.consensus_schedule().entries().first()?;
-    super::height::sumeragi_epoch(first.height, 1, first.params.epoch_length_blocks)
-        .ok()
-        .map(|(epoch, _)| epoch)
+    let schedule = world.consensus_schedule();
+    let first = schedule.entries().first()?;
+    current_epoch(world, first.height())
 }
 
 /// Return whether a key registration is fee-exempt (§4.2.3): it comes from the new key's own

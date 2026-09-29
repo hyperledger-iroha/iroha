@@ -1,0 +1,786 @@
+{
+  "schema": "iroha.native_protocol.retired_assertions.v1",
+  "purpose": "review inventory only; not executable fixtures, compatibility format or release qualification",
+  "original_grouped_fixture_sha256": "5d63214b6261f6c0d358114429464f6ccedca864c78f85b478d24f1ede34ad64",
+  "negative_controls": [
+    {
+      "retired_control": "missing_previous_native_settlement_hash",
+      "original_control_sha256": "5a10fb56c000cbb8082c5e32f54cab94aff593be5c8a93787981e125913dbc79",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "manifest_missing_previous_native_settlement_hash",
+      "original_control_sha256": "fe2ee5270a923e34efd14a33318899d15d83434691fa3b805df773bd52857455",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "flattened_phase",
+      "original_control_sha256": "a14337e630d2298d6c5f5301f39835c89b53fb8482981dafa433cbed4195c7ce",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "wrong_prepare_phase",
+      "original_control_sha256": "3ceb21a7b3ddfc9fdefc4ff620ff03b876487cefea889f236bed976e1d550772",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "source_entrypoint_drift",
+      "original_control_sha256": "31b9821bdad41804b3fd79ce59d5285f667c3f35571d80cc8a1d366afa68e9f6",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "round_context_drift",
+      "original_control_sha256": "bc444856889feedcda6d693f6baf33eb478b3e4079d9626ac5062bf846bb922b",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "unordered_validator_set",
+      "original_control_sha256": "a08ff3f0562df572c128f7fa03297836ac941bbe5c38ad420fd2d8edd801c68a",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_unordered_validator_set",
+      "original_control_sha256": "1e4c1c8303ac8a422cea900322704971f4141811f4ae2f1d024560ebc1e5b21a",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "under_quorum_bitmap",
+      "original_control_sha256": "dcc6a40fe44e13c0486f5e262b96919e167b24eb497e5ac77a5cb2b2f7544e0d",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "over_quorum_bitmap",
+      "original_control_sha256": "094c7535263aabd939a5034c3981806babbcb398b8a6a6e646fe52e426468b32",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "out_of_range_bitmap",
+      "original_control_sha256": "e5109f9ad74e3e1568758a12c02609532df8226ebeb8f22b21973b6287483a9d",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "short_pop",
+      "original_control_sha256": "f61ff492886d368b0901cbad1e2b68fb9be908b3ba7ce3fa77cad194adf88615",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "zero_pop",
+      "original_control_sha256": "0d4456f3e6e60c530b6beffa3d358651d7cf54d8da39584e24a474ffca9ec54c",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "long_pop",
+      "original_control_sha256": "7b711bd847b54e68bb3eec563cc129b9f051607e0356c118c8ca7ab2043ec61c",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "short_aggregate_signature",
+      "original_control_sha256": "24ee34fc31d9bb3108771181f2a523df1c8defc43e9362734ae3eb67a2ab9318",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "zero_aggregate_signature",
+      "original_control_sha256": "644d5d15be0c149e2e953e59d9a8775994bfd1eae8e2eb956df21d831ef3399b",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "long_aggregate_signature",
+      "original_control_sha256": "dff6d2c7f8241c7ac06b45240b58784ec580d83611513855dc88205ffb1a5a1e",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "duplicate_participant_leg",
+      "original_control_sha256": "dffa4f84abf0e252f1d151ca430874c5242d1b0b618cac40f466f34bdfa9f56e",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "empty_participant_legs",
+      "original_control_sha256": "734278d39b368c96d1a5d5cbfa32d16f8811b9530a75f47d29981a112a30fac0",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "participant_leg_overflow",
+      "original_control_sha256": "5517eee1382659e2d79f46ed829923c93727154bcc62a63f516469e8a8a6542b",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "duplicate_group_source",
+      "original_control_sha256": "55010b238391835adb6974a6c2e764de5523bbe831eb38f57e3c9617608cf69d",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "missing_current_source",
+      "original_control_sha256": "276d72355e81ad25229740b980f1c8de4ebd7590c9bbba0a51af5ecf14e3b7cc",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "group_tx_count_mismatch",
+      "original_control_sha256": "6ce0a1d2c7e7e52d4a740097f8aa04a7c4466766b6a08b2ad28de7cdad55dced",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "group_source_overflow",
+      "original_control_sha256": "880ae043d3d8ef214d935603d6747dd61c1d04d915b6874f79e97d8f50589156",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "participant_timestamp_drift",
+      "original_control_sha256": "09cfe38961372f140fca3ca959a2efb83fa805dd050b7a86a54e0465681f7935",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "nonzero_participant_effect",
+      "original_control_sha256": "3302e0af8521ce76205f20767366325d884423fed4cbecd3a180c33ec79480cd",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "nested_native_receipt",
+      "original_control_sha256": "ac368e5a21667ace73cc9eed46703355c5667c086c2294fe236735e21b4cd89b",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "nested_fee_receipt",
+      "original_control_sha256": "60c13a0e1e5a933b224023fff2d9853dde1d16c2c1c7735ebae2dd11db01c7e3",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "predecessor_hash_missing",
+      "original_control_sha256": "f764eb95964d56239df00872be0b6d442473e2befa81e88979f662125669cf90",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "receipt_source_duplicate",
+      "original_control_sha256": "c6f3f2f39431476b8eb300df5722ee1119d5facbd0e6557d591c85e1f537f512",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "outer_group_source_reorder",
+      "original_control_sha256": "98425f7a6fd1c891f079fd276d319218a448baa9c2761a7622368be149afb02a",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "outer_group_source_substitution",
+      "original_control_sha256": "a1f0ca2d70227b09b0c65b8ae2f1acee9be31e273b34ab07982e57d74d99fb29",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "unsupported_receipt_version",
+      "original_control_sha256": "c0d0674170b6d08aa972368c8256e472ba675abd66c3c6529cb6a099f4ff5104",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "lowercase_source_id",
+      "original_control_sha256": "06b3499dc98d18b51e583d1fbddca5be448e93ca1a9194650fce2ac073ecec7e",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "source_id_substituted_for_entrypoint_hash",
+      "original_control_sha256": "212725d64c5a3e032621b52eae3c200cc06b3a805d724fd9c3a2a8bf30c36c2d",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "entrypoint_hash_substituted_for_source_id",
+      "original_control_sha256": "b70d3e73bcc7a71fa3fd5dd888ecd5f43a7d4e678d935e0757c2973ec36064c0",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "wrong_entrypoint_hash_checksum",
+      "original_control_sha256": "abff6c10462d7079e0a7959392551f9fa12a2b15b59c7d98fa3385c62f92225c",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "wrong_entrypoint_hash_marker",
+      "original_control_sha256": "9873fc7d76961309012bbc439b4a4986b643390d523a276ffab977527579de33",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "stale_same_route_incarnation",
+      "original_control_sha256": "a61385248d5ba6b7da83a45be2b3c9f7600fff7ba7c870b2df98ed1c05e5bae1",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "same_route_coordinator_view_drift",
+      "original_control_sha256": "031d5df113846456ad3084fcfae028bf7deeaace1f23aafd80f63491bd27e543",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "same_route_mixed_role_deferral",
+      "original_control_sha256": "73a82fa93a208c8ef6babe47bd884c96cf57fc69d0c6a00ade5790e8b18be89e",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "execution_commitment_merge_carrier_wrong_version",
+      "original_control_sha256": "4cfbefc287eaa6176dcf4f2a15b7b60f79864ce82d62e167cc2ad40d496dc447",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "execution_commitment_missing_merge_carrier_field",
+      "original_control_sha256": "127660fbd8f87e682679e6b70b051e83e674858e23d4baf388b44575854d131c",
+      "retired_assertion_scope": "obsolete grouped DTO/layout codec",
+      "disposition": "retired with the type",
+      "active_obligation": null,
+      "replacement_evidence": "not applicable to removed wire schema",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "stale_participant_application_incarnation",
+      "original_control_sha256": "ebf5c7f8241a75f0abe25a65b8f7768fab6f5dd915826f4eede002665b79dddc",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "same_route_participant_application_marker",
+      "original_control_sha256": "e18407d2adb1bd72bee1b5ffc71dcae27b5523aa58fad04a2361d580c330514e",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "unanchored_mixed_role_participant",
+      "original_control_sha256": "2e82826a741c4b0167482456d5f2dc2bd7377a4f4172f98b7528bcb5b1d2227f",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "bounded exact participants, FIFO sources, effects, current incarnation and replay protection",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "manifest_root_tampering",
+      "original_control_sha256": "08680a41154ea9011e669093c3beb2e13aae25218ff6b17efd34f451f578f0d6",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "manifest_leaf_hash_tampering",
+      "original_control_sha256": "9ee7e03f58cb00bb5c659790efce14f31fb58d01642e313897866c3d5cb601c8",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "manifest_proof_path_tampering",
+      "original_control_sha256": "10301fae5eec216cbe55fdb25206f788739497cf4bb4e9a27f76cd0ed1443534",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "manifest_proof_position_tampering",
+      "original_control_sha256": "9d4898ea19999d7399ccfb406f054b208039b260e366c782dc2a61029e2871f1",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "application_block_substitution",
+      "original_control_sha256": "dbd5da60ef33b804c458432e9ba92a18aea40a640213b99e850926bcf9519b6c",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_forged_validator_set_hash",
+      "original_control_sha256": "cc56e0b9492aed0efe9be85ba7b19cb641cc38f01564cfab92fef1f6626f1aea",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_stale_descriptor_hash",
+      "original_control_sha256": "cbf902380ebeb5d5308cce02a44988cdfef2b7d27aef87da7a834687bba114bf",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_stale_proposal_hash",
+      "original_control_sha256": "4e1f938055546e2993eb1d82e9c64ea0d5f5d74782971af82a7167b2cc136f86",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_stale_settlement_hash",
+      "original_control_sha256": "48e8b2fd205f338df05eb268f33548e9fea658a46e49f4131ea673b41c0391ae",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "original executed subject, source, inclusion and resulting state binding",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "non_canonical_validator_peer_id",
+      "original_control_sha256": "b8d61491b40ab31ddbb95e483106cfe0f9d9a6a0148ea72e876ce5886d210860",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_duplicate_validator_set",
+      "original_control_sha256": "0ab7e0f6f4408e4bd7ab90c62430825075c6b98f40021b8efb381a12966ca8f1",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    },
+    {
+      "retired_control": "coherent_over_quorum_requirement",
+      "original_control_sha256": "70546ab72d4df2553b78e51559af8d68f45f98719fad27bba1e74f10a4ab9780",
+      "retired_assertion_scope": "obsolete grouped fixture structural consistency; never actual application execution",
+      "disposition": "active security obligation remains",
+      "active_obligation": "exact authorized committee, ordering, possession proof and exact quorum",
+      "replacement_evidence": "native lane entry/reader controls cover same-World admission only; actual cross-dataspace S6 equivalent remains required",
+      "s6_complete": false
+    }
+  ],
+  "retired_suites": [
+    {
+      "path": "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxRoundTests.swift",
+      "original_sha256": "512ea746710a3003ffcf4af3b43355c7a422f87837b8be4256e9c4cb3eb113ac",
+      "retired_test_names": [
+        "testLaneRoundRetainsExactContextIdentityAndUnsignedView"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+      "original_sha256": "cbae05edd59a03390bff34f26365041a30bff041d2bc1c720b734e7647706cd2",
+      "retired_test_names": [
+        "testRustOwnedGroupedNativeAmxV2ApplicationEvidenceNegativeCorpus",
+        "testParticipantSettlementUsesExactSevenFieldFifoFrame",
+        "testParticipantSettlementRejectsRetiredFieldsAndInvalidMembership",
+        "testRustOwnedGroupedNativeAmxV2GoldenFixture",
+        "testParticipantSettlementUsesExactNonrecursiveFields",
+        "testParticipantProposalRequiresExplicitNullPayloadHint",
+        "testParticipantSettlementRejectsNestedNativeAmxReceipts",
+        "testRustOwnedGroupedNativeAmxV2EndpointSeparation",
+        "testRustOwnedGroupedNativeAmxV2NegativeCorpus"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
+      "original_sha256": "aa1b6301f1e6dcd76b5a1434aa16a5c014e11834df6db02e0030f89a4784dad1",
+      "retired_test_names": [
+        "testExecutionCommitmentCarriesExactLaneFinalityAndMergeOptions",
+        "testDataAvailabilityRejectsRetiredEncodingTagAndZeroShards",
+        "testRustCanonicalMessageFixturesRoundtrip",
+        "testCertifiedBodyResponseCarriesThePeerIDResponderPayload",
+        "testRustMergeCarrierFixturePinsCurrentV4Shape",
+        "testRustPopulatedTransactionCommitmentFixturePinsCurrentV4Shape",
+        "testCommitReproposalsRequireTheirVoteAndCertificateRound",
+        "testStatusValidatorsRejectAnOlderCommitProposalRound",
+        "testPrepareVotesAndCertificatesRejectSplitRounds",
+        "testCommitCertificateSigningPreimagesMatchRustExactly",
+        "testNativeStatusRejectsRetiredOutboundIntentProjection",
+        "testExecutionCommitmentRejectsNoncanonicalKagemushaTopUpProjection",
+        "testExecutionCommitmentRejectsNoncanonicalNativeAmxManifestProjection",
+        "testMalformedAndSemanticallyNoncanonicalFixturesFailClosed",
+        "testCommitCertificateBindingCorruptionsFailAgainstExactRequest"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+      "original_sha256": "cc46469aa7dcef6c74d90ea6c966f04880d10338d232a4e2b7dc3dcfbf308740",
+      "retired_test_names": [
+        "initial_context_binds_the_complete_genesis_authorization",
+        "canonical_body_chunks_cover_the_complete_rs16_stripe",
+        "staged_output_directory_is_explicit",
+        "duplicate_and_incomplete_options_are_rejected"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "crates/iroha_data_model/src/block/native_amx_settlement_tests.rs",
+      "original_sha256": "b65a5ac9dbc93a9c3b63ef4f5b165a99105018856bb0c4f75282718f70c9600c",
+      "retired_test_names": [
+        "native_amx_grouped_receipt_structure_matches_rust_owned_fixture",
+        "native_amx_qc_constructor_rejects_misaligned_validator_material",
+        "native_amx_attestation_json_requires_predecessor_slot",
+        "native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment",
+        "native_amx_qc_json_decode_rejects_misaligned_validator_material",
+        "native_amx_participant_settlement_has_nonrecursive_schema_and_bounded_default_stack_codec",
+        "native_amx_participant_settlement_binary_and_json_decode_enforce_constructor",
+        "native_amx_participant_settlement_rejects_removed_fields_and_missing_authority",
+        "native_amx_participant_settlement_rejects_unlinked_six_field_binary_shape",
+        "native_amx_participant_settlement_hash_binds_exact_type_domain_and_source_order",
+        "native_amx_participant_settlement_matches_independent_sdk_array_vectors",
+        "native_amx_participant_settlement_hash_authenticates_sparse_native_history",
+        "native_amx_receipt_negative_corpus_fails_closed",
+        "native_amx_application_evidence_negative_corpus_fails_closed",
+        "native_amx_application_evidence_rejects_coherently_wrong_manifest_count",
+        "native_amx_grouped_receipts_reject_duplicate_bounds_and_same_route_drift",
+        "native_amx_grouped_receipts_accept_fifo_order_and_route_local_participant_groups",
+        "native_amx_grouped_receipts_reject_cross_context_height_drift",
+        "native_amx_mixed_role_marker_defers_only_separate_participant_anchor",
+        "native_amx_grouped_receipts_reject_qc_and_group_membership_drift",
+        "native_amx_receipts_change_lane_block_commitment_hash_inputs",
+        "native_amx_participant_settlement_declares_canonical_schema_identity",
+        "native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence",
+        "native_amx_v2_leg_rejects_removed_recursive_settlement_layout",
+        "native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups",
+        "native_amx_v2_attestation_preimage_binds_round_and_epoch"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "crates/iroha_data_model/tests/sumeragi_v2_cross_sdk_fixtures.rs",
+      "original_sha256": "224239449fa2ee9f9e2080f45cca8d5fc93aa87020c788c23de3959331847419",
+      "retired_test_names": [
+        "shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
+        "shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/NativeAmxV2GroupedFixtureTests.java",
+      "original_sha256": "8dad7d80dcbeb779e8330629462de2f6c9c7ab240663d76e51fb7633e2ab2f53",
+      "retired_test_names": [
+        "participantSettlementPreservesFifoAndHasNoRetiredShape",
+        "rustOwnedGroupedGoldenIsConsumable",
+        "participantProposalRequiresExplicitNullPayloadHint",
+        "rustOwnedNegativeCorpusIsConsumable",
+        "mixedRoleParticipantExposesDeferredAnchorValidation",
+        "javaParserPreservesCompleteNativeUnsigned64Tokens",
+        "javaParserRejectsInvalidNativeUnsigned64Tokens"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModelsTests.java",
+      "original_sha256": "ac479c81676776ffc83b2d74137808c0261dc76c4792a3cb49a8c76c43ee22e5",
+      "retired_test_names": [
+        "autonomousExecutionStagesAndConflictAreExact",
+        "autonomousReservationsRequireProvisionalIdentityAndExactGeometry",
+        "stateNamesMirrorTheToriiContract",
+        "vectorEnforcesBoundAndCanonicalOrder",
+        "rowEnforcesCarrierStateGeometryAndGroupBound",
+        "rowAcceptsFullUnsigned64DomainAndOrdersDataspacesExactly",
+        "rowRejectsValuesOutsideUnsigned64Domain",
+        "completeDiagnosticsModelMirrorsRequiredVectorsAndBounds",
+        "completeDiagnosticsModelValidatesNativeAmxSettlementAndRelayEvidence",
+        "completeDiagnosticsModelRejectsMalformedNativeAmxSettlementAndRelayEvidence"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsParsingTests.java",
+      "original_sha256": "39666e4aec07efe99ddab83a06ad160660790133941d59c4d30bba9a0d29a658",
+      "retired_test_names": [
+        "parserPreservesTypedNativeAndAutonomousRowsAndFullU64Values",
+        "parserRejectsMalformedUtf8UnknownMissingAndNoncanonicalIntegers",
+        "nposDiagnosticsAcceptOnlyTheFirstReleaseBeaconContext",
+        "parserDeepFreezesEveryAllowedOpaqueDiagnosticsValue",
+        "parserAcceptsOnlyStrictCurrentNativeAmxV2ReceiptGroups"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTests.java",
+      "original_sha256": "5d20f52e9d290a59065edb86d28e0efb3b89631309196a67ef5b8a908d7b54b0",
+      "retired_test_names": [
+        "executionCommitmentsCarryExactMandatoryLaneFinalityAndMergeCarrierOptions",
+        "dataAvailabilityRejectsRetiredEncodingTagAndZeroShards",
+        "rustCanonicalMessageFixturesRoundtrip",
+        "certifiedBodyResponseCarriesThePeerIdResponderPayload",
+        "rustMergeCarrierFixturePinsCurrentV4Shape",
+        "rustTransactionTreeFixturePinsPopulatedV4Commitments",
+        "commitReproposalsRequireTheirVoteAndCertificateRound",
+        "statusValidatorsRejectAnOlderCommitProposalRound",
+        "prepareVotesAndCertificatesRejectSplitRounds",
+        "timeoutVoteCarriesTheCompletePrepareCertificate",
+        "commitCertificateSigningPreimagesMatchRustExactly",
+        "executionCommitmentsEnforceCanonicalKagemushaTopUpBindings",
+        "executionCommitmentsRejectNonCanonicalNativeAmxManifestBindings",
+        "protocolV4RejectsEveryRetiredVersionWithoutCompatibilityAliases",
+        "malformedAndSemanticallyNoncanonicalFixturesFailClosed",
+        "commitCertificateBindingCorruptionsFailAgainstExactRequest"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/NativeAmxV2GroupedFixtureTest.kt",
+      "original_sha256": "8e7a98ce2b5f667f2edf41cdfbffa22438b229610cf5916ed55a098f05f802a0",
+      "retired_test_names": [
+        "`participant settlement uses the exact seven field FIFO frame`",
+        "`participant settlement rejects retired shape zero authority and invalid membership`",
+        "`Rust-owned grouped golden is consumable`",
+        "`participant settlement rejects recursive receipts even when empty`",
+        "`participant proposal requires an explicit null payload hint`",
+        "`Rust-owned negative corpus is consumable`",
+        "`mixed-role participant exposes deferred anchor validation`",
+        "`Native u64 fields preserve the complete numeric token domain`",
+        "`Native u64 fields reject non-integer strings and out-of-range tokens`",
+        "`Native predecessor arithmetic fails closed at u64 max`",
+        "`receipt group requires canonical swap metadata and bounded quantities`"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModelsTest.kt",
+      "original_sha256": "dddcd7ccf4e10ae3eba5a97d350263696520396f17f442c069b205b6a1d9e56a",
+      "retired_test_names": [
+        "`diagnostics own nested JSON and all caller supplied vectors`",
+        "`NPoS seed ownership survives input and returned collection mutations`",
+        "`diagnostics reject oversized vectors before traversing caller contents`",
+        "`diagnostics reject Java supplied null elements even in singleton vectors`",
+        "`diagnostics byte parser rejects malformed UTF-8 instead of replacing it`",
+        "`native participant application uses exact diagnostics JSON names`",
+        "`native participant vector enforces bounds and canonical order`",
+        "`native participant row enforces carrier state geometry and group bound`",
+        "`native participant diagnostics preserve complete u64 numeric tokens`",
+        "`native participant diagnostics reject non-integer strings and out-of-range tokens`",
+        "`native participant diagnostics order full-width dataspaces exactly`",
+        "`native participant diagnostics reject u64 overflow and predecessor wraparound`",
+        "`autonomous execution preserves stages optional carrier and explicit conflict`",
+        "`autonomous reservations require provisional identity and exact geometry`",
+        "`complete diagnostics parser preserves every required first release vector`",
+        "`complete diagnostics parser validates Native AMX settlement and relay evidence`",
+        "`complete diagnostics parser rejects malformed Native AMX settlement and relay evidence`",
+        "`complete diagnostics parser rejects unknown and missing fields`",
+        "`NPoS diagnostics accept only the first release beacon context`",
+        "`complete diagnostics parser enforces queue bounds and canonical vector order`"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
+      "original_sha256": "475a3f8c405d6883df650f995685c2556468ac6c2fb45a26455af409e10b25b1",
+      "retired_test_names": [
+        "`execution commitments carry exact mandatory lane finality and merge carrier options`",
+        "`execution commitments carry exact mandatory transaction tree options`",
+        "`data availability rejects retired encoding tag and zero shards`",
+        "`rust canonical message fixtures roundtrip`",
+        "`certified body response carries the peer id responder payload`",
+        "`Rust merge carrier fixture pins the current v4 shape`",
+        "`Rust transaction tree fixture pins populated v4 commitments`",
+        "`commit reproposals require their vote and certificate round`",
+        "`status validators reject an older commit proposal round`",
+        "`prepare votes and certificates reject split rounds`",
+        "`timeout vote carries the complete prepare certificate`",
+        "`commit certificate signing preimages match rust exactly`",
+        "`execution commitments enforce canonical KAGEMUSHA top-up bindings`",
+        "`execution commitments reject noncanonical Native AMX manifest bindings`",
+        "`malformed and semantically noncanonical fixtures fail closed`",
+        "`commit certificate binding corruptions fail against exact request`"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    },
+    {
+      "path": "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
+      "original_sha256": "d0266a68ebff5d9b201fe28e8c0e981dab4d56b734c054cf255e4c56d0062c0d",
+      "retired_test_names": [
+        "test_grouped_native_amx_v2_fixture_matches_current_openapi",
+        "test_native_amx_openapi_expresses_direct_group_bounds",
+        "test_sumeragi_status_and_diagnostics_openapi_surfaces_are_disjoint",
+        "test_grouped_native_amx_v2_negative_control_contract_is_bounded",
+        "test_receipt_group_negative_controls_fail_closed_semantically",
+        "test_receipt_group_dynamic_relationship_checks_are_bounded",
+        "test_application_evidence_negative_controls_fail_closed"
+      ],
+      "disposition": "removed with inactive protocol schema/endpoint; not counted as passing active release tests"
+    }
+  ],
+  "actual_s6_obligations": [
+    "exact real XOR asset and quantities under signed monetary plans",
+    "all authenticated participants and original source inclusion",
+    "atomic economic application or rejection across dataspaces",
+    "no participant-only credit and no duplicate global credit",
+    "fee legs/reserves and custody effects match executed signed plan",
+    "replay, incarnation replacement, recovery and authenticated pruning retain these guarantees"
+  ]
+}

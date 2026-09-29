@@ -22,17 +22,17 @@ def test_rehashed_equal_content_cannot_replace_original_artifact_path(
     shutil.copytree(source, root)
     first = root / 'runs/pair-01/one_lane/run_receipt.json'
     receipt = json.loads(first.read_bytes())
-    original = next(row for row in receipt['artifacts'] if row['role'] == 'native_finality')
+    original = next(row for row in receipt['artifacts'] if row['role'] == 'native_carrier')
     if substitution == 'other_role':
         other = next(row for row in receipt['artifacts'] if row['role'] == 'native_queries')
         put(root / other['path'], (root / original['path']).read_bytes())
     else:
         second = json.loads((root / 'runs/pair-02/one_lane/run_receipt.json').read_bytes())
-        other = next(row for row in second['artifacts'] if row['role'] == 'native_finality')
+        other = next(row for row in second['artifacts'] if row['role'] == 'native_carrier')
     expected = refresh_public_hashes(root)
     assert archive.inspect_archive(root, plan, budget, expected).inventory.sha256 == expected.inventory_sha256
     receipt = json.loads(first.read_bytes())
-    original = next(row for row in receipt['artifacts'] if row['role'] == 'native_finality')
+    original = next(row for row in receipt['artifacts'] if row['role'] == 'native_carrier')
     if substitution == 'other_role':
         other = next(row for row in receipt['artifacts'] if row['role'] == 'native_queries')
     assert original['path'] != other['path']

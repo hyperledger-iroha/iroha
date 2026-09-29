@@ -343,18 +343,13 @@ pub fn merge_candidates<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CoreHost, ProgramMetadata, encoding, host::IVMHost};
+    use crate::{CoreHost, host::IVMHost};
     use std::collections::BTreeMap;
 
     fn vm(gas: u64) -> IVM {
-        let mut code = crate::kotodama::compiler::Compiler::new().compile_source(
+        let code = crate::kotodama::compiler::Compiler::new().compile_source(
             "seiyaku Scan { state StateMap<string, int> orders; state StateMap<string, int> other; view fn main() { () } }",
         ).expect("compile scan contract");
-        let offset = ProgramMetadata::parse(&code).unwrap().code_offset;
-        code[offset..offset + 4].copy_from_slice(
-            &encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_SCAN).to_le_bytes(),
-        );
-        code[offset + 4..offset + 8].copy_from_slice(&encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(gas);
         vm.load_program(&code).expect("load scan contract");
         vm
@@ -536,8 +531,9 @@ mod tests {
         host.insert_state_value(key(1).as_ref(), b"value");
         arguments(&mut vm, "orders", None, 1);
         let path = vm.register(10);
-        vm.set_host(host);
-        let error = vm.run().unwrap_err();
+        let error = vm
+            .execute_syscall(&mut host, syscalls::SYSCALL_STATE_SCAN)
+            .unwrap_err();
         assert!(
             matches!(error.as_unmetered(), VMError::OutOfGas),
             "{error:?}"

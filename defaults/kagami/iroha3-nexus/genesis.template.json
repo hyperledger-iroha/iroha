@@ -199,12 +199,9 @@
               "epoch_seed": "3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D",
               "evidence_horizon_blocks": 7200,
               "finality_margin_blocks": 8,
-              "max_entity_correlation_pct": 25,
-              "max_nominator_concentration_pct": 25,
               "max_validators": 31,
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
-              "seat_band_pct": 5,
               "slashing_delay_blocks": 3600
             }
           }
@@ -335,5 +332,5 @@
       ]
     }
   ],
-  "wire_protocol_version": 4
+  "wire_protocol_version": 8
 }

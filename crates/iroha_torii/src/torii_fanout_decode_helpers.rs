@@ -516,36 +516,6 @@ struct QueryIngressMemoryEnvelope {
     scope_decode_allocated_bytes: usize,
     scope_canonical_encoded_bytes: usize,
 }
-/// Conservative strict-admission peak beyond the shared request representations.
-fn torii_proxy_strict_response_working_set_bytes() -> Option<usize> {
-    #[cfg(feature = "connect")]
-    {
-        let snapshot = checked_sum([
-            QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-            QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1,
-            std::mem::size_of::<iroha_core::torii_proxy::ToriiProxyHeaderV1>()
-                .checked_mul(QUEUE_PLAN_SYNCED_MAX_HEADERS_V1)?,
-            std::mem::size_of::<ToriiProxyHttpResponseV1>(),
-        ])?;
-        // Include ready responses, the currently reduced response and encoded
-        // quorum output, plus separately owned expectation, decode scratch,
-        // validated certificate and accumulated attestations. The protocol's
-        // decode-allocation ceiling is a conservative bound for each graph.
-        snapshot
-            .checked_mul(QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS.checked_add(2)?)?
-            .checked_add(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES.checked_mul(4)?)?
-            // A canonical retry reads its historical enclosing carrier, whose
-            // size is independent of the small retried request. The same W slot
-            // owns its enforced decode budget and authentication buffers.
-            .checked_add(
-                iroha_core::state::State::canonical_queue_plan_input_read_working_set_bytes()?,
-            )
-    }
-    #[cfg(not(feature = "connect"))]
-    {
-        Some(0)
-    }
-}
 /// Complete memory admitted while one authenticated peer delivers an internal
 /// Torii proxy request over HTTP.
 ///

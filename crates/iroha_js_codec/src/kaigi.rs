@@ -8,7 +8,7 @@ use norito::json::{self, Value};
 
 use crate::{CodecError, CodecResult, codec_error};
 
-pub(super) use crate::json_u64::{parse_u64, u64_json};
+pub use crate::json_u64::{parse_u64, u64_json};
 
 fn native_field(value: &mut Value, key: &str, optional: bool, label: &str) -> CodecResult<()> {
     if let Some(field) = value.as_object_mut().and_then(|fields| fields.get_mut(key)) {
@@ -21,7 +21,7 @@ fn native_field(value: &mut Value, key: &str, optional: bool, label: &str) -> Co
     Ok(())
 }
 
-pub(super) fn parse_relay_manifest(mut value: Value) -> CodecResult<KaigiRelayManifest> {
+pub fn parse_relay_manifest(mut value: Value) -> CodecResult<KaigiRelayManifest> {
     native_field(
         &mut value,
         "expiry_ms",
@@ -31,7 +31,7 @@ pub(super) fn parse_relay_manifest(mut value: Value) -> CodecResult<KaigiRelayMa
     json::from_value(value).map_err(codec_error)
 }
 
-pub(super) fn relay_manifest_json(manifest: &KaigiRelayManifest) -> CodecResult<Value> {
+pub fn relay_manifest_json(manifest: &KaigiRelayManifest) -> CodecResult<Value> {
     let mut value = json::to_value(manifest).map_err(codec_error)?;
     let fields = value
         .as_object_mut()
@@ -40,7 +40,7 @@ pub(super) fn relay_manifest_json(manifest: &KaigiRelayManifest) -> CodecResult<
     Ok(value)
 }
 
-pub(super) fn parse_call(mut value: Value) -> CodecResult<NewKaigi> {
+pub fn parse_call(mut value: Value) -> CodecResult<NewKaigi> {
     native_field(
         &mut value,
         "gas_rate_per_minute",
@@ -67,7 +67,7 @@ pub(super) fn parse_call(mut value: Value) -> CodecResult<NewKaigi> {
     json::from_value(value).map_err(codec_error)
 }
 
-pub(super) fn call_json(call: &NewKaigi) -> CodecResult<Value> {
+pub fn call_json(call: &NewKaigi) -> CodecResult<Value> {
     let mut value = json::to_value(call).map_err(codec_error)?;
     let fields = value
         .as_object_mut()

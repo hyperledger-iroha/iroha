@@ -16,7 +16,7 @@ use super::{
         COMMITTED_COLUMN_COUNT, COMMITTED_COLUMNS, PUBLIC_COLUMN_COUNT, PUBLIC_COLUMNS,
         PUBLIC_POLYNOMIAL_DEGREE, PublicColumnReconstruction,
     },
-    compact_transfer_air::CompactTransferAir,
+    compact_transfer_air::{CompactTransferAir, PolynomialPreparationCost},
     deep_geometry::{COSET_OFFSET, DeepGeometry, TRACE_ROWS},
     deep_masked_replay::{
         MaskedReplayPlan, MaskedTraceReplay, QUOTIENT_MASK_COEFFICIENTS, TRACE_MASK_COEFFICIENTS,
@@ -39,6 +39,63 @@ use crate::{
 pub(super) struct QuotientLimits {
     pub(super) max_payload_bytes: usize,
     pub(super) max_work_units: usize,
+}
+
+/// Conservative payload bytes and work units of one complete quotient build.
+fn quotient_charges(
+    replay: &MaskedReplayPlan,
+    public: &PolynomialPreparationCost,
+    division: &VanishingDivisionPlan,
+    pair: &PairMaskingPlan,
+    rows: usize,
+    cycle: usize,
+) -> Result<(usize, usize)> {
+    // Known-column cycle + selector roots and two selector work vectors.
+    let reconstruction_bytes = add(
+        mul(
+            cycle * PUBLIC_COLUMN_COUNT + 2 * PHYSICAL_HASH_ROWS,
+            F::BYTES,
+        )?,
+        PHYSICAL_HASH_ROWS * 8,
+    )?;
+    // Numerator values, IFFT lanes, coefficients/remainder, quotient and
+    // blinded chunks are all charged, even where lifetimes do not overlap.
+    let arithmetic_bytes = add(
+        mul(3 * rows + SLOT_COUNT + 2 * COLUMN_COUNT, F::BYTES)?,
+        add(division.payload_bytes(), pair.payload_bytes())?,
+    )?;
+    let payload_bytes = add(
+        replay.payload_bytes,
+        add(
+            public.payload_bytes,
+            add(
+                reconstruction_bytes,
+                add(arithmetic_bytes, 2 * COMMITTED_COLUMN_COUNT * 8)?,
+            )?,
+        )?,
+    )?;
+    let cycle_work = mul(cycle, 12 * PHYSICAL_HASH_ROWS + 4096 + PUBLIC_COLUMN_COUNT)?;
+    let point_work = mul(
+        rows,
+        add(public.point_work_units, 2 * SLOT_COUNT + 4 * COLUMN_COUNT)?,
+    )?;
+    let work_units = add(
+        replay.work_units,
+        add(
+            public.work_units,
+            add(
+                cycle_work,
+                add(
+                    point_work,
+                    add(
+                        transform_work(rows)?,
+                        add(division.work_units(), pair.work_units())?,
+                    )?,
+                )?,
+            )?,
+        )?,
+    )?;
+    Ok((payload_bytes, work_units))
 }
 
 /// Binds source geometry, full AIR degrees and all allocation extents before replay.
@@ -109,51 +166,8 @@ impl<'a> DeepQuotientPlan<'a> {
         )?;
         let public = air.polynomial_preparation_cost(domain)?;
         let cycle = rows / (TRACE_ROWS / PHYSICAL_HASH_ROWS);
-        // Known-column cycle + selector roots and two selector work vectors.
-        let reconstruction_bytes = add(
-            mul(
-                cycle * PUBLIC_COLUMN_COUNT + 2 * PHYSICAL_HASH_ROWS,
-                F::BYTES,
-            )?,
-            PHYSICAL_HASH_ROWS * 8,
-        )?;
-        // Numerator values, IFFT lanes, coefficients/remainder, quotient and
-        // blinded chunks are all charged, even where lifetimes do not overlap.
-        let arithmetic_bytes = add(
-            mul(3 * rows + SLOT_COUNT + 2 * COLUMN_COUNT, F::BYTES)?,
-            add(division.payload_bytes(), pair.payload_bytes())?,
-        )?;
-        let payload_bytes = add(
-            replay.payload_bytes,
-            add(
-                public.payload_bytes,
-                add(
-                    reconstruction_bytes,
-                    add(arithmetic_bytes, 2 * COMMITTED_COLUMN_COUNT * 8)?,
-                )?,
-            )?,
-        )?;
-        let cycle_work = mul(cycle, 12 * PHYSICAL_HASH_ROWS + 4096 + PUBLIC_COLUMN_COUNT)?;
-        let point_work = mul(
-            rows,
-            add(public.point_work_units, 2 * SLOT_COUNT + 4 * COLUMN_COUNT)?,
-        )?;
-        let work_units = add(
-            replay.work_units,
-            add(
-                public.work_units,
-                add(
-                    cycle_work,
-                    add(
-                        point_work,
-                        add(
-                            transform_work(rows)?,
-                            add(division.work_units(), pair.work_units())?,
-                        )?,
-                    )?,
-                )?,
-            )?,
-        )?;
+        let (payload_bytes, work_units) =
+            quotient_charges(&replay, &public, &division, &pair, rows, cycle)?;
         limit(
             "max_deep_quotient_payload_bytes",
             payload_bytes,

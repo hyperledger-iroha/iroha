@@ -29,6 +29,12 @@ fn ivm_manifest_fixture_uses_checked_randomness() {
 }
 fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
     ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+            entry_pc: 0,
+            frame_bytes: 0,
+            argument_words: Vec::new(),
+            result_words: vec![ivm::call::CallWordV1::Unit],
+        }],
         seiyaku_name: "ManifestAdmissionFixture".to_owned(),
         compiler_fingerprint: "iroha-core-manifest-admission-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -62,12 +68,19 @@ fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, manifest::ContractMan
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version,
     };
     let mut artifact = meta.encode();
     artifact.extend_from_slice(&minimal_contract_interface().encode_section());
-    artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        artifact.extend_from_slice(&instruction.to_le_bytes());
+    }
     let verified =
         ivm::verify_contract_artifact(&artifact).expect("canonical manifest test contract");
     (artifact, verified.manifest)
@@ -77,13 +90,20 @@ fn minimal_contract_artifact_with_syscall(abi_version: u8, syscall: u8) -> Vec<u
     code.extend_from_slice(
         &encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, syscall).to_le_bytes(),
     );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        code.extend_from_slice(&instruction.to_le_bytes());
+    }
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 5,
         abi_version,
     };
     let mut out = meta.encode();
@@ -123,7 +143,7 @@ fn contract_dispatch_metadata(entrypoint: &str, contract_address: &ContractAddre
 }
 fn install_current_lane_manifest_registry(state: &State) {
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
@@ -188,7 +208,9 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block2
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
             IvmAdmissionError::ManifestAbiHashMismatch(info),
@@ -286,7 +308,9 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block2
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         result.is_ok(),
         "matching manifest abi_hash should allow admission, got {result:?}"
@@ -349,7 +373,9 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block2
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         matches!(
             result,
@@ -439,7 +465,9 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block2
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         result.is_ok(),
         "v1 abi_hash should allow admission, got {result:?}"
@@ -505,7 +533,9 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+    let (_hash, result) = block2
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         matches!(
             result,

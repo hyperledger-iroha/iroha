@@ -25,7 +25,7 @@ pub enum PointerConstructor {
     #[strum(serialize = "dataspace_id")]
     DataSpaceId,
     AxtDescriptor,
-    AssetHandle,
+    AxtAnchoredSpendV1,
     ProofBlob,
     SoracloudRequest,
     SoracloudResponse,
@@ -45,7 +45,7 @@ impl PointerConstructor {
             "norito_bytes" => Self::NoritoBytes,
             "dataspace_id" => Self::DataSpaceId,
             "axt_descriptor" => Self::AxtDescriptor,
-            "asset_handle" => Self::AssetHandle,
+            "axt_anchored_spend_v1" => Self::AxtAnchoredSpendV1,
             "proof_blob" => Self::ProofBlob,
             "soracloud_request" => Self::SoracloudRequest,
             "soracloud_response" => Self::SoracloudResponse,
@@ -67,7 +67,7 @@ impl PointerConstructor {
             Self::Blob | Self::NoritoBytes => "bytes",
             Self::DataSpaceId => "DataSpaceId",
             Self::AxtDescriptor => "AxtDescriptor",
-            Self::AssetHandle => "AssetHandle",
+            Self::AxtAnchoredSpendV1 => "AxtAnchoredSpendV1",
             Self::ProofBlob => "ProofBlob",
             Self::SoracloudRequest => "SoracloudRequest",
             Self::SoracloudResponse => "SoracloudResponse",
@@ -380,8 +380,9 @@ pub enum Builtin {
     TransferBatch,
     AxtBegin,
     AxtTouch,
+    #[strum(serialize = "axt_stage_anchored_spend")]
+    StageAnchoredSpend,
     VerifyDsProof,
-    UseAssetHandle,
     AxtCommit,
     DeactivateContractInstance,
     RemoveSmartContractBytes,
@@ -435,8 +436,6 @@ pub enum Builtin {
     JsonObject,
     JsonSetInt,
     JsonSetAccountId,
-    EncodeInt,
-    DecodeInt,
     EncodeJson,
     DecodeJson,
     #[strum(serialize = "encode_schema")]
@@ -641,8 +640,8 @@ impl Builtin {
             "transfer_batch" => Self::TransferBatch,
             "axt_begin" => Self::AxtBegin,
             "axt_touch" => Self::AxtTouch,
+            "axt_stage_anchored_spend" => Self::StageAnchoredSpend,
             "verify_ds_proof" => Self::VerifyDsProof,
-            "use_asset_handle" => Self::UseAssetHandle,
             "axt_commit" => Self::AxtCommit,
             "deactivate_contract_instance" => Self::DeactivateContractInstance,
             "remove_smart_contract_bytes" => Self::RemoveSmartContractBytes,
@@ -696,8 +695,6 @@ impl Builtin {
             "json_object" => Self::JsonObject,
             "json_set_int" => Self::JsonSetInt,
             "json_set_account_id" => Self::JsonSetAccountId,
-            "encode_int" => Self::EncodeInt,
-            "decode_int" => Self::DecodeInt,
             "encode_json" => Self::EncodeJson,
             "decode_json" => Self::DecodeJson,
             "encode_schema" => Self::SchemaEncode,
@@ -786,14 +783,14 @@ impl Builtin {
                 PointerConstructor::Json => "Json::parse",
                 PointerConstructor::DomainId => "DomainId::parse",
                 PointerConstructor::DataSpaceId => "DataSpaceId::parse",
+                PointerConstructor::AxtDescriptor => "AxtDescriptor::parse",
+                PointerConstructor::AxtAnchoredSpendV1 => "AxtAnchoredSpendV1::parse",
                 // These constructors are compiler internals. Giving them an
                 // internal spelling here does not make them source-visible;
                 // `from_source_name` also enforces `BuiltinMode`.
                 PointerConstructor::Domain
                 | PointerConstructor::Blob
                 | PointerConstructor::NoritoBytes
-                | PointerConstructor::AxtDescriptor
-                | PointerConstructor::AssetHandle
                 | PointerConstructor::ProofBlob
                 | PointerConstructor::SoracloudRequest
                 | PointerConstructor::SoracloudResponse => constructor.name(),
@@ -907,8 +904,8 @@ impl Builtin {
             Self::TransferBatch => "ledger::asset::transfer_batch",
             Self::AxtBegin => "axt::begin",
             Self::AxtTouch => "axt::touch",
+            Self::StageAnchoredSpend => "axt::stage_anchored_spend",
             Self::VerifyDsProof => "axt::verify_proof",
-            Self::UseAssetHandle => "axt::use_asset_handle",
             Self::AxtCommit => "axt::commit",
             Self::DeactivateContractInstance => "seiyaku::deactivate_instance",
             Self::RemoveSmartContractBytes => "seiyaku::remove_code",
@@ -967,8 +964,6 @@ impl Builtin {
             Self::TlvLen => "codec::tlv_len",
             Self::BytesLen => "bytes::len",
             Self::PointerToNorito => "codec::to_norito",
-            Self::EncodeInt => self.name(),
-            Self::DecodeInt => self.name(),
             Self::EncodeJson => "codec::encode_json",
             Self::DecodeJson => "codec::decode_json",
             Self::SchemaEncode => "codec::schema::encode",
@@ -994,16 +989,13 @@ impl Builtin {
             Self::WrappingSub => "math::wrapping_sub",
             Self::WrappingMul => "math::wrapping_mul",
             Self::WrappingNeg => "math::wrapping_neg",
-            // These scalar IVM operations do not yet have specified 512-bit
-            // Kotodama semantics. Keep them available to compiler internals,
-            // but do not advertise a width-constrained source API.
-            Self::Isqrt
-            | Self::Abs
-            | Self::Min
-            | Self::Max
-            | Self::DivCeil
-            | Self::Gcd
-            | Self::Mean => self.name(),
+            Self::Isqrt => "math::isqrt",
+            Self::Abs => "math::abs",
+            Self::Min => "math::min",
+            Self::Max => "math::max",
+            Self::DivCeil => "math::div_ceil",
+            Self::Gcd => "math::gcd",
+            Self::Mean => "math::mean",
             Self::Poseidon2 => "crypto::poseidon2",
             Self::Poseidon6 => "crypto::poseidon6",
             Self::Pubkgen => "crypto::pubkgen",
@@ -1140,7 +1132,7 @@ impl Builtin {
             | Self::TransferBatch
             | Self::AxtBegin
             | Self::AxtTouch
-            | Self::UseAssetHandle
+            | Self::StageAnchoredSpend
             | Self::AxtCommit
             | Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
@@ -1245,8 +1237,6 @@ impl Builtin {
                 PointerConstructor::Domain
                 | PointerConstructor::Blob
                 | PointerConstructor::NoritoBytes
-                | PointerConstructor::AxtDescriptor
-                | PointerConstructor::AssetHandle
                 | PointerConstructor::ProofBlob
                 | PointerConstructor::SoracloudRequest
                 | PointerConstructor::SoracloudResponse,
@@ -1263,11 +1253,7 @@ impl Builtin {
             | Self::GetMerklePath
             | Self::GetMerkleCompact
             | Self::GetRegisterMerkleCompact
-            | Self::AxtBegin
-            | Self::AxtTouch
             | Self::VerifyDsProof
-            | Self::UseAssetHandle
-            | Self::AxtCommit
             | Self::SoracloudReadCommittedState
             | Self::SoracloudEmitStateMutation
             | Self::SoracloudEmitMailboxMessage
@@ -1280,8 +1266,6 @@ impl Builtin {
             | Self::NameDecode
             | Self::TlvEq
             | Self::TlvLen
-            | Self::EncodeInt
-            | Self::DecodeInt
             | Self::EncodeJson
             | Self::DecodeJson
             | Self::SchemaEncode
@@ -1300,13 +1284,6 @@ impl Builtin {
             | Self::NumericLe
             | Self::NumericGt
             | Self::NumericGe
-            | Self::Isqrt
-            | Self::Abs
-            | Self::Min
-            | Self::Max
-            | Self::DivCeil
-            | Self::Gcd
-            | Self::Mean
             | Self::NumericToIntDirect
             | Self::NumericAddDirect
             | Self::NumericSubDirect
@@ -1413,7 +1390,8 @@ impl Builtin {
             Self::GetPublicInput | Self::TriggerEvent => &[s::SYSCALL_GET_PUBLIC_INPUT],
             Self::ContractInvokeQuantity2 => &[s::SYSCALL_CALL_CONTRACT_QUANTITY2],
             Self::DebugPrint => &[s::SYSCALL_DEBUG_PRINT],
-            Self::DebugLog | Self::Info => &[s::SYSCALL_DEBUG_LOG],
+            Self::DebugLog => &[s::SYSCALL_DEBUG_LOG],
+            Self::Info => &[s::SYSCALL_POINTER_TO_NORITO, s::SYSCALL_DEBUG_LOG],
             Self::Assert | Self::AssertEq => &[s::SYSCALL_ABORT],
             Self::Require => &[s::SYSCALL_CONTRACT_ABORT],
             Self::TestInvokeEntrypoint | Self::TestInvokeEntrypointAs => {
@@ -1481,8 +1459,8 @@ impl Builtin {
             ],
             Self::AxtBegin => &[s::SYSCALL_AXT_BEGIN],
             Self::AxtTouch => &[s::SYSCALL_AXT_TOUCH],
+            Self::StageAnchoredSpend => &[s::SYSCALL_AXT_STAGE_ANCHORED_SPEND],
             Self::VerifyDsProof => &[s::SYSCALL_VERIFY_DS_PROOF],
-            Self::UseAssetHandle => &[s::SYSCALL_USE_ASSET_HANDLE],
             Self::AxtCommit => &[s::SYSCALL_AXT_COMMIT],
             Self::DeactivateContractInstance => &[s::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE],
             Self::RemoveSmartContractBytes => &[s::SYSCALL_REMOVE_SMART_CONTRACT_BYTES],
@@ -1535,8 +1513,6 @@ impl Builtin {
             Self::JsonObject => &[s::SYSCALL_JSON_OBJECT],
             Self::JsonSetInt => &[s::SYSCALL_JSON_SET_I64],
             Self::JsonSetAccountId => &[s::SYSCALL_JSON_SET_ACCOUNT_ID],
-            Self::EncodeInt => &[s::SYSCALL_ENCODE_INT],
-            Self::DecodeInt => &[s::SYSCALL_DECODE_INT],
             Self::EncodeJson => &[s::SYSCALL_JSON_ENCODE],
             Self::DecodeJson => &[s::SYSCALL_JSON_DECODE],
             Self::SchemaEncode => &[s::SYSCALL_SCHEMA_ENCODE],
@@ -1609,18 +1585,18 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect => &[],
+            Self::Isqrt => &[s::SYSCALL_INT_ISQRT],
+            Self::Abs => &[s::SYSCALL_INT_ABS],
+            Self::Min => &[s::SYSCALL_INT_MIN],
+            Self::Max => &[s::SYSCALL_INT_MAX],
+            Self::DivCeil => &[s::SYSCALL_INT_DIV_CEIL],
+            Self::Gcd => &[s::SYSCALL_INT_GCD],
+            Self::Mean => &[s::SYSCALL_INT_MEAN],
             Self::Valcom => &[s::SYSCALL_PRIVATE_NUMERIC_VALCOM],
             Self::WrappingAdd
             | Self::WrappingSub
             | Self::WrappingMul
             | Self::WrappingNeg
-            | Self::Isqrt
-            | Self::Abs
-            | Self::Min
-            | Self::Max
-            | Self::DivCeil
-            | Self::Gcd
-            | Self::Mean
             | Self::Poseidon2
             | Self::Poseidon6
             | Self::Pubkgen
@@ -1661,6 +1637,7 @@ impl Builtin {
                 | Self::StateMapRemove
                 | Self::TransferBatch
                 | Self::Path
+                | Self::Info
                 | Self::Valcom
                 | Self::TestInvokeEntrypoint
                 | Self::NumericToInt
@@ -1856,9 +1833,9 @@ impl Builtin {
                 "()",
             ),
             Self::AxtBegin => S::new(&["AxtDescriptor"], "()"),
-            Self::AxtTouch => S::new(&["DataSpaceId", "bytes"], "AssetHandle"),
+            Self::AxtTouch => S::new(&["DataSpaceId", "bytes"], "()"),
+            Self::StageAnchoredSpend => S::new(&["AxtAnchoredSpendV1"], "()"),
             Self::VerifyDsProof => S::new(&["DataSpaceId", "ProofBlob"], "bool"),
-            Self::UseAssetHandle => S::new(&["AssetHandle", "bytes", "ProofBlob?"], "()"),
             Self::AxtCommit => S::new(&[], "()"),
             Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
@@ -1911,8 +1888,6 @@ impl Builtin {
             Self::JsonObject => S::new(&[], "Json"),
             Self::JsonSetInt => S::new(&["Json", "Name", "int"], "Json"),
             Self::JsonSetAccountId => S::new(&["Json", "Name", "AccountId"], "Json"),
-            Self::EncodeInt => S::new(&["int"], "bytes"),
-            Self::DecodeInt => S::new(&["bytes"], "int"),
             Self::EncodeJson => S::new(&["Json"], "bytes"),
             Self::DecodeJson => S::new(&["bytes"], "Json"),
             Self::GetInt => S::new(&["Json", "Name"], "Option<int>"),
@@ -2107,9 +2082,9 @@ impl Builtin {
             Self::TransferBatch => signature.with_names(&["transfers"]),
             Self::SetExecutionDepth => signature.with_names(&["depth"]),
             Self::AxtBegin => signature.with_names(&["descriptor"]),
-            Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
+            Self::AxtTouch => signature.with_names(&["dataspace", "manifest"]),
+            Self::StageAnchoredSpend => signature.with_names(&["spend"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
-            Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
             Self::VrfVerify => signature.with_names(&["request"]),
             Self::DeactivateContractInstance
             | Self::RemoveSmartContractBytes
@@ -2297,7 +2272,7 @@ mod tests {
             "transfer_batch",
             "axt_begin",
             "axt_touch",
-            "use_asset_handle",
+            "axt_stage_anchored_spend",
             "axt_commit",
         ] {
             let builtin = Builtin::from_name(name).expect("registered builtin");
@@ -2305,6 +2280,11 @@ mod tests {
             assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite, "{name}");
             assert!(!builtin.spec().name.is_empty());
         }
+    }
+    #[test]
+    fn retired_reusable_handle_builtin_is_unregistered() {
+        assert!(Builtin::from_name("use_asset_handle").is_none());
+        assert!(Builtin::from_name("axt::use_asset_handle").is_none());
     }
     #[test]
     fn raw_and_private_builtins_have_restricted_modes() {
@@ -2343,14 +2323,10 @@ mod tests {
             Builtin::PointerConstructor(PointerConstructor::Domain),
             Builtin::PointerConstructor(PointerConstructor::Blob),
             Builtin::PointerConstructor(PointerConstructor::NoritoBytes),
-            Builtin::PointerConstructor(PointerConstructor::AxtDescriptor),
-            Builtin::PointerConstructor(PointerConstructor::AssetHandle),
             Builtin::PointerConstructor(PointerConstructor::ProofBlob),
             Builtin::PointerConstructor(PointerConstructor::SoracloudRequest),
             Builtin::PointerConstructor(PointerConstructor::SoracloudResponse),
             Builtin::PointerToNorito,
-            Builtin::EncodeInt,
-            Builtin::DecodeInt,
             Builtin::EncodeJson,
             Builtin::DecodeJson,
             Builtin::SchemaEncode,
@@ -2364,11 +2340,7 @@ mod tests {
             Builtin::RegisterSmartContractBytes,
             Builtin::ActivateContractInstance,
             Builtin::SetVl,
-            Builtin::AxtBegin,
-            Builtin::AxtTouch,
             Builtin::VerifyDsProof,
-            Builtin::UseAssetHandle,
-            Builtin::AxtCommit,
             Builtin::SoracloudReadCommittedState,
             Builtin::SoracloudEmitStateMutation,
             Builtin::SoracloudEmitMailboxMessage,
@@ -2407,6 +2379,11 @@ mod tests {
             (PointerConstructor::Json, "Json::parse"),
             (PointerConstructor::DomainId, "DomainId::parse"),
             (PointerConstructor::DataSpaceId, "DataSpaceId::parse"),
+            (PointerConstructor::AxtDescriptor, "AxtDescriptor::parse"),
+            (
+                PointerConstructor::AxtAnchoredSpendV1,
+                "AxtAnchoredSpendV1::parse",
+            ),
         ] {
             let builtin = Builtin::PointerConstructor(constructor);
             assert_eq!(builtin.source_name(), canonical);

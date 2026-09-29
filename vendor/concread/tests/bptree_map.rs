@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
 use concread::bptree::BptreeMap;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 // Iroha patch: the upstream proptest properties run as fixed-seed randomized
 // cases so the vendored workspace member does not pull `proptest` into the
@@ -80,10 +80,18 @@ fn bptree_remove_consistent() {
         let indices: Vec<usize> = (0..rng.random_range(0..100))
             .map(|_| rng.random_range(0..values.len()))
             .collect();
-        let mut btree_map =
-            BTreeMap::from_iter(values.iter().cloned().map(|v| (v.to_string(), v.to_string())));
-        let bptree_map =
-            BptreeMap::from_iter(values.iter().cloned().map(|v| (v.to_string(), v.to_string())));
+        let mut btree_map = BTreeMap::from_iter(
+            values
+                .iter()
+                .cloned()
+                .map(|v| (v.to_string(), v.to_string())),
+        );
+        let bptree_map = BptreeMap::from_iter(
+            values
+                .iter()
+                .cloned()
+                .map(|v| (v.to_string(), v.to_string())),
+        );
         let mut bptree_map_write_tx = bptree_map.write();
 
         for index in indices {

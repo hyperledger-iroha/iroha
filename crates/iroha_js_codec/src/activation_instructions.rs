@@ -36,9 +36,11 @@ fn fields(value: Value, names: &[&str], context: &str) -> CodecResult<json::Map>
 }
 
 fn model<T: JsonDeserialize + JsonSerialize>(value: Value, context: &str) -> CodecResult<T> {
+    // Keep the submitted spelling for the canonical check; decoding consumes `value`.
+    let submitted = value.clone();
     let parsed: T =
-        json::from_value(value.clone()).map_err(|error| invalid(format!("{context}: {error}")))?;
-    if render(&parsed)? != value {
+        json::from_value(value).map_err(|error| invalid(format!("{context}: {error}")))?;
+    if render(&parsed)? != submitted {
         return Err(invalid(format!(
             "{context} must use its exact canonical native JSON spelling"
         )));
@@ -67,19 +69,24 @@ fn revision(value: Value, context: &str) -> CodecResult<u64> {
     Ok(number)
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    clippy::unnecessary_wraps,
+    reason = "`activation_contracts!` calls every field renderer as `fn(&T) -> CodecResult<Value>`"
+)]
 fn render_revision(value: &u64) -> CodecResult<Value> {
     Ok(Value::String(value.to_string()))
 }
 
 macro_rules! activation_contracts {
     ($($ty:ident { $($field:ident: $read:ident => $write:ident),+ $(,)? }),+ $(,)?) => {
-        pub(super) fn is_activation_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_activation_instruction(instruction: &InstructionBox) -> bool {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(value.is::<$ty>())||+
         }
 
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(envelope) = value else { return None; };
             $(if let Some(payload) = envelope.get(stringify!($ty)) {
                 return Some((|| {
@@ -95,7 +102,7 @@ macro_rules! activation_contracts {
             None
         }
 
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             let instruction: &dyn Instruction = &**instruction;
             let value = instruction.as_any();
             $(if let Some(value) = value.downcast_ref::<$ty>() {

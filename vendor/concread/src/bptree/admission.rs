@@ -3,6 +3,7 @@
 use super::*;
 use crate::internals::bptree::cursor::checked_next_generation;
 use crate::internals::bptree::node::{Branch, Leaf, Node};
+use crate::internals::bptree::tracking::NodeTrackingBuffer;
 use crate::internals::lincowcell::{
     InitialCharges, WriterAdmission, WriterAdmissionError, WriterCharges, WriterLayouts,
 };
@@ -537,7 +538,7 @@ where
 fn allocate_tracking<K, V, P>(
     growth: Option<TrackingGrowth>,
     provider: &mut P,
-) -> Option<FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>
+) -> Option<NodeTrackingBuffer<K, V, P::Charge>>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -695,7 +696,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<(BptreeMapOwned<K, V, Prepaid<P>>, Option<V>), ((K, V), MapAdmissionError<E>)> {
+    ) -> AdmittedInsertResult<K, V, P, E> {
         self.insert_with_source(key, value, |_, demand| {
             admit(demand).map_err(MapAdmissionError::Refused)
         })
@@ -709,7 +710,7 @@ where
             &SuperBlock<K, V, Prepaid<P>>,
             AllocationDemand,
         ) -> Result<P, MapAdmissionError<E>>,
-    ) -> Result<(BptreeMapOwned<K, V, Prepaid<P>>, Option<V>), ((K, V), MapAdmissionError<E>)> {
+    ) -> AdmittedInsertResult<K, V, P, E> {
         let Some(acquired) = self.try_acquire_writer() else {
             return Err(((key, value), MapAdmissionError::Busy));
         };
@@ -741,13 +742,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<
-        (BptreeMapOwned<K, V, Prepaid<P>>, Option<V>),
-        (
-            (BptreeMapOwned<K, V, Prepaid<P>>, (K, V)),
-            MapAdmissionError<E>,
-        ),
-    > {
+    ) -> OwnedInsertResult<K, V, P, E> {
         owned.inner.as_ref().assert_operable();
         let mut writer = match self.inner.try_write_owned(owned.inner) {
             Ok(writer) => writer,
@@ -834,7 +829,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<Option<V>, ((K, V), MapAdmissionError<E>)> {
+    ) -> EditResult<K, V, E> {
         edit_admitted(self.inner.get_mut(), key, value, admit, None)
     }
 
@@ -964,7 +959,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
-    ) -> Result<(BptreeMapOwned<K, V, Prepaid<P>>, Option<V>), ((K, V), MapAdmissionError<E>)> {
+    ) -> AdmittedInsertResult<K, V, P, E> {
         self.insert_with_source(key, value, |source, additional| {
             let existing =
                 current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
@@ -1002,7 +997,7 @@ fn edit_admitted<K, V, P, E>(
     value: V,
     admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
-) -> Result<Option<V>, ((K, V), MapAdmissionError<E>)>
+) -> EditResult<K, V, E>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -1231,8 +1226,8 @@ where
 {
     cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
     saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
-    first: Option<FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
-    last: Option<FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+    first: Option<NodeTrackingBuffer<K, V, P::Charge>>,
+    last: Option<NodeTrackingBuffer<K, V, P::Charge>>,
 }
 
 fn start_insert<'a, K, V, P>(
@@ -1315,7 +1310,7 @@ fn prepare_insert<'a, K, V, P>(
     key: K,
     value: V,
     saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
-) -> Result<BptreeMapPreparedInsert<'a, K, V, P>, ((K, V), PlanningError)>
+) -> PreparedInsertResult<'a, K, V, P>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1452,7 +1447,7 @@ where
         &mut self,
         key: K,
         value: V,
-    ) -> Result<BptreeMapPreparedInsert<'_, K, V, P>, ((K, V), PlanningError)> {
+    ) -> PreparedInsertResult<'_, K, V, P> {
         prepare_insert(self.inner.as_mut(), key, value, None)
     }
 
@@ -1519,7 +1514,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<Option<V>, ((K, V), MapAdmissionError<E>)> {
+    ) -> EditResult<K, V, E> {
         edit_admitted(self.inner.as_mut(), key, value, admit, None)
     }
 }
@@ -1675,7 +1670,7 @@ where
         &mut self,
         key: K,
         value: V,
-    ) -> Result<BptreeMapPreparedInsert<'_, K, V, P>, ((K, V), PlanningError)> {
+    ) -> PreparedInsertResult<'_, K, V, P> {
         let (cursor, buffers) = self.inner.edit_parts();
         prepare_insert(cursor, key, value, Some(buffers))
     }
@@ -1734,7 +1729,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<Option<V>, ((K, V), MapAdmissionError<E>)> {
+    ) -> EditResult<K, V, E> {
         let (cursor, buffers) = self.inner.edit_parts();
         edit_admitted(cursor, key, value, admit, Some(buffers))
     }
@@ -1801,10 +1796,7 @@ where
             &SuperBlock<K, V, Prepaid<P>>,
             AllocationDemand,
         ) -> Result<P, MapAdmissionError<E>>,
-    ) -> Result<
-        (BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, Option<V>),
-        (Self, (K, V), MapAdmissionError<E>),
-    > {
+    ) -> AcquiredInsertResult<'a, K, V, P, E> {
         let mut input = Some((key, value));
         let acquired = self.inner.try_write_charged(|source, shells| {
             let plan =
@@ -1891,10 +1883,7 @@ where
         key: K,
         value: V,
         admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
-    ) -> Result<
-        (BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, Option<V>),
-        (Self, (K, V), MapAdmissionError<E>),
-    > {
+    ) -> AcquiredInsertResult<'a, K, V, P, E> {
         self.insert_with_source(key, value, |source, additional| {
             let existing =
                 current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
@@ -1914,7 +1903,7 @@ where
     pub fn try_write_admitted<E>(
         self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+    ) -> AcquiredWriteResult<'a, K, V, P, E> {
         self.write_with_source(|_, demand| admit(demand).map_err(MapAdmissionError::Refused))
     }
 
@@ -1924,7 +1913,7 @@ where
             &SuperBlock<K, V, Prepaid<P>>,
             AllocationDemand,
         ) -> Result<P, MapAdmissionError<E>>,
-    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+    ) -> AcquiredWriteResult<'a, K, V, P, E> {
         let acquired = self.inner.try_write_charged(|source, shells| {
             let plan = plan_writer_start::<K, V, P>(source, shells)
                 .map_err(MapAdmissionError::Planning)?;
@@ -1973,7 +1962,7 @@ where
     pub fn try_clear_admitted<E>(
         self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+    ) -> AcquiredWriteResult<'a, K, V, P, E> {
         let acquired = self.inner.try_write_charged(|source, shells| {
             checked_next_generation(source.txid)
                 .ok_or(MapAdmissionError::Planning(PlanningError::Overflow))?;

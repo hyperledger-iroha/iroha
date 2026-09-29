@@ -572,3 +572,6 @@ fn restored_equal_set_does_not_inherit_any_original_capture_authority() {
     );
     assert_all_writers_released(&set);
 }
+
+#[path = "set_frozen_read_tests.rs"]
+mod frozen_read_tests;

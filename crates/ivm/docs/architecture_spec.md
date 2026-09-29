@@ -32,6 +32,55 @@ The register Merkle tree is rebuilt lazily after writes. A burst of register or 
 the tree dirty without hashing on every write; the first root or path request rebuilds one
 canonical tree, and subsequent reads reuse it until the next mutation.
 
+## Preparation and runtime retention
+
+`ivm_cache_max_bytes` supplies one aggregate retention budget (64 MiB by default);
+zero disables retention. Immutable artifact images, decoded/prepared operations,
+metadata, literal indexes and analyses carry a reservation in their allocation
+owner. Dropping a cache entry does not refund another VM's live borrower. Native
+collection capacities and conservative B-tree node bounds account for cache
+indexes; index storage is physically freed when retention is denied.
+
+Contract and user-provided executor runtime leases restore their baseline on
+return, error and unwind. Pooled memory
+images, register/memory Merkle arrays and call-frame storage carry independent
+owners. Checkout moves uniquely owned runtime storage into active accounting;
+shared immutable owners keep their retention charge. Admission never waits for
+an executing borrower, and a denied cache admission executes cold with identical
+validation, gas and results. Reducing the budget clears idle Core/global cache
+references while outstanding borrowers remain charged until destruction.
+
+Each memory image owns two fixed bitmaps with one bit per 32-byte Merkle leaf:
+pending commit changes and changes since the runtime baseline. Constructor and
+snapshot plans reserve the complete bitmap geometry from the original execution
+lease; local images use the aggregate cache accounting owner. Stores and warm
+reset change initialized words without growing tracking sets. Bitmap backing
+keeps its charge through retention and final borrower release. Memory commits
+stream the original set bits into fixed leaves and update cached paths in
+ascending order without copied index or digest vectors. Existing full-rebuild
+and hardware selection still apply for large updates.
+
+`cache_memory::memory_stats()` exposes retained/active bytes, their measured
+resident total, the peak measured reservation, and the number of active owners
+with an unmeasured dynamic footprint. Metadata which cannot be
+normalized into a measured Norito owner remains valid and uncacheable. Embedded
+trigger descriptors currently remain uncacheable because independently cloned
+JSON backing can outlive their aggregate metadata owner.
+Cache-control blocks, shard arrays and eviction-registry capacity remain active
+infrastructure when retention is disabled. TODO: Complete active scratch
+ownership/admission and borrowed/evicted observability before treating these
+counters as a complete process-memory bound. Independently shared trigger metadata
+still needs its own allocation reservation.
+
+Fallible physical call-frame allocation returns a typed local execution deferral,
+separate from deterministic guest bounds faults. Core preserves the reason across
+nested calls, executor validation and query validation; the outer output owner
+abandons the attempt before retaining gas, fees, rejection rows or trigger
+completion. Original capacity-refusal observations propagate through Core to the
+Sumeragi retry owner without creating a durable ledger rejection. A reason-only
+refusal requires local recovery. TODO: complete production root/nested allocation
+funding, configuration-reload pool custody and notification-safe cache release.
+
 ## Execution and gas
 
 The contract interpreter is a single sequential fetch-decode-execute loop. This keeps trap
@@ -47,10 +96,13 @@ result.
 
 ## Zero-knowledge mode
 
-ZK mode enables privacy tags, private-memory range tracking, constraints, and deterministic trace
-padding. Secret-dependent public branches, addresses, traps, and host arguments are rejected.
-Execution proofs commit to canonical register and memory Merkle roots. Proof generation does not
-introduce a second instruction semantics.
+ZK mode enables privacy tags, private-memory range tracking and deterministic
+trace padding. Secret-dependent public branches, addresses, traps and host
+arguments are rejected. Register/memory Merkle logs and diagnostic traces do not
+constitute a complete execution proof. `IvmProved` admission is closed; private
+invocation requires the complete native STARK relation and State-owned finalized
+full-state commitments. Those
+release gates remain open in the [completion record](../../../specs/kotodama_ivm_completion.md).
 
 ## Vector and cryptographic acceleration
 
@@ -75,6 +127,13 @@ Thread count, completion order, and CPU capabilities affect throughput only. See
 
 ## Host boundary and ABI
 
+All compiled functions use caller-owned argument/result tables: `r10/r11` carry
+argument address/count, `r12/r13` result address/capacity, and returns carry result
+address/exact initialized count in `r10/r11`. Each table is aligned and bounded
+to 8,192 words (64 KiB). Mandatory callable descriptors bind table roles and
+frame bounds; the runtime enforces initialization, ownership and storage lifetime.
+See [calling convention](calling_convention.md) for the canonical table layout.
+
 SCALL delegates to IVMHost under the ABI-v1 syscall policy. Unknown or disallowed syscall
 numbers trap as VMError::UnknownSyscall. Pointer-ABI objects are validated for type, version,
 length, checksum, ownership, and privacy before use.
@@ -92,3 +151,68 @@ as alternate execution paths.
 - Private data cannot cross a public boundary without an allowed commitment or reveal operation.
 - Runtime state mutation uses safe Rust; acceleration-specific unsafe code is isolated behind
   parity-tested helpers and deterministic fallbacks.
+
+### Write-log allocation custody
+
+Memory records writes through private row and payload owners. Row growth and payload
+copying are reserved before guest bytes or output cursors change. Each payload is
+scrubbed on final drop, and clearing the log retains the charged row capacity.
+`Memory::try_write_log_snapshot` returns an independently owned immutable snapshot;
+it holds no lock across later stores. The raw `Vec<WriteLogEntry>` snapshot and
+mutable public byte-vector escape are removed. Entries expose `address()` and
+`bytes()`; snapshots are explicitly fallible to clone.
+
+State-owned logs reserve each append's complete replacement-row and payload
+layouts from their original finite execution pool before physical allocation or
+guest mutation. A replacement keeps the old row backing charged until after all
+entries move into the completed new backing; unchanged payload owners move with
+their entries. The old allocation is destroyed before its original charge is
+refunded. Capacity and physical allocation failures leave guest bytes and the
+existing write history unchanged and use the existing local execution-deferral
+path. Cache admission cannot supply execution credit.
+
+Detached snapshots are explicit independent copies: they reserve the complete
+exact row and payload demand from that same original pool. Their fallible clones
+retain this rule after the source VM disappears. Runtime-template copies instead
+partition the existing parent reservation after checking exact pool identity;
+their actual row/payload owners hold those split charges without retaining a
+duplicate aggregate charge for the same bytes. Each allocation also retains the
+existing aggregate retention-accounting owner. A shared outer borrower keeps all
+charges until final backing destruction; shrinking either budget does not refund
+live storage. Standalone local Memory uses its existing retention owners and
+never becomes a fallback for a refused State-owned allocation.
+
+Read-log growth/read snapshots, full worker snapshot admission, hardware scratch
+and complete nested-execution admission remain open execution-memory gates. The
+write-log subset of worker copies is funded from the original pool even when the
+worker's other private copies still use local accounting. No gas formula changes;
+Core preserves resource deferrals as operational outcomes before rejected-work
+fee accounting. The direct VM can contain attempted work when an opcode defers,
+so callers must follow the existing attempt rollback/retry boundary rather than
+resume it as though the failed attempt were a successful instruction.
+
+## Fixed canonical memory Merkle nodes
+
+Memory construction and runtime-template copying prepay the complete canonical
+SHA-256 node geometry alongside the memory image, leaf digests and dirty bitmaps.
+The checked Crypto geometry includes its exact retained node capacity; the actual
+allocation must match that request before the owner is published. Funded nodes
+carry a split charge from the original execution lease. Local nodes use the same
+aggregate retention accounting as other IVM backing. Both charges remain until
+the canonical tree's node array has been destroyed.
+
+Every byte tree retains this node storage. Sparse updates use canonical leaf-to-root
+updates; dense CPU or successful hardware leaf replacement marks the existing
+nodes stale. Root and proof queries rewrite their retained breadth-first slots
+using Crypto's existing SHA-256 relation. Warm resets keep node storage even when
+the known template root lets execution defer rewriting it. No query allocates a
+replacement canonical node array or queue. Proof output vectors, hardware block
+and digest scratch, telemetry/Rayon bookkeeping and worker snapshot resources are
+separate from this canonical-node backing guarantee.
+
+`ivm_merkle_rebuild_total` counts completed in-place canonical node refreshes once
+at the refresh owner. It excludes initial construction and independent template
+copies. Dense leaf recomputation is classified by the memory-commit path metrics
+and does not separately increment this counter. Incremental path updates retain
+their separate leaf-update counter. Byte trees have no infallible `Clone` wrapper;
+internal copies explicitly choose the fallible local or original-lease path.

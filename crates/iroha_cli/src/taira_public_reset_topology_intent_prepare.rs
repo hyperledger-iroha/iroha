@@ -1,4 +1,7 @@
 //! Read-only producer for one fresh topology intent after a durable dispatcher apply.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 #[cfg(any(target_os = "linux", test))]
 use super::super::admission;
 #[cfg(target_os = "linux")]

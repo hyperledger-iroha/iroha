@@ -28,7 +28,7 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
 |-----------|-------------|----------|--------|
 | Rust WP2-A/B | Metal shader interfaces mirroring CUDA kernels | IVM Perf TL | Feb 2026 |
 | Rust WP2-C | Metal BN254 parity tests & CI lane | IVM Perf TL | Q2 2026 |
-| Swift IOS6 | Bridge toggles wired (`connect_norito_set_acceleration_config`) + SDK API + samples | Swift Bridge Owners | Done (Jan 2026) |
+| Swift IOS6 | Length-checked process settings (`connect_norito_acceleration_config_set_v1`) + SDK API + samples | Swift Bridge Owners | Current candidate qualification pending |
 | Swift IOS5 | Sample apps/docs demonstrating config usage | Swift DX TL | Q2 2026 |
 | Telemetry | Dashboard feeds w/ acceleration parity + benchmark metrics | Swift Program PM / Telemetry | Pilot data Q2 2026 |
 | CI | XCFramework smoke harness exercising CPU vs Metal/NEON on device pool | Swift QA Lead | Q2 2026 |
@@ -50,27 +50,27 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
   retain deterministic CPU fallback policy where allowed.
 
 ### C FFI (`connect_norito_bridge`)
-- New struct `connect_norito_acceleration_config` (completed).
-- Getter coverage now includes `connect_norito_get_acceleration_config` (config only) and `connect_norito_get_acceleration_state` (config + parity) to mirror the setter.
+- The single current `connect_norito_acceleration_config` includes the complete 80-byte process resource-limit record at offset 104; the complete C record is 184 bytes on supported 64-bit targets. The setter returns status (`0` applied requested policy, `-2` malformed without mutation, `-3` wrong record length). All three V1 exports require exact caller lengths and are mandatory native-loader admission symbols. Retired size-less exports and prior layout decoders are removed.
+- Getter coverage now includes `connect_norito_acceleration_config_get_v1` (config only) and `connect_norito_acceleration_state_get_v1` (config + parity) to mirror the setter.
 - Document struct layout in header comments for SPM/CocoaPods consumers.
 
 ### Swift (`AccelerationSettings`)
-- Defaults: Metal enabled, CUDA disabled, thresholds nil (inherit).
-- Negative values ignored; `apply()` invoked automatically by `IrohaSDK`.
-- `AccelerationSettings.runtimeState()` now surfaces the `connect_norito_get_acceleration_state`
+- Defaults: SIMD, Metal and CUDA enabled, optional counts omitted (inherit), and the same finite process resource envelope as Rust. Actual use still requires supported qualified hardware.
+- Counts are unsigned and explicit zero is preserved; malformed negative/overflowing values fail decoding. `apply()` reports whether the native bridge accepted the requested policy; runtime status establishes actual availability.
+- `AccelerationSettings.runtimeState()` now surfaces the `connect_norito_acceleration_state_get_v1`
   payload (config + Metal/CUDA parity status) so Swift dashboards emit the same telemetry
   as Rust (`supported/configured/available/parity`). The helper returns `nil` when the
   bridge is absent to keep tests portable.
 - `AccelerationBackendStatus.lastError` copies the disable/error reason from
-  `connect_norito_get_acceleration_state` and frees the native buffer once the string is
+  `connect_norito_acceleration_state_get_v1` and frees the native buffer once the string is
   materialised so mobile parity dashboards can annotate why Metal/CUDA were disabled on
   each host.
 - `AccelerationSettingsLoader` (`IrohaSwift/Sources/IrohaSwift/AccelerationSettingsLoader.swift`,
   tests under `IrohaSwift/Tests/IrohaSwiftTests/AccelerationSettingsLoaderTests.swift`) now
-  resolves operator manifests in the same priority order as the Norito demo: honour
-  `NORITO_ACCEL_CONFIG_PATH`, search bundled `acceleration.{json,toml}` / `client.{json,toml}`,
-  log the chosen source, and fall back to defaults. Apps no longer need bespoke loaders to
-  mirror the Rust `iroha_config` surface.
+  reads an explicitly provided configuration URL or the bundled canonical document,
+  then ordinary defaults. Production policy uses `[accel]` and
+  `[accel.resource_limits]`; environment-first loading and recursive section aliases
+  are removed. `fromJSON` separately decodes a direct settings document.
 - Update sample apps & README to show toggles and telemetry integration.
 
 ### Telemetry (Dashboards + Exporters)
@@ -87,7 +87,7 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
   Metal/CPU microbench as part of `ci/xcode-swift-parity`).
 
 ### Configuration knobs & defaults (WP6-C)
-- `AccelerationConfig` defaults: `enable_metal = true` on macOS builds, `enable_cuda = true` when the CUDA feature is compiled, `max_gpus = None` (no cap). The Swift `AccelerationSettings` wrapper inherits the same defaults through `connect_norito_set_acceleration_config`.
+- `AccelerationConfig` defaults: `enable_metal = true` on macOS builds, `enable_cuda = true` when the CUDA feature is compiled, `max_gpus = None` (no cap). The Swift `AccelerationSettings` wrapper inherits the same defaults through `connect_norito_acceleration_config_set_v1`.
 - Norito Merkle heuristics (GPU vs CPU): `merkle_min_leaves_gpu = 8192` enables GPU hashing for trees with ≥8192 leaves; backend overrides (`merkle_min_leaves_metal`, `merkle_min_leaves_cuda`) default to the same threshold unless explicitly set.
 - CPU preference heuristics (SHA2 ISA present): on both AArch64 (ARMv8 SHA2) and x86/x86_64 (SHA-NI) the CPU path remains preferred up to `prefer_cpu_sha2_max_leaves_* = 32_768` leaves; above that the GPU threshold applies. These values are configurable via `AccelerationConfig` and should be adjusted only with benchmark evidence.
 

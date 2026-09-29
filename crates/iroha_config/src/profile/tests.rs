@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::parameters::defaults;
+use crate::parameters::user;
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId};
 use iroha_model_base::{domain::DomainId, name::Name};
 
@@ -104,8 +105,6 @@ fn sora_nexus_v1_carries_the_deployed_taira_shape() {
     let derive = profile.derive_inputs();
     assert_eq!(derive.authenticated_non_validator_sources, 4);
     assert_eq!(derive.max_external_committee_peers, 12);
-    assert_eq!(derive.queue_commands, 4_096);
-    assert_eq!(derive.queue_bodies, 1_024);
     // Baseline catalog: core system lanes plus the public `nexus` lane, no customer dataspace.
     let lanes = value_at(profile.static_config(), "nexus.lane_catalog")
         .as_array()
@@ -443,20 +442,18 @@ fn derive_admits_three_f_plus_one_rosters() {
         assert_eq!(geometry.committee_sources, committee);
         assert_eq!(geometry.authenticated_non_validator_sources, 4);
         assert_eq!(
-            geometry.body_bytes,
-            u64::from(validators + committee + 4) * 35_651_584
-        );
-        assert_eq!(
             geometry.max_total_connections,
             u64::from(validators - 1 + 12 + 4)
         );
         let fragment = profile.derived_config(&geometry);
         assert_eq!(
-            integer_at(&fragment, "sumeragi.queues.body_bytes"),
-            i64::try_from(geometry.body_bytes).unwrap()
+            integer_at(&fragment, "network.max_total_connections"),
+            i64::try_from(geometry.max_total_connections).unwrap()
         );
-        assert_eq!(integer_at(&fragment, "sumeragi.queues.commands"), 4_096);
-        assert_eq!(integer_at(&fragment, "sumeragi.queues.bodies"), 1_024);
+        assert!(
+            fragment.get("sumeragi").is_none(),
+            "the roster derives no Sumeragi node configuration"
+        );
         for entry in value_at(&fragment, "nexus.dataspace_catalog")
             .as_array()
             .unwrap()
@@ -469,8 +466,6 @@ fn derive_admits_three_f_plus_one_rosters() {
             );
         }
     }
-    // Spec §3.8: (4 + 16 + 4) × 34 MiB ≈ 816 MiB for four validators.
-    assert_eq!(profile.derive(4).unwrap().body_bytes, 816 * 1024 * 1024);
     for id in [ProfileId::SoraNexusV1Qual, ProfileId::IrohaDevV1] {
         let profile = Profile::compiled(id).unwrap();
         for validators in [4, 7, 10] {
@@ -488,43 +483,14 @@ fn derive_rejects_rosters_that_are_not_three_f_plus_one() {
         assert!(
             matches!(
                 profile.derive(validators),
-                Err(ProfileError::Geometry {
-                    source: SumeragiV2GeometryError::NotExactCommittee { .. },
-                    ..
-                })
+                Err(ProfileError::Geometry { .. })
             ),
             "{validators}"
         );
     }
     assert!(matches!(
         profile.derive(34),
-        Err(ProfileError::Geometry {
-            source: SumeragiV2GeometryError::RosterAboveMaximum { .. },
-            ..
-        })
-    ));
-}
-
-#[test]
-fn derive_is_checked_by_the_node_parser() {
-    let mut profile = sora();
-    // A body queue below the per-source minimum is caught by the geometry derivation, and a
-    // per-source byte partition the node parser rejects surfaces as a Sumeragi error.
-    profile.derive.queue_bodies = 8;
-    assert!(matches!(
-        profile.derive(4),
         Err(ProfileError::Geometry { .. })
-    ));
-    let mut profile = sora();
-    profile.body_source_bytes = 1;
-    set(
-        &mut profile.static_config,
-        "sumeragi.queues.body_source_bytes",
-        toml::Value::Integer(1),
-    );
-    assert!(matches!(
-        profile.derive(4),
-        Err(ProfileError::Sumeragi { .. })
     ));
 }
 
@@ -569,7 +535,7 @@ fn digests_are_pinned() {
     let profile = sora();
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "e3434ab2cebb1fd64457587110b8254c6cda78521ab52b87108cfa12458847ff"
+        "f6bfec243ab1b3989b79b2573230d0c6f3fbc83bdf49b46c1a14e6fd8274350d"
     );
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
@@ -598,7 +564,7 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
     );
 
     let mut changed = sora();
-    changed.derive.queue_commands = 8_192;
+    changed.derive.authenticated_non_validator_sources = 8;
     assert_ne!(
         changed.consensus_digest(4).unwrap(),
         consensus,
@@ -729,6 +695,23 @@ fn digest_inputs_roundtrip_through_norito() {
 
 fn sora_table() -> toml::Table {
     parse_profile_text(ProfileId::SoraNexusV1).unwrap()
+}
+
+#[test]
+fn genesis_recipe_rejects_retired_seat_band() {
+    Profile::from_table(ProfileId::SoraNexusV1, sora_table()).expect("canonical profile");
+    for value in [0, 5, 100] {
+        let mut table = sora_table();
+        set(
+            &mut table,
+            "genesis_recipe.npos_seat_band_pct",
+            toml::Value::Integer(value),
+        );
+        assert!(matches!(
+            Profile::from_table(ProfileId::SoraNexusV1, table),
+            Err(ProfileError::Malformed { .. })
+        ));
+    }
 }
 
 #[test]

@@ -3799,6 +3799,7 @@ export function buildExecuteTriggerInstruction(triggerOrOptions, args) {
 /**
  * Encode an `ExecuteTrigger` instruction payload to canonical Norito.
  * @param {string | { trigger: string, args?: any }} triggerOrOptions
+ * @param {number} networkPrefix Canonical I105 network prefix.
  * @param {any} [args]
  * @returns {Buffer}
  */

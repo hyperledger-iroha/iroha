@@ -34,7 +34,7 @@ use iroha_crypto::Hash;
 use iroha_sumeragi::{
     crypto::Crypto,
     safety::RecordState,
-    types::{Hash32, PublicKey},
+    types::{EpochId, Hash32, PublicKey},
 };
 use parking_lot::Mutex;
 
@@ -497,6 +497,7 @@ pub fn install<R: RecordStore + ?Sized>(
     store: &R,
     crypto: &dyn Crypto,
     instance: &Hash32,
+    genesis_epoch: EpochId,
     keys: &[(PublicKey, bool)],
     genesis_height: u64,
     assertion: Option<&FreshKeyAssertion>,
@@ -511,6 +512,7 @@ pub fn install<R: RecordStore + ?Sized>(
         store,
         crypto,
         instance,
+        genesis_epoch,
         keys,
         genesis_height,
         assertion.is_some(),
@@ -638,9 +640,15 @@ mod tests {
     }
 
     fn record(instance: Hash32, key: &PublicKey, height: u64) -> Vec<u8> {
-        SafetyRecord::fresh(instance, key.clone(), height, None)
-            .encode(&FakeCrypto::new())
-            .unwrap()
+        SafetyRecord::fresh(
+            instance,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
+            key.clone(),
+            height,
+            None,
+        )
+        .encode(&FakeCrypto::new())
+        .unwrap()
     }
 
     /// The record of `(instance, key)` is absent or a complete, valid record — never torn.
@@ -834,6 +842,7 @@ mod tests {
                 &node.open_faulty(probe.clone()),
                 &crypto,
                 &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &keys,
                 1,
                 assertion.as_ref(),
@@ -846,7 +855,18 @@ mod tests {
             for again in [true, false] {
                 let node = Node::new();
                 let crashed = node.open_faulty(CrashAt::crash(at));
-                assert!(install(&crashed, &crypto, &I, &keys, 1, assertion.as_ref()).is_err());
+                assert!(
+                    install(
+                        &crashed,
+                        &crypto,
+                        &I,
+                        iroha_sumeragi::testing::TEST_EPOCH.id,
+                        &keys,
+                        1,
+                        assertion.as_ref()
+                    )
+                    .is_err()
+                );
                 drop(crashed);
                 let store = node.open();
                 let written = assert_whole(&store, &I, &k);
@@ -855,7 +875,16 @@ mod tests {
                     "crash at {at}: an entry without its record"
                 );
                 let flag = FreshKeyAssertion::from_operator_flag(again);
-                let got = install(&store, &crypto, &I, &keys, 1, flag.as_ref()).unwrap();
+                let got = install(
+                    &store,
+                    &crypto,
+                    &I,
+                    iroha_sumeragi::testing::TEST_EPOCH.id,
+                    &keys,
+                    1,
+                    flag.as_ref(),
+                )
+                .unwrap();
                 if again || written.is_some() {
                     assert_eq!(got[0].1, RecordState::Present(record(I, &k, 1)), "at {at}");
                 } else {
@@ -890,6 +919,7 @@ mod tests {
                 &node.open_faulty(probe.clone()),
                 &crypto,
                 &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &keys,
                 1,
                 flag.as_ref(),
@@ -904,13 +934,23 @@ mod tests {
                 &node.open_faulty(CrashAt::crash(at)),
                 &crypto,
                 &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &keys,
                 1,
                 flag.as_ref(),
             );
             let store = node.open();
             assert_eq!(assert_whole(&store, &I, &k), Some(9), "crash at {at}");
-            let got = install(&store, &crypto, &I, &keys, 1, flag.as_ref()).unwrap();
+            let got = install(
+                &store,
+                &crypto,
+                &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
+                &keys,
+                1,
+                flag.as_ref(),
+            )
+            .unwrap();
             assert_eq!(
                 got[0].1,
                 RecordState::Present(live.clone()),
@@ -935,6 +975,7 @@ mod tests {
                 &store,
                 &crypto,
                 &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &[(a.clone(), false), (b.clone(), false)],
                 1,
                 None,
@@ -957,6 +998,7 @@ mod tests {
                 &node.open_faulty(probe.clone()),
                 &crypto,
                 &J,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &keys,
                 1,
                 None,
@@ -971,12 +1013,22 @@ mod tests {
                 &node.open_faulty(CrashAt::crash(at)),
                 &crypto,
                 &J,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
                 &keys,
                 1,
                 None,
             );
             let store = node.open();
-            let got = install(&store, &crypto, &J, &keys, 1, None).unwrap();
+            let got = install(
+                &store,
+                &crypto,
+                &J,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
+                &keys,
+                1,
+                None,
+            )
+            .unwrap();
             assert!(
                 got.iter().all(|(_, s, _)| *s == RecordState::Absent),
                 "crash at {at}: {got:?}"
@@ -984,7 +1036,16 @@ mod tests {
             assert_eq!(generated(&store, &a), Some(false), "crash at {at}");
             assert_eq!(generated(&store, &b), Some(false), "crash at {at}");
             // `I` was started: its records stay Absent (never re-created, rule 4).
-            let got = install(&store, &crypto, &I, &keys, 1, None).unwrap();
+            let got = install(
+                &store,
+                &crypto,
+                &I,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
+                &keys,
+                1,
+                None,
+            )
+            .unwrap();
             assert!(got.iter().all(|(_, s, _)| *s == RecordState::Absent));
         }
     }
@@ -1000,7 +1061,16 @@ mod tests {
         register_generated_key(&store, &a).unwrap();
         assert_eq!(generated(&store, &a), Some(true));
         for instance in [I, J] {
-            let got = install(&store, &crypto, &instance, &[(a.clone(), false)], 1, None).unwrap();
+            let got = install(
+                &store,
+                &crypto,
+                &instance,
+                iroha_sumeragi::testing::TEST_EPOCH.id,
+                &[(a.clone(), false)],
+                1,
+                None,
+            )
+            .unwrap();
             assert_eq!(got[0].1, RecordState::Present(record(instance, &a, 1)));
         }
         // The record store is replaced; registering another key first marks `a` imported.
@@ -1015,6 +1085,7 @@ mod tests {
             &store,
             &crypto,
             &other,
+            iroha_sumeragi::testing::TEST_EPOCH.id,
             &[(a.clone(), false), (b.clone(), true)],
             1,
             None,

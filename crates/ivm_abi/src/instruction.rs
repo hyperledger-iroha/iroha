@@ -179,7 +179,7 @@ pub mod wide {
         ((word << 8) as i32) >> 8
     }
     /// Returns true when `op` is one of the defined wide opcode values.
-    pub fn is_valid_opcode(op: u8) -> bool {
+    pub const fn is_valid_opcode(op: u8) -> bool {
         matches!(
             op,
             // Integer arithmetic and logical operations

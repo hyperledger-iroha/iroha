@@ -7,8 +7,39 @@ use core::fmt;
 use crate::{
     message::{Block, BlockHeader, Evidence, Qc, WireMessage},
     safety::{RecordState, SafetyRecord},
-    types::{Hash32, HeightConfig, Millis, PublicKey},
+    types::{Hash32, Millis, PublicKey},
 };
+
+/// Complete view-independent application-control source for the next proposal height.
+/// Every field must be revalidated against the same applied parent by the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+pub struct ApplicationControlContext {
+    /// Exact consensus instance.
+    pub instance: Hash32,
+    /// Authenticated scheduling epoch and complete authority context.
+    pub epoch: crate::types::EpochId,
+    /// Height whose control input is being prepared.
+    pub height: u64,
+    /// Exact core hash of the applied parent.
+    pub parent_hash: Hash32,
+    /// Parent result, independently rederived by the application from that same State.
+    pub parent_result: Hash32,
+}
+
+/// A view-specific request for independently built application control witness bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlWitnessContext {
+    /// Proposal height.
+    pub height: u64,
+    /// Fresh proposal view; a response from another view is stale.
+    pub view: u64,
+    /// Exact authenticated scheduling epoch and complete context.
+    pub epoch: crate::types::EpochId,
+    /// Exact core hash of the applied parent.
+    pub parent_hash: Hash32,
+    /// Independently checked execution result of that same parent.
+    pub parent_result: Hash32,
+}
 
 /// Local configuration (§12.4). Only affects performance; validated by
 /// [`crate::pacemaker::validate_local`] (§9.4).
@@ -158,8 +189,8 @@ pub struct Init {
     pub nonce: u64,
     /// Block-store tip `t`.
     pub tip: CommittedTip,
-    /// Height configurations of `t` (unless `t = g`), `t + 1` and `t + 2`.
-    pub configs: Vec<(u64, HeightConfig)>,
+    /// Exact installed/pending slots of `t` (unless `t = g`), `t + 1` and `t + 2`.
+    pub configs: Vec<(u64, crate::types::ConfigSlot)>,
     /// The last `W + 2` committed headers (`≤ t`).
     pub recent_headers: Vec<BlockHeader>,
 }
@@ -196,8 +227,25 @@ pub enum Event {
         /// Payload bytes.
         payload: Vec<u8>,
         /// The application flag of a block with this payload (§3.7 A1): its Commit votes need
-        /// attestations. `false` for `EMPTY`.
+        /// attestations. The core additionally requires attestation at every epoch boundary.
+        /// Empty builder responses are never proposed.
         attest: bool,
+    },
+    /// Exact answer to application control requested after selecting nonempty work.
+    ControlWitnessBuilt {
+        /// Fresh build request id.
+        req: u64,
+        /// Exact request source; a response from another source or view is ignored.
+        context: ControlWitnessContext,
+        /// Bounded canonical control bytes.
+        witness: crate::types::ControlWitness,
+        /// Whether this control input requires application attestation.
+        attest: bool,
+    },
+    /// The sole application owner has one own partial to retransmit for this source.
+    ApplicationControlBuilt {
+        /// Complete source-bound envelope; the core rechecks it before sending.
+        message: crate::message::ApplicationControl,
     },
     /// After answering `BuildPayload{req}` with `EMPTY`: an includable transaction arrived (at
     /// most once per `req`). It ends an eligible leader's empty-build wait at any view (§6.10).
@@ -228,7 +276,13 @@ pub enum Event {
         /// The applied header (source of the core's `recent_headers`, §2.1).
         header: Box<BlockHeader>,
         /// Configuration of height `a + 2` scheduled by the state after `a`.
-        config_after_next: HeightConfig,
+        config: crate::types::AppliedConfig,
+    },
+    /// The original publication owner cannot retry safely; it was consumed, may be visible,
+    /// or was lost with its worker. Local recovery is required, not a consensus invalid verdict.
+    PublicationRecoveryRequired {
+        /// Height whose publication cannot safely resume in this process.
+        height: u64,
     },
     /// Apply produced a commitment different from the certified result (O3).
     ApplyDiverged {
@@ -243,6 +297,7 @@ pub enum Event {
 
 /// Actions returned by `Core::handle`, executed by the driver in order (O1).
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(clippy::large_enum_variant, reason = "driver takes blocks by value")]
 pub enum Action {
     /// Durably write the safety record (a barrier for later effects, O2).
     PersistSafety(Box<SafetyRecord>),
@@ -264,6 +319,25 @@ pub enum Action {
         to: Vec<PublicKey>,
         /// Message.
         msg: WireMessage,
+    },
+    /// Build the mandatory application-control response for retained nonempty work.
+    BuildControlWitness {
+        /// Fresh request id shared with this fresh proposal's transaction request.
+        req: u64,
+        /// Exact view and authenticated parent source.
+        context: ControlWitnessContext,
+    },
+    /// Drive the single process-lived application-control producer for an applied parent.
+    DriveApplicationControl {
+        /// View-independent source, independently revalidated by the application.
+        context: ApplicationControlContext,
+    },
+    /// Deliver one bounded peer partial to the sole application-control owner.
+    ReceiveApplicationControl {
+        /// P2P-authenticated current committee sender, rechecked by the application.
+        from: PublicKey,
+        /// Complete source-bound envelope.
+        message: crate::message::ApplicationControl,
     },
     /// Build a payload (the builder only peeks at its queue).
     BuildPayload {
@@ -368,6 +442,11 @@ pub enum HaltReason {
         /// Height.
         height: u64,
     },
+    /// The executor lost or consumed the original publication owner; stop until recovery.
+    PublicationRecoveryRequired {
+        /// Height whose original publication requires recovery.
+        height: u64,
+    },
     /// A driver contract violation (§6.13): a `BlockApplied` out of order, whose header does
     /// not hash to its `block_hash`, or whose block is not the one this core committed there.
     DriverAnomaly,
@@ -423,6 +502,10 @@ pub struct Footprint {
     pub votes: usize,
     /// Stored timeout votes.
     pub timeouts: usize,
+    /// Fresh transaction parts waiting for their independent control response (at most one).
+    pub fresh_payloads: usize,
+    /// Current-source per-member application-control ingress timestamps.
+    pub control_peers: usize,
     /// Block bodies in memory.
     pub blocks: usize,
     /// `exec` entries.
@@ -457,6 +540,8 @@ impl Footprint {
         Self {
             votes: 3 * 2 * n,
             timeouts: n,
+            fresh_payloads: 1,
+            control_peers: n,
             blocks: 6,
             exec_entries: 6,
             wants: 5,
@@ -476,6 +561,8 @@ impl Footprint {
     pub fn within(&self, bound: &Self) -> bool {
         self.votes <= bound.votes
             && self.timeouts <= bound.timeouts
+            && self.fresh_payloads <= bound.fresh_payloads
+            && self.control_peers <= bound.control_peers
             && self.blocks <= bound.blocks
             && self.exec_entries <= bound.exec_entries
             && self.wants <= bound.wants

@@ -137,7 +137,7 @@ fn run_ordinary_tail_independent_batches(
             &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
             1,
             route,
-        );
+        ).expect("local execution completes");
         assert!(result.is_ok());
         let before = carrier.encode_wire().unwrap();
         assert!(

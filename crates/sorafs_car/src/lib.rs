@@ -53,6 +53,7 @@ pub mod local_fetch;
 pub mod multi_fetch;
 #[cfg(feature = "manifest")]
 pub mod musubi;
+mod output_path;
 #[cfg(feature = "manifest")]
 pub mod payload_verifier;
 pub mod policy;
@@ -76,6 +77,8 @@ pub mod taikai_bundle;
 pub mod trustless;
 #[cfg(feature = "manifest")]
 pub mod verifier;
+#[doc(hidden)]
+pub use output_path::{ensure_output_parent_dir, validate_output_path};
 #[cfg(feature = "manifest")]
 pub use reference::{validate_manifest_car_replay, validate_manifest_car_replay_bytes};
 #[cfg(feature = "manifest")]

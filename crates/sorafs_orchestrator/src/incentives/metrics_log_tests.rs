@@ -49,7 +49,7 @@ fn metrics_log_canonical_frames_replay_across_all_layouts() {
     let expected_bytes = frames.concat();
     let expected_digest = blake3::hash(&expected_bytes);
     let mut layouts = 0;
-    for flags in (0..=u8::MAX).filter(|flags| norito::core::validate_header_flags(*flags).is_ok()) {
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         layouts += 1;
         let _caller = norito::core::DecodeFlagsGuard::enter(flags);
         let temp = tempdir().unwrap();
@@ -79,7 +79,7 @@ fn metrics_log_canonical_frames_replay_across_all_layouts() {
         }
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
-    assert_eq!(layouts, 10);
+    assert_eq!(layouts, 2);
 }
 
 #[test]

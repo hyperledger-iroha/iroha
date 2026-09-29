@@ -6738,8 +6738,6 @@ public final class HttpClientTransportTests {
           : "bootstrap refresh vector key id mismatch";
       final long refreshRounds = number(vector, "refresh_rounds").longValue();
       assert refreshRounds > 0 : "bootstrap refresh vector rounds must be positive";
-      assert refreshRounds <= number(bootstrap, "max_refresh_rounds").longValue()
-          : "bootstrap refresh vector rounds exceed key bound";
       final List<Long> plaintextSlots = longList(vector, "input_plaintext_slots");
       assert !plaintextSlots.isEmpty() : "bootstrap refresh vector plaintext slots empty";
       for (final long slot : plaintextSlots) {
@@ -6747,9 +6745,24 @@ public final class HttpClientTransportTests {
       }
       assert number(vector, "expected_input_ciphertext_bytes").longValue() > 0
           : "bootstrap refresh vector input bytes must be positive";
+      assertBfvUpperSha256("bootstrap refresh vector " + name + " input", string(vector, "expected_input_ciphertext_sha256"));
+      if (vector.containsKey("expected_error")) {
+        assert refreshRounds > number(bootstrap, "max_refresh_rounds").longValue()
+            : "rejected bootstrap refresh vector must exceed key bound";
+        assert ("invalid BFV parameters: BFV bootstrap refresh rounds "
+                + refreshRounds
+                + " exceeds bootstrap key max_refresh_rounds "
+                + number(bootstrap, "max_refresh_rounds").longValue())
+            .equals(string(vector, "expected_error"))
+            : "bootstrap refresh rejection reason mismatch";
+        assert !vector.containsKey("expected_output_ciphertext_sha256")
+            : "rejected bootstrap refresh vector must not publish output";
+        continue;
+      }
+      assert refreshRounds <= number(bootstrap, "max_refresh_rounds").longValue()
+          : "bootstrap refresh vector rounds exceed key bound";
       assert number(vector, "expected_output_ciphertext_bytes").longValue() > 0
           : "bootstrap refresh vector output bytes must be positive";
-      assertBfvUpperSha256("bootstrap refresh vector " + name + " input", string(vector, "expected_input_ciphertext_sha256"));
       assertBfvUpperSha256("bootstrap refresh vector " + name + " output", string(vector, "expected_output_ciphertext_sha256"));
       assertBfvUpperSha256("bootstrap refresh vector " + name + " plaintext", string(vector, "expected_plaintext_sha256"));
       final Map<String, Object> components = object(vector, "output_components");

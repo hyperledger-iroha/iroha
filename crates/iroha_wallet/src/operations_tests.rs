@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-pub(crate) fn fixture_config() -> Config {
+pub fn fixture_config() -> Config {
     // Published deterministic SDK fixture, never an operational wallet identity.
     let source = br#"
 chain = "00000000-0000-0000-0000-000000000000"
@@ -54,11 +54,11 @@ impl HttpTransport for Transport {
                 self.quote_count.fetch_add(1, Ordering::SeqCst);
                 let request: iroha_torii_shared::FeeQuoteRequest = json::from_slice(&request.body)?;
                 let payload = request.payload;
-                let mut intent = payload.fee_payment_intent().clone();
-                if self.wrong_payer.load(Ordering::SeqCst) {
-                    intent =
-                        FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(999));
-                }
+                let intent = if self.wrong_payer.load(Ordering::SeqCst) {
+                    FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(999))
+                } else {
+                    payload.fee_payment_intent().clone()
+                };
                 let quote = FeeQuoteResponse {
                     intent,
                     observation: iroha_torii_shared::FeeQuoteObservation {
@@ -531,7 +531,7 @@ fn alias_creation_preserves_the_exact_plan_and_checks_its_rent_before_signing() 
                 panic!("alias operation required")
             };
             assert_eq!(retained_request, &request);
-            assert_eq!(retained_plan, &plan);
+            assert_eq!(retained_plan.as_ref(), &plan);
             record.verify(&service.config).unwrap();
         } else {
             let error = result.unwrap_err().to_string();

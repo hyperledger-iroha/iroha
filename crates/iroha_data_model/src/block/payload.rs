@@ -103,11 +103,6 @@ mod model {
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
         pub axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
-        /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
-        ///
-        /// Every V1 result field is required; this field stays last to make truncated layouts fail
-        /// closed.
-        pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
     }
 }
 pub use self::model::{BlockPayload, BlockResult};
@@ -178,7 +173,6 @@ impl Ord for BlockResult {
             &self.committed_fragment_count,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
-            &self.lane_finality_statements,
             &self.axt_policy_snapshot,
             &self.axt_transitioned_dataspaces,
         )
@@ -188,7 +182,6 @@ impl Ord for BlockResult {
                 &other.committed_fragment_count,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
-                &other.lane_finality_statements,
                 &other.axt_policy_snapshot,
                 &other.axt_transitioned_dataspaces,
             ))
@@ -215,31 +208,20 @@ impl SignedBlock {
     pub fn external_entrypoint_count(&self) -> usize {
         self.payload.external_entrypoints.len()
     }
-    /// Borrow complete canonical network inputs.
-    /// A valid carrier uses ordinary external inputs OR its sole native source.
-    /// Invalid mixed carriers expose both here and fail native shape validation.
+    /// Borrow complete canonical network inputs: the block's external entrypoints in execution
+    /// order.
     pub fn network_entrypoints(
         &self,
     ) -> impl ExactSizeIterator<Item = &TransactionEntrypoint> + DoubleEndedIterator {
-        NetworkEntrypointIterator::new(self)
+        self.payload.external_entrypoints.iter()
     }
-    /// Number of complete ordinary/native input entries.
+    /// Number of network input entries.
     pub fn network_entrypoint_count(&self) -> usize {
-        self.network_entrypoints().len()
+        self.payload.external_entrypoints.len()
     }
-    /// Borrow one ordinary/native input by canonical index without cloning its body.
+    /// Borrow one network input by canonical index without cloning its body.
     pub fn network_entrypoint_at(&self, index: usize) -> Option<&TransactionEntrypoint> {
-        if index < self.payload.external_entrypoints.len() {
-            return self.payload.external_entrypoints.get(index);
-        }
-        self.payload
-            .execution_context
-            .as_ref()?
-            .native_lane_decisions
-            .as_ref()?
-            .groups
-            .get(index.checked_sub(self.payload.external_entrypoints.len())?)
-            .map(|group| &group.payload.input.entrypoint)
+        self.payload.external_entrypoints.get(index)
     }
     /// Return error for an OUTPUT index.
     pub fn output_error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
@@ -407,6 +389,20 @@ impl SignedBlock {
             .root();
         self.payload.external_entrypoints = entrypoints;
     }
+    /// Whether the proposal contains original consensus work.
+    ///
+    /// Network inputs and lane merges are work. Beacon controls, execution outputs,
+    /// DA metadata and scheduling effects cannot create work.
+    /// This predicate grants no admission or execution authority: each input still
+    /// requires its normal signature, custody and deterministic execution checks.
+    #[must_use]
+    pub fn has_consensus_work(&self) -> bool {
+        self.network_entrypoint_count() > 0
+            || self
+                .lane_merge()
+                .is_some_and(|section| !section.merges.is_empty())
+    }
+
     /// Check whether the block has entrypoints or deterministic artifacts.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -454,7 +450,7 @@ impl SignedBlock {
         }
         true
     }
-    /// Hashes of complete ordinary/native network inputs. Internal invocations are not inputs.
+    /// Hashes of the network inputs. Internal invocations are not inputs.
     pub fn network_input_hashes(
         &self,
     ) -> impl ExactSizeIterator<Item = HashOf<TransactionEntrypoint>> + DoubleEndedIterator + '_
@@ -465,7 +461,7 @@ impl SignedBlock {
     pub fn network_input_merkle_tree(&self) -> MerkleTree<TransactionEntrypoint> {
         self.network_input_hashes().collect()
     }
-    /// Complete network-input root/count; unlike the physical-external header root this includes native inputs.
+    /// Network-input root and count.
     pub fn network_input_merkle_commitment(
         &self,
     ) -> Option<MerkleTreeCommitment<TransactionEntrypoint>> {
@@ -645,48 +641,3 @@ impl ExactSizeIterator for ExternalTransactionIterator<'_> {
         self.remaining
     }
 }
-/// Allocation-free canonical prefix iterator; all forward/backward operations
-/// share exact remaining indices, including alternating consumption.
-struct NetworkEntrypointIterator<'a> {
-    block: &'a SignedBlock,
-    front: usize,
-    back: usize,
-}
-impl<'a> NetworkEntrypointIterator<'a> {
-    fn new(block: &'a SignedBlock) -> Self {
-        let native_count = block
-            .execution_context()
-            .and_then(|context| context.native_lane_decisions.as_ref())
-            .map_or(0, |batch| batch.groups.len());
-        Self {
-            block,
-            front: 0,
-            back: block.external_entrypoint_count() + native_count,
-        }
-    }
-}
-impl<'a> Iterator for NetworkEntrypointIterator<'a> {
-    type Item = &'a TransactionEntrypoint;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        let index = self.front;
-        self.front += 1;
-        self.block.network_entrypoint_at(index)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.back - self.front;
-        (remaining, Some(remaining))
-    }
-}
-impl DoubleEndedIterator for NetworkEntrypointIterator<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        self.back -= 1;
-        self.block.network_entrypoint_at(self.back)
-    }
-}
-impl ExactSizeIterator for NetworkEntrypointIterator<'_> {}

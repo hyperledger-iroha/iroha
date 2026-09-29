@@ -11,6 +11,8 @@ use norito::codec::Encode;
 
 const FIXTURE_NETWORK_PREFIX: u16 = 753;
 
+type DecodeFn = fn(&[u8], u16) -> CodecResult<String>;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -41,28 +43,28 @@ fn account() -> AccountId {
     AccountId::new(pair.public_key().clone())
 }
 
+/// Build the exact `name` envelope: the shared address and revision fields, then `extra`.
+fn envelope(name: &str, expected_revision: u64, extra: Vec<(&str, Value)>) -> Value {
+    let fields = [
+        ("contract_address", Value::String(ADDRESS.to_owned())),
+        (
+            "expected_revision",
+            Value::String(expected_revision.to_string()),
+        ),
+    ]
+    .into_iter()
+    .chain(extra)
+    .map(|(key, value)| (key.to_owned(), value))
+    .collect();
+    object([(name, Value::Object(fields))])
+}
+
 // Construct the expected native instructions independently of the codec under
 // test. Each JSON fixture is paired with its actual ledger type and exact fields.
 fn cases(expected_revision: u64) -> Vec<(&'static str, InstructionBox, Value)> {
     let address: ContractAddress = ADDRESS.parse().expect("native contract address");
     let code_hash = Hash::new(b"activation-codec-artifact");
-    let common = || {
-        [
-            ("contract_address", Value::String(ADDRESS.to_owned())),
-            (
-                "expected_revision",
-                Value::String(expected_revision.to_string()),
-            ),
-        ]
-    };
-    let make = |name, extra: Vec<(&str, Value)>| {
-        let fields = common()
-            .into_iter()
-            .chain(extra)
-            .map(|(key, value)| (key.to_owned(), value))
-            .collect();
-        object([(name, Value::Object(fields))])
-    };
+    let make = |name, extra| envelope(name, expected_revision, extra);
     let mut cases = vec![
         (
             "ActivateContractInstance",
@@ -244,7 +246,7 @@ fn every_revision_rejects_numeric_aliases_null_overflow_and_noncanonical_text() 
             Value::Number(json::Number::F64(1.0)),
             Value::Number(json::Number::F64(1.5)),
             Value::Array(vec![]),
-            Value::String("".into()),
+            Value::String(String::new()),
             Value::String("01".into()),
             Value::String("+1".into()),
             Value::String("-1".into()),
@@ -445,7 +447,7 @@ fn frame_archive_confusion_truncation_and_trailing_data_fail_for_every_variant()
         let archive = native.encode();
         assert!(decode_instruction_frame(&archive, FIXTURE_NETWORK_PREFIX).is_err());
         assert!(decode_instruction_archive(&frame, FIXTURE_NETWORK_PREFIX).is_err());
-        let encodings: [(Vec<u8>, fn(&[u8], u16) -> CodecResult<String>); 2] = [
+        let encodings: [(Vec<u8>, DecodeFn); 2] = [
             (frame, decode_instruction_frame),
             (archive, decode_instruction_archive),
         ];

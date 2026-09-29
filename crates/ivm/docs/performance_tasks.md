@@ -19,8 +19,10 @@ request.
 
 - **AES‑NI/CPU AES round acceleration** – **done.** `aesenc`/`aesdec` now use
   AES‑NI on x86/x86_64 and ARMv8 AESE/AESD on AArch64 when available
-  (runtime‑detected), with scalar and CUDA fallbacks. Results are bit‑exact with
-  the reference round implementation.
+  (runtime‑detected and subject to the file-configured SIMD policy), with the
+  scalar fallback. One round stays on the CPU; eligible large batches can use
+  qualified Metal/CUDA kernels. Results are bit‑exact with the reference round
+  implementation.
 
 - **AArch64 SHA‑256 (ARMv8 SHA2)** – **done.** `sha256_compress` uses ARMv8
   SHA2 intrinsics on AArch64 when available (runtime‑detected with a golden

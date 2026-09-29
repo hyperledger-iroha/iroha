@@ -6,7 +6,7 @@ use iroha_core::pipeline::zk_lane;
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use norito::streaming::{CapabilityFlags, HpkeSuite, PrivacyBucketGranularity};
-use std::{num::NonZeroU64, sync::Arc};
+use std::num::NonZeroU64;
 #[tokio::test]
 async fn zk_lane_emits_warning_on_rejected_trace() {
     // Register a local events sender to capture warnings
@@ -35,7 +35,7 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
     let job = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xCD; 32],
-        program: Arc::from(vec![0x01, 0x00, 0x00, 0x00]),
+        program: vec![0x01, 0x00, 0x00, 0x00].into(),
         header: Some(iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(5).unwrap(),
             None,
@@ -100,7 +100,7 @@ fn zk_task_digest_reflects_transport_metadata() {
     let base = zk_lane::ZkTask {
         tx_hash: None,
         code_hash: [0xAB; 32],
-        program: Arc::from(vec![0x01, 0x00, 0x00, 0x00]),
+        program: vec![0x01, 0x00, 0x00, 0x00].into(),
         header: None,
         trace,
         constraints: Vec::new(),

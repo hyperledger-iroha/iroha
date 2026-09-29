@@ -161,7 +161,9 @@ fn bench_kotodama(c: &mut Criterion) {
         .expect("load warm prepared benchmark artifact");
     vm.set_program_counter(pc)
         .expect("select warm benchmark entrypoint");
-    let template = vm.runtime_template();
+    let template = vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     vm.set_host(host.clone());
     vm.run().expect("preflight warm benchmark invocation");
     assert_eq!(int_result_i64(&vm), 11);
@@ -459,7 +461,9 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
         .expect("load bounded List runtime benchmark");
     vm.set_program_counter(pc)
         .expect("select bounded List runtime benchmark entrypoint");
-    let template = vm.runtime_template();
+    let template = vm
+        .try_runtime_template()
+        .expect("runtime template allocation fits test host");
     vm.run().expect("verify bounded List runtime benchmark");
     assert_eq!(int_result_i64(&vm), 64);
     vm.reset_from_runtime_template(&template)

@@ -1017,7 +1017,7 @@ fn validate_finalized_public_transcript_projection(
     Ok(())
 }
 
-/// Share the exact construction sequence without copying public data for legacy callers.
+/// Share the exact construction sequence across production batch projections.
 fn build_transfer_batch_with_projection<'a, I, P>(
     parameter_set: impl Into<String>,
     public_inputs: FastpqPublicInputs,

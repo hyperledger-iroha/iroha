@@ -36,12 +36,9 @@ Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 Local contract durable-state fixtures require exact NFC path spelling and
 reject duplicate decoded JSON keys.
 
-`iroha app zk ivm prove --wait` prints the terminal job JSON and exits unsuccessfully when
-proving fails. It checks that each response identifies the requested job;
-successful job creation alone does not establish successful proof generation.
-These IVM proofs bind public commitments. Validators still replay execution.
-The prove endpoint derives the proving key from the canonical registered verifier
-key, so operators do not need to install a separate proving-key archive.
+Binding-only IVM proof helpers are removed. Core rejects `IvmProved` until the
+complete native STARK execution relation and State-owned finalized anchor are
+available. Generic proof and verifying-key registry commands remain available.
 
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
@@ -561,26 +558,19 @@ The CLI builds, quotes, signs, and submits VK registry transactions with the acc
 the active client configuration. VK JSON files contain public registry data only; signing
 authorities and private keys are not accepted in these files.
 
-Generate and register the canonical IVM replay-binding key:
+Register a verifying-key DTO produced by the circuit's canonical tooling:
 
 The optional `namespace` field defaults to `core` when omitted or `null`. Set it
 to `kagemusha_v1` for KAGEMUSHA V1 verifier records. Explicit namespace values
 must be non-empty and must not contain leading or trailing whitespace.
 
 ```bash
-cargo run --locked -p iroha_cli --features dev-tools --bin ivm_replay_binding_keygen -- \
-  --name ivm_replay_binding \
-  --vk-out replay-binding.vk \
-  --template-out vk_register.json
 iroha app zk vk register --json vk_register.json
 ```
 
-The helper writes the complete public registration DTO using the compiled
-circuit's exact key, schema, curve and proof limit. Developers do not select
-transcript parameters or invent circuit names. This relation binds public
-commitments; validators still replay IVM execution. Server proving derives the
-proving key automatically. Add `--pk-out replay-binding.pk` only when an offline
-proving-key archive is needed.
+The DTO must contain the admitted circuit's exact key, schema, curve and proof
+limit. Retain these values from its canonical generator or authenticated release
+artifact; do not invent circuit names or transcript parameters.
 
 To update an existing record, use a generated registration DTO with the same
 registry name and increase its `version` before submitting it:
@@ -600,7 +590,7 @@ circuit IDs and schema hashes are rejected by the production registry.
 Read a VK record as JSON:
 
 ```bash
-iroha app zk vk get --backend halo2/ipa --name ivm_replay_binding
+iroha app zk vk get --backend halo2/ipa --name <registered-key-name>
 ```
 
 Use the canonical generator's `public_inputs_schema_hash_hex` unchanged. It
@@ -733,7 +723,7 @@ Here are some examples of filtering:
 # Filter domains by id
 iroha ledger domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
 # Filter accounts by domain
-iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
+iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}'
 # Filter asset by domain
 iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
 ```
@@ -831,11 +821,19 @@ hexadecimal bytes followed by EOF. The descriptor is consumed before native
 output generation; the seed never enters process arguments or public receipts.
 Generic localnet development generation has its own independent input policy.
 
-`iroha tx collect-scaling-inputs` requires the independently retained complete
-Native context archive via `--native-contexts`, `--native-contexts-sha256`, and
-`--native-contexts-max-bytes`. Its canonical `Vec<NativeLaneContextsEvidenceV1>`
-contains one post-carrier context witness per height, including empty sets, in
-height order from genesis through the exact stopped tip. The collector verifies
-that archive against the anchored finality chain and exact Kura carriers before
-publishing `Vec<FinalizedNativeContextV1>` and committed Network output queries.
-A genesis context alone cannot supply this historical execution evidence.
+`kagami advanced kura scaling-evidence collect` reads the original stopped Kura
+store and its finalized native context archive. It requires independently pinned
+original signed-genesis and epoch-context files, chain/network/epoch identity and
+finite file/work bounds. It publishes the complete canonical
+`Vec<NativeHeightEvidenceV1>` and actual `Vec<CommittedTransaction>` query vector;
+it does not need a client signing key or a live Torii connection.
+
+Each height retains one complete canonical `SignedBlockWire` and the original
+`NativeContextProjectionV1` values bound by that carrier's mandatory
+`R.native_contexts` proof. The native verifier authenticates the actual
+genesis-to-tip chain, including the H2 anchor for genesis execution, and each
+committed Network input/output inclusion. An absent original context record
+fails collection. The two outputs use retained `.publishing` files and separate
+NOREPLACE publications; failures preserve surviving artifacts without returning
+a successful pair. Facts, export and independent replay still authenticate the
+complete original workload schedule before reporting useful work.

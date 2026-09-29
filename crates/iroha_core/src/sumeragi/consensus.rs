@@ -1,8 +1,7 @@
 //! Sumeragi bootstrap helpers.
 //!
-//! Global consensus messages, signatures, and quorum certificates live only
-//! in [`iroha_data_model::block::consensus_v2`]. This module deliberately does
-//! not expose the retired bitmap-QC or v1 vote-signing helpers.
+//! Native global messages and quorum certificates are owned by `iroha_sumeragi`.
+//! This module retains signed-genesis metadata and common lane evidence types.
 //!
 //! Mode separation (permissioned vs `NPoS`) is runtime-selectable via config/WSV.
 //! Build artifacts no longer hard‑code consensus mode; peers validate mode
@@ -12,22 +11,18 @@
 compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
-use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus::{
     ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
 };
-pub use iroha_data_model::block::consensus::{
-    Evidence, ExecKv, ExecWitness, LaneBlockProposalV1, ValidatorIndex,
-};
+pub use iroha_data_model::block::consensus::{ExecKv, ExecWitness, ValidatorIndex};
 /// Live consensus protocol revision.
-pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
+pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
 /// Permissioned Sumeragi v2 handshake and signing-domain tag.
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 /// NPoS Sumeragi v2 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
-use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
 /// Compute the genesis-embedded v2 consensus-parameters fingerprint.
@@ -35,8 +30,8 @@ use iroha_data_model::prelude::*;
 /// Mode, cadence, block bound, signed DA/Nexus context, and the
 /// genesis-selected NPoS election inputs are the complete canonical Norito
 /// projection for the first release.
-/// Mutable shared adapter settings are committed separately by
-/// [`SumeragiConfig::v2_config`].
+/// Native signed configuration reporting is derived by
+/// [`crate::sumeragi::node::consensus_configuration_fingerprint`].
 pub fn compute_consensus_parameters_fingerprint(
     params: &ConsensusGenesisParams,
 ) -> Result<[u8; 32], String> {
@@ -69,9 +64,6 @@ pub fn consensus_genesis_params_from_parameters(
                 max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond().clone(),
                 min_nomination_bond: npos.min_nomination_bond().clone(),
-                max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                seat_band_pct: npos.seat_band_pct(),
-                max_entity_correlation_pct: npos.max_entity_correlation_pct(),
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
@@ -89,72 +81,9 @@ pub fn consensus_genesis_params_from_parameters(
         block_cadence_ms: sumeragi.block_cadence_ms(),
         block_max_transactions: block.max_transactions(),
         mode,
-        protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
+        protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         v2_context,
     })
-}
-/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from a world
-/// snapshot, committed height, and local configuration.
-#[allow(clippy::too_many_lines)]
-pub fn compute_consensus_handshake_caps_from_world(
-    world: &impl WorldReadOnly,
-    _height: u64,
-    sumeragi_config: &SumeragiConfig,
-    config_caps: &iroha_p2p::ConsensusConfigCaps,
-    frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    signed_v2_context: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
-) -> Result<(String, String, iroha_p2p::ConsensusHandshakeCaps), String> {
-    let s_params = world.parameters();
-    let (mode_tag, bls_domain) = match frozen_mode {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => (
-            PERMISSIONED_TAG.to_string(),
-            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN.to_string(),
-        ),
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => (
-            NPOS_TAG.to_string(),
-            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN.to_string(),
-        ),
-    };
-    let canon =
-        consensus_genesis_params_from_parameters(frozen_mode, s_params, signed_v2_context.clone())
-            .map_err(str::to_owned)?;
-    let fingerprint = compute_consensus_parameters_fingerprint(&canon)?;
-    let mut config_caps = *config_caps;
-    config_caps.execution_policy_hash = signed_v2_context.execution_policy_hash;
-    config_caps.v2_config_fingerprint = sumeragi_config
-        .v2_config(s_params.sumeragi().block_cadence(), frozen_mode)
-        .map_err(|error| error.to_string())?
-        .fingerprint()
-        .into();
-    Ok((
-        mode_tag.clone(),
-        bls_domain,
-        iroha_p2p::ConsensusHandshakeCaps {
-            mode: frozen_mode,
-            proto_version: PROTO_VERSION,
-            consensus_fingerprint: fingerprint,
-            config: config_caps,
-        },
-    ))
-}
-/// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current
-/// state view and configuration.
-pub fn compute_consensus_handshake_caps_from_view(
-    view: &StateView<'_>,
-    sumeragi_config: &SumeragiConfig,
-    config_caps: &iroha_p2p::ConsensusConfigCaps,
-    frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    signed_v2_context: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
-) -> Result<(String, String, iroha_p2p::ConsensusHandshakeCaps), String> {
-    let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-    compute_consensus_handshake_caps_from_world(
-        view.world(),
-        height,
-        sumeragi_config,
-        config_caps,
-        frozen_mode,
-        signed_v2_context,
-    )
 }
 /// Handshake gate structure for p2p checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,9 +199,6 @@ mod tests {
                 max_validators: 31,
                 min_self_bond: 1_u64.into(),
                 min_nomination_bond: 1_u64.into(),
-                max_nominator_concentration_pct: 25,
-                seat_band_pct: 5,
-                max_entity_correlation_pct: 25,
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 50,
                 activation_lag_blocks: 1,
@@ -342,9 +268,6 @@ mod tests {
                 max_validators: 31,
                 min_self_bond: 1_000_u64.into(),
                 min_nomination_bond: 1_u64.into(),
-                max_nominator_concentration_pct: 40,
-                seat_band_pct: 15,
-                max_entity_correlation_pct: 25,
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 7_200,
                 activation_lag_blocks: 1,

@@ -35,7 +35,6 @@ use iroha::{
 // JSON and Norito decoders additionally receive explicit graph/allocation
 // limits so a short hostile frame cannot request a much larger heap.
 const ZK_CLI_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
-const ZK_CLI_VK_MAX_BYTES_V1: usize = iroha_core::zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES;
 const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
@@ -108,9 +107,6 @@ pub enum Command {
     /// Inspect proof registry (list/count/get)
     #[command(subcommand)]
     Proofs(ProofCommand),
-    /// IVM replay-binding helpers; validators still replay execution
-    #[command(subcommand)]
-    Ivm(IvmCommand),
     /// ZK Vote helpers (tally)
     #[command(subcommand)]
     Vote(VoteCommand),
@@ -135,7 +131,6 @@ impl Run for Command {
             Command::RegisterAsset(args) => args.run(context),
             Command::Vk(args) => args.run(context),
             Command::Proofs(args) => args.run(context),
-            Command::Ivm(args) => args.run(context),
             Command::Vote(args) => args.run(context),
             Command::Envelope(args) => args.run(context),
         }
@@ -336,185 +331,6 @@ impl Run for ProofPruneArgs {
         let prune: InstructionBox =
             iroha_data_model::isi::zk::PruneProofs::new(self.backend).into();
         context.finish(Executable::Instructions(vec![prune].into()))
-    }
-}
-#[derive(clap::Subcommand, Debug)]
-pub enum IvmCommand {
-    /// Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
-    Derive(IvmDeriveArgs),
-    /// Create an IVM replay-binding proof job via `/v1/zk/ivm/prove`
-    ///
-    /// This binds public commitments. Validators still replay execution.
-    Prove(IvmProveArgs),
-    /// Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
-    Get(IvmProveGetArgs),
-    /// Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
-    Delete(IvmProveDeleteArgs),
-    /// Export an optional offline proving-key archive for the canonical IVM replay-binding circuit
-    DerivePk(IvmDerivePkArgs),
-}
-impl Run for IvmCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            IvmCommand::Derive(args) => args.run(context),
-            IvmCommand::Prove(args) => args.run(context),
-            IvmCommand::Get(args) => args.run(context),
-            IvmCommand::Delete(args) => args.run(context),
-            IvmCommand::DerivePk(args) => args.run(context),
-        }
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmDeriveArgs {
-    /// Path to a JSON request DTO `{ vk_ref, authority, fee_payment, metadata, bytecode }`
-    #[arg(long, value_name = "PATH")]
-    json: std::path::PathBuf,
-}
-impl Run for IvmDeriveArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM derive request")?;
-        let value = client.post_zk_ivm_derive_json(&req)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmProveArgs {
-    /// Path to a JSON request DTO `{ vk_ref, authority, fee_payment, metadata, bytecode, proved? }`
-    #[arg(long, value_name = "PATH")]
-    json: std::path::PathBuf,
-    /// Poll until completion; print terminal JSON and fail if the proof job fails
-    #[arg(long)]
-    wait: bool,
-    /// Poll interval (milliseconds) when using --wait
-    #[arg(long, default_value_t = 250)]
-    poll_interval_ms: u64,
-    /// Optional timeout (seconds) when using --wait (0 = no timeout)
-    #[arg(long, default_value_t = 0)]
-    timeout_secs: u64,
-}
-impl Run for IvmProveArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM prove request")?;
-        let created = client.post_zk_ivm_prove_json(&req)?;
-        if !self.wait {
-            context.print_data(&created)?;
-            return Ok(());
-        }
-        let job_id = created
-            .get("job_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("response missing job_id"))?
-            .to_string();
-        let started = std::time::Instant::now();
-        let poll = std::time::Duration::from_millis(self.poll_interval_ms.max(10));
-        let timeout =
-            (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
-        loop {
-            if let Some(timeout) = timeout
-                && started.elapsed() >= timeout
-            {
-                eyre::bail!("timed out waiting for ivm prove job {job_id}");
-            }
-            let status = client.get_zk_ivm_prove_job_json(&job_id)?;
-            if handle_ivm_prove_job_status(&job_id, &status, |value| context.print_data(value))? {
-                return Ok(());
-            }
-            std::thread::sleep(poll);
-        }
-    }
-}
-
-/// Print an exact job's terminal response, preserving failure as a CLI error.
-fn handle_ivm_prove_job_status(
-    job_id: &str,
-    status: &norito::json::Value,
-    print: impl FnOnce(&norito::json::Value) -> Result<()>,
-) -> Result<bool> {
-    if status.get("job_id").and_then(norito::json::Value::as_str) != Some(job_id) {
-        eyre::bail!("prove response does not identify requested job {job_id}");
-    }
-    let label = status
-        .get("status")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre::eyre!("missing prove status for job {job_id}"))?;
-    match label {
-        "pending" | "running" => Ok(false),
-        "done" => {
-            print(status)?;
-            Ok(true)
-        }
-        "error" => {
-            print(status)?;
-            let detail = status
-                .get("error")
-                .and_then(norito::json::Value::as_str)
-                .filter(|detail| !detail.is_empty())
-                .unwrap_or("server provided no error detail");
-            eyre::bail!("IVM prove job {job_id} failed: {detail}");
-        }
-        other => eyre::bail!("unexpected job status `{other}` for job {job_id}"),
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct IvmProveGetArgs {
-    /// Prove job id returned by `iroha app zk ivm prove`
-    #[arg(long, value_name = "JOB_ID")]
-    job_id: String,
-}
-impl Run for IvmProveGetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let value = client.get_zk_ivm_prove_job_json(&self.job_id)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmProveDeleteArgs {
-    /// Prove job id returned by `iroha app zk ivm prove`
-    #[arg(long, value_name = "JOB_ID")]
-    job_id: String,
-}
-impl Run for IvmProveDeleteArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config()?;
-        let value = client.delete_zk_ivm_prove_job_json(&self.job_id)?;
-        context.print_data(&value)?;
-        Ok(())
-    }
-}
-#[derive(clap::Args, Debug)]
-pub struct IvmDerivePkArgs {
-    /// Canonical backend label for the verifying key envelope
-    #[arg(long, default_value = "halo2/ipa", value_name = "BACKEND")]
-    backend: String,
-    /// Path to the canonical ZK1 verifier-key envelope (`.vk`), including its circuit and parameter binding
-    #[arg(long, value_name = "PATH")]
-    vk: std::path::PathBuf,
-    /// Output path for circuit/vk-bound Norito proving key archive (`.pk`)
-    #[arg(long, value_name = "PATH")]
-    out: std::path::PathBuf,
-}
-impl Run for IvmDerivePkArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let vk_bytes =
-            read_zk_file_bounded(&self.vk, ZK_CLI_VK_MAX_BYTES_V1, "Halo2 IPA verifying key")?;
-        let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(self.backend, vk_bytes);
-        let pk = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
-            .map_err(|err| {
-                eyre::eyre!("failed to derive proving key bytes from verifying key bytes: {err}")
-            })?;
-        std::fs::write(&self.out, &pk)?;
-        context.println(format!(
-            "Wrote {} bytes to {}",
-            pk.len(),
-            self.out.display()
-        ))?;
-        Ok(())
     }
 }
 #[derive(clap::Subcommand, Debug)]
@@ -961,17 +777,9 @@ mod tests {
 
     fn check_vk_submission_dispatch(operation: VkSubmissionOperation) {
         use iroha::data_model::isi::verifying_keys::{RegisterVerifyingKey, UpdateVerifyingKey};
-        let record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("core", 1).unwrap();
-        let key = record.key.as_ref().unwrap();
         let mut payload = sample_vk_submission(Some("core"));
-        payload.circuit_id = record.circuit_id.clone();
-        payload.public_inputs_schema_hash_hex = hex::encode(record.public_inputs_schema_hash);
-        payload.curve = Some(record.curve.clone());
-        payload.gas_schedule_id = record.gas_schedule_id.clone();
-        payload.vk_len = Some(record.vk_len);
-        payload.max_proof_bytes = Some(record.max_proof_bytes);
-        payload.commitment_hex = Some(hex::encode(record.commitment));
-        payload.vk_bytes = Some(base64::engine::general_purpose::STANDARD.encode(&key.bytes));
+        payload.circuit_id = "halo2/pasta/ipa/kaigi-usage-v1".to_owned();
+        let record = build_vk_record(&payload, operation).expect("canonical submission record");
         let directory = tempfile::tempdir().unwrap();
         let json = directory.path().join("vk.json");
         std::fs::write(&json, norito::json::to_vec(&payload).unwrap()).unwrap();
@@ -1016,88 +824,6 @@ mod tests {
     #[test]
     fn vk_submission_update_uses_canonical_receipt_owner() {
         check_vk_submission_dispatch(VkSubmissionOperation::Update);
-    }
-
-    #[test]
-    fn ivm_prove_job_waits_without_printing_intermediate_responses() {
-        for label in ["pending", "running"] {
-            let response = norito::json!({"job_id": "job-7", "status": label});
-            assert!(
-                !handle_ivm_prove_job_status("job-7", &response, |_| {
-                    panic!("intermediate job response must not be printed")
-                })
-                .expect("continue waiting")
-            );
-        }
-    }
-
-    #[test]
-    fn ivm_prove_job_success_prints_the_complete_terminal_response() {
-        let response = norito::json!({
-            "job_id": "job-7", "status": "done", "attachment": {"proof": "retained"}
-        });
-        let mut printed = None;
-        assert!(
-            handle_ivm_prove_job_status("job-7", &response, |value| {
-                printed = Some(value.clone());
-                Ok(())
-            })
-            .expect("successful completion")
-        );
-        assert_eq!(printed.as_ref(), Some(&response));
-    }
-
-    #[test]
-    fn ivm_prove_job_failure_prints_details_and_returns_an_error() {
-        for detail in [Some("verifying key is unavailable"), Some(""), None] {
-            let response = norito::json!({
-                "job_id": "job-7", "status": "error", "error": detail
-            });
-            let mut printed = None;
-            let error = handle_ivm_prove_job_status("job-7", &response, |value| {
-                printed = Some(value.clone());
-                Ok(())
-            })
-            .expect_err("failed job must not produce a successful CLI exit");
-            assert_eq!(printed.as_ref(), Some(&response));
-            assert_eq!(
-                error.to_string(),
-                format!(
-                    "IVM prove job job-7 failed: {}",
-                    detail
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or("server provided no error detail")
-                )
-            );
-        }
-    }
-
-    #[test]
-    fn ivm_prove_job_rejects_mismatched_or_malformed_responses() {
-        for response in [
-            norito::json!({"job_id": "another-job", "status": "done"}),
-            norito::json!({"status": "done"}),
-            norito::json!({"job_id": "job-7"}),
-            norito::json!({"job_id": "job-7", "status": 1}),
-            norito::json!({"job_id": "job-7", "status": "unexpected"}),
-        ] {
-            let _ = handle_ivm_prove_job_status("job-7", &response, |_| {
-                panic!("invalid response must not be published as this job's result")
-            })
-            .expect_err("invalid response must fail before printing");
-        }
-    }
-
-    #[test]
-    fn ivm_prove_job_propagates_terminal_output_failures() {
-        for label in ["done", "error"] {
-            let response = norito::json!({"job_id": "job-7", "status": label});
-            let error = handle_ivm_prove_job_status("job-7", &response, |_| {
-                eyre::bail!("output is closed")
-            })
-            .expect_err("output failure remains visible");
-            assert_eq!(error.to_string(), "output is closed");
-        }
     }
 
     fn checked_zk_ed25519_key_fixture() -> iroha_crypto::KeyPair {
@@ -1165,6 +891,9 @@ mod tests {
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
             "halo2/ipa:ivm-replay-binding-v1:vk_ivm",
+            "halo2/ipa:ivm-execution-v1:vk_ivm",
+            "halo2/pasta/ivm-execution-v1:vk_ivm",
+            "halo2/pasta/ivm-replay-binding-v1:vk_ivm",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -1174,10 +903,6 @@ mod tests {
                 "{literal:?} must reject before building a verifying-key id"
             );
         }
-        let parsed = parse_vk_id_pair("halo2/pasta/ivm-replay-binding-v1:vk_ivm")
-            .expect("canonical IVM execution vk id");
-        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-replay-binding-v1");
-        assert_eq!(parsed.name.as_str(), "vk_ivm");
         let parsed = parse_vk_id_pair("stark/fri/poseidon-x7-goldilocks-6x64-v1:vk_stark")
             .expect("stark vk id");
         assert_eq!(

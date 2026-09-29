@@ -550,7 +550,7 @@ fn leader_repushes_to_members_lacking_the_proposal() {
 }
 
 #[test]
-fn proposals_and_commit_qcs_reach_next_committee_joiners() {
+fn boundary_proposals_use_only_the_applied_committee() {
     let mut h = H::new(5, |_| 0);
     let keys: Vec<PublicKey> = (0..5).map(|i| h.v.key(i)).collect();
     h.committees
@@ -574,10 +574,16 @@ fn proposals_and_commit_qcs_reach_next_committee_joiners() {
         .find(|(_, m)| matches!(m, WireMessage::Proposal(_)))
         .expect("proposal");
     assert!(
-        broadcast.0.contains(&keys[4]),
-        "the joiner of C_2 receives the proposal"
+        h.core.config(2).is_none(),
+        "successor authority awaits the applied boundary"
     );
-    assert_eq!(broadcast.0.last(), Some(&keys[4]), "after the members");
+    assert!(
+        !broadcast.0.contains(&keys[4]),
+        "an unapplied successor cannot become an authenticated proposal recipient"
+    );
+    h.commit_with(view, b"authenticated committee boundary");
+    assert_eq!(h.core.cfg.committee, h.config(2).committee);
+    assert!(h.core.cfg.committee.contains(&keys[4]));
 }
 
 // ---- §6.9 sync and serving ------------------------------------------------------------------------
@@ -696,7 +702,9 @@ fn startup_rejects_bad_input() {
     init.configs.retain(|(height, _)| *height != 2);
     assert_eq!(
         new(init, h.local, signers()),
-        Err(ConfigError::MissingConfig(2))
+        Err(ConfigError::InvalidInit(
+            "next epoch must await its applied boundary"
+        ))
     );
     let mut init = h.init(fresh.clone());
     init.tip.block_hash = Hash32([1; 32]);
@@ -741,6 +749,51 @@ fn startup_rejects_bad_input() {
     assert_eq!(
         new(h.init(fresh), local, signers()),
         Err(ConfigError::RebroadcastTooLong)
+    );
+}
+
+/// `check_init` at a committed tip: a hash-consistent tip header of an epoch other than `C_t`'s,
+/// and a tip whose `t + 2` overflows, are refused.
+#[test]
+fn startup_rejects_foreign_tip_epoch_and_height_overflow() {
+    let mut h = H::new(4, pick::set_a(0));
+    h.commit_heights(2);
+    let key = h.signers[0].public_key().clone();
+    let state = RecordState::Present(h.records[&key].clone());
+    let new = |init: Init| {
+        let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+        Core::new(
+            h.local,
+            init,
+            signers,
+            Box::new(h.v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            0,
+        )
+        .map(|_| ())
+    };
+    let valid = h.init(vec![(key, state, false)]);
+    assert!(valid.tip.height > valid.genesis_height);
+    assert_eq!(new(valid.clone()), Ok(()));
+    let mut foreign = valid.clone();
+    let header = foreign.tip.header.as_mut().unwrap();
+    header.epoch.epoch += 1;
+    foreign.tip.block_hash = header.hash(&h.v.crypto);
+    assert_eq!(
+        new(foreign),
+        Err(ConfigError::InvalidInit(
+            "noncontiguous authenticated epoch window"
+        ))
+    );
+    let mut overflow = valid;
+    overflow.tip.height = u64::MAX - 1;
+    let header = overflow.tip.header.as_mut().unwrap();
+    header.height = u64::MAX - 1;
+    overflow.tip.block_hash = header.hash(&h.v.crypto);
+    overflow.configs.clear();
+    assert_eq!(
+        new(overflow),
+        Err(ConfigError::InvalidInit("height overflow"))
     );
 }
 

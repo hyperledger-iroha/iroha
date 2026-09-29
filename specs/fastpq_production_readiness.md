@@ -135,11 +135,20 @@ retained baseline bytes and passes independent artifact verification, with
 `193a54c2e050cd1a067c8c5eafb3aa7c4745fc7a46f41de04f41a5343b8f8403`;
 225 scoped source inputs have zero drift. Receipts are retained under
 `dist/zk-remediation/2026-09-29/fastpq-source-owner-proof-run1/`.
-The current ordinary and AXT two-child remeasurements are running. Their fixture
-uses the maximum default two segments/four update occurrences, a sender near
-the signed 512-bit maximum and receiver scale 28; repeated ALICE/BOB keys do not
-cover every distinct-key/touched-tree shape. Maximum application shapes and
-broader deployment resource behavior remain open.
+Both repaired-source two-child remeasurements completed: ordinary produces
+971,675 bytes at 1,881,849,856 bytes maximum RSS; AXT produces 973,573 bytes at
+1,875,820,544 bytes maximum RSS. Each passes separate retained-artifact replay.
+The unchanged structural bounds still apply. These measured process outcomes
+resolve the observed overrun for the recorded repeated-key fixtures, not a
+universal RSS guarantee. Their maximum default two segments/four update
+occurrences use a sender near the signed 512-bit maximum and receiver scale 28;
+repeated ALICE/BOB keys do not cover every distinct-key/touched-tree shape.
+The proof-run source check records only `Cargo.lock` drift after capture; it
+cannot attest the subsequently changed checkout or complete dependency closure.
+The [September 29 record](../docs/history/2026-09-29/fastpq-two-child-memory-repair.md)
+retains artifact identities and exact scope. Four-distinct-key and maximum AXT
+context tests are implemented but await a fresh build and complete proofs.
+Maximum application shapes and broader deployment resource behavior remain open.
 All quoted timings are from a contended host and describe the stated fixtures.
 They do not establish a controlled speed ratio or release-fleet throughput.
 

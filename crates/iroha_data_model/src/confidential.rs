@@ -1057,6 +1057,8 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     DeriveFast,
 )]
 #[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::ConfidentialParamsId")]
 pub struct ConfidentialParamsId {
     value: u32,
 }
@@ -1187,6 +1189,31 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_registry_schema_identity_roundtrips() {
+        let value = ConfidentialParamsId::new(17);
+        assert_eq!(
+            <ConfidentialParamsId as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::confidential::ConfidentialParamsId"
+        );
+        let encoded = norito::encode_canonical(&value).expect("canonical owner frame");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<ConfidentialParamsId>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ConfidentialParamsId>(&encoded)
+                .expect("canonical owner roundtrip"),
+            value
+        );
+        let mut wrong_owner = encoded;
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ConfidentialParamsId>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     mod memo_slots;
     use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};

@@ -1,6 +1,6 @@
 //! Actual State acquisition must jointly retire original World and membership writers.
 //!
-//! Register this child under carrier_preparation_tests.rs to reuse its genuine
+//! Register this child under acquisition_fixture_tests.rs to reuse its original
 //! four-validator fixture without widening any production or test API.
 
 use super::fixture;
@@ -216,7 +216,7 @@ enum StateExit {
 }
 
 fn assert_state_exit_releases_all_original_writers(exit: StateExit) {
-    let (state, proposal, _topology, _context) = fixture();
+    let (state, proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let mut parameters = Some(
@@ -346,7 +346,7 @@ fn pristine_stage_panic_releases_healthy_membership_before_world_notification() 
 
 #[test]
 fn acquired_runtime_result_drop_releases_membership_before_world_notification() {
-    let (state, _proposal, _topology, _context) = fixture();
+    let (state, _proposal) = fixture();
     let state: Arc<State> = Arc::from(state);
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let parameters = state
@@ -403,7 +403,7 @@ fn acquired_runtime_result_drop_releases_membership_before_world_notification() 
 #[test]
 fn runtime_index_snapshots_notify_before_acquiring_original_writers() {
     for replacement in [false, true] {
-        let (state, _proposal, _topology, _context) = fixture();
+        let (state, _proposal) = fixture();
         let state: Arc<State> = Arc::from(state);
         let membership = membership_probe_before_stage(&state);
         let callback = membership_probe_callback(&state, membership);

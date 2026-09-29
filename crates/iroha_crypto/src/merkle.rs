@@ -97,6 +97,9 @@ impl<T> MerkleTreeCommitment<T> {
 /// Errors returned by Merkle tree helpers.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MerkleError {
+    /// A fallible Merkle node allocation could not be reserved.
+    #[error("merkle tree allocation unavailable")]
+    AllocationUnavailable,
     /// Chunk size must be in the range `1..=32`.
     #[error("invalid chunk size {chunk}; expected 1..=32 bytes")]
     InvalidChunkSize {
@@ -767,6 +770,34 @@ impl<T> Default for MerkleTree<T> {
     }
 }
 impl<T> MerkleTree<T> {
+    /// Clone the retained node array using a checked, fallible allocation.
+    ///
+    /// The clone keeps the exact node ordering and hashing scheme. Runtime
+    /// owners can reserve its reported footprint before calling this method.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::AllocationUnavailable`] if the node array does
+    /// not fit the host allocation geometry or the allocator refuses it.
+    pub fn try_clone_allocation(&self) -> Result<Self, MerkleError> {
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(self.nodes.len())
+            .map_err(|_| MerkleError::AllocationUnavailable)?;
+        nodes.extend_from_slice(&self.nodes);
+        Ok(Self {
+            hash_scheme: self.hash_scheme,
+            nodes,
+        })
+    }
+
+    /// Allocator-requested bytes retained by the internal node array.
+    ///
+    /// This reports native allocation capacity, independently of the wire
+    /// encoding and tree commitment. Allocator bookkeeping is excluded.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.nodes.capacity() * core::mem::size_of::<Option<HashOf<T>>>()
+    }
     fn ensure_serialized_leaf_count(leaf_count: usize) -> Result<(), MerkleError> {
         if leaf_count > SERIALIZED_MERKLE_TREE_MAX_LEAVES_V1 {
             return Err(MerkleError::SerializedTreeTooManyLeaves {
@@ -960,20 +991,19 @@ impl<T> MerkleTree<T> {
     where
         I: IntoIterator<Item = HashOf<T>>,
     {
-        let mut frontier: Vec<Option<HashOf<T>>> = Vec::new();
+        // A native pointer-width frontier covers every representable leaf count. No
+        // fallible backing allocation or input-sized scratch is needed for root-only hashing.
+        let mut frontier = [None; usize::BITS as usize];
         for leaf in leaves {
             let mut node = Self::leaf_hash(&leaf);
             let mut level = 0_usize;
             loop {
-                if level == frontier.len() {
-                    frontier.push(Some(node));
-                    break;
-                }
-                if let Some(left) = frontier[level].take() {
+                let slot = frontier.get_mut(level)?;
+                if let Some(left) = slot.take() {
                     node = Self::pair_hash(Some(&left), Some(&node))?;
                     level = level.checked_add(1)?;
                 } else {
-                    frontier[level] = Some(node);
+                    *slot = Some(node);
                     break;
                 }
             }
@@ -1492,6 +1522,94 @@ impl CompactMerkleProof<[u8; 32]> {
 // nodes. The resulting 32-byte digests are wrapped with Hash::prehashed to
 // maintain the Hash invariants (LSB set) while preserving the SHA-256 layout.
 impl MerkleTree<[u8; 32]> {
+    fn repeated_sha256_node_capacity(leaf_count: usize) -> Result<usize, MerkleError> {
+        leaf_count
+            .max(1)
+            .checked_next_power_of_two()
+            .and_then(|slots| slots.checked_mul(2))
+            .ok_or(MerkleError::AllocationUnavailable)
+    }
+
+    /// Requested bytes for the sole node allocation of a repeated-leaf SHA-256 tree.
+    ///
+    /// Reserve this amount before calling
+    /// [`Self::try_from_repeated_hashed_leaf_sha256`]. The returned tree reports
+    /// its actual retained capacity through [`Self::allocated_bytes`].
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::AllocationUnavailable`] when the requested node
+    /// array cannot fit in the host address space.
+    pub fn repeated_sha256_node_allocation_bytes(leaf_count: usize) -> Result<usize, MerkleError> {
+        let bytes = Self::repeated_sha256_node_capacity(leaf_count)?
+            .checked_mul(core::mem::size_of::<Option<HashOf<[u8; 32]>>>())
+            .ok_or(MerkleError::AllocationUnavailable)?;
+        if bytes > isize::MAX as usize {
+            return Err(MerkleError::AllocationUnavailable);
+        }
+        Ok(bytes)
+    }
+
+    /// Build a repeated pre-hashed SHA-256 leaf tree with one fallible node allocation.
+    ///
+    /// The breadth-first node layout, promotion of an unpaired right-edge
+    /// leaf, and retained node capacity match [`Self::from_hashed_leaves_sha256`].
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::AllocationUnavailable`] for overflowing geometry
+    /// or when the node array cannot be reserved.
+    pub fn try_from_repeated_hashed_leaf_sha256(
+        leaf_count: usize,
+        digest: [u8; 32],
+    ) -> Result<Self, MerkleError> {
+        let mut tree = Self::try_sha256_node_storage(leaf_count)?;
+        if leaf_count != 0 {
+            let offset = tree.nodes.len() - leaf_count;
+            let leaf = HashOf::from_untyped_unchecked(Hash::prehashed(digest));
+            tree.nodes[offset..].fill(Some(leaf));
+            tree.rebuild_sha256_parents(offset);
+        }
+        Ok(tree)
+    }
+
+    /// Build exact hashed leaves with one fallible, fixed-geometry node allocation.
+    ///
+    /// Capacity matches [`Self::repeated_sha256_node_allocation_bytes`]. Leaves,
+    /// node ordering and ragged promotion use the same canonical SHA-256 relation
+    /// as [`Self::rewrite_hashed_leaves_sha256`]; no temporary queue is allocated.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::AllocationUnavailable`] for overflowing geometry
+    /// or when the sole node array cannot be reserved.
+    pub fn try_from_hashed_leaves_sha256(digests: &[[u8; 32]]) -> Result<Self, MerkleError> {
+        let mut tree = Self::try_sha256_node_storage(digests.len())?;
+        tree.rewrite_hashed_leaves_sha256(digests)?;
+        Ok(tree)
+    }
+
+    fn try_sha256_node_storage(leaf_count: usize) -> Result<Self, MerkleError> {
+        Self::repeated_sha256_node_allocation_bytes(leaf_count)?;
+        let capacity = Self::repeated_sha256_node_capacity(leaf_count)?;
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(capacity)
+            .map_err(|_| MerkleError::AllocationUnavailable)?;
+        if leaf_count != 0 {
+            nodes.resize(capacity / 2 - 1 + leaf_count, None);
+        }
+        Ok(Self {
+            hash_scheme: MerkleHashScheme::Sha256V1,
+            nodes,
+        })
+    }
+
+    fn rebuild_sha256_parents(&mut self, leaf_offset: usize) {
+        for parent in (0..leaf_offset).rev() {
+            let left = self.nodes.get((parent << 1) + 1).and_then(Option::as_ref);
+            let right = self.nodes.get((parent << 1) + 2).and_then(Option::as_ref);
+            self.nodes[parent] = Self::pair_hash_sha256(left, right);
+        }
+    }
+
     /// Build a Merkle tree from an iterator of pre-hashed 32-byte leaves.
     /// Each leaf is assumed to be the SHA-256 digest of a chunk, and inner
     /// nodes are computed as SHA-256 of left||right. If a right child is
@@ -1650,6 +1768,28 @@ impl MerkleTree<[u8; 32]> {
             return;
         }
         self.update(idx);
+    }
+
+    /// Rewrite every SHA-256 leaf and parent in an existing tree without changing
+    /// its node allocation. The caller must supply exactly the current leaf count.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::InvalidLayout`] for another hash scheme or leaf count.
+    pub fn rewrite_hashed_leaves_sha256(
+        &mut self,
+        digests: &[[u8; 32]],
+    ) -> Result<(), MerkleError> {
+        if self.hash_scheme != MerkleHashScheme::Sha256V1 || self.leaf_count() != digests.len() {
+            return Err(MerkleError::InvalidLayout(
+                "SHA-256 rewrite requires the existing leaf count and scheme".into(),
+            ));
+        }
+        let leaf_offset = (1_usize << self.height()) - 1;
+        for (slot, digest) in self.nodes[leaf_offset..].iter_mut().zip(digests) {
+            *slot = Some(HashOf::from_untyped_unchecked(Hash::prehashed(*digest)));
+        }
+        self.rebuild_sha256_parents(leaf_offset);
+        Ok(())
     }
 }
 impl MerkleProof<[u8; 32]> {
@@ -1824,6 +1964,105 @@ impl<'a, T> LeafHashIterator<'a, T> {
 mod tests {
     use super::*;
     use crate::Hash;
+    #[test]
+    fn sha256_rewrite_reuses_nodes_and_matches_canonical_ragged_roots() {
+        for count in [0, 1, 2, 3, 5, 63, 64, 65, 256] {
+            let mut tree =
+                MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![[0x11; 32]; count]);
+            let original_nodes = tree.nodes.as_ptr();
+            let original_capacity = tree.nodes.capacity();
+            let digests: Vec<_> = (0..count)
+                .map(|index| [u8::try_from(index).expect("at most 256 fixture leaves"); 32])
+                .collect();
+            tree.rewrite_hashed_leaves_sha256(&digests).unwrap();
+            assert_eq!(tree.nodes.as_ptr(), original_nodes);
+            assert_eq!(tree.nodes.capacity(), original_capacity);
+            let canonical = MerkleTree::from_hashed_leaves_sha256(digests.iter().copied());
+            assert_eq!(tree, canonical);
+            let fixed = MerkleTree::try_from_hashed_leaves_sha256(&digests).unwrap();
+            assert_eq!(fixed, canonical);
+            assert_eq!(
+                fixed.allocated_bytes(),
+                MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(count).unwrap()
+            );
+            for index in 0..u32::try_from(count).unwrap() {
+                assert_eq!(tree.get_proof(index), canonical.get_proof(index));
+                assert_eq!(fixed.get_proof(index), canonical.get_proof(index));
+            }
+        }
+        let mut tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256([[0x55; 32]; 3]);
+        let unchanged = tree.clone();
+        assert!(matches!(
+            tree.rewrite_hashed_leaves_sha256(&[[0x77; 32]; 2]),
+            Err(MerkleError::InvalidLayout(_))
+        ));
+        assert_eq!(tree, unchanged);
+        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
+        let mut application: MerkleTree<[u8; 32]> = [leaf; 3].into_iter().collect();
+        let unchanged = application.clone();
+        assert!(matches!(
+            application.rewrite_hashed_leaves_sha256(&[[0x77; 32]; 3]),
+            Err(MerkleError::InvalidLayout(_))
+        ));
+        assert_eq!(application, unchanged);
+    }
+    #[test]
+    fn fallible_node_clone_preserves_scheme_and_is_independent() {
+        for count in [0, 1, 3, 256] {
+            let mut source =
+                MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![[0x5a; 32]; count]);
+            let copied = source
+                .try_clone_allocation()
+                .expect("bounded Merkle node clone");
+            assert_eq!(copied, source);
+            assert_eq!(copied.root(), source.root());
+            if let Some(first) = source.nodes.first_mut() {
+                *first = None;
+                assert_ne!(copied, source);
+            }
+        }
+    }
+
+    #[test]
+    fn fallible_repeated_sha256_tree_preserves_canonical_layout_and_capacity() {
+        let digest = [0xA5; 32];
+        for count in [0, 1, 2, 3, 5, 256] {
+            let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![digest; count]);
+            let fallible =
+                MerkleTree::<[u8; 32]>::try_from_repeated_hashed_leaf_sha256(count, digest)
+                    .expect("bounded repeated-leaf tree allocation");
+            assert_eq!(fallible, canonical, "node layout differs at {count} leaves");
+            assert_eq!(fallible.root(), canonical.root());
+            assert_eq!(fallible.allocated_bytes(), canonical.allocated_bytes());
+            assert_eq!(
+                fallible.allocated_bytes(),
+                MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(count)
+                    .expect("bounded node capacity"),
+            );
+        }
+        assert!(matches!(
+            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(usize::MAX),
+            Err(MerkleError::AllocationUnavailable)
+        ));
+        assert!(matches!(
+            MerkleTree::<[u8; 32]>::try_from_repeated_hashed_leaf_sha256(usize::MAX, digest,),
+            Err(MerkleError::AllocationUnavailable)
+        ));
+    }
+
+    #[test]
+    fn allocated_bytes_reports_retained_capacity_after_removing_nodes() {
+        let mut tree = MerkleTree::<()>::default();
+        tree.nodes.reserve(32);
+        let reserved = tree.nodes.capacity() * core::mem::size_of::<Option<HashOf<()>>>();
+        assert_eq!(tree.allocated_bytes(), reserved);
+        tree.nodes.push(None);
+        tree.nodes.clear();
+        assert_eq!(tree.allocated_bytes(), reserved);
+        tree.nodes = Vec::new();
+        assert_eq!(tree.allocated_bytes(), 0);
+    }
+
     fn find_deeper_even_step<T>(leaf_index: u32, audit_len: usize) -> Option<usize> {
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(leaf_index as usize, audit_len);
         let mut chosen: Option<usize> = None;
@@ -2004,6 +2243,19 @@ mod tests {
         for count in 0_u8..=31 {
             let hashes = test_hashes(count);
             let tree: MerkleTree<_> = hashes.iter().copied().collect();
+            assert_eq!(
+                MerkleTree::root_from_typed_leaves(hashes),
+                tree.root(),
+                "leaf count {count}"
+            );
+        }
+    }
+    #[test]
+    fn stack_streaming_root_matches_large_exact_and_ragged_trees() {
+        for count in [255_u64, 256, 257, 1023, 1024, 1025, 4095, 4096, 4097] {
+            let hashes = (0..count)
+                .map(|index| HashOf::<()>::from_untyped_unchecked(Hash::new(index.to_le_bytes())));
+            let tree: MerkleTree<()> = hashes.clone().collect();
             assert_eq!(
                 MerkleTree::root_from_typed_leaves(hashes),
                 tree.root(),

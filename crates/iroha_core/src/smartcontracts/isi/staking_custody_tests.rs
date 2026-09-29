@@ -36,8 +36,7 @@ fn staking_custody_blocks_generic_debits_of_bonded_and_pending_funds() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xC4);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
     let lane = LaneId::new(17);
     let (validator, recipient, asset) = register_custody_fixture(&mut stx, lane, 1_000);
     let custody = stx
@@ -201,7 +200,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let mut state_block = state.block(block.as_ref().header());
     let lane = LaneId::new(17);
     let (validator, asset, before, share_before, nexus) = {
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, _, definition) = prepare_accounts(&mut stx);
         stx.nexus.staking.stake_escrow_account_id = validator.to_string();
         RegisterPublicLaneValidator {
@@ -241,7 +240,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let key = (lane, validator.clone());
     let share_key = stake_key(lane, &validator, &validator);
     let instruction = {
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus = nexus.clone();
         let monetary_plan = fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one());
         BondPublicLaneStake {
@@ -254,9 +253,9 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         }
     };
     {
-        let mut stx = state_block.transaction();
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
         stx.nexus = nexus.clone();
-        seed_test_call_hash(&mut stx, 0xC5);
         let error = crate::executor::Executor::Initial
             .execute_instruction(&mut stx, &validator, instruction.clone().into())
             .unwrap_err();
@@ -278,7 +277,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         // dropping the StateTransaction rolls that write back.
     }
     assert!(state_block.drain_transfer_transcripts().is_empty());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC6; Hash::LENGTH]));
     stx.nexus = nexus;
     assert_eq!(stx.world.public_lane_validators.get(&key), Some(&before));
     assert_eq!(
@@ -299,7 +298,6 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     );
     assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
 
-    seed_test_call_hash(&mut stx, 0xC6);
     Mint::asset_quantity(1_u64, asset.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -336,8 +334,7 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-    seed_test_call_hash(&mut stx, 0xC1);
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC1; Hash::LENGTH]));
     let lane = LaneId::new(17);
     let (validator, sink, asset) = register_custody_fixture(&mut stx, lane, 1_000);
     RegisterPublicLaneValidator {
@@ -426,7 +423,7 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
         let (validator, asset, release_at_ms, release_height, nexus) = {
             let block = new_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let (validator, _, asset) = register_custody_fixture(&mut stx, lane, 1_000);
             let release_at_ms = stx.block_unix_timestamp_ms();
             SchedulePublicLaneUnbond {
@@ -453,9 +450,9 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
         };
         let block = new_block_with_height_and_time(release_height, release_at_ms);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
         stx.nexus = nexus;
-        seed_test_call_hash(&mut stx, 0xC2);
         let key = (lane, validator.clone());
         let share_key = stake_key(lane, &validator, &validator);
         let share_before = stx
@@ -522,7 +519,7 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
         let (validator, replacement, asset, release_at_ms, release_height, nexus) = {
             let block = new_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let (validator, replacement, asset) = register_custody_fixture(&mut stx, lane, 1_000);
             let release_at_ms = stx.block_unix_timestamp_ms();
             SchedulePublicLaneUnbond {
@@ -556,9 +553,9 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
         };
         let block = new_block_with_height_and_time(release_height, release_at_ms);
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
         stx.nexus = nexus;
-        seed_test_call_hash(&mut stx, 0xC3);
         stx.nexus.staking.stake_escrow_account_id = replacement.to_string();
         let key = (lane, validator.clone());
         let custody_before = stx.world.public_lane_stake_custody.get(&key).cloned();
@@ -630,7 +627,7 @@ fn staking_mode_owner_change_rejects_pending_custody_without_blocking_withdrawal
     let (validator, asset, before, share_before, release_at_ms, release_height, nexus) = {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         let (validator, _, asset) = register_custody_fixture(&mut stx, lane, 1_000);
         let release_at_ms = stx.block_unix_timestamp_ms();
         SchedulePublicLaneUnbond {
@@ -690,9 +687,8 @@ fn staking_mode_owner_change_rejects_pending_custody_without_blocking_withdrawal
 
     let block = new_block_with_height_and_time(release_height, release_at_ms);
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xC7; Hash::LENGTH]));
     stx.nexus = nexus;
-    seed_test_call_hash(&mut stx, 0xC7);
     let key = (lane, validator.clone());
     let share_key = stake_key(lane, &validator, &validator);
     let destination = AssetId::new(asset.definition().clone(), validator.clone());

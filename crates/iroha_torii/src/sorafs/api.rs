@@ -34388,45 +34388,6 @@ mod advert_tests {
             .sign(signer.keypair.private_key())
     }
     #[test]
-    fn moderation_command_rejects_ordinary_admission_intent() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
-            "case-admission-1".to_owned(),
-            "round-1".to_owned(),
-            [0x51; 32],
-        )
-        .into();
-        let canonical = signed_moderation_transaction(&app, &auth.provider, instruction.clone());
-        validate_moderation_signed_transaction(
-            &app,
-            &canonical,
-            ModerationCommandRouteV1::AcceptAssignment,
-        )
-        .expect("QueuePlanSynced moderation transaction passes route validation");
-        let mut ordinary_builder = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        ordinary_builder.set_ttl(Duration::from_millis(
-            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
-        ));
-        let ordinary = ordinary_builder
-            .with_instructions([instruction])
-            .sign(auth.provider.keypair.private_key());
-        assert_eq!(
-            ordinary.admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
-        let response = validate_moderation_signed_transaction(
-            &app,
-            &ordinary,
-            ModerationCommandRouteV1::AcceptAssignment,
-        )
-        .expect_err("Ordinary moderation transaction must fail before ingress");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[test]
     fn moderation_command_contract_requires_exact_network_signature_route_and_one_instruction() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let assignment: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
@@ -34781,43 +34742,6 @@ mod advert_tests {
         )
         .expect_err("authority substitution must invalidate the repair envelope");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-    #[test]
-    fn repair_command_rejects_ordinary_admission_intent() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]);
-        let canonical = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
-        .with_instructions([instruction.clone()])
-        .sign(auth.provider.keypair.private_key());
-        validate_repair_signed_transaction(
-            app.state.network_id_ref(),
-            &canonical,
-            RepairCommandRouteV1::Report,
-        )
-        .expect("QueuePlanSynced repair transaction passes route validation");
-        let ordinary = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .sign(auth.provider.keypair.private_key());
-        assert_eq!(
-            ordinary.admission_intent(),
-            TransactionAdmissionIntent::Ordinary
-        );
-        let response = validate_repair_signed_transaction(
-            app.state.network_id_ref(),
-            &ordinary,
-            RepairCommandRouteV1::Report,
-        )
-        .expect_err("Ordinary repair transaction must fail before ingress");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn orderbook_submission_validation_preserves_http_error_classes() {

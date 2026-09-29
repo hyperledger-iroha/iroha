@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import unittest
 from http.client import HTTPConnection
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlencode, urlparse
 
 # The standalone mock has no native dependencies; load it without importing the
@@ -49,6 +51,27 @@ def _assert_absence(response, hash_value: str, scope: str | None) -> None:
 
 
 class MockPipelineTests(unittest.TestCase):
+    def test_stdio_mock_terminates_after_signal(self) -> None:
+        process = subprocess.Popen(
+            [sys.executable, str(MODULE_PATH), "--stdio"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert process.stdout is not None
+            self.assertTrue(json.loads(process.stdout.readline())["base_url"].startswith("http://"))
+        finally:
+            process.terminate()
+            process.communicate(timeout=3)
+        self.assertEqual(process.returncode, 0)
+
+    def test_local_mock_bind_never_uses_reverse_dns(self) -> None:
+        with patch("socket.getfqdn", side_effect=AssertionError("reverse DNS was used")):
+            server = MOCK.ToriiMockServer()
+        self.addCleanup(server._server.server_close)
+        self.assertTrue(server.base_url.startswith("http://127.0.0.1:"))
+
     def setUp(self) -> None:
         server = MOCK.ToriiMockServer().start()
         self.addCleanup(server.stop)

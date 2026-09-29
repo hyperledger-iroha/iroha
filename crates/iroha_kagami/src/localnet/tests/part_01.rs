@@ -2279,7 +2279,6 @@ fn perf_profile_npos_applies_election_and_runtime_limits() {
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .expect("npos parameters must be present");
-    assert_eq!(npos.seat_band_pct(), 100);
     assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
 }
 #[test]

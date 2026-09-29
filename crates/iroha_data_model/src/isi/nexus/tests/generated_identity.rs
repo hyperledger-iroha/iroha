@@ -110,21 +110,14 @@ where
     row
 }
 
-fn verified_instruction_records() -> [Value; 2] {
-    let mut relay = sample_lane_relay_instruction();
-    relay.envelope = sample_envelope(9);
-    relay.proof_blob = sample_proof_blob(0x41);
-    relay.proof_blob.expiry_slot = Some(110);
+fn verified_instruction_records() -> [Value; 1] {
     let mut allocation = sample_fee_budget_instruction();
     allocation.program_revision = 2;
     allocation.verified_allocation = "0.125".parse().expect("fractional allocation");
     allocation.source_height = 9;
     allocation.expires_at_height = 109;
     allocation.proof_blob.expiry_slot = Some(110);
-    [
-        record([sample_fee_budget_instruction(), allocation]),
-        record([sample_lane_relay_instruction(), relay]),
-    ]
+    [record([sample_fee_budget_instruction(), allocation])]
 }
 
 fn sponsor_instruction_records() -> [Value; 10] {
@@ -188,46 +181,6 @@ fn sponsor_instruction_records() -> [Value; 10] {
     ]
 }
 
-#[test]
-fn nexus_identity_header_matches_every_captured_confidential_field() {
-    let captured: Value = json::from_str(include_str!(
-        "../../../../tests/fixtures/nexus_instruction_generated_identity_frames.json"
-    ))
-    .expect("immutable Nexus instruction capture");
-    let relay = captured
-        .as_array()
-        .expect("captured instruction records")
-        .iter()
-        .find(|row| {
-            row["nominal"].as_str()
-                == Some("iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay")
-        })
-        .expect("captured relay instruction");
-    let bytes = hex::decode(relay["cases"][0]["frame"].as_str().expect("captured frame"))
-        .expect("captured frame hex");
-    let captured: RegisterVerifiedLaneRelay =
-        norito::decode_from_bytes(&bytes).expect("decode captured relay instruction");
-    let expected = captured
-        .envelope
-        .block_header
-        .confidential_features()
-        .expect("captured confidential digest");
-    assert_eq!(expected.vk_set_hash, None);
-    assert_eq!(expected.poseidon_params_id, None);
-    assert_eq!(expected.pedersen_params_id, None);
-    assert_eq!(expected.conf_rules_version, Some(1));
-    assert_eq!(
-        hex::encode(expected.zk_policy_hash.expect("captured policy hash")),
-        "93769134d0a34d4c937a95bbc34005771b9d82ef0fcfdff06957f207e216896f"
-    );
-    for height in [5, 9] {
-        assert_eq!(
-            sample_header(height).confidential_features(),
-            Some(expected)
-        );
-    }
-}
-
 fn current_instruction_records() -> Value {
     let mut rows = sponsor_instruction_records().to_vec();
     rows.extend(verified_instruction_records());
@@ -237,12 +190,12 @@ fn current_instruction_records() -> Value {
             .as_str()
             .cmp(&right.get("nominal").unwrap().as_str())
     });
-    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.len(), 11);
     assert_eq!(
         rows.iter()
             .map(|row| row.get("cases").unwrap().as_array().unwrap().len())
             .sum::<usize>(),
-        24
+        22
     );
     Value::Array(rows)
 }

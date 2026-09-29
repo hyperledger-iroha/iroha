@@ -42,7 +42,15 @@ fn private_settlement_snapshot_recipient_reservations_follow_replacement() {
         ivm: &ivm,
         _marker: PhantomData,
     };
-    let restored = parse_world(SnapshotJsonMap::parse(&encoded, "world").unwrap(), &seed).unwrap();
+    let restored = parse_world(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        SnapshotJsonMap::parse(&encoded, "world").unwrap(),
+        &seed,
+    )
+    .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+    .unwrap();
     assert_eq!(restored.private_settlement_recipient_index.view().len(), 6);
     let restored_index = recipient_index_snapshot(&restored);
     assert_eq!(restored_index, recipient_index_snapshot(&world));
@@ -70,8 +78,15 @@ fn private_settlement_snapshot_recipient_reservations_follow_replacement() {
             .is_empty()
     );
     let replaced = json::to_json(&restored).unwrap();
-    let restarted =
-        parse_world(SnapshotJsonMap::parse(&replaced, "world").unwrap(), &seed).unwrap();
+    let restarted = parse_world(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        SnapshotJsonMap::parse(&replaced, "world").unwrap(),
+        &seed,
+    )
+    .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+    .unwrap();
     assert!(
         restarted
             .private_settlement_recipient_index
@@ -107,6 +122,9 @@ fn private_settlement_snapshot_rejects_duplicate_recipients_in_prior_outputs() {
     let operation_index_refusal = std::cell::RefCell::new(None);
     let ivm = IVM::new(0);
     let result = parse_world(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         SnapshotJsonMap::parse(&encoded, "world").unwrap(),
         &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -114,7 +132,8 @@ fn private_settlement_snapshot_rejects_duplicate_recipients_in_prior_outputs() {
             ivm: &ivm,
             _marker: PhantomData,
         },
-    );
+    )
+    .map_err(crate::state::deserialize::snapshot_format_error_for_test);
     let Err(error) = result else {
         panic!("invalid predecessor recipient reuse was accepted")
     };

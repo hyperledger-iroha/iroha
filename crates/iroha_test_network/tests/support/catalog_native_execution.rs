@@ -292,7 +292,7 @@ mod tests {
         );
         for certificate in [
             None,
-            Some(CommitCertificate::new(
+            Some(CommitCertificate::from_untrusted_parts(
                 Vec::new(),
                 Vec::new(),
                 b"invalid result".to_vec(),

@@ -395,7 +395,7 @@ fn build_sorafs_gateway_fetch_config(
         let telemetry_label = derive_scoreboard_telemetry_label(
             scoreboard.telemetry_source_label.as_deref(),
             options,
-            &client.chain().to_string(),
+            client.chain().as_str(),
         );
         config.scoreboard.persist_metadata = Some(ensure_scoreboard_metadata(
             scoreboard.metadata.clone(),

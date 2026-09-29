@@ -426,8 +426,13 @@ mod tests {
     }
     #[test]
     fn canonical_catalog_retires_direct_sumeragi_mutation_and_vrf_snapshot_routes() {
-        assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
-        assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
+        // Consensus evidence is log and telemetry only: no route reads or submits it.
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| route.path() != "/v1/sumeragi/evidence"
+                    && route.path() != "/v1/sumeragi/evidence/count")
+        );
         for (stable_route_id, path) in [
             ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
             ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
@@ -618,7 +623,7 @@ mod tests {
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
-            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+            "/v1/gov/proposals/sccp-route-governance"
         );
     }
     #[test]
@@ -783,7 +788,6 @@ mod tests {
             );
         }
         assert!(CATALOGED_ROUTES.contains(&diagnostic::OPENAPI_JSON));
-        assert!(CATALOGED_ROUTES.contains(&core::NEXUS_LIFECYCLE_GET));
         assert!(CATALOGED_ROUTES.contains(&core::NEXUS_VALIDATOR_COMMITTEE_GET));
         assert!(
             CATALOGED_ROUTES
@@ -1696,8 +1700,6 @@ mod tests {
             sumeragi::BLS_KEYS,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::PARAMETERS,
-            sumeragi::EVIDENCE_COUNT,
-            sumeragi::EVIDENCE_LIST,
         ] {
             assert_eq!(route.surface(), ApiSurface::Operator, "{}", route.path());
             assert_eq!(
@@ -1757,7 +1759,7 @@ mod tests {
         assert!(
             without_features
                 .iter()
-                .any(|route| route.stable_route_id() == sumeragi::EVIDENCE_LIST.stable_route_id())
+                .any(|route| route.stable_route_id() == sumeragi::BRIDGE_FINALITY.stable_route_id())
         );
         assert!(without_features.iter().all(|route| {
             route.stable_route_id() != sumeragi::STATUS.stable_route_id()
@@ -2484,13 +2486,10 @@ mod tests {
         );
         assert_eq!(core::HEALTH.effect(), RouteEffect::ReadOnly);
         assert_eq!(core::HEALTH.admission(), AdmissionPolicy::Public);
-        assert_eq!(
-            runtime_governance::ZK_IVM_PROVE.effect(),
-            RouteEffect::ExpensiveCompute
-        );
-        assert_eq!(
-            runtime_governance::ZK_IVM_PROVE.admission(),
-            AdmissionPolicy::AuthenticatedAccount
+        assert!(
+            !CATALOGED_ROUTES
+                .iter()
+                .any(|route| { route.path().starts_with("/v1/zk/ivm/") })
         );
         assert_eq!(
             streaming::SUBSCRIPTION_WS.effect(),

@@ -51,8 +51,9 @@ mod effect_budget {
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             if cap == 1 {
                 assert_limit(
                     &result.unwrap_err(),
@@ -117,8 +118,9 @@ mod effect_budget {
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = cap;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             if cap == exact - 1 {
                 assert_limit(
                     &result.unwrap_err(),
@@ -236,8 +238,9 @@ seiyaku ActualEffectGroups {
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             assert!(
                 tx.last_tx_gas_used > 0,
                 "actual VM must finish before artifact admission"
@@ -313,8 +316,9 @@ seiyaku ActualEffectGroups {
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             assert!(tx.last_tx_gas_used > 0);
             assert!(
                 tx.world
@@ -438,8 +442,9 @@ seiyaku ActualEffectGroups {
             tx.pipeline.quarantine_tx_max_cycles = cap;
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = 0;
-            let result =
-                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result = Executor::Initial
+                .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
+                .map_err(crate::execution_attempt::expect_completed_rejection);
             let cycles = tx.completed_execution_cycles_for_tests().unwrap();
             assert!(!tx.execution_effect_limit_exceeded());
             if case < 2 {

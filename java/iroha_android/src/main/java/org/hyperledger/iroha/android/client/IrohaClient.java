@@ -398,8 +398,10 @@ public interface IrohaClient {
   }
 
   /** Fetches the complete Kotodama manifest registered for one code hash. */
-  default CompletableFuture<ContractManifestRecord> getContractManifest(final String codeHash) {
-    final CompletableFuture<ContractManifestRecord> future = new CompletableFuture<>();
+  default CompletableFuture<org.hyperledger.iroha.sdk.client.ContractManifestRecord>
+      getContractManifest(final String codeHash) {
+    final CompletableFuture<org.hyperledger.iroha.sdk.client.ContractManifestRecord> future =
+        new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
             "getContractManifest requires a concrete IrohaClient implementation"));

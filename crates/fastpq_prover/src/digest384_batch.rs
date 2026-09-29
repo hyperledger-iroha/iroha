@@ -20,18 +20,18 @@ use crate::digest384_gpu::{
 use crate::{DigestExecutionV1, gpu::GpuError};
 
 /// Maximum final byte payload admitted to one continuation dispatch.
-pub(crate) const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
+pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
 pub(crate) const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 /// Eight CPU/device known answers and one CPU/device public probe.
 /// The enclosing prover charges this cold bound even for CPU or warm execution.
-pub(crate) const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
+pub const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
 
 /// Bound shared backing buffers, retained/oversized pool pages, returned digests
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
-pub(crate) fn last_fields_payload_charge(
+pub fn last_fields_payload_charge(
     job_count: usize,
     total_final_field_bytes: usize,
 ) -> crate::Result<usize> {
@@ -113,7 +113,14 @@ fn native_error(error: impl core::fmt::Display) -> crate::Error {
 /// CPU needs no device discovery. Unknown completion from an earlier device
 /// call blocks even CPU proving: selecting CPU does not discharge retained
 /// private staging. Failure precedes witness expansion, entropy or transforms.
-pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::Result<()> {
+#[cfg_attr(
+    not(feature = "fastpq-gpu"),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "only CPU execution exists without `fastpq-gpu`; device builds return errors"
+    )
+)]
+pub fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::Result<()> {
     #[cfg(feature = "fastpq-gpu")]
     if crate::gpu::transform_completion_uncertain_v1() {
         return Err(native_error(
@@ -148,7 +155,7 @@ pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> c
 /// device execution constructs typed jobs; CPU preserves the optimized prefix
 /// owner without repeating its suffix absorption for unused device state.
 #[cfg(any(test, feature = "fastpq-gpu"))]
-pub(crate) fn execute_last_fields_with_cpu<'a>(
+pub fn execute_last_fields_with_cpu<'a>(
     job_count: usize,
     total_final_field_bytes: usize,
     execution: DigestExecutionV1,
@@ -211,7 +218,7 @@ fn execute_prepared_jobs_with_cpu(
 
 /// Diagnostic adapter using the independent canonical streaming CPU path.
 #[cfg(test)]
-pub(crate) fn execute_last_fields(
+pub fn execute_last_fields(
     jobs: &[Digest384LastFieldJob<'_>],
     execution: DigestExecutionV1,
 ) -> crate::Result<Vec<GoldilocksDigest384V1>> {
@@ -222,7 +229,7 @@ pub(crate) fn execute_last_fields(
 
 /// A fresh canonical typed prefix and its exact final byte field.
 #[derive(Clone)]
-pub(crate) struct Digest384LastFieldJob<'a> {
+pub struct Digest384LastFieldJob<'a> {
     prefix: GoldilocksDigest384LastFieldStreamV1,
     final_field: &'a [u8],
 }
@@ -270,7 +277,7 @@ impl<'a> Digest384LastFieldJob<'a> {
 
 /// Hash jobs in input order using the independent canonical CPU stream implementation.
 #[cfg(test)]
-pub(crate) fn hash_last_fields_cpu(
+pub fn hash_last_fields_cpu(
     jobs: &[Digest384LastFieldJob<'_>],
 ) -> Result<Vec<GoldilocksDigest384V1>, GpuError> {
     validate_jobs(jobs)?;
@@ -294,7 +301,7 @@ fn hash_last_field_cpu(job: &Digest384LastFieldJob<'_>) -> Result<GoldilocksDige
 /// device. Every nonempty successful result requires completed GPU work. The
 /// caller may explicitly use [`hash_last_fields_cpu`] after an error.
 #[cfg(test)]
-pub(crate) fn try_hash_last_fields_metal(
+pub fn try_hash_last_fields_metal(
     jobs: &[Digest384LastFieldJob<'_>],
 ) -> Result<Vec<GoldilocksDigest384V1>, GpuError> {
     if jobs.is_empty() {
@@ -908,7 +915,7 @@ mod tests {
             .iter()
             .map(|&len| {
                 (0..len)
-                    .map(|index| ((index * 73 + len) & 255) as u8)
+                    .map(|index| u8::try_from((index * 73 + len) & 255).expect("masked byte"))
                     .collect()
             })
             .collect();

@@ -313,14 +313,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
         const INSTRUCTIONS_TAG: u32 = 0;
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-            let mut cursor = std::io::Cursor::new(bytes);
-            let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-            let used = usize::try_from(cursor.position())
-                .map_err(|_| norito::core::Error::LengthMismatch)?;
-            return Ok((decoded, used));
-        }
         let tag_bytes = bytes
             .get(..core::mem::size_of::<u32>())
             .ok_or(norito::core::Error::LengthMismatch)?;

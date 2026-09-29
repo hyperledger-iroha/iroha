@@ -1128,11 +1128,12 @@ fn seed_retention_archive(
         },
     );
     let shortfall = *world.musubi_replication_shortfall_releases.view().get();
-    world.musubi_replication_shortfall_releases = Cell::new(
-        shortfall
-            .checked_add(release_count)
-            .expect("retention fixture shortfall count fits u64"),
-    );
+    world.musubi_replication_shortfall_releases =
+        crate::state::scalar_cell_custody::fixture(
+            shortfall
+                .checked_add(release_count)
+                .expect("retention fixture shortfall count fits u64"),
+        );
     archive_id
 }
 fn archive_location_replay_fixture(

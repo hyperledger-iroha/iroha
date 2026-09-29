@@ -5,11 +5,14 @@
 
 use std::alloc::Layout;
 
-use super::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use super::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
+    InsufficientReservation,
+};
 
 /// A fixed allocation retaining its original prepaid charge until deallocation.
 ///
-/// The backing allocation cannot be extracted, replaced or grown. Bounded appends
+/// Safe access cannot extract, replace or grow the backing allocation. Bounded appends
 /// initialize elements before exposing them without invoking `Clone`. Field drop
 /// order frees the backing Vec before returning its credits. This owner accounts
 /// only its requested layout;
@@ -101,6 +104,33 @@ impl std::fmt::Display for ChargedBufferFromChargeError {
 
 impl std::error::Error for ChargedBufferFromChargeError {}
 
+/// Failure to construct one fixed allocation from an already admitted parent.
+#[derive(Debug)]
+pub enum PrepaidBufferError {
+    /// A concrete child allocation exceeds the parent's unchanged remainder.
+    Reservation(InsufficientReservation),
+    /// Layout overflow or physical allocation failure; no pool reacquisition occurs.
+    Allocation(ChargedBufferError),
+}
+
+impl std::fmt::Display for PrepaidBufferError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reservation(refusal) => refusal.fmt(formatter),
+            Self::Allocation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PrepaidBufferError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Reservation(refusal) => Some(refusal),
+            Self::Allocation(error) => Some(error),
+        }
+    }
+}
+
 impl<T> ChargedBuffer<T> {
     /// Admit the exact backing layout before requesting it from the allocator.
     ///
@@ -162,7 +192,36 @@ impl<T> ChargedBuffer<T> {
             .map_err(|charge| (charge, ChargedBufferFromChargeError::Allocator { layout }))
     }
 
-    // Both callers validate this concrete layout and its original charge before
+    /// Construct fixed backing storage from its parent's original prepaid credit.
+    ///
+    /// This performs no second pool admission and never waits for a parent to
+    /// release memory. It splits the exact requested layout before allocating;
+    /// the resulting owner keeps that charge through actual deallocation.
+    ///
+    /// # Errors
+    /// Returns an unchanged reservation on layout overflow or insufficient
+    /// prepaid credit. A global allocator failure refunds the split allocation
+    /// charge and leaves the parent's unspent remainder intact.
+    pub fn from_reservation(
+        capacity: usize,
+        reservation: &mut AllocationReservation,
+    ) -> Result<Self, PrepaidBufferError> {
+        let layout = Layout::array::<T>(capacity).map_err(|_| {
+            PrepaidBufferError::Allocation(ChargedBufferError::Admission(
+                AllocationRefusal::DemandOverflow,
+            ))
+        })?;
+        let charge = reservation
+            .try_split(layout)
+            .map_err(PrepaidBufferError::Reservation)?;
+        Self::allocate(capacity, layout, charge).map_err(|_charge| {
+            PrepaidBufferError::Allocation(ChargedBufferError::Allocator {
+                requested_bytes: layout.size(),
+            })
+        })
+    }
+
+    // All constructors validate this concrete layout and its original charge before
     // entering the sole backing-allocation kernel. Null returns the same charge;
     // only the caller decides whether that original custody is retained or freed.
     fn allocate(
@@ -191,6 +250,64 @@ impl<T> ChargedBuffer<T> {
             capacity,
             _charge: charge,
         })
+    }
+
+    /// Whether this backing allocation retains a charge from the exact original pool.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self._charge.belongs_to(budget)
+    }
+
+    /// Transfer the exact Vec allocation and its original charge to a canonical owner.
+    ///
+    /// This performs no allocation, clone, refund or capacity acquisition. Ordinary
+    /// callers should retain this buffer; only an audited owning representation
+    /// which must embed a concrete Vec field needs this seam.
+    ///
+    /// # Safety
+    /// The caller must bind both returned values into one move-only owner before
+    /// any fallible work. The Vec must retain this allocation and capacity without
+    /// replacement or growth; it must be fully destroyed before its charge drops.
+    /// On unwind the owner must not refund until physical reclamation is complete.
+    /// If moved into a nested field, the enclosing owner must preserve these rules
+    /// and offer no safe extraction or mutation that separates allocation/charge.
+    /// Nested element allocations require their own retained charges. The charge
+    /// funds only this original backing, never a later clone or replacement.
+    #[allow(unsafe_code)]
+    pub unsafe fn into_allocation_parts(self) -> (Vec<T>, AllocationCharge) {
+        let Self {
+            values,
+            capacity: _,
+            _charge,
+        } = self;
+        (values, _charge)
+    }
+
+    /// Borrow the uninitialized tail of this exact fixed backing allocation.
+    /// The slice cannot grow, replace or separate the allocation from its charge.
+    /// Initializing a slot does not expose it as a `T`; the owner must explicitly
+    /// establish a complete initialized prefix with `set_initialized_len`.
+    pub fn spare_capacity_mut(&mut self) -> &mut [std::mem::MaybeUninit<T>] {
+        let remaining = self.capacity - self.values.len();
+        &mut self.values.spare_capacity_mut()[..remaining]
+    }
+
+    /// Expose an already initialized prefix without moving any element or growing.
+    ///
+    /// # Safety
+    /// Every element in the newly exposed prefix must be fully initialized as a
+    /// valid `T` in this same original backing. All partial initialization must be
+    /// guarded so panic/refusal releases enclosing physical owners before dropping
+    /// initialized fields or reclaiming their backing. No element may be exposed
+    /// twice, and no uninitialized field may be read or dropped. Shrinking is not
+    /// accepted: remove initialized elements with the existing bounded operations.
+    #[allow(unsafe_code)]
+    pub unsafe fn set_initialized_len(&mut self, len: usize) {
+        assert!(
+            len >= self.values.len() && len <= self.capacity,
+            "initialized prefix must extend within original admitted capacity"
+        );
+        // SAFETY: the caller establishes every newly exposed element above.
+        unsafe { self.values.set_len(len) };
     }
 
     /// Borrow initialized elements without separating allocation and charge.
@@ -231,6 +348,24 @@ impl<T> ChargedBuffer<T> {
         self.values.push(value);
         Ok(())
     }
+
+    /// Move one value into an already reserved slot without allocating.
+    /// The caller must have preflighted capacity before any visible effects.
+    pub fn push_reserved(&mut self, value: T) {
+        assert!(self.values.len() < self.capacity);
+        self.values.push(value);
+    }
+
+    /// Remove the last initialized value while retaining this backing charge.
+    pub fn pop(&mut self) -> Option<T> {
+        self.values.pop()
+    }
+
+    /// Move initialized values out of this backing without reallocating it.
+    /// Unconsumed values are dropped with the drain; the backing stays charged.
+    pub fn drain_all(&mut self) -> std::vec::Drain<'_, T> {
+        self.values.drain(..)
+    }
 }
 
 impl<T: Copy> ChargedBuffer<T> {
@@ -261,3 +396,9 @@ impl<T: Copy> ChargedBuffer<T> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod move_only_tests;
+
+#[cfg(test)]
+mod placement_tests;

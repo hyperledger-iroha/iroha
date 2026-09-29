@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::queue::RoutingDecision;
-use iroha_data_model::nexus::LaneFinalityStatement;
 
 /// Block validation supplies its checked settlement projection before attachment.
 /// Rows, sources, receipts, transcripts and applying policy remain State-owned.
@@ -22,8 +21,19 @@ pub(crate) enum ExecutionOutputSealError<E> {
     Storage(crate::state::StateStorageAdmissionError),
     /// The State owner, retained source or canonical attachment was inconsistent.
     Owner(String),
+    /// Local execution did not complete; no output may be sealed or published.
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// The block finalizer rejected its actual deterministic effects.
     Finalizer(E),
+}
+
+impl<E> From<ExecutionAttemptError<String>> for ExecutionOutputSealError<E> {
+    fn from(error: ExecutionAttemptError<String>) -> Self {
+        match error {
+            ExecutionAttemptError::Rejected(reason) => Self::Owner(reason),
+            ExecutionAttemptError::Deferred(reason) => Self::Deferred(reason),
+        }
+    }
 }
 
 impl<E> From<String> for ExecutionOutputSealError<E> {
@@ -102,6 +112,24 @@ impl StateBlock<'_> {
         }
     }
 
+    /// Check a borrowed witness against the exact original sealed execution.
+    /// This grants no finality and performs no durable write or ownership transfer.
+    pub(crate) fn verify_sumeragi_execution_witness(
+        &self,
+        block: &SignedBlock,
+        witness: &iroha_data_model::block::consensus::ExecWitness,
+    ) -> Result<(), String> {
+        self.verify_execution_output_seal(block)?;
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
+        else {
+            return Err("publication requires the original sealed output owner".into());
+        };
+        if sealed.witness_hash != Some(HashOf::new(witness)) {
+            return Err("publication witness differs from the actual captured witness".into());
+        }
+        Ok(())
+    }
+
     /// Authorize this exact execution of a block the Sumeragi core committed: its witness
     /// is the one sealed at execution, and Kura already holds the block with exactly this
     /// commit certificate (the durable boundary, `specs/sumeragi.md` §12.3 O3).
@@ -111,14 +139,7 @@ impl StateBlock<'_> {
         witness: &iroha_data_model::block::consensus::ExecWitness,
         certificate: &iroha_data_model::block::CommitCertificate,
     ) -> Result<(), String> {
-        self.verify_execution_output_seal(block.as_ref())?;
-        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
-        else {
-            return Err("publication requires the original sealed output owner".into());
-        };
-        if sealed.witness_hash != Some(HashOf::new(witness)) {
-            return Err("publication witness differs from the actual captured witness".into());
-        }
+        self.verify_sumeragi_execution_witness(block.as_ref(), witness)?;
         let height = usize::try_from(block.as_ref().header().height().get())
             .ok()
             .and_then(core::num::NonZeroUsize::new)
@@ -128,9 +149,12 @@ impl StateBlock<'_> {
             .kura
             .get_block(height)
             .ok_or("the committed block has not been durably stored")?;
-        if durable.hash() != block.as_ref().hash() || durable.commit_certificate() != Some(certificate)
+        if durable.hash() != block.as_ref().hash()
+            || durable.commit_certificate() != Some(certificate)
         {
-            return Err("the durable block or its certificate differs from the committed one".into());
+            return Err(
+                "the durable block or its certificate differs from the committed one".into(),
+            );
         }
         let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.take()
         else {
@@ -145,89 +169,7 @@ impl StateBlock<'_> {
         Ok(())
     }
 
-    /// Authorize this exact execution only after its witness, result wire and
-    /// verified finality have crossed the canonical durable Kura boundary.
-    pub(crate) fn authorize_execution_output_publication(
-        &mut self,
-        block: &crate::block::CommittedBlock,
-        witness: &iroha_data_model::block::consensus::ExecWitness,
-    ) -> Result<(), String> {
-        self.verify_execution_output_seal(block.as_ref())?;
-        if self.native_lane_stage.is_some() {
-            self.validate_native_output_source(block.as_ref())?;
-        }
-        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
-        else {
-            return Err("publication requires the original sealed output owner".into());
-        };
-        if sealed.witness_hash != Some(HashOf::new(witness)) {
-            return Err("publication witness differs from the actual captured witness".into());
-        }
-        let artifact = block
-            .verified_v2_finality_artifact()
-            .ok_or("execution publication requires verified finality")?;
-        let native = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-            block.as_ref(), self.staged_merge_entry(),
-        )?;
-        let lanes = crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
-            block.as_ref(),
-        )?;
-        let actual = crate::sumeragi::exec::execution_commitment_from_validated_block(
-            witness,
-            &native,
-            &lanes,
-            block.as_ref(),
-        )
-        .map_err(str::to_owned)?;
-        if actual != artifact.commit_qc.execution_commitment {
-            return Err("captured execution differs from verified finality".into());
-        }
-        let durable = self
-            .state_ref
-            .kura
-            .v2_finality_artifact(artifact.height)
-            .map_err(|error| error.to_string())?
-            .ok_or("execution finality has not been durably stored")?;
-        if durable != *artifact {
-            return Err("durable finality differs from execution authority".into());
-        }
-        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.take()
-        else {
-            unreachable!("exclusive borrow retains the checked seal")
-        };
-        self.execution_output_plan = Some(ExecutionOutputPlanState::Authorized(
-            AuthorizedExecutionOutputs {
-                sealed,
-                finality_hash: HashOf::new(artifact).into(),
-            },
-        ));
-        Ok(())
-    }
-
-    /// Consume authorized execution around the sole deterministic metadata tail.
-    /// Failed or unwound preparation permanently poisons this publication owner.
-    pub(in crate::state) fn finalize_authorized_execution_outputs(
-        &mut self,
-        block: &crate::block::CommittedBlock,
-        prepare: impl FnOnce(
-            &mut Self,
-        ) -> Result<
-            Vec<iroha_data_model::events::EventBox>,
-            crate::state::MergeLedgerCommitError,
-        >,
-    ) -> Result<Vec<iroha_data_model::events::EventBox>, crate::state::MergeLedgerCommitError> {
-        let Some(artifact) = block.verified_v2_finality_artifact() else {
-            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
-            return Err(crate::state::MergeLedgerCommitError::ExecutionBatchInvalid(
-                "publication lost verified finality".into(),
-            ));
-        };
-        let finality_hash = Hash::from(HashOf::new(artifact));
-        self.finalize_execution_outputs_with_finality(block, finality_hash, prepare)
-    }
-
-    /// [`Self::finalize_authorized_execution_outputs`] for a Sumeragi commit: the
-    /// authorization binds `certificate`.
+    /// Finalize the exact native commit authorized by `certificate`.
     pub(in crate::state) fn finalize_sumeragi_execution_outputs(
         &mut self,
         block: &crate::block::CommittedBlock,
@@ -269,11 +211,6 @@ impl StateBlock<'_> {
             finished: false,
         };
         let state = &mut *owner.state;
-        if state.native_lane_stage.is_some() {
-            state
-                .validate_native_output_source(block.as_ref())
-                .map_err(invalid)?;
-        }
         let wire = block
             .as_ref()
             .encode_wire()
@@ -315,9 +252,7 @@ impl StateBlock<'_> {
     /// Validate the retained linear owner immediately before journal publication.
     pub(in crate::state) fn verify_execution_output_publication(&self) -> Result<(), String> {
         match self.execution_output_plan.as_ref() {
-            None if self.native_lane_stage.is_none() && self.merge_execution_prefix.is_none() => {
-                Ok(())
-            }
+            None => Ok(()),
             Some(ExecutionOutputPlanState::Finalized(finalized)) => {
                 if finalized.authorized.sealed.proposal != self._curr_block.hash() {
                     return Err("finalized execution belongs to another carrier".into());
@@ -394,29 +329,18 @@ impl StateBlock<'_> {
             {
                 return Err("output seal source differs from its actual execution".into());
             }
-            state.verify_merge_prefix_carrier(block)?;
-            if retained.native {
-                state.validate_native_output_carrier(block)?;
-            } else if state.native_lane_stage.is_some()
-                || block
-                    .execution_context()
-                    .is_some_and(|context| context.native_lane_decisions.is_some())
-            {
-                return Err("execution output seal cannot substitute native authority".into());
+            if block.execution_context().is_some_and(|context| {
+                context.native_lane_decisions.is_some() || context.merge_entry.is_some()
+            }) {
+                return Err("retired lane execution attachment".into());
             }
             let sources = retained
                 .sources
                 .ok_or("output seal requires all actual phases")?;
-            if sources.is_native() != retained.native
-                || sources.proposal() != block.hash()
+            if sources.proposal() != block.hash()
                 || sources.source_context().network_id != state.network_id
                 || sources.source_context().height != state._curr_block.height().get()
-                || sources.entries().len()
-                    != retained
-                        .rows
-                        .len()
-                        .checked_add(sources.prefix_count())
-                        .ok_or("complete source count overflow")?
+                || sources.entries().len() != retained.rows.len()
                 || sources.carrier_network_routes().len() != block.network_entrypoint_count()
             {
                 return Err("output seal lost its complete actual source inventory".into());
@@ -424,7 +348,6 @@ impl StateBlock<'_> {
             if !state.batch_transfer_outcomes.is_empty() {
                 return Err("output seal retains unowned business receipts".into());
             }
-            state.verify_merge_owned_sources(&sources)?;
             let metadata = finalize(state, block, sources.carrier_network_routes())
                 .map_err(ExecutionOutputSealError::Finalizer)?;
             if !matches!(
@@ -442,15 +365,11 @@ impl StateBlock<'_> {
                 return Err("output finalizer did not account for every applied fragment".into());
             }
             let tx_set = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                sources
-                    .merge_prefix()
-                    .into_iter()
-                    .flat_map(|prefix| prefix.inputs().iter())
-                    .chain((0..block.network_entrypoint_count()).map(|index| {
-                        block
-                            .network_entrypoint_at(index)
-                            .expect("immutable Network count and source positions agree")
-                    })),
+                (0..block.network_entrypoint_count()).map(|index| {
+                    block
+                        .network_entrypoint_at(index)
+                        .expect("immutable Network count and source positions agree")
+                }),
             )
             .map_err(|error| error.to_string())?;
             state.set_fastpq_tx_set_hash(tx_set.into());
@@ -495,7 +414,6 @@ impl StateBlock<'_> {
                 wire_hash: Hash::new(&wire),
                 wire_bytes: u64::try_from(wire.len())
                     .map_err(|_| "sealed wire length exceeds u64")?,
-                _row_slots_charge: retained.row_slots_charge,
             })
         })();
         match result {

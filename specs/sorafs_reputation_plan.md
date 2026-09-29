@@ -271,7 +271,7 @@ publication authority.
 - `CanManageSorafsReputationJournalPolicy`,
   `CanRecordSorafsReputationJournal`, and
   `CanResolveSorafsCapacityDispute` are exact unit permissions wired through
-  the default executor. Recorder identity is additionally pinned by the active
+  Core's initial executor. Recorder identity is additionally pinned by the active
   policy; holding the generic record permission does not make an account the
   governed recorder.
 - `crates/sorafs_manifest::reputation` defines the canonical V1 Norito/JSON

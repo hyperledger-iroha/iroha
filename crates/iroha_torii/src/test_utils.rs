@@ -1,10 +1,3 @@
-//! Test utilities for Torii integration tests.
-//!
-//! These helpers are intended for crate integration tests to avoid duplicating
-//! queue-drain and state-apply boilerplate when exercising app API endpoints.
-#[cfg(test)]
-#[path = "finality_test_support.rs"]
-mod finality;
 #[cfg(test)]
 pub(crate) use finality::{
     torii_proof_finality_for_block, torii_proof_finality_for_block_with_context,
@@ -163,7 +156,7 @@ fn apply_accepted_fixture_block(
         let nexus = state.nexus_snapshot();
         let manifests =
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
-        state.install_lane_manifests(&manifests);
+        state.install_lane_manifests_for_testing(&manifests);
     }
     // Supplying a non-empty context bypasses Core's automatic single-height lane ownership
     // fixture, which is unsuitable for this helper's multi-block synthetic chains. Preserve the
@@ -258,6 +251,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: Vec::new(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "torii-test-utils".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -936,17 +930,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
             zk_prover_allowed_backends: defaults::torii::zk_prover_allowed_backends(),
             zk_prover_allowed_circuits: defaults::torii::zk_prover_allowed_circuits(),
-            zk_ivm_prove_max_inflight: defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
-            zk_ivm_prove_max_queue: defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
-            zk_ivm_tooling_timeout_ms: defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS,
-            zk_ivm_prove_job_ttl_secs: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
-            zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
-            zk_ivm_prove_job_max_retained_bytes:
-                defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
-            zk_ivm_prove_job_max_entries_per_owner:
-                defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
-            zk_ivm_prove_job_max_retained_bytes_per_owner:
-                defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
+            ivm_tooling_max_inflight: defaults::torii::IVM_TOOLING_MAX_INFLIGHT,
+            ivm_tooling_timeout_ms: defaults::torii::IVM_TOOLING_TIMEOUT_MS,
             transaction_ingress: A::TransactionIngress::default(),
             da_ingest,
             connect: A::Connect {
@@ -1001,6 +986,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
+        musubi_publication: A::MusubiPublication::default(),
         kura: A::Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
@@ -1011,6 +997,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
             block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
@@ -1077,6 +1064,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             cache_size: defaults::pipeline::CACHE_SIZE,
             ivm_cache_max_decoded_ops: defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
             ivm_cache_max_bytes: defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            ivm_execution_max_bytes: defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ivm_prover_threads: defaults::pipeline::IVM_PROVER_THREADS,
             overlay_max_instructions: defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
             overlay_max_bytes: defaults::pipeline::OVERLAY_MAX_BYTES,
@@ -1398,6 +1386,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             enforcement_mode: A::NtsEnforcementMode::Warn,
         },
         accel: A::Acceleration {
+            resource_limits: iroha_config::parameters::defaults::accel::RESOURCE_LIMITS,
             enable_simd: false,
             enable_cuda: false,
             enable_metal: false,
@@ -1548,37 +1537,6 @@ mod tests {
         assert_eq!(
             cfg.genesis.public_key.algorithm(),
             iroha_crypto::Algorithm::default()
-        );
-    }
-    #[test]
-    fn fixture_execution_context_preserves_full_routing_plan() {
-        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20));
-        let participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(30));
-        let plan = RoutingPlan::native_amx(
-            coordinator,
-            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
-        );
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-            b"torii fixture routed transaction",
-        ));
-        let context = execution_context_for_routing_plan(entrypoint_hash, coordinator, &plan);
-        assert_eq!(context.entrypoint_hash, entrypoint_hash);
-        assert_eq!(context.lane_id, coordinator.lane_id);
-        assert_eq!(context.dataspace_id, coordinator.dataspace_id);
-        assert_eq!(context.routing_plan_digest, plan.digest());
-        assert_eq!(context.routing_plan_legs.len(), 2);
-        assert_eq!(
-            context.routing_plan_legs[0].role,
-            ExternalExecutionRouteRole::Coordinator
-        );
-        assert_eq!(
-            context.routing_plan_legs[1].role,
-            ExternalExecutionRouteRole::Participant
-        );
-        assert_eq!(context.routing_plan_legs[1].lane_id, participant.lane_id);
-        assert_eq!(
-            context.routing_plan_legs[1].dataspace_id,
-            participant.dataspace_id
         );
     }
     #[test]

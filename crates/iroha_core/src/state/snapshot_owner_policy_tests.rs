@@ -112,7 +112,7 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
     let (validator, keypair) = bls_account_in("snapshot-owner");
-    let npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+    let npos = SumeragiNposParameters::default();
     assert_eq!(
         npos.xor_asset_definition_id.to_string(),
         configured.fees.fee_asset_id,
@@ -126,8 +126,8 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         Register::account(Account::new(validator.clone()))
             .execute(&validator, &mut transaction)
             .expect("register staking validator account");
-        // Stake custody derives its asset from committed NPoS policy, so install
-        // that immutable identity through the fixture's initial-genesis ISI path.
+        // Custody identity comes from committed genesis policy. Install that
+        // exact network XOR policy through the same ISI path as real genesis.
         SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
             npos.into_custom_parameter(),
         ))
@@ -335,6 +335,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
     }
     let snapshot = norito::json::to_json(&state).expect("serialize committed catalog snapshot");
     let seed = || deserialize::KuraSeed {
+        execution_budget: state.ivm_execution_budget(),
         operation_index_budget: state.world.operation_index_budget().clone(),
         kura: Arc::clone(&state.kura),
         lane_manifests: state.lane_manifests.read().clone(),

@@ -97,25 +97,6 @@ fn verifying_key_fixture_publishes_record_and_circuit_index_without_finality() {
 }
 
 #[test]
-fn evidence_fixture_publishes_signed_record_without_finality() {
-    let mut state = state();
-    let record = EvidenceRecord {
-        evidence: phase_vote_evidence(),
-        recorded_at_height: 1,
-        recorded_at_view: 0,
-        recorded_at_ms: 10,
-        penalty_status: EvidencePenaltyStatus::Pending,
-    };
-    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
-    insert_evidence_record_for_test(&mut state, record.clone());
-    assert_no_finality(&state);
-    let view = state.view();
-    assert_eq!(view.world().consensus_evidence().get(&key), Some(&record));
-    assert_eq!(evidence_count(&view), 1);
-    assert_eq!(evidence_list_snapshot(&view), vec![record]);
-}
-
-#[test]
 fn contract_fixture_replaces_code_without_finality() {
     let mut state = state();
     let address = contract_address();
@@ -280,91 +261,4 @@ fn governance_lock_fixture_publishes_original_custody_without_finality() {
     assert_eq!(stored.direction, record.direction);
     assert_eq!(stored.duration_blocks, record.duration_blocks);
     assert_eq!(stored.custody, record.custody);
-}
-
-fn phase_vote_evidence() -> Evidence {
-    let mut keys = (0..4_u8)
-        .map(|index| {
-            KeyPair::try_from_seed(vec![0xA1, index], Algorithm::BlsNormal).expect("BLS key")
-        })
-        .collect::<Vec<_>>();
-    keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
-    let roster = keys
-        .iter()
-        .map(|key| ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0xA1; 32]),
-    ));
-    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-            network_id, 2, &roster,
-        );
-    let context = HeightContext {
-        network_id,
-        protocol_version: PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
-        epoch_end_height: 2,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("four-validator quorum"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"evidence nexus context"),
-        execution_policy_hash: Hash::new(b"evidence execution policy"),
-        da_layout: recommended_data_availability_layout(),
-        leader_seed: [0xA1; 32],
-    };
-    context.validate().expect("valid evidence context");
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height: 1,
-        view: 0,
-    };
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"parent state"),
-        Hash::new(b"post state"),
-        Hash::new(b"writes"),
-        1,
-        Hash::new([0xA1]),
-    );
-    let vote = |seed: u8| {
-        let mut vote = Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 2])),
-                payload_hash: Hash::new([seed, 3]),
-            },
-            execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        };
-        vote.signature = Signature::new(keys[0].private_key(), &vote.signature_preimage())
-            .payload()
-            .to_vec();
-        vote
-    };
-    Evidence {
-        equivocation: SumeragiV2EquivocationEvidence {
-            conflict: SumeragiV2Equivocation::PhaseVote {
-                first: vote(0xA1),
-                second: vote(0xA2),
-            },
-            context,
-            proofs_of_possession: keys
-                .iter()
-                .map(|key| bls_normal_pop_prove(key.private_key()).expect("BLS proof"))
-                .collect(),
-        },
-    }
 }

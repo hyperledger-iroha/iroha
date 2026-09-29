@@ -70,7 +70,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "NftView",
   "QueryPage",
   "AxtDescriptor",
-  "AssetHandle",
+  "AxtAnchoredSpendV1",
   "ProofBlob",
   "SoracloudRequest",
   "SoracloudResponse",
@@ -411,6 +411,8 @@ export function isCanonicalKotodamaStateTypeName(value, errorIdentities = null) 
     ) {
       return null;
     }
+    // Empty products retain their validated nominal name and have no fields.
+    if (consume("}")) return "aggregate";
     const fields = new Set();
     while (true) {
       const field = identifier();

@@ -96,7 +96,13 @@ fn pulse(
         height: 9,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6D; 32])),
     };
-    GlobalThresholdBeaconPulseAggregatorV1::new(session.clone(), 10, anchor).expect("exact pulse")
+    GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        10,
+        anchor,
+        crate::beacon::pulse_context_fixture_v1(),
+    )
+    .expect("exact pulse")
 }
 
 #[test]

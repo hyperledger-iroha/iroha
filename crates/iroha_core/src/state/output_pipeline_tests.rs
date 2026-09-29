@@ -1,6 +1,7 @@
 //! Actual Pipeline event ordering, rollback, repeat and quarantine controls.
 
 use super::*;
+use crate::exec_witness;
 use iroha_data_model::{
     block::execution_output::{PipelineEventPositionV1, TriggerFailureRootV1},
     events::pipeline::{
@@ -337,3 +338,73 @@ fn exhausted_pipeline_gas_skips_callbacks_without_failure_or_repeat_debit() {
 
 #[path = "output_internal_failure_tests.rs"]
 mod internal_failures;
+
+#[test]
+fn pipeline_vm_refusal_preserves_callback_repeats_and_publishes_no_rejection() {
+    use iroha_data_model::transaction::IvmBytecode;
+    use ivm::error::ExecutionDeferral;
+    let _guard = exec_witness::exec_witness_guard();
+    let id: TriggerId = "pipeline_local_refusal".parse().unwrap();
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 100,
+        ..Default::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let action = Action::new(
+        Executable::Ivm(IvmBytecode::from_compiled(program)),
+        Repeats::Exactly(2),
+        ALICE_ID.clone(),
+        block_filter(),
+    )
+    .unwrap();
+    let (state, source) = pipeline_fixture(65_536, vec![Trigger::new(id.clone(), action)]);
+    let reason = ExecutionDeferral::AllocationUnavailable;
+    let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
+    cache_owner.set_checkout_refusal_for_test(Some(reason));
+    exec_witness::start_block();
+    {
+        let mut block = state.block(source.header());
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        assert_eq!(
+            block.execute_ordinary_output_plan(&source, None),
+            Err(ExecutionAttemptError::Deferred(reason.into()))
+        );
+        assert!(block.retained_execution_outputs_for_test().is_err());
+        assert_eq!(
+            block
+                .world
+                .triggers
+                .pipeline_triggers()
+                .get(&id)
+                .unwrap()
+                .repeats,
+            Repeats::Exactly(2)
+        );
+        assert!(
+            block
+                .world
+                .external_event_buf
+                .iter()
+                .all(|event| !matches!(event, EventBox::TriggerCompleted(_)))
+        );
+    }
+    cache_owner.set_checkout_refusal_for_test(None);
+    exec_witness::start_block();
+    let mut retry = state.block(source.header());
+    execute_all(&mut retry, &source);
+    let ExecutionOutputV1::Pipeline(row) = &retained(&retry).rows[1] else {
+        panic!("actual Pipeline output");
+    };
+    assert!(row.result.is_ok());
+    assert_eq!(
+        retry
+            .world
+            .triggers
+            .pipeline_triggers()
+            .get(&id)
+            .unwrap()
+            .repeats,
+        Repeats::Exactly(1)
+    );
+}

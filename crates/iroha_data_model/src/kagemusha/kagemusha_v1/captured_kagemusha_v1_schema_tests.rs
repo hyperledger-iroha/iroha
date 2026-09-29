@@ -141,3 +141,5 @@ fn captured_codec_schema_identities() {
         case.check();
     }
 }
+
+crate::captured_schema_tests::native_capture::owner_printer!(CASES);

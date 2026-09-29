@@ -45,7 +45,9 @@ fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
 }
 fn returned_int_list(vm: &IVM, capacity: u64) -> (u64, u64, Vec<i64>, Vec<u64>) {
     let layout = ListLayoutV1::try_new(capacity, 1).expect("List<int, N> layout");
-    let base = vm.register(10);
+    let base = vm
+        .public_call_result_word(0)
+        .expect("completed return word");
     let words = (0..layout.allocation_bytes().expect("bounded allocation") / 8)
         .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
         .collect::<Vec<_>>();
@@ -151,7 +153,9 @@ fn run_multiword_mutation_failure_case(
         .expect("select multiword List entrypoint");
     vm.run().expect("execute multiword List program");
     let layout = ListLayoutV1::try_new(2, 2).expect("List<Pair, 2> layout");
-    let base = vm.register(10);
+    let base = vm
+        .public_call_result_word(0)
+        .expect("completed return word");
     let allocation = (0..layout.allocation_bytes().expect("bounded allocation") / 8)
         .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
         .collect();
@@ -165,14 +169,14 @@ fn safe_mutations_execute_with_transactional_failures() {
     let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/001.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
-    assert_eq!(common::decode_i64_register(&vm, 10), 312);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 312);
 }
 #[test]
 fn comprehension_and_take_execute_as_bounded_copies() {
     let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/002.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
-    assert_eq!(common::decode_i64_register(&vm, 10), 6);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 6);
 }
 #[test]
 fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
@@ -196,7 +200,7 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
         );
         let (vm, gas_used) = run_with_gas(&source);
         assert_eq!(
-            common::decode_i64_register(&vm, 10),
+            common::decode_i64_return_word(&vm, 0),
             i64::try_from(active_len).expect("bounded active length")
         );
         samples.push((active_len, gas_used));
@@ -230,7 +234,7 @@ fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
         let (_, control_gas) = run_parameterized_int_entrypoint(&control, index);
         let (_, repeated_gas) = run_parameterized_int_entrypoint(&program, index);
         let (_, repeated_control_gas) = run_parameterized_int_entrypoint(&control, index);
-        assert_eq!(common::decode_i64_register(&vm, 10), expected);
+        assert_eq!(common::decode_i64_return_word(&vm, 0), expected);
         let operation_gas = gas
             .checked_sub(control_gas)
             .expect("List get exceeds matched decode control");
@@ -485,7 +489,7 @@ fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
             "#
             ),
         );
-        assert_eq!(common::decode_i64_register(&vm, 10), expected);
+        assert_eq!(common::decode_i64_return_word(&vm, 0), expected);
         samples.push((needle, gas));
     }
     let first_scan_step = samples[1].1 - samples[0].1;
@@ -515,7 +519,7 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             ),
         );
         assert_eq!(
-            common::decode_i64_register(&control, 10),
+            common::decode_i64_return_word(&control, 0),
             i64::try_from(active_len).expect("bounded active length")
         );
         let (copied, copied_gas) = run_main_body_with_gas(
@@ -529,7 +533,7 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             ),
         );
         assert_eq!(
-            common::decode_i64_register(&copied, 10),
+            common::decode_i64_return_word(&copied, 0),
             i64::try_from(active_len).expect("bounded active length")
         );
         deltas.push((
@@ -556,14 +560,16 @@ fn enumerate_materializes_bounded_structured_elements() {
     let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/006.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
-    assert_eq!(common::decode_i64_register(&vm, 10), 18);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 18);
 }
 #[test]
 fn list_of_options_uses_one_word_per_element() {
     let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/007.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
-    let list = vm.register(10);
+    let list = vm
+        .public_call_result_word(0)
+        .expect("completed return word");
     assert_eq!(vm.load_u64(list), Ok(2), "returned List length header");
     assert_eq!(
         vm.load_u64(list + 8),
@@ -593,7 +599,7 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
     let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/008.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline"));
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
 }
 #[test]
 fn recursive_contains_support_does_not_admit_resource_elements() {
@@ -610,22 +616,11 @@ fn recursive_contains_support_does_not_admit_resource_elements() {
     );
 }
 #[test]
-fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
-    let error = KotodamaCompiler::new()
-        .compile_source(
-            include_str!("../fixtures/koto_v1/kotodama_lists/010.ko")
-                .strip_suffix('\n')
-                .expect("fixture sentinel newline"),
-        )
-        .expect_err("zero-sized List elements must fail semantic analysis");
-    assert!(
-        error.contains("E_LIST_ZERO_SIZED_ELEMENT"),
-        "unexpected compiler diagnostic: {error}"
-    );
-    assert!(
-        error.contains("List elements must encode at least one word"),
-        "diagnostic must explain the representation requirement: {error}"
-    );
+fn empty_product_elements_have_stable_unit_slot_layouts() {
+    let vm = run(include_str!("../fixtures/koto_v1/kotodama_lists/010.ko")
+        .strip_suffix('\n')
+        .expect("fixture sentinel newline"));
+    assert_eq!(common::decode_i64_return_word(&vm, 0), 1);
     KotodamaCompiler::new()
         .compile_source(
             include_str!("../fixtures/koto_v1/kotodama_lists/011.ko")

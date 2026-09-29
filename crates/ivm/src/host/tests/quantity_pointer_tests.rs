@@ -249,7 +249,13 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
             }],
             "{label} must be rejected after the fixed header only"
         );
-        assert!(vm.memory.write_log().is_empty(), "{label}");
+        assert!(
+            vm.memory
+                .try_write_log_snapshot()
+                .expect("allocate write-log snapshot")
+                .is_empty(),
+            "{label}"
+        );
     }
     vm.set_register(10, account_ptr);
     vm.set_register(11, account_ptr);
@@ -273,7 +279,12 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         vm.memory.read_set().is_empty(),
         "header-only preparation must reject the oversized frame before reading its payload"
     );
-    assert!(vm.memory.write_log().is_empty());
+    assert!(
+        vm.memory
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot")
+            .is_empty()
+    );
     vm.memory.clear_tracking();
     assert_eq!(
         scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
@@ -287,7 +298,12 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         }],
         "scoped transfer must read only the bounded header before rejecting the payload"
     );
-    assert!(vm.memory.write_log().is_empty());
+    assert!(
+        vm.memory
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot")
+            .is_empty()
+    );
     assert_eq!(
         [
             vm.register(10),
@@ -316,7 +332,12 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         }],
         "batch transfer must read only the bounded header before rejecting the payload"
     );
-    assert!(vm.memory.write_log().is_empty());
+    assert!(
+        vm.memory
+            .try_write_log_snapshot()
+            .expect("allocate write-log snapshot")
+            .is_empty()
+    );
     assert!(batch_host.fastpq_batch_active);
     assert!(!batch_host.fastpq_batch_has_entries);
 }

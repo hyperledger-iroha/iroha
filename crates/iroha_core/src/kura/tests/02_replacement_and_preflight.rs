@@ -2452,6 +2452,8 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        native_context_archive_max_bytes:
+            iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
@@ -2609,5 +2611,21 @@ fn configured_pending_control_shared_bytes_reject_oversized_startup_inventory() 
     assert!(
         open_configured_kura_with_pending_limits(&config, &limits).is_err(),
         "startup must reject combined pending-control bytes above the configured shared limit"
+    );
+}
+
+#[test]
+fn native_context_archive_limit_is_retained_from_actual_kura_configuration() {
+    let (_directory, mut config) =
+        kura_storage_fixture("native context archive bound", BLOCKS_IN_MEMORY);
+    config.native_context_archive_max_bytes = nonzero!(12_345_usize);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    assert_eq!(
+        kura.native_context_archive_max_bytes(),
+        config.native_context_archive_max_bytes
+    );
+    assert_eq!(
+        Kura::blank_kura_for_testing().native_context_archive_max_bytes(),
+        iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES
     );
 }

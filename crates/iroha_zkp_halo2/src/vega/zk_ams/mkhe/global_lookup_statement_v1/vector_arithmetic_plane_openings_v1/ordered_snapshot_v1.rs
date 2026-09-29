@@ -580,12 +580,14 @@ fn aggregate_digest_v1(
         plan.total_slots,
     );
     hash.update(&plan.digest);
-    for index in 0..SEGMENTS_V1 {
-        for value in plan.segments[index].words_v1() {
+    for ((segment, context), leaf_digest) in
+        plan.segments.iter().zip(&plan.contexts).zip(&leaf_digests)
+    {
+        for value in segment.words_v1() {
             hash.update(&value.to_be_bytes());
         }
-        hash.update(&plan.contexts[index]);
-        hash.update(&leaf_digests[index]);
+        hash.update(context);
+        hash.update(leaf_digest);
     }
     nonzero_v1(hash.finalize())
 }
@@ -613,14 +615,15 @@ impl OrderedPlaneSpoolSnapshotV1 {
         if aggregate_digest_v1(&self.plan, self.leaf_digests)? != self.digest {
             return Err(OrderedSnapshotErrorV1::Context);
         }
-        for index in 0..SEGMENTS_V1 {
-            let segment = self.plan.segments[index];
-            if live[index].slot_count_v1() != segment.slots
-                || live[index].plaintext_len_v1() != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
-                || live[index].ciphertext_record_len_v1()
+        for ((segment, spool), leaf_digest) in
+            self.plan.segments.iter().zip(live).zip(&self.leaf_digests)
+        {
+            if spool.slot_count_v1() != segment.slots
+                || spool.plaintext_len_v1() != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
+                || spool.ciphertext_record_len_v1()
                     != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 + SNAPSHOT_SLOT_TAG_BYTES_V1
-                || live[index].file_len_v1() != segment.file_bytes
-                || *live[index].snapshot_digest_v1() != self.leaf_digests[index]
+                || spool.file_len_v1() != segment.file_bytes
+                || spool.snapshot_digest_v1() != leaf_digest
             {
                 return Err(OrderedSnapshotErrorV1::Context);
             }

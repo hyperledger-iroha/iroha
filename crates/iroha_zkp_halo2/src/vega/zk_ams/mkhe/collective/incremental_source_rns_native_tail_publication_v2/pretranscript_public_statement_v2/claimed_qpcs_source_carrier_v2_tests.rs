@@ -393,7 +393,7 @@ fn exact_stage_wrapper_has_only_purpose_specific_forward_transitions() {
 fn final_claimed_qpcs_owner_consumes_the_context_directly_into_atomic_verification() {
     let source = include_str!("claimed_qpcs_source_carrier_v2.rs");
     let terminal = source
-        .split_once("fn verify_composite_v2<'envelope>")
+        .split_once("fn verify_composite_v2(")
         .expect("consuming composite terminal seam")
         .1
         .split_once("impl<'proof, Stage>")

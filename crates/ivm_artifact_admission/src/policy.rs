@@ -5,7 +5,7 @@ use iroha_data_model::smart_contract::manifest::{
 use ivm_abi::metadata::{
     CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
     EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, ProgramMetadata, mode,
+    EmbeddedStateType, ProgramMetadata, mode,
 };
 use ivm_abi::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES,
@@ -73,7 +73,7 @@ pub fn validate_contract_interface(
         &contract_interface.states,
     )?;
     validate_error_types(contract_interface)?;
-    if contract_interface.entrypoints.is_empty() {
+    if profile == ValidationProfile::Production && contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
             "CNTR must declare at least one entrypoint",
         ));
@@ -86,21 +86,8 @@ pub fn validate_contract_interface(
     let mut entrypoint_reachability = BTreeMap::new();
     let mut hajimari_seen = false;
     let mut kaizen_seen = false;
-    let mut test_return_seen = false;
     for entrypoint in &contract_interface.entrypoints {
-        let is_test_return = profile == ValidationProfile::KotoTest
-            && entrypoint.name == KOTO_TEST_RETURN_ENTRYPOINT;
-        if is_test_return {
-            if test_return_seen {
-                return Err(ContractArtifactError::invalid(
-                    "compiler-owned Kotodama test interface declares more than one return entrypoint",
-                ));
-            }
-            validate_koto_test_return_entrypoint(entrypoint, decoded)?;
-            test_return_seen = true;
-        } else {
-            validate_entrypoint_name(&entrypoint.name)?;
-        }
+        validate_entrypoint_name(&entrypoint.name)?;
         if !entrypoint_names.insert(entrypoint.name.clone()) {
             return Err(ContractArtifactError::invalid(format!(
                 "duplicate entrypoint `{}`",
@@ -123,7 +110,6 @@ pub fn validate_contract_interface(
         let reachability =
             reachable_syscalls(decoded, entrypoint.entry_pc, entrypoint.name.as_str())?;
         if profile == ValidationProfile::KotoTest
-            && !is_test_return
             && reachability
                 .syscalls
                 .iter()
@@ -149,13 +135,10 @@ pub fn validate_contract_interface(
                         field.name == param.name
                             && field.ty.canonical_type_name().as_deref()
                                 == Some(param.type_name.as_str())
-                    })
-                    && reachability
-                        .syscalls
-                        .contains(&ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD) => {}
+                    }) => {}
             (_, Some(_)) => {
                 return Err(ContractArtifactError::invalid(format!(
-                    "entrypoint `{}` has an invalid argument schema or does not decode it",
+                    "entrypoint `{}` has an invalid argument schema",
                     entrypoint.name
                 )));
             }
@@ -178,7 +161,7 @@ pub fn validate_contract_interface(
                     }) => {}
             (Some(_), Some(_)) => {
                 return Err(ContractArtifactError::invalid(format!(
-                    "entrypoint `{}` has a return schema that does not match its declared type or exceeds the ABI v1 public register window",
+                    "entrypoint `{}` has a return schema that does not match its declared type or exceeds the ABI v1 public schema or table bounds",
                     entrypoint.name
                 )));
             }
@@ -293,14 +276,19 @@ pub fn validate_contract_interface(
         }
         entrypoint_reachability.insert(entrypoint.name.clone(), reachability);
     }
-    if profile == ValidationProfile::KotoTest && !test_return_seen {
-        return Err(ContractArtifactError::invalid(
-            "Kotodama test-suite interface is missing its compiler-owned return entrypoint",
-        ));
+    let mut callable_roots = entrypoint_pcs.clone();
+    if profile == ValidationProfile::KotoTest {
+        // The crate-private loader authenticates this compiler-owned sidecar. Private test
+        // functions are invocation roots without becoming public contract entrypoints.
+        callable_roots.extend(
+            contract_interface
+                .callables
+                .iter()
+                .map(|callable| callable.entry_pc),
+        );
     }
-    if profile == ValidationProfile::Production {
-        validate_nonrecursive_direct_calls(decoded, &entrypoint_pcs)?;
-    }
+    validate_nonrecursive_direct_calls(decoded, &callable_roots)?;
+    validate_callable_tables(contract_interface, decoded, &callable_roots, zk_enabled)?;
     // Entrypoint authorization is enforced by dispatch metadata, not by code at
     // the target PC. Shared implementation must live in private helpers.
     for caller in &contract_interface.entrypoints {
@@ -375,45 +363,6 @@ fn is_canonical_entrypoint_name(name: &str) -> bool {
 }
 fn is_canonical_seiyaku_name(name: &str) -> bool {
     is_canonical_source_type_declaration_name(name)
-}
-fn validate_koto_test_return_entrypoint(
-    entrypoint: &EmbeddedEntrypointDescriptor,
-    decoded: &[DecodedOp],
-) -> Result<(), ContractArtifactError> {
-    let is_exact_descriptor = entrypoint.kind == EntryPointKind::View
-        && entrypoint.params.is_empty()
-        && entrypoint.argument_schema.is_none()
-        && entrypoint.return_type.as_deref() == Some("()")
-        && entrypoint.return_schema.as_ref().is_some_and(|schema| {
-            schema.nodes.as_slice() == [ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit]
-        })
-        && entrypoint.permission.is_none()
-        && entrypoint.read_keys.is_empty()
-        && entrypoint.write_keys.is_empty()
-        && entrypoint.access_hints_complete == Some(true)
-        && entrypoint.access_hints_skipped.is_empty()
-        && entrypoint.triggers.is_empty();
-    if !is_exact_descriptor {
-        return Err(ContractArtifactError::invalid(
-            "compiler-owned Kotodama test return entrypoint has a noncanonical descriptor",
-        ));
-    }
-    let Some(last) = decoded.last() else {
-        return Err(ContractArtifactError::invalid(
-            "Kotodama test-suite executable stream is empty",
-        ));
-    };
-    if ivm_abi::instruction::wide::opcode(last.inst) != ivm_abi::instruction::wide::control::HALT {
-        return Err(ContractArtifactError::invalid(
-            "Kotodama test-suite executable stream must end in the compiler-owned return HALT",
-        ));
-    }
-    if last.pc != entrypoint.entry_pc {
-        return Err(ContractArtifactError::invalid(
-            "compiler-owned Kotodama test return entrypoint must select the terminal HALT",
-        ));
-    }
-    Ok(())
 }
 #[expect(
     clippy::too_many_lines,
@@ -541,6 +490,88 @@ fn validate_bytecode_security(
                     op.pc
                 )));
             }
+        }
+    }
+    Ok(())
+}
+/// Bind the complete function graph to exact table roles and bounded stack reservations.
+fn validate_callable_tables(
+    interface: &EmbeddedContractInterfaceV1,
+    decoded: &[DecodedOp],
+    entrypoint_pcs: &BTreeSet<u64>,
+    zk_enabled: bool,
+) -> Result<(), ContractArtifactError> {
+    use ivm_abi::call::CallWordV1;
+    let mut expected_roots = entrypoint_pcs.clone();
+    for instruction in decoded
+        .iter()
+        .filter(|instruction| is_direct_call(instruction))
+    {
+        expected_roots.insert(direct_control_flow_target(instruction).ok_or_else(|| {
+            ContractArtifactError::invalid(
+                "callable table references an invalid direct-call target",
+            )
+        })?);
+    }
+    let mut declared_roots = BTreeSet::new();
+    let mut previous = None;
+    for callable in &interface.callables {
+        if !callable.validate()
+            || previous.is_some_and(|pc| callable.entry_pc <= pc)
+            || (!zk_enabled
+                && callable
+                    .argument_words
+                    .iter()
+                    .chain(&callable.result_words)
+                    .any(|word| word.is_private()))
+        {
+            return Err(ContractArtifactError::invalid(
+                "CNTR callables must have increasing unique roots, bounded aligned frames/tables, and valid role/privacy declarations",
+            ));
+        }
+        previous = Some(callable.entry_pc);
+        declared_roots.insert(callable.entry_pc);
+    }
+    if declared_roots != expected_roots {
+        return Err(ContractArtifactError::invalid(
+            "CNTR callable descriptors must cover exactly every entrypoint and direct-call root",
+        ));
+    }
+    for entrypoint in &interface.entrypoints {
+        let callable = interface
+            .callables
+            .binary_search_by_key(&entrypoint.entry_pc, |callable| callable.entry_pc)
+            .ok()
+            .and_then(|index| interface.callables.get(index))
+            .ok_or_else(|| {
+                ContractArtifactError::invalid("entrypoint has no callable descriptor")
+            })?;
+        let argument_words = match &entrypoint.argument_schema {
+            None => Vec::new(),
+            Some(schema) => schema
+                .word_kinds()
+                .ok_or_else(|| {
+                    ContractArtifactError::invalid("entrypoint has an invalid call argument schema")
+                })?
+                .into_iter()
+                .map(CallWordV1::from_entrypoint_word)
+                .collect(),
+        };
+        let result_words = entrypoint
+            .return_schema
+            .as_ref()
+            .and_then(ivm_abi::entrypoint::EntrypointValueTypeV1::word_kinds)
+            .ok_or_else(|| {
+                ContractArtifactError::invalid("entrypoint has an invalid call result schema")
+            })?
+            .into_iter()
+            .map(CallWordV1::from_entrypoint_word)
+            .collect::<Vec<_>>();
+        if callable.argument_words != argument_words || callable.result_words != result_words {
+            return Err(ContractArtifactError::invalid(format!(
+                "entrypoint `{}` callable roles do not match its canonical argument/result schemas",
+                entrypoint.name
+            )));
         }
     }
     Ok(())
@@ -1088,11 +1119,6 @@ fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
             "entrypoint names must not be empty",
         ));
     }
-    if name == KOTO_TEST_RETURN_ENTRYPOINT {
-        return Err(ContractArtifactError::invalid(
-            "compiler-owned Kotodama test return selector is forbidden in deployable contracts",
-        ));
-    }
     if !is_canonical_entrypoint_name(name) {
         return Err(ContractArtifactError::invalid(format!(
             "entrypoint `{name}` is not a canonical Kotodama V1 identifier or branded lifecycle selector"
@@ -1352,11 +1378,6 @@ fn schedule_nested_state_types<'a>(
                     "CNTR struct `{name}` is not a canonical Kotodama V1 struct identity"
                 )));
             }
-            if fields.is_empty() {
-                return Err(ContractArtifactError::invalid(format!(
-                    "CNTR struct `{name}` must contain at least one field"
-                )));
-            }
             pending.push(PendingStateTypeValidation::StructFields {
                 struct_name: name,
                 fields,
@@ -1413,6 +1434,42 @@ fn schedule_nested_state_types<'a>(
 mod tests {
     use super::*;
     #[test]
+    fn callable_table_rejects_missing_roots_schema_substitution_and_invalid_privacy() {
+        let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
+            "seiyaku Calls { fn echo(bool value) -> bool { value } view fn main(bool value) -> bool { echo(value: value) } }"
+        ).expect("compile table calls");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse contract");
+        let decoded =
+            crate::decode_instruction_stream(&bytes[parsed.code_offset..]).expect("decode");
+        let mut interface = parsed.contract_interface.expect("CNTR");
+        let roots = interface
+            .entrypoints
+            .iter()
+            .map(|entry| entry.entry_pc)
+            .collect();
+        validate_callable_tables(&interface, &decoded, &roots, false)
+            .expect("canonical callable table");
+        let original = interface.callables.clone();
+        interface.callables.clear();
+        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        interface.callables = original.clone();
+        let public_pc = interface.entrypoints[0].entry_pc;
+        interface
+            .callables
+            .iter_mut()
+            .find(|callable| callable.entry_pc == public_pc)
+            .unwrap()
+            .result_words[0] = ivm_abi::call::CallWordV1::Unit;
+        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        interface.callables = original.clone();
+        interface.callables[0].argument_words[0] =
+            ivm_abi::call::CallWordV1::SecretNumeric(ivm_abi::pointer_abi::PointerType::Int as u16);
+        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+        interface.callables = original;
+        interface.callables[0].frame_bytes += 1;
+        assert!(validate_callable_tables(&interface, &decoded, &roots, false).is_err());
+    }
+    #[test]
     fn state_cursor_is_an_opaque_value_with_a_supported_scalar_key() {
         use iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1;
         let cursor = EmbeddedStateType::StateCursor(EntrypointValueKindV1::Int);
@@ -1434,6 +1491,7 @@ mod tests {
         let list = ivm_abi::error_types::list_error_type();
         let numeric = ivm_abi::error_types::numeric_error_type();
         let mut interface = EmbeddedContractInterfaceV1 {
+            callables: Vec::new(),
             seiyaku_name: "Errors".into(),
             compiler_fingerprint: "test".into(),
             abi_hash: [0; 32],
@@ -1665,6 +1723,16 @@ mod tests {
     fn validate_declared_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
         validate_state_type(ty, true)?;
         validate_runtime_state_schema("value", ty)
+    }
+    #[test]
+    fn empty_nominal_state_products_are_admitted_as_unit_slots() {
+        let empty = wide_struct(0);
+        validate_declared_state_type(&empty).expect("empty nominal state product");
+        validate_declared_state_type(&EmbeddedStateType::List {
+            element: Box::new(empty),
+            capacity: 2,
+        })
+        .expect("empty nominal state list element");
     }
     #[test]
     fn exact_runtime_state_schema_node_boundary_is_admitted() {

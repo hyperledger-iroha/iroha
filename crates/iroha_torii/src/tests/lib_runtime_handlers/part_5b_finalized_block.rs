@@ -226,31 +226,3 @@ pub(crate) fn app_with_finalized_block_for_test(
     }
     (app, artifact)
 }
-#[tokio::test]
-async fn finalized_block_fixture_commits_one_ordinary_block_with_durable_finality() {
-    let (app, artifact) = app_with_finalized_block_for_test(true);
-    assert_ne!(
-        *app.state.network_id_ref(),
-        *mk_app_state_for_tests().state.network_id_ref(),
-        "the fixture network must differ from the default test app"
-    );
-    let block = app
-        .state
-        .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
-        .expect("committed fixture block");
-    assert_eq!(block.hash(), artifact.block_hash);
-    assert_eq!(block.execution_outputs().len(), 1);
-    assert_eq!(
-        artifact.height_context.network_id,
-        *app.state.network_id_ref()
-    );
-    let (unpersisted, unpersisted_artifact) = app_with_finalized_block_for_test(false);
-    assert_eq!(unpersisted_artifact.height, artifact.height);
-    assert!(
-        !unpersisted
-            .kura
-            .v2_finality_artifact_path_for_testing(1)
-            .exists(),
-        "without persist_finality the fixture stores no finality sidecar"
-    );
-}

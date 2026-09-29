@@ -1177,14 +1177,9 @@ mod tests {
         let wire = block.encode_wire().expect("fixture wire");
         let (len, hash) = (wire.len() as u64, Hash::new(&wire));
         // A node-local commit certificate does not change the committed identity.
-        let stored =
-            block
-                .clone()
-                .with_commit_certificate(Some(crate::block::CommitCertificate::new(
-                    vec![1],
-                    vec![2],
-                    vec![3],
-                )));
+        let stored = block.clone().with_commit_certificate(Some(
+            crate::block::CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3]),
+        ));
         for candidate in [&block, &stored] {
             let anchor = TrustedBlockProofAnchor::from_committed_execution(
                 candidate,
@@ -1732,39 +1727,3 @@ mod tests {
 
 #[cfg(test)]
 mod captured_proofs_schema_tests;
-
-/// Reuse real BLS/PoP finality fixtures for native-output anchor controls.
-#[cfg(all(test, feature = "transparent_api"))]
-pub(super) fn finalized_native_output_artifact_for_test(
-    block: &SignedBlock,
-    commitment: &ExecutionCommitment,
-) -> V2FinalityArtifact {
-    let header = block.header();
-    let batch = block
-        .execution_context()
-        .and_then(|context| context.native_lane_decisions.as_deref())
-        .expect("native output fixture has an exact source batch");
-    assert_eq!(
-        batch.base_state_height.checked_add(1),
-        Some(header.height().get())
-    );
-    // This pure proof fixture declares its exact pre-State trust root. It does not claim
-    // to have executed that State or authenticate the native input certificates.
-    let snapshot_bootstrap = super::consensus_v2::SnapshotBootstrapAnchor {
-        snapshot_height: batch.base_state_height,
-        snapshot_block_hash: header
-            .prev_block_hash()
-            .expect("non-genesis native carrier"),
-        snapshot_block_creation_time_ms: header
-            .creation_time_ms
-            .checked_sub(1)
-            .expect("fixture successor timestamp follows its anchor"),
-        snapshot_state_hash: batch.base_state_hash.into(),
-    };
-    tests::finalized_artifact_for_block_with_layout(
-        block,
-        commitment,
-        Some(super::consensus_v2::recommended_data_availability_layout()),
-        Some(snapshot_bootstrap),
-    )
-}

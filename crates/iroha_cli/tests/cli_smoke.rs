@@ -4,12 +4,12 @@
 //! the current version string. They help catch regression where the clap command tree fails to
 //! build or the binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "cli_smoke/incentives_dispute.rs"]
+mod incentives_dispute;
 #[path = "cli_smoke/zk_ivm_jobs.rs"]
 mod zk_ivm_jobs;
 #[path = "cli_smoke/zk_memo.rs"]
 mod zk_memo;
-#[path = "cli_smoke/incentives_dispute.rs"]
-mod incentives_dispute;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;

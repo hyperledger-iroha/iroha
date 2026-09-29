@@ -26,7 +26,7 @@ use crate::{
         compact_public_api::AxtVerificationContext,
         compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
         compact_value_domain::CompactTransferValue,
-        deep_binding,
+        deep_binding::{self, fixed_u32},
         deep_geometry::{
             CONSTRAINTS, COSET_OFFSET, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, LDE_ROOT, LDE_ROWS,
             QUERY_CANDIDATES, QUERY_COUNT, TRACE_ROWS,
@@ -198,30 +198,33 @@ impl DeepQuantityArtifactProfile {
             version: 1,
             catalog: fastpq_isi::FASTPQ_CATALOG_V1,
             protocol_identity: deep_binding::IDENTITY.to_vec(),
-            trace_rows: TRACE_ROWS as u32,
+            trace_rows: fixed_u32(TRACE_ROWS),
             trace_root: fastpq_isi::FASTPQ_FINAL_V1.trace_root,
-            lde_rows: LDE_ROWS as u32,
+            lde_rows: fixed_u32(LDE_ROWS),
             lde_root: LDE_ROOT,
             coset_offset: COSET_OFFSET,
-            committed_columns: COMMITTED_COLUMN_COUNT as u32,
+            committed_columns: fixed_u32(COMMITTED_COLUMN_COUNT),
             public_column_layout: LAYOUT_ID,
-            constraints: CONSTRAINTS as u32,
+            constraints: fixed_u32(CONSTRAINTS),
             modulus: crate::field::GOLDILOCKS_MODULUS_V1,
             extension_degree: 4,
             extension_nonresidue: 7,
             extension_schema: crate::GoldilocksFp4V1::frame_name(),
-            extension_bytes: crate::GoldilocksFp4V1::BYTES as u32,
+            extension_bytes: fixed_u32(crate::GoldilocksFp4V1::BYTES),
             hash_digest_lanes: 6,
             lane_parameter_sha3_256: fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1,
-            fri_arities: FRI_ARITIES.map(|value| value as u32),
-            fri_lengths: FRI_LENGTHS.map(|value| value as u32),
-            fri_degrees: FRI_DEGREES.map(|value| value as u32),
-            query_count: QUERY_COUNT as u32,
-            query_candidates: QUERY_CANDIDATES as u32,
+            fri_arities: FRI_ARITIES.map(fixed_u32),
+            fri_lengths: FRI_LENGTHS.map(fixed_u32),
+            fri_degrees: FRI_DEGREES.map(fixed_u32),
+            query_count: fixed_u32(QUERY_COUNT),
+            query_candidates: fixed_u32(QUERY_CANDIDATES),
             tape_bytes: core::array::from_fn(|round| {
-                deep_binding::Round::new(round as u8 + 1)
-                    .expect("fixed DEEP round")
-                    .tape_bytes() as u32
+                let round = u8::try_from(round + 1).expect("fixed DEEP round index fits u8");
+                fixed_u32(
+                    deep_binding::Round::new(round)
+                        .expect("fixed DEEP round")
+                        .tape_bytes(),
+                )
             }),
             proof_frame_schema: DeepProof::frame_name(),
             proof_frame_hash: norito::schema::identity::frame_hash::<DeepProof>(),
@@ -263,27 +266,39 @@ fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
 /// Verify ordinary model bytes under the fixed candidate and caller-expected inputs.
 /// No artifact field selects proof semantics or a protocol implementation.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+)]
 pub(in crate::backend) fn verify_ordinary_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<u64>(bytes, expected, None, limits)
+    verify_ordinary_artifact_for::<u64>(bytes, expected, None, &limits)
 }
 
-/// Verify a complete ordinary QuantityValueV1 artifact under its fixed profile.
+/// Verify a complete ordinary `QuantityValueV1` artifact under its fixed profile.
 /// The caller supplies expected inputs; advertised metadata cannot select a format.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+)]
 pub(in crate::backend) fn verify_quantity_ordinary_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, limits)
+    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, &limits)
 }
 
 /// Verify the fixed quantity route with an independently expected complete statement digest.
 /// This mandatory normal-library input is checked before carrier or child verification.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+)]
 pub(in crate::backend) fn verify_bound_quantity_ordinary_artifact(
     bytes: &[u8],
     expected: &PublicIO,
@@ -294,7 +309,7 @@ pub(in crate::backend) fn verify_bound_quantity_ordinary_artifact(
         bytes,
         expected,
         Some(expected_statement_digest),
-        limits,
+        &limits,
     )
 }
 
@@ -302,7 +317,7 @@ fn verify_ordinary_artifact_for<V: CompactTransferValue>(
     bytes: &[u8],
     expected: &PublicIO,
     expected_statement_digest: Option<[u8; 32]>,
-    limits: ArtifactLimits,
+    limits: &ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
     norito::core::with_decode_limits_scope(limits.total_decode, || {
         let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
@@ -349,29 +364,41 @@ fn verify_ordinary_artifact_for<V: CompactTransferValue>(
 /// Verify AXT model bytes against every independently supplied caller expectation.
 /// The artifact cannot substitute its own binding, mirrors, metadata or preimages.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+)]
 pub(in crate::backend) fn verify_axt_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_axt_artifact_for::<u64>(bytes, expected, None, context, limits)
+    verify_axt_artifact_for::<u64>(bytes, expected, None, &context, &limits)
 }
 
-/// Verify a complete AXT QuantityValueV1 artifact with independent caller context.
+/// Verify a complete AXT `QuantityValueV1` artifact with independent caller context.
 /// All binding, mirrors and remote preimages remain mandatory under this route.
 #[cfg(test)]
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+)]
 pub(in crate::backend) fn verify_quantity_axt_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_axt_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, context, limits)
+    verify_axt_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, &context, &limits)
 }
 
 /// Verify the fixed AXT quantity route with a mandatory independent statement digest.
 /// All AXT context and complete statement identity remain caller expectations.
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+)]
 pub(in crate::backend) fn verify_bound_quantity_axt_artifact(
     bytes: &[u8],
     expected: &PublicIO,
@@ -383,8 +410,8 @@ pub(in crate::backend) fn verify_bound_quantity_axt_artifact(
         bytes,
         expected,
         Some(expected_statement_digest),
-        context,
-        limits,
+        &context,
+        &limits,
     )
 }
 
@@ -392,8 +419,8 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
     bytes: &[u8],
     expected: &PublicIO,
     expected_statement_digest: Option<[u8; 32]>,
-    context: AxtVerificationContext<'_>,
-    limits: ArtifactLimits,
+    context: &AxtVerificationContext<'_>,
+    limits: &ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
     norito::core::with_decode_limits_scope(limits.total_decode, || {
         let artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
@@ -401,7 +428,7 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
             profile_id_for::<V>(),
             limits.transport,
         )?;
-        validate_axt_advertisement(&artifact, context)?;
+        validate_axt_advertisement(&artifact, *context)?;
         let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
             &artifact.statement,
             expected,
@@ -420,7 +447,7 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
                 let bundle = verify_axt_transfer_bundle_with_allocation(
                     prepared,
                     expected,
-                    context,
+                    *context,
                     &artifact.bundle_frame,
                     limits.bundle,
                     limits.max_segment_decode_allocation_charges,
@@ -439,6 +466,10 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
     })
 }
 
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context contract of its sibling test module"
+)]
 fn validate_axt_advertisement(
     artifact: &FastpqAxtCompactArtifactV1,
     context: AxtVerificationContext<'_>,
@@ -461,7 +492,11 @@ fn validate_axt_advertisement(
         ),
         (
             "compact_artifact_amount_bytes",
-            advertised.committed_amount.as_ref().map(|b| b.as_slice()) == expected.committed_amount,
+            advertised
+                .committed_amount
+                .as_ref()
+                .map(<[u8; 16]>::as_slice)
+                == expected.committed_amount,
         ),
         (
             "compact_artifact_expiry_bytes",
@@ -470,6 +505,11 @@ fn validate_axt_advertisement(
         (
             "compact_artifact_manifest_bytes",
             advertised.manifest_root.as_slice() == expected.manifest_root,
+        ),
+        (
+            "compact_artifact_source_occurrences",
+            advertised.source_transfer_occurrences.as_slice()
+                == expected.source_transfer_occurrences,
         ),
         (
             "compact_artifact_da_bytes",

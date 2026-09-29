@@ -16,13 +16,13 @@ use crate::{CodecError, CodecResult};
 
 macro_rules! retail_contracts {
     ($($name:literal => $ty:ty),+ $(,)?) => {
-        pub(super) fn is_retail_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_retail_instruction(instruction: &InstructionBox) -> bool {
             let typed: &dyn Instruction = &**instruction;
             let any = typed.as_any();
             $(any.is::<$ty>())||+
         }
 
-        pub(super) fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(envelope) = value else { return None; };
             $(if let Some(payload) = envelope.get($name) {
                 return Some((|| {
@@ -38,7 +38,7 @@ macro_rules! retail_contracts {
             None
         }
 
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             let typed: &dyn Instruction = &**instruction;
             let any = typed.as_any();
             $(if let Some(value) = any.downcast_ref::<$ty>() {

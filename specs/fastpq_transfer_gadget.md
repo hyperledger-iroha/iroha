@@ -76,8 +76,10 @@ witnesses are rejected before proof construction.
 The `fastpq_json` and `fastpq_fixture_rebind` tools accept only the canonical
 `FastpqTransitionBatch` frame at their batch boundary. Internal prover structs,
 bare payloads, alternate layouts, and trailing bytes are rejected. JSON-tool
-proofs, relay references, touch-manifest commitments, and emitted Norito objects
+proofs, touch-manifest commitments, and emitted Norito objects
 use the canonical V1 frame independently of ambient layout guards.
+The JSON helper produces captured AXT transfer proofs only. It rejects retired
+lane-relay request fields and does not synthesize metadata-only relay proofs.
 AXT proof bytes are the exact `FastpqAxtCompactArtifactV1` frame, with complete
 quantity-encoded public rows and no embedded replay proof. The JSON prover and
 verifier report the artifact byte length and SHA-256; the former preprocessing

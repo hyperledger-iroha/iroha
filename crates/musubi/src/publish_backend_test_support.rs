@@ -179,6 +179,7 @@ impl PublicationBackend for EarlyBackend {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         _request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
         _location: &MusubiArchiveLocationV1,
         _provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
@@ -294,6 +295,7 @@ impl PublicationBackend for CompleteBackend {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
@@ -481,6 +483,7 @@ impl PublicationBackend for ArchiveRecoveryBackend {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         _request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
         _location: &MusubiArchiveLocationV1,
         _provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
@@ -642,6 +645,7 @@ impl PublicationBackend for LocationRecoveryBackend {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
+        _registered: &PublicationRegisteredArchiveV1,
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {

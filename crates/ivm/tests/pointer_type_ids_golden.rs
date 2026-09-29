@@ -15,13 +15,13 @@ fn pointer_type_ids_match_golden() {
         (P::NoritoBytes, 0x0009),
         (P::DataSpaceId, 0x000A),
         (P::AxtDescriptor, 0x000B),
-        (P::AssetHandle, 0x000C),
         (P::ProofBlob, 0x000D),
         (P::SoracloudRequest, 0x000E),
         (P::SoracloudResponse, 0x000F),
         (P::Quantity, 0x0010),
         (P::Int, 0x0011),
         (P::Decimal, 0x0012),
+        (P::AxtAnchoredSpendV1, 0x0013),
     ];
     // END GENERATED ABI V1 POINTER TYPE IDS
     let expected_types = expected
@@ -44,7 +44,8 @@ fn pointer_type_ids_match_golden() {
             "the generated ABI-v1 pointer type decoder changed for 0x{id:04X}"
         );
     }
-    assert_eq!(P::from_u16(0x0013), None);
+    assert_eq!(P::from_u16(0x000C), None);
+    assert_eq!(P::from_u16(0x0014), None);
 }
 #[test]
 fn numeric_pointer_ids_are_exactly_the_v1_reset_layout() {
@@ -53,7 +54,8 @@ fn numeric_pointer_ids_are_exactly_the_v1_reset_layout() {
         (0x0010, Some(P::Quantity)),
         (0x0011, Some(P::Int)),
         (0x0012, Some(P::Decimal)),
-        (0x0013, None),
+        (0x0013, Some(P::AxtAnchoredSpendV1)),
+        (0x0014, None),
     ];
     for (id, pointer_type) in expected {
         assert_eq!(P::from_u16(id), pointer_type, "pointer ID 0x{id:04X}");
@@ -80,13 +82,13 @@ fn pointer_policy_allows_expected_types_for_v1() {
         P::NoritoBytes,
         P::DataSpaceId,
         P::AxtDescriptor,
-        P::AssetHandle,
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
         P::Int,
         P::Decimal,
         P::Quantity,
+        P::AxtAnchoredSpendV1,
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }
@@ -94,12 +96,14 @@ fn pointer_policy_allows_expected_types_for_v1() {
 #[test]
 fn unassigned_numeric_pointer_id_is_unknown_and_never_allowed() {
     use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
-    assert_eq!(P::from_u16(0x0013), None);
-    assert!(
-        !ivm::pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1)
-            .iter()
-            .any(|ty| *ty as u16 == 0x0013)
-    );
+    for retired_or_unassigned in [0x000C, 0x0014] {
+        assert_eq!(P::from_u16(retired_or_unassigned), None);
+        assert!(
+            !ivm::pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1)
+                .iter()
+                .any(|ty| *ty as u16 == retired_or_unassigned)
+        );
+    }
     for ty in P::all() {
         assert!(
             is_type_allowed_for_policy(SyscallPolicy::AbiV1, *ty),

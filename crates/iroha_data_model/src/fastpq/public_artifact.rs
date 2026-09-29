@@ -16,7 +16,7 @@ use super::{
 use crate::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1},
+    nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtSourceTransferOccurrenceV1},
     privacy::GoldilocksDigest384V1,
 };
 use iroha_crypto::Hash;
@@ -204,6 +204,8 @@ pub struct FastpqAxtPublicMetadataV1 {
     pub manifest_root: [u8; 32],
     /// Exact 33-byte option encoding of the DA commitment.
     pub da_commitment: [u8; 33],
+    /// Exact successful source transfer occurrences in claim-commitment order.
+    pub source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
 }
 
 /// Advertised pre-proof AXT outer mirrors; callers must authenticate their own values.
@@ -662,6 +664,7 @@ mod tests {
                 )],
             },
             metadata: FastpqAxtPublicMetadataV1 {
+                source_transfer_occurrences: Vec::new(),
                 parameter: "fastpq-state-transition-stark-v1".into(),
                 entry_hash: [14; 32],
                 committed_amount: Some(123_u128.to_le_bytes()),

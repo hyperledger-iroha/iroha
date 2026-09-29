@@ -439,3 +439,23 @@ fn protobuf_signature_and_merkle_codecs_are_strict() {
     assert_eq!(work.secp256k1_recoveries, 4);
     assert_eq!(segment_work(&chain.raw_segment(1, 3)).native_headers, 3);
 }
+
+#[test]
+fn field_readers_reject_only_another_wire_type() {
+    let map = BTreeMap::from([
+        (1, Wire::Varint(7)),
+        (2, Wire::Bytes(b"ab")),
+        (3, Wire::Fixed),
+    ]);
+    let malformed = || TronLcError::MalformedTransaction;
+    assert_eq!(varint_of(&map, 1, malformed), Ok(Some(7)));
+    assert_eq!(varint_of(&map, 4, malformed), Ok(None));
+    for field in [2, 3] {
+        assert_eq!(varint_of(&map, field, malformed), Err(malformed()));
+    }
+    assert_eq!(bytes_of(&map, 2, malformed), Ok(Some(&b"ab"[..])));
+    assert_eq!(bytes_of(&map, 4, malformed), Ok(None));
+    for field in [1, 3] {
+        assert_eq!(bytes_of(&map, field, malformed), Err(malformed()));
+    }
+}

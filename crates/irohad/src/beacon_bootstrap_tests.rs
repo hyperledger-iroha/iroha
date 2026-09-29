@@ -16,30 +16,25 @@ fn test_network() -> NetworkId {
 
 fn current_phase_fixture() -> (
     iroha_core::sumeragi::test_chain::CertifiedTestChain,
-    SumeragiFinalityVerifier,
+    NativeJournalCursor,
 ) {
     use iroha_core::{
         state::World,
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     let config = TestChainConfig::new(World::default(), 10_000);
-    let chain_id = config.chain_id.to_string();
+    let chain_id = config.chain_id.clone();
     let chain = CertifiedTestChain::start(config).expect("current signed genesis");
-    let validators = chain
-        .validators()
-        .iter()
-        .map(|(peer, proof_of_possession)| FinalityValidator {
-            public_key: peer.public_key().clone(),
-            proof_of_possession: proof_of_possession.clone(),
-        })
-        .collect();
-    let mut verifier = SumeragiFinalityVerifier::new(chain.genesis(), &chain_id, validators)
-        .expect("independent signed-genesis root");
-    let first = iroha_core::sumeragi::finality::build_proof(&chain.state().view(), 1)
-        .expect("current genesis proof");
-    verifier
-        .verify(&first)
-        .expect("authenticated genesis execution");
+    let verifier = NativeJournalCursor::new(
+        chain_id,
+        chain.network_id(),
+        test_finality_limits().checked().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        verifier.tip().is_none(),
+        "signed genesis alone is not a finalized execution"
+    );
     (chain, verifier)
 }
 
@@ -47,9 +42,19 @@ fn current_phase_fixture() -> (
 fn current_phase_pipe_accepts_real_work_and_rejects_replay() {
     let (mut chain, mut verifier) = current_phase_fixture();
     chain.commit_at(20_000, Vec::new()); // Fixture adds a signed clock transaction.
-    let proof = iroha_core::sumeragi::finality::build_proof(&chain.state().view(), 2)
-        .expect("current certified transaction block");
-    let bytes = norito::encode_canonical(&proof).expect("canonical current proof");
+    let limits = test_finality_limits().checked().unwrap();
+    let journal = NativeFinalityJournal {
+        blocks: (1..=2)
+            .map(|height| {
+                iroha_data_model::sumeragi::finality::NativeFinalityArtifact::from_block(
+                    chain.committed(height).block(),
+                    limits,
+                )
+                .unwrap()
+            })
+            .collect(),
+    };
+    let bytes = norito::encode_canonical(&journal).expect("canonical complete native journal");
     let (mut writer, reader) = UnixStream::pair().expect("local proof stream");
     for _ in 0..2 {
         writer
@@ -83,24 +88,25 @@ fn current_phase_pipe_accepts_real_work_and_rejects_replay() {
 }
 
 #[test]
-fn rotation_requires_current_state_evidence_before_opening_custody() {
+fn rotation_rejects_unadmitted_evidence_before_opening_custody() {
+    let mut limits = test_finality_limits();
+    limits.finality_allocated_bytes = 0;
     let proof = RotationProofArgs {
-        selection_evidence: PathBuf::from("/must-not-open/retired-evidence"),
+        selection_evidence: PathBuf::from("/must-not-open/unadmitted-evidence"),
         network_id: test_network(),
-        trusted_context_id: Hash::new(b"retired-context"),
-        anchor_height: 1,
+        chain_id: ChainId::from("rotation-phase-test"),
+        finality_limits: limits,
         target_epoch: 2,
         transition_id: Hash::new(b"unproved-transition"),
     };
     assert!(matches!(
         read_verified_rotation_selection(&proof),
-        Err(Error::UnsupportedRotationEvidence)
+        Err(Error::InvalidInput)
     ));
 }
 
 #[test]
 fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
-    let (_, initial_verifier) = current_phase_fixture();
     for frame in [
         0_u32.to_be_bytes().to_vec(),
         u32::try_from(MAX_ROTATION_PHASE_PROOF_BYTES + 1)
@@ -113,7 +119,12 @@ fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
         let (mut writer, reader) = UnixStream::pair().expect("local proof stream");
         writer.write_all(&frame).expect("write malformed frame");
         drop(writer);
-        let mut verifier = initial_verifier.clone();
+        let mut verifier = NativeJournalCursor::new(
+            ChainId::from("rotation-phase-test"),
+            test_network(),
+            test_finality_limits().checked().expect("limits"),
+        )
+        .expect("independent cursor");
         let mut last_height = 10;
         assert!(
             read_rotation_phase_height(
@@ -129,29 +140,91 @@ fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
     }
 }
 
+fn test_finality_limits() -> FinalityLimitsArgs {
+    FinalityLimitsArgs {
+        finality_block_bytes: NATIVE_FINALITY_MAX_BLOCK_BYTES,
+        finality_journal_bytes: NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+        finality_block_count: NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        finality_allocated_bytes: 128 * 1024 * 1024,
+    }
+}
+
 #[test]
-fn rotation_phase_rejects_replay_gap_header_mismatch_and_cutoff() {
-    assert!(check_rotation_phase_height(10, 11, 11, 14).is_ok());
+fn finality_admission_rejects_zero_contradictory_and_over_protocol_limits() {
+    assert!(test_finality_limits().checked().is_ok());
+    let mut limits = test_finality_limits();
+    limits.finality_allocated_bytes = 0;
+    assert_eq!(limits.checked(), Err(Error::InvalidInput));
+    let mut limits = test_finality_limits();
+    limits.finality_journal_bytes = limits.finality_block_bytes - 1;
+    assert_eq!(limits.checked(), Err(Error::InvalidInput));
+    let mut limits = test_finality_limits();
+    limits.finality_block_count = NATIVE_FINALITY_MAX_BLOCK_COUNT + 1;
+    assert_eq!(limits.checked(), Err(Error::InvalidInput));
+}
+
+#[test]
+fn rotation_phase_rejects_replay_gap_and_cutoff() {
+    assert!(check_rotation_phase_height(10, 11, 14).is_ok());
+    assert_eq!(check_rotation_phase_height(11, 11, 14), Err(Error::Height));
+    assert_eq!(check_rotation_phase_height(11, 13, 14), Err(Error::Height));
+    assert_eq!(check_rotation_phase_height(13, 14, 14), Err(Error::Height));
     assert_eq!(
-        check_rotation_phase_height(11, 11, 11, 14),
+        check_rotation_phase_height(u64::MAX, 0, u64::MAX),
         Err(Error::Height)
     );
+}
+
+#[test]
+fn claimed_journal_count_never_substitutes_for_actual_native_source() {
+    use iroha_data_model::sumeragi::finality::NativeFinalityArtifact;
+    let mut cursor = NativeJournalCursor::new(
+        ChainId::from("rotation-phase-test"),
+        test_network(),
+        test_finality_limits().checked().expect("limits"),
+    )
+    .expect("cursor");
+    let journal = NativeFinalityJournal {
+        blocks: vec![
+            NativeFinalityArtifact {
+                block_wire: vec![0]
+            };
+            2
+        ],
+    };
+    let mut height = 1;
     assert_eq!(
-        check_rotation_phase_height(11, 13, 13, 14),
+        advance_phase_journal(&mut cursor, &journal, &mut height, 10),
+        Err(Error::Crypto)
+    );
+    assert_eq!(height, 1);
+    assert!(cursor.tip().is_none());
+    // An independently tracked phase clock cannot replace the retained native receipt.
+    let mut height = 2;
+    let journal = NativeFinalityJournal {
+        blocks: vec![
+            NativeFinalityArtifact {
+                block_wire: vec![0]
+            };
+            3
+        ],
+    };
+    assert_eq!(
+        advance_phase_journal(&mut cursor, &journal, &mut height, 10),
         Err(Error::Height)
     );
-    assert_eq!(
-        check_rotation_phase_height(11, 12, 11, 14),
-        Err(Error::Height)
-    );
-    assert_eq!(
-        check_rotation_phase_height(13, 14, 14, 14),
-        Err(Error::Height)
-    );
-    assert_eq!(
-        check_rotation_phase_height(u64::MAX, 0, 0, u64::MAX),
-        Err(Error::Height)
-    );
+    assert_eq!(height, 2);
+    assert!(cursor.tip().is_none());
+}
+
+fn without_argument(args: &[String], name: &str) -> Vec<String> {
+    let mut result = args.to_vec();
+    let position = result
+        .iter()
+        .position(|arg| arg == name)
+        .expect("argument exists");
+    result.drain(position..position + 2);
+    result
 }
 
 #[test]
@@ -178,7 +251,6 @@ fn bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame() {
 
 #[test]
 fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
-    let context = Hash::new(b"trusted-rotation-context").to_string();
     let transition = Hash::new(b"trusted-rotation-attempt").to_string();
     let base = vec![
         "beacon-bootstrap".to_owned(),
@@ -187,10 +259,8 @@ fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
         "selection.norito".to_owned(),
         "--network-id".to_owned(),
         test_network().to_string(),
-        "--trusted-context-id".to_owned(),
-        context,
-        "--anchor-height".to_owned(),
-        "10".to_owned(),
+        "--chain-id".to_owned(),
+        "rotation-test".to_owned(),
         "--target-epoch".to_owned(),
         "2".to_owned(),
         "--transition-id".to_owned(),
@@ -214,12 +284,17 @@ fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
         "/tmp/owner-journal".into(),
     ]);
     assert!(Args::try_parse_from(&seat).is_ok());
-    let mut no_context = seat.clone();
-    no_context.drain(6..8);
-    assert!(Args::try_parse_from(no_context).is_err());
-    let mut no_key = seat.clone();
-    no_key.drain(16..18);
-    assert!(Args::try_parse_from(no_key).is_err());
+    assert!(Args::try_parse_from(without_argument(&seat, "--chain-id")).is_err());
+    let mut retired_pin = seat.clone();
+    retired_pin.extend([
+        "--trusted-context-id".into(),
+        Hash::new(b"retired").to_string(),
+    ]);
+    assert!(Args::try_parse_from(retired_pin).is_err());
+    let mut retired_height = seat.clone();
+    retired_height.extend(["--anchor-height".into(), "10".into()]);
+    assert!(Args::try_parse_from(retired_height).is_err());
+    assert!(Args::try_parse_from(without_argument(&seat, "--key-fd")).is_err());
     let mut both_keys = seat.clone();
     both_keys.extend(["--config-fd".into(), "198".into()]);
     assert!(Args::try_parse_from(both_keys).is_err());
@@ -242,9 +317,7 @@ fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
         "rotation-bundle.json".into(),
     ]);
     assert!(Args::try_parse_from(&assemble_dkg).is_ok());
-    let mut no_provider = assemble_dkg;
-    no_provider.drain(18..20);
-    assert!(Args::try_parse_from(no_provider).is_err());
+    assert!(Args::try_parse_from(without_argument(&assemble_dkg, "--provider")).is_err());
 
     let mut sign = base.clone();
     sign[1] = "sign-rotation".into();
@@ -259,9 +332,7 @@ fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
         "signature.json".into(),
     ]);
     assert!(Args::try_parse_from(&sign).is_ok());
-    let mut no_key = sign;
-    no_key.drain(18..20);
-    assert!(Args::try_parse_from(no_key).is_err());
+    assert!(Args::try_parse_from(without_argument(&sign, "--key-fd")).is_err());
 }
 
 #[test]
@@ -281,8 +352,8 @@ fn genesis_seat_parser_requires_signed_anchor_and_one_private_identity() {
         "genesis.signed.nrt".to_owned(),
         "--genesis-public-key".to_owned(),
         "genesis.public-key".to_owned(),
-        "--genesis-finality".to_owned(),
-        "genesis-finality.norito".to_owned(),
+        "--chain-id".to_owned(),
+        "genesis-test".to_owned(),
     ];
     let mut seat = base.clone();
     seat.extend([
@@ -298,12 +369,12 @@ fn genesis_seat_parser_requires_signed_anchor_and_one_private_identity() {
         "/tmp/owner-journal".into(),
     ]);
     assert!(Args::try_parse_from(&seat).is_ok());
-    let mut no_anchor = seat.clone();
-    no_anchor.drain(14..16);
-    assert!(Args::try_parse_from(no_anchor).is_err());
-    let mut no_key = seat.clone();
-    no_key.drain(18..20);
-    assert!(Args::try_parse_from(no_key).is_err());
+    assert!(Args::try_parse_from(without_argument(&seat, "--genesis-signed")).is_err());
+    assert!(Args::try_parse_from(without_argument(&seat, "--chain-id")).is_err());
+    let mut retired = seat.clone();
+    retired.extend(["--genesis-finality".into(), "fake-h1-qc.norito".into()]);
+    assert!(Args::try_parse_from(retired).is_err());
+    assert!(Args::try_parse_from(without_argument(&seat, "--key-fd")).is_err());
     let mut both = seat;
     both.extend(["--config-fd".into(), "198".into()]);
     assert!(Args::try_parse_from(both).is_err());
@@ -360,8 +431,8 @@ fn genesis_public_assembly_requires_exact_proof_and_provider_inputs() {
         "genesis.signed.nrt".to_owned(),
         "--genesis-public-key".to_owned(),
         "genesis.public-key".to_owned(),
-        "--genesis-finality".to_owned(),
-        "genesis-finality.norito".to_owned(),
+        "--chain-id".to_owned(),
+        "genesis-test".to_owned(),
         "--phase-proof".to_owned(),
         "phase-2.norito".to_owned(),
         "--public-session".to_owned(),
@@ -374,12 +445,8 @@ fn genesis_public_assembly_requires_exact_proof_and_provider_inputs() {
         "public-bundle.json".to_owned(),
     ];
     assert!(Args::try_parse_from(&base).is_ok());
-    let mut no_phase = base.clone();
-    no_phase.drain(16..18);
-    assert!(Args::try_parse_from(no_phase).is_err());
-    let mut no_provider = base;
-    no_provider.drain(20..22);
-    assert!(Args::try_parse_from(no_provider).is_err());
+    assert!(Args::try_parse_from(without_argument(&base, "--phase-proof")).is_err());
+    assert!(Args::try_parse_from(without_argument(&base, "--provider")).is_err());
 }
 
 #[test]

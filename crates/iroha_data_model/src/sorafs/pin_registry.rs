@@ -286,7 +286,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ManifestDigest {
         Ok((value, consumed))
     }
 }
-#[allow(dead_code)]
 fn _assert_manifest_digest_decode<'a>()
 where
     ManifestDigest: norito::core::DecodeFromSlice<'a>,

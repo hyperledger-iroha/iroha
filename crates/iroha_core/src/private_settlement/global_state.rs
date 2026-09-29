@@ -2315,7 +2315,7 @@ pub(crate) mod tests {
             );
         }
         let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&registry);
+        state.install_lane_manifests_for_testing(&registry);
         registry
     }
 

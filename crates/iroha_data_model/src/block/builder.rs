@@ -159,8 +159,7 @@ impl BlockBuilder {
     /// # Errors
     ///
     /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
-    /// backend rejects the private-key material or finalized header hash, or native
-    /// source/output structure is malformed.
+    /// backend rejects the private-key material or finalized header hash.
     pub fn try_build_with_signature(
         mut self,
         signatory_index: u64,
@@ -168,14 +167,6 @@ impl BlockBuilder {
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         self.finalize_header();
         let mut block = self.into_block(BTreeSet::new());
-        block
-            .validate_native_lane_source()
-            .map_err(iroha_crypto::Error::Signing)?;
-        if block.has_results() {
-            block
-                .validate_native_lane_results()
-                .map_err(iroha_crypto::Error::Signing)?;
-        }
         let sig = SignatureOf::try_from_hash(private_key, block.hash())?;
         block
             .signatures

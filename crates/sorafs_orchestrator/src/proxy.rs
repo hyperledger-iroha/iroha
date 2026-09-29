@@ -990,9 +990,9 @@ impl LocalQuicProxyHandle {
     pub async fn shutdown(&self) {}
 }
 struct LocalQuicProxyInner {
+    /// Keeps the QUIC listener endpoint open for the proxy's lifetime.
     #[cfg(feature = "local-quic-proxy")]
-    #[allow(unused)]
-    endpoint: Endpoint,
+    _endpoint: Endpoint,
     local_addr: SocketAddr,
     certificate_pem: String,
     browser_manifest: Option<BrowserManifestTemplate>,
@@ -1631,7 +1631,7 @@ pub fn spawn_local_quic_proxy(
     });
     Ok(LocalQuicProxyHandle {
         inner: Arc::new(LocalQuicProxyInner {
-            endpoint,
+            _endpoint: endpoint,
             local_addr,
             certificate_pem,
             browser_manifest,
@@ -3159,18 +3159,14 @@ mod tests {
     }
     #[test]
     fn proxy_rejects_unbounded_stream_configuration() {
-        let zero = LocalQuicProxyConfig {
-            max_streams_per_circuit: Some(0),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut zero = LocalQuicProxyConfig::default();
+        zero.max_streams_per_circuit = Some(0);
         assert!(matches!(
             zero.validated_stream_limit(),
             Err(ProxyError::StreamLimit { .. })
         ));
-        let excessive = LocalQuicProxyConfig {
-            max_streams_per_circuit: Some(PROXY_MAX_STREAMS_PER_CONNECTION + 1),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut excessive = LocalQuicProxyConfig::default();
+        excessive.max_streams_per_circuit = Some(PROXY_MAX_STREAMS_PER_CONNECTION + 1);
         assert!(matches!(
             excessive.validated_stream_limit(),
             Err(ProxyError::StreamLimit { .. })
@@ -3178,10 +3174,8 @@ mod tests {
     }
     #[test]
     fn proxy_config_debug_redacts_guard_cache_key() {
-        let config = LocalQuicProxyConfig {
-            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.guard_cache_key_hex = Some(TEST_GUARD_KEY.into());
         let rendered = format!("{config:?}");
         assert!(rendered.contains("<redacted>"));
         assert!(!rendered.contains(TEST_GUARD_KEY));
@@ -3337,12 +3331,10 @@ mod tests {
     }
     #[test]
     fn manifest_template_populates_expected_fields() {
-        let config = LocalQuicProxyConfig {
-            telemetry_label: Some("dev-proxy".into()),
-            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
-            proxy_mode: ProxyMode::Bridge,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.telemetry_label = Some("dev-proxy".into());
+        config.guard_cache_key_hex = Some(TEST_GUARD_KEY.into());
+        config.proxy_mode = ProxyMode::Bridge;
         let (cert_pem, cert_der) = sample_certificate();
         let addr: SocketAddr = "127.0.0.1:4433".parse().expect("addr");
         let template = build_manifest_template(&config, addr, &cert_pem, &cert_der)
@@ -3421,11 +3413,9 @@ mod tests {
     }
     #[test]
     fn cache_tag_generation_matches_expected() {
-        let config = LocalQuicProxyConfig {
-            telemetry_label: Some("dev-proxy".into()),
-            proxy_mode: ProxyMode::Bridge,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.telemetry_label = Some("dev-proxy".into());
+        config.proxy_mode = ProxyMode::Bridge;
         let guard_key = GuardCacheKey::from_bytes([0x11; GuardCacheKey::LENGTH])
             .expect("non-zero guard cache key");
         let (cert_pem, cert_der) = sample_certificate();
@@ -3544,10 +3534,9 @@ mod tests {
     }
     #[test]
     fn spawn_local_quic_proxy_rejects_non_loopback_bind_addr() {
-        let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
-            bind_addr: "0.0.0.0:0".into(),
-            ..LocalQuicProxyConfig::default()
-        });
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "0.0.0.0:0".into();
+        let result = spawn_local_quic_proxy(config);
         match result {
             Err(ProxyError::BindAddressNotLoopback(addr)) => {
                 assert_eq!(addr, "0.0.0.0:0".parse().expect("addr"));
@@ -3588,12 +3577,10 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn handshake_manifest_includes_cache_tagging() {
-        let config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            telemetry_label: Some("dev-proxy".into()),
-            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.telemetry_label = Some("dev-proxy".into());
+        config.guard_cache_key_hex = Some(TEST_GUARD_KEY.into());
         let Some(proxy) = spawn_proxy_or_skip(config.clone()) else {
             return;
         };
@@ -3624,12 +3611,10 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn stream_rejects_version_mismatch() {
-        let config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            emit_browser_manifest: false,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.proxy_mode = ProxyMode::Bridge;
+        config.emit_browser_manifest = false;
         let Some(proxy) = spawn_proxy_or_skip(config) else {
             return;
         };
@@ -3658,11 +3643,9 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn handshake_rejects_version_mismatch() {
-        let config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            emit_browser_manifest: false,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.emit_browser_manifest = false;
         let Some(proxy) = spawn_proxy_or_skip(config) else {
             return;
         };
@@ -3693,11 +3676,9 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn handshake_requires_the_out_of_band_client_capability() {
-        let config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            emit_browser_manifest: true,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.emit_browser_manifest = true;
         let Some(proxy) = spawn_proxy_or_skip(config) else {
             return;
         };
@@ -3756,12 +3737,10 @@ mod tests {
         tokio::fs::write(&spool_path, b"norito-bytes")
             .await
             .expect("write norito payload");
-        let mut config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            emit_browser_manifest: false,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.proxy_mode = ProxyMode::Bridge;
+        config.emit_browser_manifest = false;
         config.norito_bridge = Some(ProxyNoritoBridgeConfig {
             spool_dir: spool_dir.path().to_string_lossy().into_owned(),
             extension: Some("norito".into()),
@@ -3807,12 +3786,10 @@ mod tests {
         tokio::fs::write(&car_path, b"car-bytes")
             .await
             .expect("write car payload");
-        let mut config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            emit_browser_manifest: false,
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.proxy_mode = ProxyMode::Bridge;
+        config.emit_browser_manifest = false;
         config.car_bridge = Some(ProxyCarBridgeConfig {
             cache_dir: cache_dir.path().to_string_lossy().into_owned(),
             extension: Some("car".into()),
@@ -3859,13 +3836,11 @@ mod tests {
         tokio::fs::write(&spool_path, b"kaigi-bytes")
             .await
             .expect("write kaigi payload");
-        let mut config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            emit_browser_manifest: false,
-            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.proxy_mode = ProxyMode::Bridge;
+        config.emit_browser_manifest = false;
+        config.guard_cache_key_hex = Some(TEST_GUARD_KEY.into());
         config.kaigi_bridge = Some(ProxyKaigiBridgeConfig {
             spool_dir: spool_dir.path().to_string_lossy().into_owned(),
             extension: Some("norito".into()),
@@ -3912,13 +3887,11 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn tcp_stream_bridge_rejects_loopback_ssrf() {
-        let config = LocalQuicProxyConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            proxy_mode: ProxyMode::Bridge,
-            emit_browser_manifest: false,
-            guard_cache_key_hex: Some(TEST_GUARD_KEY.into()),
-            ..LocalQuicProxyConfig::default()
-        };
+        let mut config = LocalQuicProxyConfig::default();
+        config.bind_addr = "127.0.0.1:0".into();
+        config.proxy_mode = ProxyMode::Bridge;
+        config.emit_browser_manifest = false;
+        config.guard_cache_key_hex = Some(TEST_GUARD_KEY.into());
         let Some(proxy) = spawn_proxy_or_skip(config) else {
             return;
         };

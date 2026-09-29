@@ -1099,11 +1099,12 @@ mod tests {
         let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
             .expect("valid RAM-LFE test secret");
         let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        let mut mismatched_program = default_bfv_programmed_hidden_program();
-        mismatched_program
-            .instructions
-            .pop()
-            .expect("default program has instructions");
+        let default_program = default_bfv_programmed_hidden_program();
+        let mut builder = HiddenRamFheProgram::builder().expect("bounded tape allocation");
+        for instruction in default_program.instructions().take(default_program.instruction_count() - 1) {
+            builder.push(instruction).expect("bounded modified tape");
+        }
+        let mismatched_program = builder.finish().expect("modified tape remains a valid program");
         service.register_program_runtime(
             program_policy.program_id.clone(),
             secret,

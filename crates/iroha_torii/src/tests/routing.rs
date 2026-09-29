@@ -15,124 +15,6 @@ mod tests {
     use iroha_telemetry::metrics::Metrics;
     use std::sync::Arc;
     use tokio::runtime::Runtime;
-    fn install_passive_diagnostic_lane_artifact(
-        state: &CoreState,
-        kura: &Kura,
-    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
-        use iroha_data_model::{
-            block::{
-                BlockExecutionContextBundle, SignedBlock,
-                consensus::{
-                    LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
-                    SumeragiLanePayloadOwnership,
-                },
-            },
-            consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        };
-        use iroha_model_base::peer::PeerId;
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-        let block_signer = checked_routing_fixture_keypair(
-            0xe2,
-            Algorithm::Ed25519,
-            "derive passive diagnostic block signer",
-        );
-        let mut block: SignedBlock =
-            iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
-                .chain(0, None)
-                .sign(block_signer.private_key())
-                .unpack(|_| {})
-                .into();
-        let entrypoint_hashes = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
-        let accepted_transaction_hashes = entrypoint_hashes
-            .iter()
-            .copied()
-            .map(Hash::from)
-            .collect::<Vec<_>>();
-        let accepted_candidate_indices = (0..accepted_transaction_hashes.len())
-            .map(|index| u64::try_from(index).expect("diagnostic fixture index fits u64"))
-            .collect::<Vec<_>>();
-        let validator = checked_routing_fixture_keypair(
-            0xe3,
-            Algorithm::Ed25519,
-            "derive passive diagnostic lane validator",
-        );
-        let validator_set = vec![PeerId::new(validator.public_key().clone())];
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::UNIVERSAL;
-        let lane_incarnation = state
-            .lane_incarnation(lane_id)
-            .expect("default diagnostic lane incarnation");
-        let mut ownership = SumeragiLanePayloadOwnership {
-            proposal_height: block.header().height().get(),
-            proposal_view: block.header().view_change_index(),
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            lane_block_height: 1,
-            lane_block_view: 0,
-            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
-            qc_mode_tag: "permissioned:torii-passive-diagnostics".to_owned(),
-            accepted_candidate_indices: accepted_candidate_indices.clone(),
-            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_descriptor_hash: Some(Hash::new(b"passive diagnostic placeholder")),
-            lane_block_descriptor_validator_set: validator_set.clone(),
-            lane_block_descriptor_validator_count: 1,
-            lane_block_descriptor_min_quorum: 1,
-            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
-            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        let replay = ownership
-            .compute_replay_hashes()
-            .expect("passive diagnostic ownership replay hashes");
-        ownership.subject_hash = replay.subject_hash;
-        ownership.payload_ownership_hash = replay.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
-        let descriptor = LaneBlockDescriptorV1 {
-            lane_id,
-            dataspace_id,
-            lane_incarnation,
-            proposal_height: ownership.proposal_height,
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_height: 1,
-            lane_block_view: ownership.lane_block_view,
-            subject_hash: ownership.subject_hash,
-            payload_ownership_hash: ownership.payload_ownership_hash,
-            rbc_instance_hash: ownership.rbc_instance_hash,
-            accepted_candidate_indices,
-            accepted_transaction_hashes,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set,
-            validator_count: 1,
-            min_quorum: 1,
-            qc_mode_tag: ownership.qc_mode_tag.clone(),
-            descriptor_hash: replay.lane_block_descriptor_hash,
-        };
-        let mut proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
-                proposal_height: ownership.proposal_height,
-                proposal_view: ownership.proposal_view,
-                proposal_block_hash: block.hash(),
-            }),
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        block.set_execution_context(Some(
-            BlockExecutionContextBundle::new(Vec::new())
-                .with_lane_payload_ownerships(vec![ownership]),
-        ));
-        kura.store_block(Arc::new(block))
-            .expect("store passive diagnostic lane artifact");
-        proposal
-    }
     #[test]
     fn openapi_handler_emits_alias_spec() {
         Runtime::new().expect("runtime").block_on(async {
@@ -339,6 +221,9 @@ mod tests {
             .public_key()
             .clone();
         let expected = iroha_data_model::sumeragi::SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: iroha_crypto::Hash::new(b"native Torii diagnostic configuration"),
+            beacon_horizon: None,
             instance: [1; 32],
             height: 42,
             view: 3,
@@ -1015,7 +900,11 @@ mod tests {
                     .as_ref()
                     .clone()
                     .with_commit_certificate(corrupt.then(|| {
-                        CommitCertificate::new(Vec::new(), Vec::new(), b"invalid result".to_vec())
+                        CommitCertificate::from_untrusted_parts(
+                            Vec::new(),
+                            Vec::new(),
+                            b"invalid result".to_vec(),
+                        )
                     }));
                 let header = block.header();
                 let hash = block.hash();

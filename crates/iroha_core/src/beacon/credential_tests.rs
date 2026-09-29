@@ -100,8 +100,13 @@ fn pulse_aggregator(
         height: 40,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x81; 32])),
     };
-    GlobalThresholdBeaconPulseAggregatorV1::new(session.clone(), 41, anchor)
-        .expect("canonical pulse")
+    GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        41,
+        anchor,
+        crate::beacon::pulse_context_fixture_v1(),
+    )
+    .expect("canonical pulse")
 }
 
 #[test]

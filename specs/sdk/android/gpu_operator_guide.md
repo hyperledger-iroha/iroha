@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Kotlin/JVM CUDA bridge contract and qualification
+# Kotlin/JVM automatic native computation contract
 
-`kotlin/core-jvm` owns `org.hyperledger.iroha.sdk.gpu.CudaAccelerators`
+`kotlin/core-jvm` owns `org.hyperledger.iroha.sdk.gpu.Accelerators`
 for both Kotlin and Java callers. Each operation accepts one ordered batch:
 `poseidon2`, `poseidon6`, `bn254Add`, `bn254Sub` and `bn254Mul`.
 A single calculation is a one-element batch. Poseidon rows contain two or six
@@ -10,57 +10,52 @@ unsigned JVM-long bit patterns; BN254 rows contain four little-endian limbs
 strictly below the field modulus. Inputs and successful outputs are copied,
 and batches are bounded to 65,536 elements before native-buffer allocation.
 
-Construct an explicitly disabled context with `CudaAccelerators.disabled()`,
+Construct an explicitly disabled context with `Accelerators.disabled()`,
 inject an application-owned `Backend`, or call `loadNative(absoluteLibraryPath)`.
-Native library loading errors remain visible. `status` distinguishes `READY`,
-`UNAVAILABLE` and `DISABLED`; a null computation means the backend did not compute
-that batch. The SDK does not replace it with a zero value or a CPU result.
-Native contexts share the loaded bridge's device state; selecting an injected
-or disabled context does not replace another context's backend.
+Native loading and resource errors remain visible. The native bridge selects
+qualified acceleration from public workload geometry and recomputes the full
+result on the CPU after backend refusal or failure. CUDA `status` distinguishes
+`READY`, `UNAVAILABLE` and `DISABLED`; ordinary computation can succeed in all
+three states. A disabled or injected backend can return null when it declines.
+Selecting an injected or disabled context does not replace another context's
+backend.
 
 ```kotlin
-import org.hyperledger.iroha.sdk.gpu.CudaAccelerators
+import org.hyperledger.iroha.sdk.gpu.Accelerators
 
-val accelerator = CudaAccelerators.loadNative(configuredAbsoluteBridgePath)
+val accelerator = Accelerators.loadNative(configuredAbsoluteBridgePath)
 val hashes: LongArray? = accelerator.poseidon2(arrayOf(longArrayOf(1L, 2L)))
 ```
 
-The canonical JNI exports and array conversion belong to
-`crates/connect_norito_bridge/src/platform_jni/gpu.rs`.
-No Java-package exports or scalar/batch duplicate entry points are retained.
-The native bridge must be rebuilt with the Kotlin declarations from the same
-source revision; old libraries fail symbol resolution.
+JNI conversion belongs to `crates/connect_norito_bridge/src/platform_jni/gpu`.
+Each native call reserves its captured input and result storage in the common
+process acceleration envelope before allocation. Those owners remain charged
+through the final Java-array copy. Admission failure raises a Java exception
+before a result is published. State execution destinations use their original
+execution leases separately. The same-source bridge must export the Kotlin
+`Accelerators` symbols; retired class symbols and aliases are absent.
 
 ## Test entry points
 
-Run Java API contract tests without CUDA:
+Run the Java API contract controls without CUDA:
 
 ```sh
 cd kotlin
-./gradlew :core-jvm:test --tests '*CudaAcceleratorsJavaConsumerTest' --console=plain
+./gradlew :core-jvm:test --tests '*AcceleratorsJavaConsumerTest' --console=plain
 ```
 
-The ordinary JVM suite also runs `CudaAcceleratorsNativeBindingTest` against
-its configured host bridge. That test resolves all seven JNI declarations with
-empty batches. It establishes binding execution, not GPU numerical conformance.
+With a same-source rebuilt bridge, `AcceleratorsNativeBindingTest` resolves all
+seven JNI declarations. `PoseidonAutomaticNativeTest` retains all ten IVM CPU
+goldens and batch/single equivalence; `Bn254AutomaticNativeTest` compares all
+three field operations against independent `BigInteger` arithmetic. These are
+ordinary native parity tests, so a qualified CPU fallback is a valid result.
+`IROHA_NATIVE_LIBRARY_PATH` identifies the host test artifact directory; it is
+not a production backend-selection switch. Native compilation and execution
+must be repeated after this first-release API replacement.
 
-On a CUDA-capable runner, build the bridge and run the dedicated hardware task
-from the repository root:
-
-```sh
-cargo build --locked -p connect_norito_bridge --lib --features cuda
-IROHA_NATIVE_LIBRARY_PATH="$PWD/target/debug" \
-  kotlin/gradlew -p kotlin :core-jvm:cudaHardwareTest --console=plain
-```
-
-`IROHA_NATIVE_LIBRARY_PATH` is a test artifact location, not a production
-backend-selection switch. The task requires an absolute directory and runs
-every time. Its five tests compare Poseidon outputs with the IVM CPU goldens
-and all three BN254 operations with independent `BigInteger` modular arithmetic,
-including multi-element and one-element batches. Missing libraries, devices,
-READY status or results fail the task. Ordinary JVM runs exclude the hardware
-tag. `.github/workflows/nightly_cuda.yml` builds and selects this task.
-
-The current local macOS checkpoint has no CUDA device qualification. Compiling
-the hardware tests, passing injected-backend tests or resolving host JNI symbols
-does not establish hardware execution, Android support or release provenance.
+`cudaHardwareTest` currently fails with an explicit open-gate message because
+the JNI boundary has no per-family completed-kernel receipts. Output parity or
+CUDA availability alone cannot qualify physical execution. The Rust IVM
+`cuda_hardware` gate separately requires actual completion receipts and scalar
+parity for every CUDA family. Neither host suite establishes Android delivery,
+physical Android execution, signed artifact provenance or mixed-validator parity.

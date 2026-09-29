@@ -14,7 +14,6 @@ mod duration_clamp_tests {
         user::{LaneValidatorModeConfig, SoracloudRuntime},
     };
     use iroha_config_base::{
-        env::MockEnv,
         read::ConfigReader,
         toml::TomlSource,
         util::{Bytes, DurationMs},
@@ -196,6 +195,263 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .parse::<actual::RuntimeProviderBrokerEndpointPath>()
                 .is_err()
         );
+    }
+    #[test]
+    fn musubi_private_custody_root_projects_through_user_and_actual_layers() {
+        assert_eq!(
+            actual::MusubiPublication::default().custody_root,
+            PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT),
+        );
+        let default = load_root(base_table()).musubi_publication.custody_root;
+        assert!(default.ends_with("storage/musubi-publication"));
+
+        let mut table = base_table();
+        let mut publication = Table::new();
+        let configured_path = std::env::current_dir()
+            .expect("current directory")
+            .join("musubi-private-v1");
+        publication.insert(
+            "custody_root".into(),
+            Value::String(configured_path.to_string_lossy().into_owned()),
+        );
+        table.insert("musubi_publication".into(), Value::Table(publication));
+        let configured = load_root(table).musubi_publication.custody_root;
+        assert_eq!(configured, configured_path);
+    }
+    #[test]
+    fn musubi_private_tls_listener_projects_only_non_secret_settings() {
+        let default = load_root(base_table()).musubi_publication;
+        assert_eq!(
+            default.private_tls_bind,
+            defaults::musubi_publication::private_tls_bind()
+        );
+        assert_eq!(
+            default.private_mount_prefix,
+            defaults::musubi_publication::PRIVATE_MOUNT_PREFIX
+        );
+        assert_eq!(
+            default.max_inflight_requests,
+            defaults::musubi_publication::MAX_INFLIGHT_REQUESTS
+        );
+        let mut table = base_table();
+        let mut publication = Table::new();
+        publication.insert(
+            "private_tls_bind".into(),
+            Value::String("127.0.0.1:18496".to_owned()),
+        );
+        publication.insert(
+            "private_mount_prefix".into(),
+            Value::String("/operator".to_owned()),
+        );
+        publication.insert("max_inflight_requests".into(), Value::Integer(3));
+        table.insert("musubi_publication".into(), Value::Table(publication));
+        let configured = load_root(table).musubi_publication;
+        assert_eq!(configured.private_tls_bind.to_string(), "127.0.0.1:18496");
+        assert_eq!(configured.private_mount_prefix, "/operator");
+        assert_eq!(configured.max_inflight_requests, 3);
+    }
+    #[test]
+    fn musubi_private_tls_listener_rejects_invalid_public_geometry() {
+        for (field, value) in [
+            ("private_tls_bind", Value::String("not-a-socket".to_owned())),
+            (
+                "private_mount_prefix",
+                Value::String("/private/".to_owned()),
+            ),
+            ("max_inflight_requests", Value::Integer(5)),
+        ] {
+            let mut table = base_table();
+            let mut publication = Table::new();
+            publication.insert(field.into(), value);
+            table.insert("musubi_publication".into(), Value::Table(publication));
+            assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+        }
+    }
+    #[test]
+    fn musubi_publication_resource_and_receipt_policy_comes_from_config() {
+        let default = load_root(base_table()).musubi_publication;
+        assert_eq!(
+            default.journal_max_operations,
+            defaults::musubi_publication::JOURNAL_MAX_OPERATIONS
+        );
+        assert_eq!(
+            default.journal_max_authorizations,
+            defaults::musubi_publication::JOURNAL_MAX_AUTHORIZATIONS
+        );
+        assert_eq!(
+            default.journal_max_total_response_bytes,
+            defaults::musubi_publication::JOURNAL_MAX_TOTAL_RESPONSE_BYTES
+        );
+        assert_eq!(
+            default.journal_max_snapshot_bytes,
+            defaults::musubi_publication::JOURNAL_MAX_SNAPSHOT_BYTES
+        );
+        assert_eq!(
+            default.max_seed_records,
+            defaults::musubi_publication::MAX_SEED_RECORDS
+        );
+        assert_eq!(
+            default.max_seed_bytes,
+            defaults::musubi_publication::MAX_SEED_BYTES
+        );
+        assert_eq!(
+            default.max_future_clock_skew_ms,
+            defaults::musubi_publication::MAX_FUTURE_CLOCK_SKEW_MS
+        );
+        assert_eq!(
+            default.receipt_lifetime_ms,
+            defaults::musubi_publication::RECEIPT_LIFETIME_MS
+        );
+
+        let mut table = base_table();
+        let mut publication = Table::new();
+        for (field, value) in [
+            ("journal_max_operations", 2_048),
+            ("journal_max_authorizations", 8_192),
+            ("journal_max_total_response_bytes", 24 * 1024 * 1024),
+            ("journal_max_snapshot_bytes", 32 * 1024 * 1024),
+            ("max_seed_records", 32),
+            ("max_seed_bytes", 512 * 1024 * 1024),
+            ("max_future_clock_skew_ms", 3_000),
+            ("receipt_lifetime_ms", 120_000),
+        ] {
+            publication.insert(field.into(), Value::Integer(value));
+        }
+        table.insert("musubi_publication".into(), Value::Table(publication));
+        let configured = load_root(table).musubi_publication;
+        assert_eq!(configured.journal_max_operations, 2_048);
+        assert_eq!(configured.journal_max_authorizations, 8_192);
+        assert_eq!(
+            configured.journal_max_total_response_bytes,
+            24 * 1024 * 1024
+        );
+        assert_eq!(configured.journal_max_snapshot_bytes, 32 * 1024 * 1024);
+        assert_eq!(configured.max_seed_records, 32);
+        assert_eq!(configured.max_seed_bytes, 512 * 1024 * 1024);
+        assert_eq!(configured.max_future_clock_skew_ms, 3_000);
+        assert_eq!(configured.receipt_lifetime_ms, 120_000);
+    }
+    #[test]
+    fn musubi_publication_rejects_invalid_resource_and_receipt_policy() {
+        for (field, value) in [
+            ("journal_max_operations", 0),
+            ("journal_max_operations", 1_000_001),
+            ("journal_max_authorizations", 0),
+            ("journal_max_authorizations", 1_000_001),
+            ("journal_max_total_response_bytes", 16 * 1024 * 1024 - 1),
+            ("journal_max_total_response_bytes", 64 * 1024 * 1024 + 1),
+            ("journal_max_snapshot_bytes", 32 * 1024 * 1024),
+            ("journal_max_snapshot_bytes", 96 * 1024 * 1024 + 1),
+            ("max_seed_records", 0),
+            ("max_seed_records", 1_025),
+            ("max_seed_bytes", 0),
+            ("max_seed_bytes", 64 * 1024 * 1024 * 1024 + 1),
+            ("max_future_clock_skew_ms", 30_001),
+            ("receipt_lifetime_ms", 0),
+            ("receipt_lifetime_ms", 24 * 60 * 60 * 1_000 + 1),
+        ] {
+            let mut table = base_table();
+            let mut publication = Table::new();
+            publication.insert(field.into(), Value::Integer(value));
+            table.insert("musubi_publication".into(), Value::Table(publication));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid {field}={value} was accepted"
+            );
+        }
+    }
+    #[test]
+    fn musubi_paid_pin_policy_projects_exact_public_identity_without_credentials() {
+        let default = load_root(base_table()).musubi_publication;
+        assert_eq!(
+            default.pin_storage_class,
+            iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+        );
+        assert_eq!(
+            default.pin_retention_horizon_secs,
+            defaults::musubi_publication::PIN_RETENTION_HORIZON_SECS,
+        );
+        assert_eq!(
+            default.pin_transaction_authority,
+            actual::MusubiPinTransactionAuthority::IngressBroker,
+        );
+
+        let key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("pin account fixture");
+        let pin_account = AccountId::new(key.public_key().clone());
+        let mut table = base_table();
+        let mut publication = Table::new();
+        publication.insert("pin_storage_class".into(), Value::String("warm".to_owned()));
+        publication.insert(
+            "pin_retention_horizon_secs".into(),
+            Value::Integer(90 * 24 * 60 * 60),
+        );
+        publication.insert(
+            "pin_transaction_authority".into(),
+            Value::String(pin_account.to_string()),
+        );
+        table.insert("musubi_publication".into(), Value::Table(publication));
+        let configured = load_root(table).musubi_publication;
+        assert_eq!(
+            configured.pin_storage_class,
+            iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+        );
+        assert_eq!(configured.pin_retention_horizon_secs, 90 * 24 * 60 * 60);
+        assert_eq!(
+            configured.pin_transaction_authority,
+            actual::MusubiPinTransactionAuthority::Account(pin_account),
+        );
+    }
+    #[test]
+    fn musubi_paid_pin_policy_rejects_noncanonical_or_unfundable_geometry() {
+        let deadline = i64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        );
+        for horizon in [
+            deadline + 1,
+            i64::try_from(defaults::musubi_publication::MAX_PIN_RETENTION_HORIZON_SECS)
+                .expect("bounded test value"),
+        ] {
+            let mut table = base_table();
+            let mut publication = Table::new();
+            publication.insert("pin_retention_horizon_secs".into(), Value::Integer(horizon));
+            table.insert("musubi_publication".into(), Value::Table(publication));
+            assert_eq!(
+                load_root(table)
+                    .musubi_publication
+                    .pin_retention_horizon_secs,
+                u64::try_from(horizon).expect("positive horizon"),
+            );
+        }
+        for (field, value) in [
+            ("pin_storage_class", Value::String("HOT".to_owned())),
+            ("pin_storage_class", Value::String(" warm".to_owned())),
+            (
+                "pin_transaction_authority",
+                Value::String("INGRESS_BROKER".to_owned()),
+            ),
+            (
+                "pin_transaction_authority",
+                Value::String("alice@wonderland".to_owned()),
+            ),
+            ("pin_retention_horizon_secs", Value::Integer(deadline)),
+            (
+                "pin_retention_horizon_secs",
+                Value::Integer(
+                    i64::try_from(defaults::musubi_publication::MAX_PIN_RETENTION_HORIZON_SECS + 1)
+                        .expect("bounded test value"),
+                ),
+            ),
+        ] {
+            let mut table = base_table();
+            let mut publication = Table::new();
+            publication.insert(field.into(), value);
+            table.insert("musubi_publication".into(), Value::Table(publication));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid Musubi paid-pin {field} was accepted",
+            );
+        }
     }
     #[test]
     fn network_enum_labels_reject_aliases_without_panicking() {
@@ -533,14 +789,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             programs: vec![super::ToriiRamLfeProgram {
                 program_id: "phone_retail".to_owned(),
                 secret_hex: "01020304".parse().expect("valid RAM-LFE secret"),
-                hidden_program_hex: format!(
-                    "0x{}",
-                    hex::encode(
-                        iroha_crypto::default_bfv_programmed_hidden_program()
-                            .to_bytes()
-                            .expect("default RAM-LFE hidden program should encode")
-                    )
-                ),
+                hidden_program_hex: iroha_crypto::default_bfv_programmed_hidden_program(),
                 signer_private_key: private_key,
                 receipt_ttl_ms: None,
             }],

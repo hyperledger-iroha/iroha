@@ -1,8 +1,13 @@
 //! Offline verification of incumbent-authorized pending committee custody.
 //!
-//! The context pin is supplied independently. A lifecycle certificate authorizes the exact
+//! The configured chain and signed-genesis network are supplied independently. A lifecycle certificate authorizes the exact
 //! transcript but does not prove transaction inclusion or activate its target committee.
 
+use crate::state::StateView;
+use crate::sumeragi::{
+    certified_chain::{CertifiedBlock, CertifiedChain},
+    native_journal::with_verified_native_journal,
+};
 use crate::{
     beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     state::{
@@ -13,8 +18,6 @@ use crate::{
 };
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::HeightContextId,
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::GlobalThresholdBeaconKeySessionV1,
     isi::{
         consensus_keys::{ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1},
@@ -27,8 +30,49 @@ use iroha_data_model::{
         ValidatorCandidateKeysV1, ValidatorCommitteePreparationV1, ValidatorCommitteeStatusV1,
         ValidatorCommitteeTransitionV1,
     },
+    sumeragi::finality::{NativeFinalityJournal, NativeFinalityLimits},
 };
-use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode as _};
+use iroha_model_base::chain::ChainId;
+use iroha_sumeragi::crypto::AttestationVerifier;
+use norito::{NoritoDeserialize, NoritoSerialize};
+
+/// Join an observed transition to the exact independently certified native selecting boundary.
+///
+/// Both blocks must come from the same independently authenticated chain reader. This verifies
+/// the immutable selection binding; it grants no execution, custody or activation authority.
+///
+/// # Errors
+/// Rejects a changed network, target, height, predecessor, frozen preparation or preparing epoch.
+pub fn validate_validator_committee_selection_binding_v1(
+    selection: &ValidatorCommitteeTransitionV1,
+    selecting: &CertifiedBlock,
+    latest: &CertifiedBlock,
+    target_epoch: u64,
+) -> Result<(), String> {
+    selection.validate()?;
+    let preparation = &selection.preparation;
+    if preparation.target_epoch != target_epoch
+        || preparation.network_id != latest.commitment().schedule.current.network_id
+        || selecting.commitment().schedule.current.network_id != preparation.network_id
+        || selecting.height() != preparation.selection_height
+        || selecting.height() > latest.height()
+        || selecting.block().header().prev_block_hash() != Some(preparation.selection_anchor)
+    {
+        return Err("committee selection native finality binding differs".into());
+    }
+    let boundary = selecting
+        .commitment()
+        .schedule
+        .boundary
+        .as_ref()
+        .ok_or("selecting native result lacks the frozen committee boundary")?;
+    if boundary.preparation.as_ref() != Some(preparation)
+        || boundary.selection_anchor != preparation.selection_anchor
+    {
+        return Err("committee preparation differs from selecting native result".into());
+    }
+    preparation.validate_against_preparing_authorization(&boundary.next.authorization)
+}
 
 /// Maximum encoded public evidence size, independent of caller transport limits.
 pub const COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1: usize = 64 * 1024 * 1024;
@@ -54,8 +98,8 @@ pub const COMMITTEE_PROVISIONING_FINALITY_MAX_COUNT_V1: usize = 65_536;
 pub struct ValidatorCommitteeSelectionEvidenceV1 {
     /// Selection observation whose immutable preparation must match finality.
     pub status: ValidatorCommitteeStatusV1,
-    /// Contiguous canonical finality from an independently pinned context.
-    pub finality_chain: Vec<BridgeFinalityProof>,
+    /// Contiguous canonical finality from independently pinned signed genesis.
+    pub finality_journal: NativeFinalityJournal,
 }
 
 /// Authority to run the exact selected DKG, without credential or activation authority.
@@ -94,116 +138,127 @@ impl VerifiedValidatorCommitteeSelectionV1 {
 /// election inputs, invalid candidate BLS possession, and expired preparation.
 pub fn verify_validator_committee_selection_evidence_v1(
     evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    chain_id: &ChainId,
     network: NetworkId,
-    trusted_context: HeightContextId,
-    anchor_height: u64,
+    target_epoch: u64,
+    transition_id: [u8; 32],
+    limits: NativeFinalityLimits,
+    attestations: &dyn AttestationVerifier,
+) -> Result<VerifiedValidatorCommitteeSelectionV1, String> {
+    check_evidence_size(evidence, limits)?;
+    with_verified_native_journal(
+        &evidence.finality_journal,
+        chain_id,
+        &network,
+        limits,
+        attestations,
+        |reader| {
+            verify_selection_observation(
+                &evidence.status,
+                &evidence.finality_journal,
+                reader,
+                network,
+                target_epoch,
+                transition_id,
+            )
+        },
+    )
+}
+
+fn check_evidence_size<T: norito::core::SerializePayload>(
+    evidence: &T,
+    limits: NativeFinalityLimits,
+) -> Result<(), String> {
+    limits.validate()?;
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let bytes = norito::core::encoded_payload_len(evidence).map_err(|error| error.to_string())?;
+    if bytes > limits.journal_bytes || bytes > COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1 {
+        return Err("committee evidence exceeds its configured aggregate bound".into());
+    }
+    Ok(())
+}
+
+fn verify_selection_observation(
+    status: &ValidatorCommitteeStatusV1,
+    journal: &NativeFinalityJournal,
+    reader: &CertifiedChain<'_, StateView<'_>>,
+    network: NetworkId,
     target_epoch: u64,
     transition_id: [u8; 32],
 ) -> Result<VerifiedValidatorCommitteeSelectionV1, String> {
-    let status = &evidence.status;
     let selected = status
         .selected
         .as_ref()
         .ok_or("selection evidence lacks a frozen committee")?;
     let preparation = &selected.transition.preparation;
     preparation.validate()?;
-    if anchor_height == 0
-        || transition_id == [0; 32]
+    if transition_id == [0; 32]
         || status.network_id != network
         || preparation.network_id != network
         || status.target_epoch != target_epoch
         || preparation.target_epoch != target_epoch
         || preparation.transition_id()? != transition_id
-        || evidence.finality_chain.is_empty()
-        || evidence.finality_chain.len() > COMMITTEE_PROVISIONING_FINALITY_MAX_COUNT_V1
+        || journal.blocks.len() > COMMITTEE_PROVISIONING_FINALITY_MAX_COUNT_V1
     {
         return Err("selection evidence differs from its exact network, attempt or bounds".into());
     }
-    let mut size = status.encode().len();
-    let mut verifier = BridgeFinalityVerifier::with_context(network, trusted_context);
-    let mut selecting = None;
-    for (index, proof) in evidence.finality_chain.iter().enumerate() {
-        size = size
-            .checked_add(proof.encode().len())
-            .ok_or("selection evidence length overflows")?;
-        let height = anchor_height
-            .checked_add(u64::try_from(index).map_err(|_| "selection height overflows")?)
-            .ok_or("selection height overflows")?;
-        if size > COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1
-            || proof.block_header.height().get() != height
-        {
-            return Err("selection finality is not bounded and contiguous from its anchor".into());
-        }
-        verifier.verify(proof).map_err(|error| error.to_string())?;
-        if height == preparation.selection_height {
-            selecting = Some(&proof.finality_artifact);
-        }
-    }
-    let latest = &evidence
-        .finality_chain
-        .last()
-        .ok_or("missing finality")?
-        .finality_artifact;
-    if latest != &status.latest_finality
-        || selecting != Some(&selected.selecting_finality)
-        || latest.height <= preparation.selection_height
-        || latest.height >= preparation.first_height.saturating_sub(1)
-        || latest.height_context.epoch != preparation.selection_epoch + 1
-        || selected.selecting_finality.height_context.epoch != preparation.selection_epoch
-        || selected.selecting_finality.subject.parent_block_hash
-            != Some(preparation.selection_anchor)
+    let selecting_index = usize::try_from(preparation.selection_height)
+        .ok()
+        .and_then(|height| height.checked_sub(1))
+        .ok_or("invalid selection height")?;
+    if journal.blocks.last() != Some(&status.latest_finality)
+        || journal.blocks.get(selecting_index) != Some(&selected.selecting_finality)
     {
-        return Err("selection observations differ from anchored E+1 finality".into());
+        return Err("committee status attachments differ from the exact native journal".into());
     }
-    let snapshot = selected
-        .selecting_finality
-        .height_context
-        .next_epoch_snapshot
-        .as_ref()
-        .ok_or("selecting finality lacks its committee snapshot")?;
-    if snapshot.committee_preparation.as_ref() != Some(preparation)
-        || snapshot.epoch != preparation.selection_epoch + 1
-        || snapshot.roster != latest.height_context.roster
-        || snapshot.kagemusha_mint_finality_authority
-            != latest.height_context.kagemusha_mint_finality_authority
-        || snapshot.kagemusha_mint_finality_authorization
-            != latest.height_context.kagemusha_mint_finality_authorization
-    {
-        return Err("selected committee or preparing authority changed after finality".into());
-    }
-    let incumbent = &latest.height_context.kagemusha_mint_finality_authority;
-    if incumbent.validators.len() != latest.height_context.roster.len()
-        || incumbent
-            .validators
-            .iter()
-            .zip(&latest.height_context.roster)
-            .any(|(keys, seat)| keys.validator != seat.validator)
-    {
-        return Err("preparing authority differs from the exact incumbent voter roster".into());
-    }
-    preparation.validate_against_preparing_authorization(
-        &snapshot.kagemusha_mint_finality_authorization,
+    let latest_height =
+        u64::try_from(journal.blocks.len()).map_err(|_| "journal height overflow")?;
+    let latest = reader
+        .certified(latest_height)
+        .map_err(|error| error.to_string())?;
+    let selecting = reader
+        .certified(preparation.selection_height)
+        .map_err(|error| error.to_string())?;
+    validate_validator_committee_selection_binding_v1(
+        &selected.transition,
+        &selecting,
+        &latest,
+        target_epoch,
     )?;
-    for (seat, pop) in preparation
-        .roster
-        .iter()
-        .zip(&preparation.validator_set_pops)
+    let current = &latest.commitment().schedule.current;
+    let boundary = selecting
+        .commitment()
+        .schedule
+        .boundary
+        .as_ref()
+        .ok_or("selecting native result lacks its certified boundary")?;
+    if latest_height <= preparation.selection_height
+        || latest_height >= preparation.first_height.saturating_sub(1)
+        || current.authorization.epoch
+            != preparation
+                .selection_epoch
+                .checked_add(1)
+                .ok_or("epoch overflow")?
+        || selecting.commitment().schedule.current.authorization.epoch
+            != preparation.selection_epoch
+        || selecting.block().header().prev_block_hash() != Some(preparation.selection_anchor)
+        || boundary.selection_anchor != preparation.selection_anchor
+        || boundary.preparation.as_ref() != Some(preparation)
+        || boundary.next != *current
     {
-        iroha_crypto::bls_normal_pop_verify(seat.validator.public_key(), pop)
-            .map_err(|_| "frozen target has invalid BLS key possession")?;
+        return Err(
+            "selection observations differ from incumbent-certified native E+1 finality".into(),
+        );
     }
-    let BeaconEpochBindingV1::Installed(incumbent_beacon) = latest
-        .height_context
-        .kagemusha_mint_finality_authorization
-        .beacon
-    else {
+    preparation.validate_against_preparing_authorization(&current.authorization)?;
+    let BeaconEpochBindingV1::Installed(incumbent_beacon) = current.authorization.beacon else {
         return Err("selection DKG requires an installed incumbent beacon".into());
     };
     Ok(VerifiedValidatorCommitteeSelectionV1 {
         preparation: preparation.clone(),
-        incumbent_authority: incumbent.clone(),
+        incumbent_authority: current.authority.clone(),
         incumbent_beacon,
-        observed_height: latest.height,
+        observed_height: latest_height,
     })
 }
 
@@ -226,8 +281,8 @@ pub fn verify_validator_committee_selection_evidence_v1(
 pub struct ValidatorCommitteeProvisioningEvidenceV1 {
     /// Exact selected committee and cryptographically checkable progress observations.
     pub status: ValidatorCommitteeStatusV1,
-    /// Contiguous canonical finality from the independent anchor through the observed tip.
-    pub finality_chain: Vec<BridgeFinalityProof>,
+    /// Contiguous canonical finality from signed genesis through the observed tip.
+    pub finality_journal: NativeFinalityJournal,
     /// Exact incumbent quorum authorization for the pending public beacon transcript.
     pub beacon_finalization: ThresholdKeyLifecycleCertificateV1,
 }
@@ -263,184 +318,132 @@ impl VerifiedValidatorCommitteeProvisioningV1 {
     }
 }
 
-/// Verify a bounded public custody envelope from an independently supplied context pin.
+/// Verify a bounded public custody envelope from independently configured chain and signed-genesis network.
 ///
 /// # Errors
 /// Rejects changed network/attempt/chain, expired preparation, substituted keys/transcript,
 /// invalid actual-possession proofs, or missing exact incumbent quorum authorization.
 pub fn verify_validator_committee_provisioning_evidence_v1(
     evidence: &ValidatorCommitteeProvisioningEvidenceV1,
+    chain_id: &ChainId,
     network: NetworkId,
-    trusted_context: HeightContextId,
-    anchor_height: u64,
     target_epoch: u64,
     transition_id: [u8; 32],
+    limits: NativeFinalityLimits,
+    attestations: &dyn AttestationVerifier,
 ) -> Result<VerifiedValidatorCommitteeProvisioningV1, String> {
-    let status = &evidence.status;
-    let selected = status
-        .selected
-        .as_ref()
-        .ok_or("custody evidence lacks a selected committee")?;
-    let transition = &selected.transition;
-    transition.validate()?;
-    let preparation = &transition.preparation;
-    if anchor_height == 0
-        || transition_id == [0; 32]
-        || status.network_id != network
-        || preparation.network_id != network
-        || status.target_epoch != target_epoch
-        || preparation.target_epoch != target_epoch
-        || preparation.transition_id()? != transition_id
-        || transition.outcome.is_some()
-        || transition.credentials.is_none()
-        || evidence.finality_chain.is_empty()
-        || evidence.finality_chain.len() > COMMITTEE_PROVISIONING_FINALITY_MAX_COUNT_V1
-        || status.candidate_keys.len() != preparation.roster.len()
-    {
-        return Err(
-            "custody evidence differs from its exact network, pending attempt or bounds".to_owned(),
-        );
-    }
-    let mut size = status
-        .encode()
-        .len()
-        .checked_add(evidence.beacon_finalization.encode().len())
-        .ok_or("custody evidence length overflows")?;
-    let mut verifier = BridgeFinalityVerifier::with_context(network, trusted_context);
-    let mut selecting = None;
-    let mut finalizing = None;
-    for (index, proof) in evidence.finality_chain.iter().enumerate() {
-        size = size
-            .checked_add(proof.encode().len())
-            .ok_or("custody evidence length overflows")?;
-        let height = anchor_height
-            .checked_add(u64::try_from(index).map_err(|_| "finality count overflows")?)
-            .ok_or("finality height overflows")?;
-        if size > COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1
-            || proof.block_header.height().get() != height
-        {
-            return Err(
-                "custody finality is not bounded and contiguous from its independent anchor"
-                    .to_owned(),
-            );
-        }
-        verifier.verify(proof).map_err(|error| error.to_string())?;
-        if height == preparation.selection_height {
-            selecting = Some(&proof.finality_artifact);
-        }
-        if height == evidence.beacon_finalization.effective_height {
-            finalizing = Some(&proof.finality_artifact);
-        }
-    }
-    let latest = &evidence
-        .finality_chain
-        .last()
-        .ok_or("missing finality")?
-        .finality_artifact;
-    if latest != &status.latest_finality
-        || selecting != Some(&selected.selecting_finality)
-        || latest.height >= preparation.first_height - 1
-        || selected.selecting_finality.subject.parent_block_hash
-            != Some(preparation.selection_anchor)
-    {
-        return Err("custody observations differ from anchored pending finality".to_owned());
-    }
-    let selecting_snapshot = selected
-        .selecting_finality
-        .height_context
-        .next_epoch_snapshot
-        .as_ref()
-        .ok_or("selecting finality lacks its committee snapshot")?;
-    if selecting_snapshot.committee_preparation.as_ref() != Some(preparation) {
-        return Err("selecting boundary did not certify this exact preparation".to_owned());
-    }
-    let (incumbent_authority, current) = match &latest.height_context.next_epoch_snapshot {
-        Some(snapshot) => (
-            &snapshot.kagemusha_mint_finality_authority,
-            &snapshot.kagemusha_mint_finality_authorization,
-        ),
-        None => (
-            &latest.height_context.kagemusha_mint_finality_authority,
-            &latest.height_context.kagemusha_mint_finality_authorization,
-        ),
-    };
-    preparation.validate_against_preparing_authorization(current)?;
-    preparation.validate_against_preparing_authorization(
-        &selecting_snapshot.kagemusha_mint_finality_authorization,
-    )?;
-    let BeaconEpochBindingV1::Installed(incumbent_beacon) = current.beacon else {
-        return Err("pending custody requires an installed incumbent beacon".to_owned());
-    };
-    let finalizing = finalizing.ok_or("custody evidence lacks anchored finalization authority")?;
-    let certificate = &evidence.beacon_finalization;
-    if certificate.action != ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey
-        || certificate.expected_active_session_id != Some(incumbent_beacon.session_id)
-        || finalizing
-            .height_context
-            .kagemusha_mint_finality_authorization
-            != *current
-        || certificate.effective_height <= preparation.selection_height
-        || certificate.effective_height >= preparation.first_height - 1
-    {
-        return Err("pending beacon certificate differs from its preparing authority".to_owned());
-    }
-    let peers = finalizing
-        .height_context
-        .roster
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
-    verify_threshold_key_lifecycle_certificate_v1(
-        certificate,
+    check_evidence_size(evidence, limits)?;
+    with_verified_native_journal(
+        &evidence.finality_journal,
+        chain_id,
         &network,
-        certificate.effective_height,
-        &peers,
-    )
-    .map_err(|error| error.to_string())?;
-    let record: FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
-        norito::decode_canonical(&certificate.public_state)
-            .map_err(|_| "pending beacon certificate public state is not canonical")?;
-    record.validate().map_err(|error| error.to_string())?;
-    if record.activated_at_height.is_some()
-        || record.retired_at_height.is_some()
-        || record.session.network_id != network
-        || record.session.session_id != certificate.session_id
-        || record.session.transcript_hash != certificate.transcript_hash
-        || status.pending_beacon_session.as_ref() != Some(&record.session)
-        || record.session.adaptive_dkg.finalized_at_height > certificate.effective_height
-    {
-        return Err("pending beacon transcript differs from its exact certificate".to_owned());
-    }
-    let mut world = World::new();
-    for (candidate, seat) in status.candidate_keys.iter().zip(&preparation.roster) {
-        if candidate.network_id != network
-            || candidate.generation != preparation.authority_generation
-            || candidate.keys.validator != seat.validator
-        {
-            return Err("candidate evidence differs from the frozen seat order".to_owned());
-        }
-        verify_candidate(candidate)?;
-        world.validator_candidate_keys.insert(
-            ValidatorCandidateKeysV1::key_id(
+        limits,
+        attestations,
+        |reader| {
+            let selected = verify_selection_observation(
+                &evidence.status,
+                &evidence.finality_journal,
+                reader,
                 network,
-                candidate.generation,
-                &candidate.keys.validator,
-            ),
-            candidate.clone(),
-        );
-    }
-    let session = record.session.clone();
-    world
-        .global_beacon_key_sessions
-        .insert(session.session_id, record);
-    verify_progress(&world.view(), transition)?;
-    Ok(VerifiedValidatorCommitteeProvisioningV1 {
-        transition: transition.clone(),
-        session,
-        incumbent_authority: incumbent_authority.clone(),
-        incumbent_beacon,
-        observed_height: latest.height,
-    })
+                target_epoch,
+                transition_id,
+            )?;
+            let status = &evidence.status;
+            let transition = &status
+                .selected
+                .as_ref()
+                .ok_or("missing selected attempt")?
+                .transition;
+            transition.validate()?;
+            let preparation = &transition.preparation;
+            if transition.outcome.is_some()
+                || transition.credentials.is_none()
+                || status.candidate_keys.len() != preparation.committee.len()
+            {
+                return Err("custody evidence is not a complete pending attempt".into());
+            }
+            let certificate = &evidence.beacon_finalization;
+            let incumbent_beacon = selected.incumbent_beacon;
+            if certificate.action != ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey
+                || certificate.expected_active_session_id != Some(incumbent_beacon.session_id)
+                || certificate.effective_height <= preparation.selection_height
+                || certificate.effective_height >= preparation.first_height - 1
+                || certificate.effective_height > selected.observed_height
+            {
+                return Err(
+                    "pending beacon certificate differs from its preparing authority".into(),
+                );
+            }
+            let finalizing = reader
+                .certified(certificate.effective_height)
+                .map_err(|error| error.to_string())?;
+            let latest = reader
+                .certified(selected.observed_height)
+                .map_err(|error| error.to_string())?;
+            let current = &latest.commitment().schedule.current;
+            if finalizing.commitment().schedule.current != *current {
+                return Err("pending beacon certificate names a different native epoch".into());
+            }
+            let peers = current
+                .committee
+                .iter()
+                .map(|seat| seat.validator.clone())
+                .collect::<Vec<_>>();
+            verify_threshold_key_lifecycle_certificate_v1(
+                certificate,
+                &network,
+                certificate.effective_height,
+                &peers,
+            )
+            .map_err(|error| error.to_string())?;
+            let record: FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
+                norito::decode_canonical(&certificate.public_state)
+                    .map_err(|_| "pending beacon certificate public state is not canonical")?;
+            record.validate().map_err(|error| error.to_string())?;
+            if record.activated_at_height.is_some()
+                || record.retired_at_height.is_some()
+                || record.session.network_id != network
+                || record.session.session_id != certificate.session_id
+                || record.session.transcript_hash != certificate.transcript_hash
+                || status.pending_beacon_session.as_ref() != Some(&record.session)
+                || record.session.adaptive_dkg.finalized_at_height > certificate.effective_height
+            {
+                return Err(
+                    "pending beacon transcript differs from its exact certificate".to_owned(),
+                );
+            }
+            let mut world = World::new();
+            for (candidate, seat) in status.candidate_keys.iter().zip(&preparation.committee) {
+                if candidate.network_id != network
+                    || candidate.generation != preparation.authority_generation
+                    || candidate.keys.validator != seat.validator
+                {
+                    return Err("candidate evidence differs from the frozen seat order".to_owned());
+                }
+                verify_candidate(candidate)?;
+                world.validator_candidate_keys.insert(
+                    ValidatorCandidateKeysV1::key_id(
+                        network,
+                        candidate.generation,
+                        &candidate.keys.validator,
+                    ),
+                    candidate.clone(),
+                );
+            }
+            let session = record.session.clone();
+            world
+                .global_beacon_key_sessions
+                .insert(session.session_id, record);
+            verify_progress(&world.view(), transition)?;
+            Ok(VerifiedValidatorCommitteeProvisioningV1 {
+                transition: transition.clone(),
+                session,
+                incumbent_authority: selected.incumbent_authority,
+                incumbent_beacon,
+                observed_height: selected.observed_height,
+            })
+        },
+    )
 }
 
 #[cfg(test)]

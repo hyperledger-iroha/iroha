@@ -635,18 +635,8 @@ pub mod settlement {
 }
 pub mod nexus {
     //! Nexus query definitions.
-    use crate::{
-        AccountId,
-        nexus::{FeeSponsorProgramId, LaneRelayEnvelopeRef},
-    };
+    use crate::{AccountId, nexus::FeeSponsorProgramId};
     queries! {
-        /// Fetch a verified lane relay by its canonical reference.
-        #[repr(transparent)]
-        #[norito_schema(name = "iroha_data_model::query::nexus::model::FindLaneRelayEnvelopeByRef")]
-        pub struct FindLaneRelayEnvelopeByRef {
-            /// Canonical relay reference to look up.
-            pub relay_ref: LaneRelayEnvelopeRef,
-        }
         /// Find all fee sponsor programs.
         #[derive(Copy)]
         #[norito_schema(name = "iroha_data_model::query::nexus::model::FindFeeSponsorPrograms")]
@@ -686,7 +676,7 @@ pub mod nexus {
         //! Prelude re-exports for Nexus queries.
         pub use super::{
             FindFeeSponsorProgramById, FindFeeSponsorProgramIds, FindFeeSponsorPrograms,
-            FindFeeSponsorProgramsBySponsor, FindLaneRelayEnvelopeByRef,
+            FindFeeSponsorProgramsBySponsor,
         };
     }
 }

@@ -37,7 +37,13 @@ impl ValidQueryRequest {
             latest_block,
             authority,
             &request,
-        )?;
+        ).map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            // API-client queries have no transaction output. Report an operational
+            // internal error here; the IVM path below keeps the typed retry reason.
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) =>
+                ValidationFail::InternalError(format!("query execution unavailable: {reason}")),
+        })?;
         Ok(Self { request, limits })
     }
     /// Validate a query for an IVM program.
@@ -52,11 +58,11 @@ impl ValidQueryRequest {
         query: QueryRequest,
         state: &mut impl IvmQueryValidator,
         limits: QueryLimits,
-    ) -> Result<Self, ValidationFail> {
+    ) -> Result<Self, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         if matches!(&query, QueryRequest::Continue(_)) {
             return Err(ValidationFail::NotPermitted(
                 "QueryRequest::Continue is not supported in IVM".to_string(),
-            ));
+            ).into());
         }
         validate_query_request_limits(&query, limits)?;
         let authority = state.authority().clone();

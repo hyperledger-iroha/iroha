@@ -443,10 +443,7 @@ Contract deployment is performed by locally signing the native code-upload,
 manifest-registration, and atomic `CommitContractDeployment` instructions;
 the client does not expose a server-side deployment wrapper.
 
-The IVM replay-binding backend label is `halo2/pasta/ivm-replay-binding-v1`;
-its canonical circuit ID is `halo2/pasta/ipa/ivm-replay-binding-v1`. These
-are distinct registry fields. The proof binds public commitments; validators
-establish execution validity through authenticated VM replay.
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Verifying-key register/update helpers validate production backends, the
 required `authority`, height ranges, and inline verifier-key commitments before

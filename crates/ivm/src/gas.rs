@@ -619,6 +619,14 @@ struct GasScheduleDescriptor {
 fn canonical_gas_parameters() -> Vec<GasParameter> {
     let vrf_decode_limits = ivm_abi::host_payload::VRF_VERIFY_DECODE_LIMITS_V1;
     let values = [
+        (
+            "call_table_formula_version",
+            crate::call_gas::FORMULA_VERSION,
+        ),
+        ("call_table_per_byte", crate::call_gas::PER_BYTE),
+        ("call_pointer_base", crate::call_gas::POINTER_BASE),
+        ("call_bitmap_coverage", crate::call_gas::BITMAP_COVERAGE),
+        ("call_word_bytes", ivm_abi::call::CALL_WORD_BYTES_V1 as u64),
         ("vector_base_lanes", VECTOR_BASE_LANES as u64),
         ("syscall_per_byte", SYSCALL_GAS_PER_BYTE),
         (

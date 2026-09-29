@@ -16,9 +16,8 @@ pub(super) fn unit_methods(ident: &Ident, hook: Option<&Path>) -> TokenStream {
             }
         };
     };
-    // A fieldless value can still carry a packed offset table. Its existing
-    // canonical boundary checks that metadata; a zero field offset is not a
-    // claim that the complete payload is empty.
+    // A fieldless value has an empty payload in every v1 layout; the canonical
+    // field boundary rejects trailing bytes.
     quote! {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             match <Self as norito::core::DeserializePayload<'de>>::try_deserialize(archived) {

@@ -1513,72 +1513,8 @@ fn query_conversion_message(error: &Error) -> Option<&str> {
         _ => None,
     }
 }
-struct FailingZkJobIdRng;
-#[derive(Debug)]
-struct FailingZkJobIdRngError;
-impl std::fmt::Display for FailingZkJobIdRngError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("failing zk job-id RNG")
-    }
-}
-impl rand::rand_core::TryRngCore for FailingZkJobIdRng {
-    type Error = FailingZkJobIdRngError;
-    fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
-        Err(FailingZkJobIdRngError)
-    }
-    fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
-        Err(FailingZkJobIdRngError)
-    }
-    fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
-        Err(FailingZkJobIdRngError)
-    }
-}
-impl rand::rand_core::TryCryptoRng for FailingZkJobIdRng {}
-#[test]
-fn zk_ivm_prove_job_id_reports_rng_failure() {
-    let mut rng = FailingZkJobIdRng;
-    let error = zk_ivm_prove_job_id_with_rng(&mut rng).expect_err("RNG failure must be reported");
-    match error {
-        Error::Query(ValidationFail::InternalError(message)) => {
-            assert!(message.contains("zk IVM prove job-id OS RNG failed"));
-            assert!(message.contains("failing zk job-id RNG"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-#[tokio::test]
-async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
-    let app = mk_ivm_prove_app_state_for_tests();
-    let invalid = [
-        "0123456789abcdef0123456789abcde",
-        "0123456789abcdef0123456789abcdef0",
-        "0123456789ABCDEF0123456789ABCDEF",
-        "g123456789abcdef0123456789abcdef",
-    ];
-    for job_id in invalid {
-        let get_error = match call_zk_ivm_prove_get(app.clone(), job_id.to_owned()).await {
-            Ok(_) => panic!("GET accepted invalid job id"),
-            Err(error) => error,
-        };
-        let message = query_conversion_message(&get_error).expect("GET conversion error");
-        assert!(message.contains("exactly 32 lowercase hexadecimal"));
-        assert!(
-            !message.contains(job_id),
-            "invalid id must not be reflected"
-        );
-        let delete_error = match call_zk_ivm_prove_delete(app.clone(), job_id.to_owned()).await {
-            Ok(_) => panic!("DELETE accepted and echoed invalid job id"),
-            Err(error) => error,
-        };
-        let message = query_conversion_message(&delete_error).expect("DELETE conversion error");
-        assert!(message.contains("exactly 32 lowercase hexadecimal"));
-        assert!(
-            !message.contains(job_id),
-            "invalid id must not be reflected"
-        );
-    }
-    validate_zk_ivm_prove_job_id("0123456789abcdef0123456789abcdef").expect("canonical id");
-}
+#[cfg(feature = "push")]
+use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_push;
 #[cfg(feature = "telemetry")]
 use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
 #[cfg(feature = "app_api")]
@@ -1599,23 +1535,51 @@ use crate::{
 use iroha_core::smartcontracts::Execute;
 #[test]
 fn stark_fri_backend_label_is_singular_and_exact() {
-    assert!(is_stark_fri_v1_backend(
+    assert!(iroha_data_model::zk::is_stark_fri_v1_backend_label(
         "stark/fri/poseidon-x7-goldilocks-6x64-v1"
     ));
-    assert!(!is_stark_fri_v1_backend("stark/fri"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/latest"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/random-profile"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/sha512-goldilocks"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
-    assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
-    assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/poseidon2-goldilocks"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/sha256_goldilocks.v1"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/latest"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/random-profile"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/sha512-goldilocks"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/kzg"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/bn254"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/debug"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/debug-proof"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/mock"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri/mock-proof"
+    ));
+    assert!(!iroha_data_model::zk::is_stark_fri_v1_backend_label(
+        "stark/fri-v2"
+    ));
 }
 #[test]
 fn parse_pipeline_status_scope_accepts_only_exact_current_values() {
@@ -2239,290 +2203,6 @@ fn sample_stark_vk_box(
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     iroha_data_model::proof::VerifyingKeyBox::new(backend.to_owned(), bytes)
-}
-fn sample_ivm_prove_authority_keypair() -> KeyPair {
-    checked_torii_test_ed25519_keypair(0x83, "derive ZK IVM prove authority fixture key")
-}
-fn sample_ivm_prove_authority() -> AccountId {
-    AccountId::new(sample_ivm_prove_authority_keypair().public_key().clone())
-}
-fn mk_ivm_prove_app_state_for_tests() -> SharedAppState {
-    let authority = sample_ivm_prove_authority();
-    mk_app_state_for_tests_with_world(world_with_account(&authority))
-}
-/// Own the production supervisor for a route fixture and join it explicitly.
-/// Unwinding still sends shutdown so no fixture leaves accepting work behind.
-struct IvmProveSupervisorFixture {
-    app: SharedAppState,
-    task: Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>>,
-}
-impl IvmProveSupervisorFixture {
-    fn start(app: &SharedAppState) -> Self {
-        zk_ivm_prove_ensure_supervisor(app);
-        Self {
-            app: app.clone(),
-            task: Some(zk_ivm_prove_take_supervisor(app).expect("retain route fixture supervisor")),
-        }
-    }
-    async fn shutdown(mut self) {
-        self.app.shutdown_signal.send();
-        let task = self.task.take().expect("supervisor is joined exactly once");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(300), task)
-                .await
-                .expect("route fixture supervisor shuts down")
-                .expect("route fixture supervisor joins"),
-            ToriiCriticalWorkerExit::StoppedByShutdown,
-        );
-        assert!(self.app.zk_ivm_prove_jobs.is_empty());
-        assert_eq!(self.app.zk_ivm_prove_job_budget.used_bytes(), 0);
-        assert_eq!(
-            self.app.zk_ivm_prove_slots.available_permits(),
-            self.app.zk_ivm_prove_slots_total
-        );
-        assert_eq!(
-            self.app.zk_ivm_prove_inflight.available_permits(),
-            self.app.zk_ivm_prove_inflight_total
-        );
-    }
-}
-impl Drop for IvmProveSupervisorFixture {
-    fn drop(&mut self) {
-        self.app.shutdown_signal.send();
-    }
-}
-/// Install a signed, self-describing contract and its active instance through the
-/// production registration/activation instructions in the VK's committed block.
-fn install_ivm_prove_contract_fixture(
-    app: &SharedAppState,
-    authority_keypair: &KeyPair,
-    vk_id: &VerifyingKeyId,
-    vk_record: VerifyingKeyRecord,
-) -> (IvmBytecode, iroha_model_base::metadata::Metadata) {
-    use iroha_core::smartcontracts::code::{
-        activate_instance, register_code_bytes, register_manifest,
-    };
-    use iroha_executor_data_model::permission::{
-        governance::CanEnactGovernance, smart_contract::CanManageSmartContractCode,
-    };
-
-    let authority = AccountId::new(authority_keypair.public_key().clone());
-    let (artifact, manifest) =
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-            force_zk: true,
-            max_cycles: 4_096,
-            ..Default::default()
-        })
-        .compile_source_with_manifest(
-            r#"seiyaku ProveRouteFixture {
-            kotoage fn main() authorize("CanEnactGovernance") {}
-        }"#,
-        )
-        .expect("compile registered ZK contract fixture");
-    let verified = ivm::verify_contract_artifact(&artifact).expect("verify contract fixture");
-    assert_eq!(
-        manifest.signature_payload(),
-        verified.manifest.signature_payload()
-    );
-    let code_hash = verified.code_hash;
-    let address = iroha_data_model::smart_contract::ContractAddress::derive(
-        app.state.network_id_ref(),
-        &authority,
-        91,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive fixture contract address");
-    let height = next_block_height(app);
-    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-    let mut block = app.state.block(header);
-    let mut stx =
-        block.transaction_for_fastpq_testing(Hash::new(b"Torii registered prove fixture"));
-    for permission in [
-        Permission::from(CanManageSmartContractCode),
-        Permission::from(CanEnactGovernance),
-    ] {
-        stx.world_mut_for_testing()
-            .add_account_permission(&authority, permission);
-    }
-    assert_eq!(
-        register_code_bytes(&authority, artifact.clone(), &mut stx)
-            .expect("production bytecode registration"),
-        code_hash,
-    );
-    register_manifest(&authority, manifest.signed(authority_keypair), &mut stx)
-        .expect("production signed-manifest registration");
-    stx.world_mut_for_testing()
-        .bind_inactive_contract_subject_for_testing(address.clone(), authority.clone());
-    activate_instance(&authority, address.clone(), 1, code_hash, &mut stx)
-        .expect("production contract activation");
-    stx.world
-        .verifying_keys_by_circuit_mut_for_testing()
-        .insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-    stx.world
-        .verifying_keys_mut_for_testing()
-        .insert(vk_id.clone(), vk_record);
-    stx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit registered contract and VK fixture at the explicit empty-block height");
-    let mut metadata = iroha_model_base::metadata::Metadata::default();
-    for (name, value) in [
-        ("contract_address", address.to_string()),
-        ("contract_code_hash", code_hash.to_string()),
-        ("contract_entrypoint", "main".to_owned()),
-    ] {
-        metadata.insert(
-            name.parse().expect("contract metadata key"),
-            iroha_primitives::json::Json::new(value),
-        );
-    }
-    (IvmBytecode::from_compiled(artifact), metadata)
-}
-/// Validate the actual returned proof, its payload commitments, role and mandatory
-/// VM replay with the same state used by the registered route fixture.
-fn assert_ivm_prove_response_replays(
-    app: &SharedAppState,
-    request: &ZkIvmProveRequestDto,
-    response: &ZkIvmProveJobDto,
-    signer: &KeyPair,
-) {
-    let proved = response
-        .proved
-        .clone()
-        .expect("done response has proved payload");
-    assert_eq!(proved.bytecode, request.bytecode);
-    assert_eq!(
-        request.authority,
-        AccountId::new(signer.public_key().clone())
-    );
-    let attachment = response
-        .attachment
-        .clone()
-        .expect("done response has proof");
-    let transaction = TransactionBuilder::new(
-        *app.state.network_id_ref(),
-        request.authority.clone(),
-        request.fee_payment.clone(),
-    )
-    .with_metadata(request.metadata.clone())
-    .with_executable(iroha_data_model::transaction::Executable::IvmProved(proved))
-    .with_attachments(
-        iroha_data_model::proof::ProofAttachmentList::try_from(vec![attachment])
-            .expect("one bounded proof attachment"),
-    )
-    .try_sign(signer.private_key())
-    .expect("sign the exact returned proved transaction");
-    iroha_core::pipeline::overlay::build_overlay_for_transaction(
-        &transaction,
-        &app.state.query_view(),
-    )
-    .expect("returned proof must bind the returned payload and pass mandatory VM replay");
-}
-fn signed_ivm_prove_headers(
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    body: &[u8],
-) -> HeaderMap {
-    let authority = sample_ivm_prove_authority();
-    let key_pair = sample_ivm_prove_authority_keypair();
-    let mut headers = signed_app_headers(&authority, &key_pair, method, uri, body);
-    headers.insert(
-        axum::http::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers
-}
-async fn call_zk_ivm_prove(
-    app: SharedAppState,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    let method = axum::http::Method::POST;
-    let uri: axum::http::Uri = "/v1/zk/ivm/prove".parse().expect("prove URI");
-    let headers = signed_ivm_prove_headers(&method, &uri, body.as_ref());
-    handler_zk_ivm_prove(
-        State(app),
-        method,
-        uri,
-        headers,
-        crate::loopback_connect_info(),
-        body,
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-async fn call_zk_ivm_prove_get(app: SharedAppState, job_id: String) -> Result<AxResponse, Error> {
-    let method = axum::http::Method::GET;
-    let uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
-        .parse()
-        .expect("prove-job GET URI");
-    let headers = signed_ivm_prove_headers(&method, &uri, &[]);
-    handler_zk_ivm_prove_get(
-        State(app),
-        method,
-        uri,
-        headers,
-        crate::loopback_connect_info(),
-        axum::extract::Path(job_id),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-async fn call_zk_ivm_prove_delete(
-    app: SharedAppState,
-    job_id: String,
-) -> Result<AxResponse, Error> {
-    let method = axum::http::Method::DELETE;
-    let uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
-        .parse()
-        .expect("prove-job DELETE URI");
-    let headers = signed_ivm_prove_headers(&method, &uri, &[]);
-    handler_zk_ivm_prove_delete(
-        State(app),
-        method,
-        uri,
-        headers,
-        crate::loopback_connect_info(),
-        axum::extract::Path(job_id),
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-fn sample_ivm_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
-    iroha_data_model::transaction::FeePaymentIntent::authority(
-        Vec::new(),
-        NonZeroU64::new(50_000_000),
-    )
-}
-#[test]
-fn zk_ivm_fee_payment_requires_typed_gas_bound_and_rejects_legacy_metadata() {
-    let metadata = iroha_model_base::metadata::Metadata::default();
-    let missing_gas = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
-    assert!(validate_zk_ivm_fee_payment(&missing_gas, &metadata).is_err());
-    let valid = sample_ivm_fee_payment();
-    validate_zk_ivm_fee_payment(&valid, &metadata).expect("typed gas bound should validate");
-    let mut legacy = metadata;
-    legacy.insert(
-        Name::from_str("gas_limit").expect("static legacy metadata key"),
-        iroha_primitives::json::Json::new(50_000_000_u64),
-    );
-    assert!(validate_zk_ivm_fee_payment(&valid, &legacy).is_err());
-}
-fn make_ivm_prove_request(
-    vk_ref: VerifyingKeyId,
-    bytecode: IvmBytecode,
-    proved: Option<IvmProved>,
-) -> ZkIvmProveRequestDto {
-    ZkIvmProveRequestDto {
-        vk_ref,
-        authority: sample_ivm_prove_authority(),
-        fee_payment: sample_ivm_fee_payment(),
-        metadata: iroha_model_base::metadata::Metadata::default(),
-        bytecode,
-        proved,
-    }
 }
 fn set_latest_block_height(app: &SharedAppState, height: u64) {
     let mut current_height = current_block_height(app);

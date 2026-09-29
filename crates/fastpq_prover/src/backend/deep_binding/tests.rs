@@ -14,25 +14,30 @@ fn context() -> Context {
     Context::new(b"complete immutable public statement").unwrap()
 }
 
+/// Narrow one fixed test dimension or coordinate to its `u32` field.
+fn test_u32(value: usize) -> u32 {
+    u32::try_from(value).expect("fixed test dimension fits u32")
+}
+
 #[test]
 fn doubled_degree_geometry_changes_the_bound_context_and_root_commitment() {
     let current = context();
     let old_descriptor = StatementContext {
         layout: LAYOUT_ID.to_owned(),
         relation: FIXTURE_RELATION_IDENTITY.to_owned(),
-        trace_rows: TRACE_ROWS as u32,
-        lde_rows: LDE_ROWS as u32,
-        columns: COMMITTED_COLUMN_COUNT as u32,
-        constraints: CONSTRAINTS as u32,
+        trace_rows: test_u32(TRACE_ROWS),
+        lde_rows: test_u32(LDE_ROWS),
+        columns: test_u32(COMMITTED_COLUMN_COUNT),
+        constraints: test_u32(CONSTRAINTS),
         modulus: MODULUS,
         extension_nonresidue: 7,
         lde_root: LDE_ROOT,
         coset_offset: COSET_OFFSET,
-        fri_arities: FRI_ARITIES.map(|v| v as u32),
-        fri_lengths: FRI_LENGTHS.map(|v| v as u32),
+        fri_arities: FRI_ARITIES.map(test_u32),
+        fri_lengths: FRI_LENGTHS.map(test_u32),
         fri_degrees: [65_536, 4_096, 256, 32, 4, 1],
-        query_count: QUERY_COUNT as u32,
-        query_candidates: QUERY_CANDIDATES as u32,
+        query_count: test_u32(QUERY_COUNT),
+        query_candidates: test_u32(QUERY_CANDIDATES),
         statement: b"complete immutable public statement".to_vec(),
     };
     let old = Context {
@@ -157,7 +162,7 @@ fn every_unused_canonical_coordinate_is_bound_before_the_next_message() {
         let expected = context.chain(round, &raw, root).unwrap();
         for index in used..raw.len() / 8 {
             let mut changed = raw.clone();
-            changed[index * 8..(index + 1) * 8].copy_from_slice(&123456_u64.to_le_bytes());
+            changed[index * 8..(index + 1) * 8].copy_from_slice(&123_456_u64.to_le_bytes());
             assert_eq!(
                 decode(round, &raw).unwrap(),
                 decode(round, &changed).unwrap()
@@ -305,9 +310,13 @@ fn all_fixed_oracle_shapes_and_full_terminal_are_checked() {
         let (_, _, leaves, bytes) = oracle.shape().unwrap();
         let payload = vec![0; bytes];
         let leaf = context
-            .hash_leaf(oracle, (leaves - 1) as u32, &payload)
+            .hash_leaf(oracle, test_u32(leaves - 1), &payload)
             .unwrap();
-        assert!(context.hash_leaf(oracle, leaves as u32, &payload).is_err());
+        assert!(
+            context
+                .hash_leaf(oracle, test_u32(leaves), &payload)
+                .is_err()
+        );
         assert!(context.hash_leaf(oracle, 0, &payload[..bytes - 8]).is_err());
         let mut bad = payload;
         bad[bytes - 8..].copy_from_slice(&MODULUS.to_le_bytes());
@@ -460,5 +469,5 @@ fn prepared_relation_identity_is_explicit_bounded_and_separate_from_raw_fixtures
         )
         .is_ok()
     );
-    assert!(core::ptr::eq(&relation, relation.deep_relation()));
+    assert!(core::ptr::eq(&raw const relation, relation.deep_relation()));
 }

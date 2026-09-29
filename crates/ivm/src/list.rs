@@ -334,7 +334,9 @@ mod tests {
         }
         for element_words in [1_u64, 2, 4] {
             let mut vm = IVM::new(0);
-            let template = vm.runtime_template();
+            let template = vm
+                .try_runtime_template()
+                .expect("runtime template allocation fits test host");
             for capacity in 1..=64 {
                 // Every capacity is an independent model-checking scenario.
                 // Reusing one VM across all capacities retains every prior

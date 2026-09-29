@@ -5,8 +5,8 @@
   "assets": [
     {
       "path": "hayahi_app_readme.tmpl",
-      "byte_length": 2489,
-      "sha256": "88d32c53932846ee2ccb739b89ea9d5781f8b18f3fb1c6de859d4afdbaebf901",
+      "byte_length": 2529,
+      "sha256": "e4402ed7a587f08010f77adbb078299316d78e6c4dea2cea6ce7c4069e590807",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -49,8 +49,8 @@
     },
     {
       "path": "http_service_readme.tmpl",
-      "byte_length": 6465,
-      "sha256": "550cf4a99c3b334e3e369e47ccc874cfd67d022951f6b4a2c39e514e95e866c7",
+      "byte_length": 6798,
+      "sha256": "e05f7bc465141f0a617497f7978a029d9d5756447553d23c733db6d7edf834fb",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -82,8 +82,8 @@
     },
     {
       "path": "pii_app_readme.tmpl",
-      "byte_length": 2333,
-      "sha256": "773b55330b0e852937e4af98975d097d7c4bb16bfaae8099a54862631e9dcef2",
+      "byte_length": 2373,
+      "sha256": "0aa0a6cb317c2a4d7a2522321023c49d9530f0a023fb4a3a4f47106b1baf8d07",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -126,8 +126,8 @@
     },
     {
       "path": "single_api_app_readme.tmpl",
-      "byte_length": 3568,
-      "sha256": "2e0b3731be0d8ac7eac11457e2613d2a965f06343242df67c1a474426001c4e4",
+      "byte_length": 3826,
+      "sha256": "dda2e8bf8298ce56e76eea5e2491694ca8333da3864ad84985255ae6651d43d5",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -225,8 +225,8 @@
     },
     {
       "path": "split_app_readme.tmpl",
-      "byte_length": 5763,
-      "sha256": "9f7a342d23fe07361d23dfc9a3cdaa0a3c53cba1dece5c264d4cbeded268b2d6",
+      "byte_length": 6021,
+      "sha256": "bfce2600f2a0b562fd14a1280704da21e81ac46e819c7e4071c8229a1a351b99",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -280,8 +280,8 @@
     },
     {
       "path": "webapp_readme.tmpl",
-      "byte_length": 1929,
-      "sha256": "a6e938f83d8b6f3d15a88091eb8010faa2bb9a27e63c0de32e3a3030efe96b28",
+      "byte_length": 1969,
+      "sha256": "9b01833f515cfa8ce2688060585fdef7a5ff60ca76f1e7d1dcf7921941a7ab1d",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {

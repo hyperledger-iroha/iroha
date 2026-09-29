@@ -256,7 +256,7 @@ impl QMaskSFileV1 {
             || self.next_slot != self.block_end_slot
             || self.block_end_slot == 0
             || self.block_end_slot > S_SLOTS_V1
-            || self.block_end_slot % S_FIRST_BLOCK_SLOTS_V1 != 0
+            || !self.block_end_slot.is_multiple_of(S_FIRST_BLOCK_SLOTS_V1)
         {
             return Err(OrderedSnapshotErrorV1::Order);
         }
@@ -298,7 +298,10 @@ impl WrittenQMaskSBlockFileV1 {
             || self.file.next_slot != self.file.block_end_slot
             || self.file.block_end_slot == 0
             || self.file.block_end_slot > S_SLOTS_V1
-            || self.file.block_end_slot % S_FIRST_BLOCK_SLOTS_V1 != 0
+            || !self
+                .file
+                .block_end_slot
+                .is_multiple_of(S_FIRST_BLOCK_SLOTS_V1)
         {
             return Err(OrderedSnapshotErrorV1::Order);
         }

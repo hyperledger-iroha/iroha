@@ -76,7 +76,7 @@ class FactsReceipt:
     original_anchor_sha256: str
     stopped_height: int
     journal_sha256: str
-    finality_sha256: str
+    carrier_sha256: str
     queries_sha256: str
     facts: RetainedOutput
 
@@ -239,7 +239,7 @@ class NativeFacts:
                             for name, cap in zip(names, caps, strict=True))
         _require(all(original[9][index][1] == self._files[index + 2][0] for index in range(4)),
                  'native_facts_peer_config_binding')
-        self._vector_caps = outputs.allocation('finality'), outputs.allocation('queries')
+        self._vector_caps = outputs.allocation('carrier'), outputs.allocation('queries')
         _require(sum(caps) + self._journal_input[3] + sum(self._vector_caps) <= budget[4]
                  and outputs.allocation('facts') == budget[5]
                  and self._plan[15] <= budget[12], 'native_facts_total_reservation')
@@ -317,7 +317,7 @@ class NativeFacts:
         try:
             _require(self._phase == 'tip-ready' and self._height is not None, 'native_facts_publication_phase')
             self._phase = 'busy'; self._verify()
-            vectors = tuple(self._outputs.artifact(role) for role in ('finality', 'queries'))
+            vectors = tuple(self._outputs.artifact(role) for role in ('carrier', 'queries'))
             _require(tuple(row.max_bytes for row in vectors) == self._vector_caps,
                      'native_facts_vector_reservation_changed')
             arguments = []

@@ -17,6 +17,111 @@ fn run_catalog_test(test: impl FnOnce() + Send + 'static) {
     }
 }
 
+#[test]
+fn lifecycle_rebind_requires_materialized_manifest_source() {
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let registry =
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+    rebind_lane_manifests_for_lifecycle(&registry, &nexus.lane_catalog, &nexus.governance)
+        .expect("materialized source rebinds to its exact catalog");
+    let status_only = LaneManifestRegistry::from_statuses(BTreeMap::new());
+    let error =
+        rebind_lane_manifests_for_lifecycle(&status_only, &nexus.lane_catalog, &nexus.governance)
+            .expect_err("status-only scaffolding cannot authorize a lifecycle transition");
+    assert!(
+        error.to_string().contains("materialized frozen source"),
+        "unexpected lifecycle diagnostic: {error}"
+    );
+}
+
+#[test]
+fn materialized_manifest_install_rejects_status_only_without_publication() {
+    run_catalog_test(|| {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let nexus = state.nexus_snapshot();
+        let original_manifests = state.lane_manifests.read().clone();
+        let original_privacy = state.lane_privacy_registry.read().clone();
+        let status_only = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::new()));
+        let error = state
+            .install_materialized_lane_manifests_for_catalog(
+                &status_only,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .expect_err("status-only registry cannot publish");
+        assert!(error.to_string().contains("materialized frozen source"));
+        assert!(Arc::ptr_eq(
+            &state.lane_manifests.read(),
+            &original_manifests
+        ));
+        assert!(Arc::ptr_eq(
+            &state.lane_privacy_registry.read(),
+            &original_privacy
+        ));
+
+        let materialized = Arc::new(LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ));
+        state
+            .install_materialized_lane_manifests_for_catalog(
+                &materialized,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .expect("matching frozen source publishes");
+        assert!(Arc::ptr_eq(&state.lane_manifests.read(), &materialized));
+    });
+}
+
+#[test]
+fn provisional_emergency_manifest_install_is_empty_and_one_shot() {
+    run_catalog_test(|| {
+        let mut strict_state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        assert!(
+            strict_state
+                .install_provisional_empty_lane_manifests_for_emergency_fast_pre_auth()
+                .is_err(),
+            "Strict startup must refuse the emergency pre-authentication installer"
+        );
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing_in_emergency_fast_mode(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .install_provisional_empty_lane_manifests_for_emergency_fast_pre_auth()
+            .expect("unshared pre-authentication State admits one empty provisional install");
+        let provisional = state.lane_manifests.read().clone();
+        assert!(provisional.statuses().is_empty());
+        assert!(
+            provisional
+                .validate_materialized_source_projection()
+                .is_err()
+        );
+        let privacy = state.lane_privacy_registry.read().clone();
+        let error = state
+            .install_provisional_empty_lane_manifests_for_emergency_fast_pre_auth()
+            .expect_err("emergency pre-authentication install must be one-shot");
+        assert!(
+            error
+                .to_string()
+                .contains("one-shot pre-authentication phase")
+        );
+        assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &provisional));
+        assert!(Arc::ptr_eq(&*state.lane_privacy_registry.read(), &privacy));
+    });
+}
+
 #[derive(Clone, Copy)]
 enum InvalidMember {
     None,
@@ -95,7 +200,7 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
         nexus.clone(),
         LiveQueryStore::start_test(),
     );
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_config(
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
         &nexus.governance,
         &nexus.registry,

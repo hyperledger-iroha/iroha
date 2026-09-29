@@ -2162,12 +2162,14 @@ mod tests {
             fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600))
                 .expect("protect token secret fixture");
         }
-        let mut pow = PowConfig::default();
-        pow.token = Some(soranet_relay::config::TokenConfig {
-            enabled: true,
-            issuer_public_key_hex: Some(hex::encode(configured.public_key())),
-            ..soranet_relay::config::TokenConfig::default()
-        });
+        let pow = PowConfig {
+            token: Some(soranet_relay::config::TokenConfig {
+                enabled: true,
+                issuer_public_key_hex: Some(hex::encode(configured.public_key())),
+                ..soranet_relay::config::TokenConfig::default()
+            }),
+            ..PowConfig::default()
+        };
         let options = TokenCliOptions {
             secret_path: Some(secret_path.clone()),
             revocation_file: None,

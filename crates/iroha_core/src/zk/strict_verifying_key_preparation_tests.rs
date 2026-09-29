@@ -31,10 +31,10 @@ mod strict_verifying_key_preparation_tests {
     fn portable_off_ledger_record() -> VerifyingKeyRecord {
         let mut record = VerifyingKeyRecord::new(
             1,
-            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            KAIGI_USAGE_CIRCUIT_ID_V1,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            ivm_replay_binding_public_inputs_schema_hash(),
+            iroha_crypto::Hash::new(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1).into(),
             [0x42; 32],
         );
         record.gas_schedule_id = Some("halo2_default".to_owned());
@@ -67,10 +67,10 @@ mod strict_verifying_key_preparation_tests {
         let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "oversized-off-ledger");
         let mut record = VerifyingKeyRecord::new(
             1,
-            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            KAIGI_USAGE_CIRCUIT_ID_V1,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            ivm_replay_binding_public_inputs_schema_hash(),
+            iroha_crypto::Hash::new(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1).into(),
             [0x42; 32],
         );
         record.vk_len =
@@ -87,6 +87,30 @@ mod strict_verifying_key_preparation_tests {
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
             .expect_err("a production Halo2 key must bind the circuit's canonical schema");
         assert!(error.contains("schema hash"), "unexpected error: {error}");
+    }
+    #[test]
+    fn binding_only_ivm_verifier_records_are_not_admitted() {
+        let halo2_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "ivm-binding");
+        let mut halo2_record = portable_off_ledger_record();
+        halo2_record.circuit_id = "halo2/pasta/ipa/ivm-execution-v1".to_owned();
+        halo2_record.public_inputs_schema_hash = [0x22; 32];
+        let halo2_error = validate_and_prepare_verifying_key_record_v1(&halo2_id, &halo2_record)
+            .expect_err("binding-only Halo2 IVM key must not enter state");
+        assert!(halo2_error.contains("not admitted"), "{halo2_error}");
+
+        let stark_id = VerifyingKeyId::new(ZK_BACKEND_STARK_FRI_V1, "ivm-binding");
+        let mut stark_record = VerifyingKeyRecord::new(
+            1,
+            format!("{ZK_BACKEND_STARK_FRI_V1}:{IVM_EXECUTION_V1_CIRCUIT_ID}"),
+            iroha_data_model::zk::BackendTag::Stark,
+            "goldilocks",
+            [0x22; 32],
+            [0x42; 32],
+        );
+        stark_record.gas_schedule_id = Some("stark_default".to_owned());
+        let stark_error = validate_and_prepare_verifying_key_record_v1(&stark_id, &stark_record)
+            .expect_err("binding-only STARK IVM key must not enter state");
+        assert!(stark_error.contains("not admitted"), "{stark_error}");
     }
     #[test]
     fn record_preparation_rejects_oversized_stark_off_ledger_declaration() {
@@ -113,7 +137,7 @@ mod strict_verifying_key_preparation_tests {
         );
         let error = validate_and_prepare_verifying_key_material_v1(
             ZK_BACKEND_HALO2_IPA,
-            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             &vk,
         )
@@ -129,7 +153,7 @@ mod strict_verifying_key_preparation_tests {
         assert!(
             validate_and_prepare_verifying_key_material_v1(
                 ZK_BACKEND_HALO2_IPA,
-                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+                "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                 iroha_data_model::zk::BackendTag::Halo2IpaPasta,
                 &vk,
             )

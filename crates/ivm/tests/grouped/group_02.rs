@@ -4,10 +4,10 @@
 mod control_flows;
 #[path = "../core_host_build_path_map_key_syscall.rs"]
 mod core_host_build_path_map_key_syscall;
-#[path = "../core_host_decode_int_syscall.rs"]
-mod core_host_decode_int_syscall;
 #[path = "../core_host_input_publish_tlv.rs"]
 mod core_host_input_publish_tlv;
+#[path = "../core_host_int_pointer_codec.rs"]
+mod core_host_int_pointer_codec;
 #[path = "../core_host_json_schema_syscalls.rs"]
 mod core_host_json_schema_syscalls;
 #[path = "../core_host_name_decode_syscall.rs"]

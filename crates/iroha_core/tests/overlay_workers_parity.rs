@@ -3,29 +3,15 @@
 //! identical outcomes (events and final state), preserving determinism.
 use crate::synthetic_state_snapshots as snapshots;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
-use std::{borrow::Cow, sync::Arc}; // trait for .get()
-fn test_network_id(label: &[u8]) -> NetworkId {
-    NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::new(label),
-        ),
-    )
-}
-fn run_with_workers(
-    workers: usize,
-    network_id: &NetworkId,
-    txs: Vec<SignedTransaction>,
-    alice_id: &AccountId,
-    bob_id: &AccountId,
-) -> (String, iroha_core::state::State) {
+use std::sync::Arc; // trait for .get()
+fn build_chain(workers: usize, alice_id: &AccountId, bob_id: &AccountId) -> CertifiedTestChain {
     // Build a fresh world with a domain, two accounts, and a numeric asset definition
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
@@ -43,53 +29,37 @@ fn run_with_workers(
     let acc_a = Account::new(alice_id.clone()).build(alice_id);
     let acc_b = Account::new(bob_id.clone()).build(alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-    let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query,
-        ChainId::from("chain"),
-        *network_id,
-    );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    // Configure overlay parallelism and fixed worker pool size
-    let mut cfg = state.view().pipeline().clone();
-    cfg.parallel_overlay = true;
-    cfg.workers = workers; // 0 = Rayon default
-    state.set_pipeline(cfg);
-    let genesis = state
-        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("publish fixture genesis");
-    // Build and execute block
-    let block: SignedBlock = {
-        let accepted: Vec<_> = txs
-            .into_iter()
-            .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
-            .collect();
-        BlockBuilder::new(accepted)
-            .chain(0, Some(&genesis))
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-            .unpack(|_| {})
-            .into()
-    };
-    let mut sb = state.block(block.header());
-    let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = state
-        .commit_executed_block_for_testing(sb, cb)
-        .expect("publish worker parity effects");
-    let json = snapshots::events_json_filtered(&events);
-    (json, state)
+    let mut config = TestChainConfig::new(world, 1000);
+    config.chain_id = ChainId::from("overlay_workers_parity");
+    config.pipeline.parallel_overlay = true;
+    config.pipeline.workers = workers;
+    CertifiedTestChain::start(config).unwrap()
+}
+fn run(
+    mut chain: CertifiedTestChain,
+    txs: Vec<SignedTransaction>,
+) -> (String, Arc<iroha_core::state::State>) {
+    chain.commit(txs);
+    let events = chain
+        .take_events()
+        .expect("complete actual publication event delivery");
+    (
+        snapshots::events_json_filtered(&events),
+        Arc::clone(chain.state()),
+    )
 }
 #[test]
 fn overlay_parallel_workers_parity() {
-    let network_id = test_network_id(b"overlay-workers-parity");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let first = build_chain(0, &alice_id, &bob_id);
+    let second = build_chain(2, &alice_id, &bob_id);
+    let network_id = first.network_id();
+    assert_eq!(
+        network_id,
+        second.network_id(),
+        "local execution optimization preserves signed genesis identity"
+    );
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -148,8 +118,8 @@ fn overlay_parallel_workers_parity() {
         .sign(alice_keypair.private_key()),
     ];
     // Run with workers=0 (Rayon default) and workers=2
-    let (json0, state0) = run_with_workers(0, &network_id, txs.clone(), &alice_id, &bob_id);
-    let (json2, state2) = run_with_workers(2, &network_id, txs, &alice_id, &bob_id);
+    let (json0, state0) = run(first, txs.clone());
+    let (json2, state2) = run(second, txs);
     // Compare event JSON and balances
     assert_eq!(
         json0, json2,

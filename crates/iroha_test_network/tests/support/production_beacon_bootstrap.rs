@@ -6,16 +6,21 @@ use iroha_core::beacon::credential::global_beacon_partial_signer_public_inventor
 use iroha_core::{
     beacon,
     kura::{BlockIndex, BlockStore, Kura},
+    sumeragi::{
+        certified_chain::CertifiedBlock,
+        native_journal::{NativeJournalCursor, with_verified_native_journal},
+    },
 };
 use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
 use iroha_data_model::{
-    block::{SignedBlock, decode_framed_signed_block},
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
+    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
+    parameter::system::SumeragiNposParameters,
+    sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
 };
 use iroha_test_network::{
@@ -1201,23 +1206,6 @@ async fn submit_install(
     Ok(install_height)
 }
 
-fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
-    ensure!(height > 0, "genesis is height one");
-    let mut index = [BlockIndex {
-        start: 0,
-        length: 0,
-    }];
-    store.read_block_indices(height - 1, &mut index)?;
-    ensure!(
-        (1..=iroha_data_model::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES)
-            .contains(&index[0].length),
-        "invalid canonical block length"
-    );
-    let mut bytes = vec![0; usize::try_from(index[0].length)?];
-    store.read_block_data(index[0].start, &mut bytes)?;
-    Ok(decode_framed_signed_block(&bytes)?)
-}
-
 fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisProvisioningBundle> {
     let manifest = iroha_genesis::RawGenesisTransaction::from_path(
         prepared.genesis_directory.join("genesis.json"),
@@ -1245,32 +1233,66 @@ fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisPr
     })
 }
 
-fn read_exact_finality(config_path: &Path, height: u64) -> Result<SumeragiFinalityProof> {
+fn native_finality_limits() -> NativeFinalityLimits {
+    NativeFinalityLimits {
+        block_bytes: 32 * 1024 * 1024,
+        journal_bytes: 64 * 1024 * 1024,
+        block_count: 256,
+        allocated_bytes: 512 * 1024 * 1024,
+    }
+}
+
+fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinalityJournal> {
+    let limits = native_finality_limits();
+    ensure!(
+        (2..=u64::try_from(limits.block_count)?).contains(&height),
+        "native finality needs a bounded H2+ prefix"
+    );
+    let mut blocks = Vec::with_capacity(usize::try_from(height)?);
+    let mut total = 0_usize;
+    for at in 1..=height {
+        let mut index = [BlockIndex {
+            start: 0,
+            length: 0,
+        }];
+        store.read_block_indices(at - 1, &mut index)?;
+        let length = usize::try_from(index[0].length)?;
+        total = total
+            .checked_add(length)
+            .ok_or_else(|| eyre!("native journal length overflow"))?;
+        ensure!(
+            length > 0 && length <= limits.block_bytes && total <= limits.journal_bytes,
+            "native source exceeds configured bounds before allocation"
+        );
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length)?;
+        bytes.resize(length, 0);
+        store.read_block_data(index[0].start, &mut bytes)?;
+        blocks.push(NativeFinalityArtifact { block_wire: bytes });
+    }
+    Ok(NativeFinalityJournal { blocks })
+}
+
+fn read_exact_finality(config_path: &Path, height: u64) -> Result<NativeFinalityJournal> {
     let native = config(config_path)?;
     let mut store =
         BlockStore::open_read_only(Kura::canonical_storage_paths(native.kura.store_dir.value()).0)?;
-    let genesis = read_block(&mut store, 1)?;
-    // This fixture retains its signed genesis committee throughout. The independent
-    // contiguous verifier below checks every next-committee commitment against it.
-    let committee = iroha_genesis::signed_genesis_validator_pops(&genesis)?
-        .into_iter()
-        .map(|(public_key, proof_of_possession)| FinalityValidator {
-            public_key,
-            proof_of_possession,
-        })
-        .collect();
-    let block = read_block(&mut store, height)?;
+    let journal = journal_from_store(&mut store, height)?;
+    let mut cursor = NativeJournalCursor::new(
+        native.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(native.genesis.expected_hash),
+        native_finality_limits(),
+    )
+    .map_err(|error| eyre!(error))?;
     ensure!(
-        block.header().height().get() == height,
-        "native block differs from requested height"
+        cursor
+            .advance(&journal)
+            .map_err(|error| eyre!(error))?
+            .height()
+            == height,
+        "native finality differs from requested phase"
     );
-    let proof = SumeragiFinalityProof {
-        block_header: block.header(),
-        block_wire: block.encode_wire()?,
-        committee,
-    };
-    proof.decode_checked()?;
-    Ok(proof)
+    Ok(journal)
 }
 
 fn verify_pulse(
@@ -1289,20 +1311,12 @@ fn verify_pulse(
     let signed_wire: Vec<u8> = json::from_value(field(genesis, "signed_wire")?.clone())?;
     let public_key: iroha_crypto::PublicKey =
         json::from_value(field(genesis, "public_key")?.clone())?;
-    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+    iroha_genesis::validate_prepared_genesis_bundle(
         &signed_wire,
         &manifest,
         &public_key,
         record.session.network_id.into_genesis_hash(),
     )?;
-    let validators: Vec<_> = validated
-        .validator_pops()
-        .iter()
-        .map(|(public_key, proof_of_possession)| FinalityValidator {
-            public_key: public_key.clone(),
-            proof_of_possession: proof_of_possession.clone(),
-        })
-        .collect();
     let parameters = manifest.effective_parameters()?;
     let epoch_length = parameters.sumeragi().epoch_length_blocks.get();
     ensure!(
@@ -1335,32 +1349,98 @@ fn verify_pulse(
             store.read_index_count()? > epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
-        let anchor = read_block(&mut store, anchor_height)?;
-        let block = read_block(&mut store, pulse_height)?;
-        // Authenticate actual current certificates and their canonical executed block
-        // identities. No retired epoch-context or sidecar is an authority source.
-        let mut verifier = SumeragiFinalityVerifier::new(
-            validated.block(),
-            &manifest.chain_id().to_string(),
-            validators.clone(),
-        )?;
-        for height in 1..=epoch_length + 1 {
-            let proof = read_exact_finality(config_path, height)?;
+        ensure!(
+            iroha_data_model::NetworkId::from_genesis_hash(native.genesis.expected_hash)
+                == record.session.network_id
+                && native.common.chain == *manifest.chain_id(),
+            "peer configuration differs from independently signed ceremony source"
+        );
+        let journal = journal_from_store(&mut store, epoch_length + 1)?;
+        let cursor = NativeJournalCursor::new(
+            native.common.chain.clone(),
+            record.session.network_id,
+            native_finality_limits(),
+        )
+        .map_err(|error| eyre!(error))?;
+        let certified = with_verified_native_journal(
+            &journal,
+            &native.common.chain,
+            &record.session.network_id,
+            native_finality_limits(),
+            cursor.attestations(),
+            |reader| {
+                reader
+                    .walk(1, epoch_length + 1)
+                    .collect::<std::result::Result<Vec<CertifiedBlock>, _>>()
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .map_err(|error| eyre!(error))?;
+        let anchor = certified[usize::try_from(anchor_height - 1)?].block();
+        let pulse_source = &certified[usize::try_from(pulse_height - 1)?];
+        let block = pulse_source.block();
+        // Native completion has already authenticated this exact catalog
+        // transaction as Applied on all four peers. The first-release carrier
+        // executes it through a native lane decision, not a merge entry. Bind
+        // the sole native decision to this pulse and exclude unrelated work.
+        let context = block
+            .execution_context()
+            .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
+        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
+            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
+        })?;
+        decisions
+            .validate_structure()
+            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
+        ensure!(
+            decisions.base_state_height == anchor_height
+                && decisions.groups.len() == 1
+                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
+                && decisions.groups[0].payload.descriptor.slots.len() == 1
+                && context.merge_entry.is_none()
+                && block.external_entrypoint_count() == 0
+                && context.queue_plan_admissions.is_empty()
+                && context.autonomous_lane_payloads.is_empty()
+                && context.lane_payload_ownerships.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
+        );
+        let initial_authority = &certified[0].commitment().schedule.current.authority;
+        let mut prior_authorization = None;
+        for proof in certified.iter().skip(1) {
+            let height = proof.height();
+            let context = &proof.commitment().schedule.current;
             ensure!(
-                proof.committee == validators,
-                "fixture changed its signed validator committee"
+                &context.authority == initial_authority,
+                "unchanged committee must retain the same immutable authority generation"
             );
-            verifier.verify(&proof)?;
-            let certified = read_block(&mut store, height)?;
-            ensure!(
-                certified.encode_wire()? == proof.block_wire,
-                "proof and native journal block differ"
-            );
-            if height > 1 {
+            if height == epoch_length {
+                prior_authorization = Some(context.authorization);
+            }
+            if height == epoch_length + 1 {
+                let authorization = &context.authorization;
                 ensure!(
-                    certified.network_entrypoint_count() > 0,
-                    "fixture committed an empty block"
+                    authorization.epoch == 1,
+                    "scheduling epoch must advance after retained boundary"
                 );
+                ensure!(
+                    authorization.decision == KagemushaMintFinalityEpochDecisionV1::Retain,
+                    "unchanged committee must authenticate a retain decision"
+                );
+                ensure!(
+                    authorization.beacon
+                        == BeaconEpochBindingV1::Installed(
+                            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                                session_id: record.session.session_id,
+                                transcript_hash: record.session.transcript_hash
+                            }
+                        ),
+                    "retained epoch must bind installed beacon authority"
+                );
+                authorization.validate_successor(
+                    prior_authorization
+                        .as_ref()
+                        .ok_or_else(|| eyre!("missing certified boundary authorization"))?,
+                )?;
             }
         }
         // Native completion already authenticated this catalog transaction as Applied
@@ -1372,8 +1452,8 @@ fn verify_pulse(
                     .is_some_and(|entrypoint| entrypoint.hash() == catalog_entrypoint_hash),
             "mandatory pulse block is not the exact catalog transaction"
         );
-        let pulse = block.global_beacon_pulse().ok_or_else(|| {
-            eyre!("mandatory pulse is absent from signed-genesis height {pulse_height}")
+        let pulse = pulse_source.commitment().beacon.as_ref().ok_or_else(|| {
+            eyre!("mandatory pulse absent from native certified result at height {pulse_height}")
         })?;
         ensure!(
             pulse.height == pulse_height,
@@ -1385,6 +1465,18 @@ fn verify_pulse(
             GlobalThresholdBeaconChainAnchorV1 {
                 height: anchor_height,
                 block_hash: anchor.hash(),
+            },
+            &{
+                let header = pulse_source
+                    .header()
+                    .ok_or_else(|| eyre!("native pulse header is absent"))?;
+                iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1 {
+                    instance: header.instance.0,
+                    epoch: header.epoch.epoch,
+                    epoch_context_id: header.epoch.context.0,
+                    parent_consensus_hash: header.parent_hash.0,
+                    parent_result: header.parent_result.0,
+                }
             },
         )?;
         let proof = (block.hash(), pulse.clone());
@@ -1930,11 +2022,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         eprintln!("beacon fixture initial startup complete: elapsed={:.3}s", startup_started.elapsed().as_secs_f64());
         let ceremony_deadline = Instant::now() + PHASE_BUDGET;
         let signed_genesis = native_genesis_bundle(&prepared)?;
-        let first_finality = read_exact_finality(&directory.join("peer0.toml"), 1)?;
-        ensure!(
-            first_finality.block_header.hash() == signed_genesis.block_hash,
-            "live h1 finality differs from the retained signed genesis"
-        );
+        let chain_id = config(&directory.join("peer0.toml"))?.common.chain;
         let seats = prepared
             .roster
             .iter()
@@ -1967,9 +2055,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         let dkg = run_disposable_genesis_dkg_from_configs(
             signed_genesis,
             network_id,
+            &chain_id,
             &seats,
             &launcher,
-            &first_finality,
+            native_finality_limits(),
             5,
             move |expected| {
                 let predecessor = Arc::clone(&predecessor);

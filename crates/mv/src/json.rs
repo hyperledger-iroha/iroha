@@ -305,28 +305,41 @@ where
     V: JsonSerialize + Value,
 {
     fn json_serialize(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"revert\":");
-        write_revert(self.revert_map().iter(), out);
-        out.push(',');
-        out.push_str("\"blocks\":");
-        out.push('{');
-        let mut iter = self.iter();
-        if let Some((key, value)) = iter.next() {
-            key.encode_json_key(out);
-            out.push(':');
-            value.json_serialize(out);
-            for (key, value) in iter {
-                out.push(',');
-                key.encode_json_key(out);
-                out.push(':');
-                value.json_serialize(out);
-            }
-        }
-        out.push('}');
-        out.push('}');
+        write_original_storage(self.revert_map().iter(), self.iter(), out);
     }
 }
+impl<K, V, A, M: StorageMode<K, V>> JsonSerialize for crate::storage::Detached<K, V, A, M>
+where
+    K: JsonKeyCodec + Key,
+    V: JsonSerialize + Value,
+{
+    fn json_serialize(&self, out: &mut String) {
+        write_original_storage(self.original_undo_entries(), self.iter(), out);
+    }
+}
+
+// The same snapshot layout reads either attached or frozen original generations.
+// No current target view, payload clone or intermediate snapshot is constructed.
+fn write_original_storage<'a, K, V>(
+    undo: impl Iterator<Item = (&'a K, &'a Option<V>)>,
+    entries: impl Iterator<Item = (&'a K, &'a V)>,
+    out: &mut String,
+) where
+    K: JsonKeyCodec + 'a,
+    V: JsonSerialize + 'a,
+{
+    out.push('{');
+    out.push_str("\"revert\":");
+    write_revert(undo, out);
+    out.push(',');
+    out.push_str("\"blocks\":{");
+    let mut first = true;
+    for (key, value) in entries {
+        write_storage_json_entry(key, value, &mut first, out);
+    }
+    out.push_str("}}");
+}
+
 /// Serialize the exact storage JSON after applying ordered block-local changes.
 ///
 /// This read-only projection preserves the first pre-block undo value for every
@@ -430,15 +443,29 @@ where
     Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"revert\":");
-        JsonSerialize::json_serialize(self.original_undo(), out);
-        out.push(',');
-        out.push_str("\"blocks\":");
-        JsonSerialize::json_serialize(self.get(), out);
-        out.push('}');
+        write_original_cell(self.original_undo(), self.get(), out);
     }
 }
+impl<V, A, Charge> JsonSerialize for crate::cell::Detached<V, A, Charge>
+where
+    V: JsonSerialize + Value,
+    Charge: Send + Sync + 'static,
+{
+    fn json_serialize(&self, out: &mut String) {
+        write_original_cell(self.original_undo(), self.get(), out);
+    }
+}
+
+fn write_original_cell<V: JsonSerialize>(undo: &Option<V>, value: &V, out: &mut String) {
+    out.push('{');
+    out.push_str("\"revert\":");
+    undo.json_serialize(out);
+    out.push(',');
+    out.push_str("\"blocks\":");
+    value.json_serialize(out);
+    out.push('}');
+}
+
 impl<K, V> JsonDeserialize for Storage<K, V>
 where
     K: JsonKeyCodec + Key + Ord,
@@ -505,6 +532,10 @@ fn write_blocks<K, V, M: MapMode + NodeCloning<K, V>>(
     }
     out.push('}');
 }
+#[cfg(test)]
+#[path = "json/frozen_original_tests.rs"]
+mod frozen_original_tests;
+
 #[cfg(test)]
 #[path = "json/charged_cell_tests.rs"]
 mod charged_cell_tests;

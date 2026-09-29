@@ -19,7 +19,7 @@ use iroha_data_model::{
 use mv::storage::StorageReadOnly;
 
 impl ExecutionOutputProducer<'_, '_, '_> {
-    pub(super) fn execute_pipeline_outputs(&mut self) -> Result<(), String> {
+    pub(super) fn execute_pipeline_outputs(&mut self) -> Result<(), ExecutionAttemptError<String>> {
         let result = (|| {
             if self.failed
                 || self.pipeline_started
@@ -96,7 +96,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         position: PipelineEventPositionV1,
         event: PipelineEventBox,
         maximum: u32,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionAttemptError<String>> {
         if self.state.gas_limit_per_block != 0
             && self.state.gas_used_in_block >= self.state.gas_limit_per_block
         {
@@ -106,9 +106,11 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         let height = self.source.header().height().get();
         let limit = usize::try_from(maximum).map_err(|_| "Pipeline capacity exceeds host width")?;
         let mut matched: Vec<TriggerId> = Vec::new();
-        matched
-            .try_reserve_exact(limit)
-            .map_err(|_| "host cannot retain Pipeline matches")?;
+        matched.try_reserve_exact(limit).map_err(|_| {
+            ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            )
+        })?;
         for id in self
             .state
             .world

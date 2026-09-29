@@ -1,7 +1,7 @@
 //! Prefix equality, measurement isolation and arithmetic limits for sequence length observations.
 
 use super::*;
-use crate::core::{self as codec, Encoder};
+use crate::core::{self as codec, Encoder, default_encode_flags, header_flags};
 use std::cell::Cell;
 
 #[derive(Clone)]
@@ -171,7 +171,6 @@ fn raw_byte_vec_is_explicitly_a_different_payload() {
         codec::write_element_sequence::<u8, _>(
             &mut Encoder::for_buffer(&mut generic),
             [1_u8, 2, 3],
-            u64::MAX,
         )
         .unwrap();
         let mut raw = Vec::new();
@@ -179,44 +178,6 @@ fn raw_byte_vec_is_explicitly_a_different_payload() {
         assert_eq!(measured.len(), generic.len());
         assert_eq!(raw.len(), 11);
         assert_ne!(measured.len(), raw.len());
-    }
-}
-
-#[test]
-fn incompatible_sequential_override_rejects_before_measurement() {
-    struct Never;
-    impl SerializePayload for Never {
-        fn serialize(&self, _: &mut Encoder<'_>) -> Result<(), Error> {
-            panic!("must reject before counting")
-        }
-    }
-    for flags in layouts() {
-        let mut measured = SequencePayloadLength::new(flags).unwrap();
-        let snapshot = measured;
-        {
-            let _sequential = codec::SequentialOverrideGuard::enter();
-            if flags == default_encode_flags() {
-                let mut compatible = SequencePayloadLength::new(flags).unwrap();
-                compatible.push(&1_u16).unwrap();
-                assert_eq!(compatible.len(), 11);
-            } else {
-                assert!(matches!(
-                    SequencePayloadLength::new(flags),
-                    Err(Error::UnsupportedFeature("sequence length layout override"))
-                ));
-                assert!(matches!(
-                    measured.push(&Never),
-                    Err(Error::UnsupportedFeature("sequence length layout override"))
-                ));
-                assert_eq!(measured, snapshot);
-            }
-            assert!(matches!(
-                SequencePayloadLength::new(0x80),
-                Err(Error::UnsupportedFeature("layout flag"))
-            ));
-        }
-        measured.push(&1_u16).unwrap();
-        assert_eq!(measured.count(), 1);
     }
 }
 
@@ -229,8 +190,6 @@ fn success_and_serializer_failure_restore_enclosing_flags_and_encode_tracking() 
     impl SerializePayload for Probe {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             assert_eq!(codec::effective_layout_flags(), self.expected);
-            codec::note_fixed_offsets_emitted();
-            codec::mark_field_bitset_used_if_encoding();
             codec::note_compact_len_emitted();
             writer.write_all(&[9])?;
             if self.fail {
@@ -244,27 +203,30 @@ fn success_and_serializer_failure_restore_enclosing_flags_and_encode_tracking() 
     let _payload = codec::PayloadCtxGuard::enter_with_flags(&payload, header_flags::COMPACT_LEN);
     let payload_context = codec::payload_ctx();
     let _outer_flags = DecodeFlagsGuard::enter(0);
-    let _encode = codec::EncodeContextGuard::enter();
-    codec::note_fixed_offsets_emitted();
-    for flags in layouts() {
-        let mut measured = SequencePayloadLength::new(flags).unwrap();
-        for fail in [false, true] {
-            let snapshot = measured;
-            let result = measured.push(&Probe {
-                expected: flags,
-                fail,
-            });
-            if fail {
-                assert!(matches!(result, Err(Error::NonCanonicalEncoding)));
-                assert_eq!(measured, snapshot);
-            } else {
-                result.unwrap();
+    // An outer marker survives each measurement, and the probe's inner marker never leaks out.
+    for outer_marker in [false, true] {
+        let _encode = codec::EncodeContextGuard::enter();
+        if outer_marker {
+            codec::note_compact_len_emitted();
+        }
+        for flags in layouts() {
+            let mut measured = SequencePayloadLength::new(flags).unwrap();
+            for fail in [false, true] {
+                let snapshot = measured;
+                let result = measured.push(&Probe {
+                    expected: flags,
+                    fail,
+                });
+                if fail {
+                    assert!(matches!(result, Err(Error::NonCanonicalEncoding)));
+                    assert_eq!(measured, snapshot);
+                } else {
+                    result.unwrap();
+                }
+                assert_eq!(codec::effective_layout_flags(), 0);
+                assert_eq!(codec::payload_ctx(), payload_context);
+                assert_eq!(codec::compact_len_used(), outer_marker);
             }
-            assert_eq!(codec::effective_layout_flags(), 0);
-            assert_eq!(codec::payload_ctx(), payload_context);
-            assert!(codec::fixed_offsets_used());
-            assert!(!codec::field_bitset_used());
-            assert!(!codec::compact_len_used());
         }
     }
 }
@@ -406,7 +368,7 @@ fn checked_arithmetic_accepts_the_last_representable_length_then_rejects() {
 }
 
 #[test]
-fn checked_count_payload_and_offset_table_overflows_do_not_mutate() {
+fn checked_count_overflow_does_not_mutate() {
     let initial = SequencePayloadLength::new(default_encode_flags()).unwrap();
     let mut count_full = SequencePayloadLength {
         count: usize::MAX,
@@ -418,27 +380,6 @@ fn checked_count_payload_and_offset_table_overflows_do_not_mutate() {
         Err(Error::LengthMismatch)
     ));
     assert_eq!(count_full, snapshot);
-    let payload_full = SequencePayloadLength {
-        payload_bytes: usize::MAX,
-        ..initial
-    };
-    assert!(matches!(
-        payload_full.checked_append(1),
-        Err(Error::LengthMismatch)
-    ));
-    let final_count = usize::MAX / 8 - 1;
-    assert_eq!(
-        packed_sequence_table_len(final_count).unwrap(),
-        (final_count + 1) * 8
-    );
-    assert!(matches!(
-        packed_sequence_table_len(final_count + 1),
-        Err(Error::LengthMismatch)
-    ));
-    assert!(matches!(
-        packed_sequence_table_len(usize::MAX),
-        Err(Error::LengthMismatch)
-    ));
 }
 
 #[test]
@@ -460,37 +401,4 @@ fn serializer_error_precedes_arithmetic_failure_without_mutating_snapshot() {
         Err(Error::NonCanonicalEncoding)
     ));
     assert_eq!(full, snapshot);
-}
-
-#[test]
-fn an_override_retained_by_the_serializer_cannot_change_frozen_framing() {
-    struct RetainsOverride<'a> {
-        guard: &'a std::cell::RefCell<Option<codec::SequentialOverrideGuard>>,
-        calls: &'a Cell<usize>,
-    }
-    impl SerializePayload for RetainsOverride<'_> {
-        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-            self.calls.set(self.calls.get() + 1);
-            *self.guard.borrow_mut() = Some(codec::SequentialOverrideGuard::enter());
-            writer.write_all(&[1])?;
-            Ok(())
-        }
-    }
-    let guard = std::cell::RefCell::new(None);
-    let calls = Cell::new(0);
-    let mut measured = SequencePayloadLength::new(0).unwrap();
-    let snapshot = measured;
-    assert!(matches!(
-        measured.push(&RetainsOverride {
-            guard: &guard,
-            calls: &calls
-        }),
-        Err(Error::UnsupportedFeature("sequence length layout override"))
-    ));
-    assert_eq!(calls.get(), 1);
-    assert_eq!(measured, snapshot);
-    // The serializer owns its retained side effect; measurement does not discard that guard.
-    drop(guard.borrow_mut().take());
-    measured.push(&1_u8).unwrap();
-    assert_eq!(measured.len(), 17);
 }

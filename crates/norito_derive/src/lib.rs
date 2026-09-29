@@ -50,124 +50,8 @@ use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
 
 include!("attribute_helpers.rs");
 
-// ---- Type classification helpers for packed-struct hybrid layout ----
-// Fixed-size types either have a statically known serialized size or are
-// special-cased ([u8; N]). Returns Some(byte_len) when known (the value is
-// not used arithmetically in all call sites; Some(..) signifies fixed-size).
-fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
-    match ty {
-        syn::Type::Path(tp) => {
-            let id = tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default();
-            match id.as_str() {
-                "u8" | "i8" | "bool" => Some(1),
-                "u16" | "i16" => Some(2),
-                "u32" | "i32" | "f32" => Some(4),
-                "u64" | "i64" | "f64" | "usize" | "isize" => Some(8),
-                "u128" | "i128" => Some(16),
-                "NonZeroU16" => Some(2),
-                "NonZeroU32" => Some(4),
-                "NonZeroU64" => Some(8),
-                _ => None,
-            }
-        }
-        // [u8; N] serializes as raw bytes and is therefore fixed-size.
-        syn::Type::Array(_) => u8_array_len(ty).map(|_| 0),
-        _ => None,
-    }
-}
-
-// Self-delimiting types embed their own length or allow slice-based decoding
-// that consumes exactly the number of bytes they need.
-fn is_self_delimiting(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Path(tp) => {
-            let id = tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default();
-            // Conservative rule: only a tight allowlist of well-known
-            // primitives/wrappers that are guaranteed to carry their own
-            // length headers are considered self‑delimiting at the field
-            // boundary. This avoids requiring `DecodeFromSlice` on arbitrary
-            // user‑defined types (e.g., `*Id` newtypes/structs) which only
-            // implement Norito (de)serialization but not the strict slice API.
-            //
-            // Collections like Vec/Map/Set/Option/Result are self‑delimiting
-            // because they embed their own lengths.
-            if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
-                return true;
-            }
-            if matches!(
-                id.as_str(),
-                "Vec"
-                    | "VecDeque"
-                    | "LinkedList"
-                    | "BinaryHeap"
-                    | "HashMap"
-                    | "BTreeMap"
-                    | "HashSet"
-                    | "BTreeSet"
-                    | "Option"
-                    | "Result"
-            ) {
-                return true;
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
-fn needs_packed_size_with_attrs(ty: &syn::Type, attrs: &FieldAttr) -> bool {
-    attrs.needs_size
-        || is_staged_wrapper(ty)
-        || !(is_self_delimiting(ty) || is_fixed_size(ty).is_some())
-}
-
-fn is_signature_like(ty: &syn::Type) -> bool {
-    let _ = ty;
-    false
-}
-
-fn is_staged_wrapper(ty: &syn::Type) -> bool {
-    let _ = ty;
-    false
-}
-
-// Recognize `Option<..>` and `Result<..>` to enable slice-based enum decoding fast path
-fn is_option_or_result(ty: &syn::Type) -> bool {
-    type_ident(ty).is_some_and(|ident| ident == "Option" || ident == "Result")
-}
-
-// Recognize `Vec<..>` to enable slice-based enum packed decode fast path
-fn is_vec_type(ty: &syn::Type) -> bool {
-    type_ident(ty).is_some_and(|ident| ident == "Vec")
-}
-
 fn is_option_type(ty: &syn::Type) -> bool {
     type_ident(ty).is_some_and(|ident| ident == "Option")
-}
-
-fn option_inner_type(ty: &syn::Type) -> Option<syn::Type> {
-    if let syn::Type::Path(tp) = ty
-        && let Some(seg) = tp.path.segments.last()
-        && seg.ident == "Option"
-        && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
-    {
-        for arg in &args.args {
-            if let syn::GenericArgument::Type(inner) = arg {
-                return Some(inner.clone());
-            }
-        }
-    }
-    None
 }
 
 fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ident]) -> bool {
@@ -525,8 +409,6 @@ struct FieldAttr {
     combined_json_helper: bool,
     /// Whether the field should be flattened into the surrounding struct payload.
     flatten: bool,
-    /// Force packed-struct layout to emit an explicit size header for this field.
-    needs_size: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -982,14 +864,6 @@ impl FieldAttr {
                             return Err(meta.error("duplicate `flatten` attribute"));
                         }
                         out.flatten = true;
-                    } else if meta.path.is_ident("needs_size") {
-                        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
-                            return Err(meta.error("`needs_size` does not take a value"));
-                        }
-                        if out.needs_size {
-                            return Err(meta.error("duplicate `needs_size` attribute"));
-                        }
-                        out.needs_size = true;
                     } else {
                         return Err(meta.error("unknown `norito` field attribute"));
                     }
@@ -1048,58 +922,9 @@ fn active_struct_fields<'fields, 'ast>(
     fields.iter().filter(|field| !field.attrs.skip)
 }
 
-fn struct_has_flatten(fields: &[StructField<'_>]) -> bool {
-    fields.iter().any(|field| field.attrs.flatten)
-}
-
-fn struct_has_signature_like(fields: &[StructField<'_>]) -> bool {
-    active_struct_fields(fields).any(|field| is_signature_like(&field.field.ty))
-}
-
-fn packed_field_bitset_from(fields: &[StructField<'_>]) -> Vec<u8> {
-    let needs = active_struct_fields(fields)
-        .map(|field| needs_packed_size_with_attrs(&field.field.ty, &field.attrs))
-        .collect::<Vec<_>>();
-    needs
-        .chunks(8)
-        .map(|chunk: &[bool]| {
-            chunk
-                .iter()
-                .enumerate()
-                .fold(0_u8, |byte, (bit, needs_size)| {
-                    if *needs_size {
-                        byte | (1_u8 << bit)
-                    } else {
-                        byte
-                    }
-                })
-        })
-        .collect()
-}
-
-fn packed_bit_positions(fields: &[StructField<'_>]) -> Vec<Option<usize>> {
-    let mut position = 0;
-    fields
-        .iter()
-        .map(|field| {
-            if field.attrs.skip {
-                None
-            } else {
-                let current = position;
-                position += 1;
-                Some(current)
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 #[path = "tests/field_attrs.rs"]
 mod field_attr_tests;
-
-#[cfg(test)]
-#[path = "tests/type_classification.rs"]
-mod self_delimiting_tests;
 
 #[cfg(test)]
 #[path = "tests/variant_attrs.rs"]
@@ -1121,34 +946,32 @@ fn enum_field_len_add(binding: &syn::Ident, ty: &syn::Type, kind: EncodedLenKind
     } else {
         quote! { norito::core::SerializePayload::#method(#binding)? }
     };
-    if is_self_delimiting(ty) || is_fixed_size(ty).is_some() {
+    quote! {
+        let __e = #length;
+        __sum = __sum
+            .checked_add(norito::core::len_prefix_len(__e))?
+            .checked_add(__e)?;
+    }
+}
+
+/// Stream one enum-variant field into its length-prefixed frame.
+///
+/// `[u8; N]` fields write their raw bytes; every other field delegates to its
+/// own `SerializePayload` implementation.
+fn enum_field_serialize(binding: &syn::Ident, ty: &syn::Type) -> TokenStream2 {
+    if u8_array_len(ty).is_some() {
         quote! {
-            let __e = #length;
-            if norito::core::use_packed_struct() {
-                __sum = __sum.checked_add(__e)?;
-            } else {
-                __sum = __sum
-                    .checked_add(norito::core::len_prefix_len(__e))?
-                    .checked_add(__e)?;
-            }
+            norito::core::write_len(writer, core::mem::size_of_val(#binding) as u64)?;
+            writer.write_all(&#binding[..])?;
         }
     } else {
         quote! {
-            let __e = #length;
-            __sum = __sum
-                .checked_add(norito::core::len_prefix_len(__e))?
-                .checked_add(__e)?;
+            norito::core::write_len_prefixed(writer, #binding)?;
         }
     }
 }
 
-fn derive_struct_len_body(
-    fields: &Fields,
-    parsed_fields: &[StructField<'_>],
-    has_flatten_fields: bool,
-    field_bitset_enabled: &TokenStream2,
-    kind: EncodedLenKind,
-) -> TokenStream2 {
+fn derive_struct_len_body(parsed_fields: &[StructField<'_>], kind: EncodedLenKind) -> TokenStream2 {
     let method = match kind {
         EncodedLenKind::Hint => format_ident!("encoded_len_hint"),
         EncodedLenKind::Exact => format_ident!("encoded_len_exact"),
@@ -1157,66 +980,36 @@ fn derive_struct_len_body(
         EncodedLenKind::Hint => format_ident!("__h"),
         EncodedLenKind::Exact => format_ident!("__e"),
     };
-    let mut compat_parts = Vec::new();
-    let mut bitset_parts = Vec::new();
-    let mut offset_parts = Vec::new();
-    for field in active_struct_fields(parsed_fields) {
-        let member = &field.member;
-        let length = if u8_array_len(&field.field.ty).is_some() && !field.attrs.flatten {
-            quote! { core::mem::size_of_val(&self.#member) }
-        } else {
-            quote! { norito::core::SerializePayload::#method(&self.#member)? }
-        };
-        let compat_sum = if field.attrs.flatten {
-            quote! { __sum = __sum.checked_add(#len_var)?; }
-        } else {
-            quote! {
-                __sum = __sum
-                    .checked_add(norito::core::len_prefix_len(#len_var))?
-                    .checked_add(#len_var)?;
-            }
-        };
-        compat_parts.push(quote! {
-            let #len_var = #length;
-            #compat_sum
-        });
-        let bitset_sum = if needs_packed_size_with_attrs(&field.field.ty, &field.attrs) {
-            quote! {
-                __sum = __sum
-                    .checked_add(norito::core::len_prefix_len(#len_var))?
-                    .checked_add(#len_var)?;
-            }
-        } else {
-            quote! { __sum = __sum.checked_add(#len_var)?; }
-        };
-        bitset_parts.push(quote! {
-            let #len_var = #length;
-            #bitset_sum
-        });
-        offset_parts.push(quote! {
-            let #len_var = #length;
-            __sum = __sum.checked_add(#len_var)?;
-        });
-    }
-    let count = active_struct_fields(parsed_fields).count();
-    let bitset_len = count.div_ceil(8);
-    let use_packed = if matches!(fields, Fields::Named(_)) {
-        quote! { !#has_flatten_fields && norito::core::use_packed_struct() }
-    } else {
-        quote! { norito::core::use_packed_struct() }
-    };
-    quote! {
-        if #use_packed {
-            if #field_bitset_enabled {
-                __sum = __sum.checked_add(#bitset_len)?;
-                #(#bitset_parts)*
+    let parts = active_struct_fields(parsed_fields)
+        .map(|field| {
+            let member = &field.member;
+            let length = if u8_array_len(&field.field.ty).is_some() && !field.attrs.flatten {
+                quote! { core::mem::size_of_val(&self.#member) }
             } else {
-                __sum = __sum.checked_add((#count + 1_usize).checked_mul(8)?)?;
-                #(#offset_parts)*
+                quote! { norito::core::SerializePayload::#method(&self.#member)? }
+            };
+            let sum = if field.attrs.flatten {
+                quote! { __sum = __sum.checked_add(#len_var)?; }
+            } else {
+                quote! {
+                    __sum = __sum
+                        .checked_add(norito::core::len_prefix_len(#len_var))?
+                        .checked_add(#len_var)?;
+                }
+            };
+            quote! {
+                let #len_var = #length;
+                #sum
             }
-        } else {
-            #(#compat_parts)*
-        }
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return quote! { Some(0) };
+    }
+    quote! {
+        let mut __sum: usize = 0;
+        #(#parts)*
+        Some(__sum)
     }
 }
 
@@ -1230,36 +1023,6 @@ fn generic_arguments(generics: &Generics) -> TokenStream2 {
         TokenStream2::new()
     } else {
         quote! { < #( #params ),* > }
-    }
-}
-
-struct PackedSerializeParts {
-    direct: Vec<TokenStream2>,
-    descriptors: Vec<TokenStream2>,
-}
-
-fn packed_serialize_parts(fields: &[StructField<'_>]) -> PackedSerializeParts {
-    let mut direct = Vec::new();
-    let mut descriptors = Vec::new();
-    for field in active_struct_fields(fields) {
-        let member = &field.member;
-        if u8_array_len(&field.field.ty).is_some() {
-            direct.push(quote! { writer.write_all(&self.#member)?; });
-            descriptors.push(quote! {
-                norito::core::PackedField::Bytes(&self.#member)
-            });
-            continue;
-        }
-        direct.push(quote! {
-            norito::core::SerializePayload::serialize(&self.#member, writer)?;
-        });
-        descriptors.push(quote! {
-            norito::core::PackedField::Value(&self.#member)
-        });
-    }
-    PackedSerializeParts {
-        direct,
-        descriptors,
     }
 }
 
@@ -1277,7 +1040,6 @@ fn struct_serialize_calls(
             );
             if field.attrs.flatten {
                 quote! {
-                    let _flatten_guard = norito::core::SequentialOverrideGuard::enter();
                     norito::core::SerializePayload::serialize(&self.#member, writer)?;
                 }
             } else if u8_array_len(&field.field.ty).is_some() {
@@ -1295,13 +1057,6 @@ fn struct_serialize_calls(
         .collect()
 }
 
-fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, bool) {
-    let bytes = packed_field_bitset_from(fields);
-    let bitset = quote! { [ #( #bytes ),* ] };
-    let all_needs_false = bytes.is_empty() || bytes.iter().all(|byte| *byte == 0);
-    (bitset, all_needs_false)
-}
-
 /// Generate payload serialization and, when requested, an archived alias.
 ///
 /// Each field is serialized in definition order and the resulting
@@ -1314,42 +1069,14 @@ fn derive_struct_serialize(
     generate_archived: bool,
 ) -> TokenStream2 {
     let parsed_fields = struct_fields(fields);
-    let has_flatten_fields = struct_has_flatten(&parsed_fields);
     let mut r#gen = generics.clone();
     let serialize_calls = struct_serialize_calls(&parsed_fields, &mut r#gen);
-    let PackedSerializeParts {
-        direct: packed_field_ser_calls,
-        descriptors: packed_field_descriptors,
-    } = packed_serialize_parts(&parsed_fields);
-    let field_bitset_enabled = if struct_has_signature_like(&parsed_fields) {
-        quote! { false }
-    } else {
-        quote! { norito::core::use_field_bitset() }
-    };
-    let len_hint_body = derive_struct_len_body(
-        fields,
-        &parsed_fields,
-        has_flatten_fields,
-        &field_bitset_enabled,
-        EncodedLenKind::Hint,
-    );
-    let len_exact_body = derive_struct_len_body(
-        fields,
-        &parsed_fields,
-        has_flatten_fields,
-        &field_bitset_enabled,
-        EncodedLenKind::Exact,
-    );
-    for field in active_struct_fields(&parsed_fields) {
-        if is_signature_like(&field.field.ty) || is_staged_wrapper(&field.field.ty) {
-            add_bound(&mut r#gen, &field.field.ty, quote!(norito::codec::Decode));
-        }
-    }
+    let len_hint_body = derive_struct_len_body(&parsed_fields, EncodedLenKind::Hint);
+    let len_exact_body = derive_struct_len_body(&parsed_fields, EncodedLenKind::Exact);
 
     let archived = format_ident!("Archived{}", ident);
     let alias_generics = generic_arguments(generics);
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
-    let (bitset_bytes, all_needs_false) = packed_size_headers(&parsed_fields);
     let alias_decl = if !generate_archived || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
@@ -1367,48 +1094,18 @@ fn derive_struct_serialize(
         impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
-                let mut __sum: usize = 0;
                 #len_hint_body
-                Some(__sum)
             }
             fn encoded_len_exact(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
-                let mut __sum: usize = 0;
                 #len_exact_body
-                Some(__sum)
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
                 use norito::core::WriteBytesExt;
-                if !#has_flatten_fields && norito::core::use_packed_struct() {
-                    if #field_bitset_enabled {
-                        norito::core::mark_field_bitset_used_if_encoding();
-                        // Hybrid packed-struct: write bitset + optional sizes before payload.
-                        if #all_needs_false {
-                            writer.write_all(&#bitset_bytes)?;
-                            // No sizes to emit
-                            #( #packed_field_ser_calls )*
-                            Ok(())
-                        } else {
-                            norito::core::write_packed_fields(
-                                writer,
-                                &[#(#packed_field_descriptors),*],
-                                Some(&#bitset_bytes),
-                            )
-                        }
-                    } else {
-                        // Packed offsets and their payloads share one measurement owner.
-                        norito::core::write_packed_fields(
-                            writer,
-                            &[#(#packed_field_descriptors),*],
-                            None,
-                        )
-                    }
-                } else {
-                    // Count each field before streaming it into its declared frame.
-                    #(#serialize_calls)*
-                    Ok(())
-                }
+                // Count each field before streaming it into its declared frame.
+                #(#serialize_calls)*
+                Ok(())
             }
         }
     }
@@ -1465,46 +1162,15 @@ fn derive_enum_serialize(
                         .iter()
                         .zip(bindings.iter())
                         .filter_map(|(f, b)| {
-                            let attrs = FieldAttr::parse_validated(&f.attrs);
-                            if attrs.skip {
+                            if FieldAttr::parse_validated(&f.attrs).skip {
                                 return None;
                             }
                             add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
-                            let is_sd = is_self_delimiting(&f.ty);
-                            let is_fixed = is_fixed_size(&f.ty).is_some();
-                            let is_u8_array = u8_array_len(&f.ty).is_some();
-                            let ser = if is_sd || is_fixed {
-                                if is_u8_array {
-                                    quote! {
-                                        if __norito_packed {
-                                            writer.write_all(&#b[..])?;
-                                        } else {
-                                            let __len_bytes = core::mem::size_of_val(#b);
-                                            norito::core::write_len(writer, __len_bytes as u64)?;
-                                            writer.write_all(&#b[..])?;
-                                        }
-                                    }
-                                } else {
-                                    quote! {
-                                        if __norito_packed {
-                                            norito::core::SerializePayload::serialize(#b, writer)?;
-                                        } else {
-                                            norito::core::write_len_prefixed(writer, #b)?;
-                                        }
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                    norito::core::write_len_prefixed(writer, #b)?;
-                                }
-                            };
-                            Some(ser)
+                            Some(enum_field_serialize(b, &f.ty))
                         });
 
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
-                        let __norito_packed = norito::core::use_packed_struct();
                         norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_bindings)*
                         #(#serialize_calls)*
@@ -1548,47 +1214,15 @@ fn derive_enum_serialize(
                     })
                     .collect::<Vec<_>>();
                 let serialize_calls = fields.named.iter().filter_map(|f| {
-                    let attrs = FieldAttr::parse_validated(&f.attrs);
-                    if attrs.skip {
+                    if FieldAttr::parse_validated(&f.attrs).skip {
                         return None;
                     }
                     let name = f.ident.as_ref().unwrap();
                     add_bound(&mut r#gen, &f.ty, quote!(norito::core::SerializePayload));
-                    let is_sd = is_self_delimiting(&f.ty);
-                    let is_fixed = is_fixed_size(&f.ty).is_some();
-                    let is_u8_array = u8_array_len(&f.ty).is_some();
-                    let ser = if is_sd || is_fixed {
-                        if is_u8_array {
-                            quote! {
-                                if __norito_packed {
-                                    writer.write_all(&#name[..])?;
-                                } else {
-                                    let __len_bytes = core::mem::size_of_val(#name);
-                                    norito::core::write_len(writer, __len_bytes as u64)?;
-                                    writer.write_all(&#name[..])?;
-                                }
-                            }
-                        } else {
-                            quote! {
-                                if __norito_packed {
-                                    norito::core::SerializePayload::serialize(#name, writer)?;
-                                } else {
-                                    norito::core::write_len_prefixed(writer, #name)?;
-                                }
-                            }
-                        }
-                    } else {
-                        // Non self-delimiting, non-fixed: always write an outer length header
-                        // for named enum fields (both in packed and non-packed modes).
-                        quote! {
-                            norito::core::write_len_prefixed(writer, #name)?;
-                        }
-                    };
-                    Some(ser)
+                    Some(enum_field_serialize(name, &f.ty))
                 });
                 arms.push(quote! {
                     Self::#v_ident { #(#names),* } => {
-                        let __norito_packed = norito::core::use_packed_struct();
                         norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
                         #(#ignored_names)*
                         #(#serialize_calls)*
@@ -1680,10 +1314,6 @@ fn derive_enum_serialize(
 
 #[cfg(test)]
 mod deserialize_codegen_tests {
-    fn packed_field_bitset(fields: &syn::Fields) -> Vec<u8> {
-        super::packed_field_bitset_from(&super::struct_fields(fields))
-    }
-
     include!("tests/deserialize_codegen.rs");
 }
 
@@ -2833,6 +2463,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 };
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn json_object_field_order() -> ::core::option::Option<&'static [&'static str]> {
                                 #field_order
@@ -2894,6 +2525,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 }
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn write_json(&self, out: &mut ::std::string::String) {
                                 norito::json::write_json_unbounded(self, out);
@@ -2919,6 +2551,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                 let r#gen = generics.clone();
                 let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                 quote! {
+                        #[automatically_derived]
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                             fn write_json(&self, out: &mut ::std::string::String) {
                                 norito::json::write_json_unbounded(self, out);
@@ -3161,6 +2794,7 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
             }
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
                     fn write_json(&self, out: &mut ::std::string::String) {
                         norito::json::write_json_unbounded(self, out);
@@ -3316,6 +2950,7 @@ fn derive_struct_json_deserialize(
             };
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             let result = quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3388,6 +3023,7 @@ fn derive_struct_json_deserialize(
             let (impl_generics, ty_generics, where_clause) = gen_local.split_for_impl();
             let len = unnamed.unnamed.len();
             let result = quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3429,6 +3065,7 @@ fn derive_struct_json_deserialize(
         Fields::Unit => {
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             Ok(quote! {
+                #[automatically_derived]
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3466,6 +3103,7 @@ fn derive_struct_json_deserialize_flatten(
         TokenStream2::new()
     };
     let result = quote! {
+        #[automatically_derived]
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
             fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
@@ -3745,6 +3383,7 @@ fn derive_enum_json_deserialize(
         }
     };
     let result = quote! {
+        #[automatically_derived]
         impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
             #[allow(clippy::useless_let_if_seq)]
             fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {

@@ -14,7 +14,7 @@ Goals
 
 Non‑Goals (Initial Phase)
 - Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Changing `abi_version` away from `1` or expanding syscall/pointer‑ABI surfaces is out of scope; ABI v1 is fixed and runtime upgrades do not change the host ABI.
+- Changing `abi_version` away from `1` is out of scope. The first-release ABI v1 surface includes typed anchored-spend staging at syscall `0xB5` and pointer ID `0x0013`; runtime upgrades do not add a second ABI.
 
 Terminology
 - Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
@@ -234,7 +234,8 @@ Smart Contracts and IVM Extensions
   - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
   - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
   - `verify_space_proof(dsid, proof, statement)` → bool
-  - `use_asset_handle(handle, op, amount)` → result (operation permitted only when policy accepts the handle and the operation names the exact asset definition authenticated by the handle's issuer signature)
+  - Remote spends use the signed `AxtAnchoredSpendV1` envelope wire. Production admission remains closed until the finalized source anchor, successful execution receipt, exact transfer occurrence, and atomic nonce/budget/effect owner are connected; no reusable-handle VM syscall is admitted.
+  - State permanently retains both the issuer-context nonce and the physical source transfer coordinate `(network, dataspace, lane, finalized block header, transaction index, transcript index, delta index)`. One transactional reservation pairs them, and snapshot restore rejects missing or inconsistent pairs. Neither a new nonce nor a different handle or proof can make a consumed physical transfer fresh. This replay substrate does not authorize a remote spend while source finality and issuer authority remain unverified.
 - Asset Handles and Fees:
   - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
 - Determinism: All syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
@@ -277,9 +278,9 @@ AIR Primer (for Nexus)
 - Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
 
 ABI Stability (ABI v1)
-- ABI v1 surface is fixed; no new syscalls or pointer‑ABI types are introduced in this release.
+- ABI v1 is the sole first-release surface. Its finalized candidate includes signed anchored-spend staging at `0xB5` with pointer ID `0x0013`; retired `0xB4` is unassigned.
 - Runtime upgrades must keep `abi_version = 1` with empty `added_syscalls`/`added_pointer_types`.
-- ABI goldens (syscall list, ABI hash, pointer type IDs) remain pinned and must not change.
+- ABI goldens (syscall list, ABI hash, pointer type IDs) pin that one candidate and must be regenerated together for any pre-release edit.
 
 Privacy Model
 - Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
@@ -349,7 +350,7 @@ Cross‑Data‑Space Workflow (Native AMX Example)
 
 Changes to Iroha Components
 - iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
-- ivm: Keep ABI v1 surface fixed (no new syscalls/pointer‑ABI types); AMX/runtime upgrades must use existing v1 primitives; keep ABI goldens pinned.
+- ivm: Ship the one ABI v1 surface, including typed anchored-spend staging; keep ABI goldens pinned to the final candidate.
 - iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
 - Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
 - kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
@@ -406,7 +407,7 @@ Configuration and Determinism
 Implementation Path
 1) Introduce data‑space‑qualified IDs and Nexus block/global state composition in the data model.
 2) Implement Kura/WSV erasure‑coding backends as mandatory deterministic protocol components.
-3) Keep ABI v1 surface fixed; implement AMX without new syscalls/pointer types and update tests/docs without changing ABI.
+3) Finalize the sole ABI v1, including `0xB5` and pointer `0x0013`; regenerate syscall, pointer, gas, and ABI-hash fixtures together.
 4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
 5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
 

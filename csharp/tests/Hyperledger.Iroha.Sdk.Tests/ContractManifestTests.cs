@@ -407,7 +407,7 @@ public sealed class ContractManifestTests
             "Transfer{amount:quantity}",
             "Transfer{amount:  quantity}",
             "Transfer {amount: quantity}",
-            "Transfer{}",
+            "Transfer{ }",
             "Transfer{amount: quantity, amount: int}",
             "Transfer{__kotodama_link_amount: quantity}",
             "(int)",

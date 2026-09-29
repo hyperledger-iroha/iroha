@@ -86,7 +86,7 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "NftView",
     "QueryPage",
     "AxtDescriptor",
-    "AssetHandle",
+    "AxtAnchoredSpendV1",
     "ProofBlob",
     "SoracloudRequest",
     "SoracloudResponse",

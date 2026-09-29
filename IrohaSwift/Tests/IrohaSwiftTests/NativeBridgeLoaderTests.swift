@@ -4,6 +4,20 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
+    func testEveryCurrentAccelerationExportIsRequiredForAdmission() {
+        XCTAssertEqual(NoritoBridgeLoader.accelerationRequiredSymbols, [
+            "connect_norito_acceleration_config_set_v1",
+            "connect_norito_acceleration_config_get_v1",
+            "connect_norito_acceleration_state_get_v1"
+        ])
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { _ in true }))
+        for missing in NoritoBridgeLoader.accelerationRequiredSymbols {
+            XCTAssertFalse(NoritoBridgeLoader.hasRequiredExports(resolving: { $0 != missing }))
+        }
+        let required = Set(NoritoBridgeLoader.accelerationRequiredSymbols)
+        XCTAssertFalse(NoritoBridgeLoader.hasRequiredExports(resolving: { !required.contains($0) }))
+    }
+
     func testExpectedBridgeAbiVersionIsTwentyFourForPackagedArtifacts() {
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 24)
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 24)

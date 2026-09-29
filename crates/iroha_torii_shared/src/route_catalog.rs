@@ -1535,30 +1535,6 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI);
-    /// Read the current Nexus lane lifecycle commitment.
-    pub const NEXUS_LIFECYCLE_GET: RouteDescriptor = RouteDescriptor::new(
-        "nexus.lifecycle.read",
-        HttpMethod::Get,
-        "/v1/nexus/lifecycle",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read one frozen validator committee attempt and its finality attachments.
-    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
-        "nexus.validator_committee.read",
-        HttpMethod::Get,
-        "/v1/nexus/validator-committee",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
     /// Prepare exact staking monetary inputs without submitting a transaction.
     pub const NEXUS_STAKING_PREPARATION_POST: RouteDescriptor = RouteDescriptor::new(
         "nexus.staking.prepare",
@@ -1576,30 +1552,6 @@ pub mod core {
         "ledger.headers",
         HttpMethod::Get,
         "/v1/ledger/headers",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read a ledger execution-state root with exact Sumeragi-v2 finality.
-    pub const LEDGER_STATE_ROOT: RouteDescriptor = RouteDescriptor::new(
-        "ledger.state_root",
-        HttpMethod::Get,
-        "/v1/ledger/state/{height}",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
-    /// Read exact Sumeragi-v2 ledger execution-state finality.
-    pub const LEDGER_STATE_PROOF: RouteDescriptor = RouteDescriptor::new(
-        "ledger.state_proof",
-        HttpMethod::Get,
-        "/v1/ledger/state-proof/{height}",
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
@@ -1828,6 +1780,18 @@ pub mod core {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     );
+    /// Read one frozen validator committee attempt and its finality attachments.
+    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
+        "nexus.validator_committee.read",
+        HttpMethod::Get,
+        "/v1/nexus/validator-committee",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Core information routes registered by `add_core_info_routes`.
     pub const INFO_ROUTES: &[RouteDescriptor] = &[
         API_VERSION,
@@ -1836,12 +1800,9 @@ pub mod core {
         LIVEZ,
         READYZ,
         CONFIGURATION_GET,
-        NEXUS_LIFECYCLE_GET,
         NEXUS_VALIDATOR_COMMITTEE_GET,
         NEXUS_STAKING_PREPARATION_POST,
         LEDGER_HEADERS,
-        LEDGER_STATE_ROOT,
-        LEDGER_STATE_PROOF,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         INTERNAL_PROXY,
@@ -2576,7 +2537,7 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-/// Consensus evidence, bridge finality, and Sumeragi introspection routes.
+/// Bridge finality and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
@@ -2630,12 +2591,6 @@ pub mod sumeragi {
             reason: "SSE transport endpoint; stream contract is not an ordinary resource",
         })
     }
-    /// Count persisted consensus evidence records as an authenticated operator.
-    pub const EVIDENCE_COUNT: RouteDescriptor =
-        operator_get("sumeragi.evidence.count", "/v1/sumeragi/evidence/count");
-    /// List persisted consensus evidence records as an authenticated operator.
-    pub const EVIDENCE_LIST: RouteDescriptor =
-        operator_get("sumeragi.evidence.list", "/v1/sumeragi/evidence");
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
         telemetry_operator_get("sumeragi.status.read", "/v1/sumeragi/status");
@@ -2682,8 +2637,6 @@ pub mod sumeragi {
         telemetry_operator_get("sumeragi.parameter.read", "/v1/sumeragi/params");
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
-        EVIDENCE_COUNT,
-        EVIDENCE_LIST,
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,
@@ -2728,9 +2681,6 @@ pub mod runtime_governance {
         )
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
-    }
-    const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        public_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_post(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
@@ -2777,22 +2727,6 @@ pub mod runtime_governance {
     pub const ZK_VOTE_TALLY: RouteDescriptor =
         account_read_post("zk.vote.tally", "/v1/zk/vote/tally")
             .with_projections(RouteProjections::ALL);
-    /// Derive an IVM zero-knowledge executable.
-    pub const ZK_IVM_DERIVE: RouteDescriptor =
-        account_compute_post("zk.ivm.derive", "/v1/zk/ivm/derive")
-            .with_feature_gate(FeatureGate::Feature("app_api"));
-    /// Start an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE: RouteDescriptor =
-        account_compute_post("zk.ivm.prove", "/v1/zk/ivm/prove")
-            .with_feature_gate(FeatureGate::Feature("app_api"));
-    /// Read an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE_GET: RouteDescriptor =
-        app_get("zk.ivm.prove_job.read", "/v1/zk/ivm/prove/{job_id}")
-            .with_admission(AdmissionPolicy::AuthenticatedAccount)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-    /// Cancel and delete an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE_DELETE: RouteDescriptor =
-        app_signed_delete("zk.ivm.prove_job.delete", "/v1/zk/ivm/prove/{job_id}");
     /// Verify a bounded batch of zero-knowledge proofs.
     pub const ZK_VERIFY_BATCH: RouteDescriptor =
         account_compute_post("zk.proof.verify_batch", "/v1/zk/verify-batch")
@@ -3060,10 +2994,6 @@ pub mod runtime_governance {
         ZK_ROOTS,
         ZK_MERKLE_PATH,
         ZK_VOTE_TALLY,
-        ZK_IVM_DERIVE,
-        ZK_IVM_PROVE,
-        ZK_IVM_PROVE_GET,
-        ZK_IVM_PROVE_DELETE,
         ZK_VERIFY_BATCH,
         ZK_ATTACHMENTS_GET,
         ZK_ATTACHMENTS_POST,

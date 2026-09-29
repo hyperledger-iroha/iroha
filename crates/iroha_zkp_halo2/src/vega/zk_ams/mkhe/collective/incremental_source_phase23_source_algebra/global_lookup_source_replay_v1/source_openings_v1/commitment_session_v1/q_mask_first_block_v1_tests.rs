@@ -33,14 +33,14 @@ impl MaskedRelaxedRandomSourceV1 for Words {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let call = self.calls.get();
         self.calls.set(call + 1);
-        if let Some((at, panic)) = self.fail {
-            if call == at {
-                destination[..3].fill(77);
-                if panic {
-                    panic!("original source partially filled then unwound");
-                }
-                return Err(MaskedRelaxedRandomErrorV1::Unavailable);
+        if let Some((at, panic)) = self.fail
+            && call == at
+        {
+            destination[..3].fill(77);
+            if panic {
+                panic!("original source partially filled then unwound");
             }
+            return Err(MaskedRelaxedRandomErrorV1::Unavailable);
         }
         for bytes in destination.chunks_mut(8) {
             let value = self.constant.unwrap_or(self.next.get());

@@ -13,6 +13,10 @@
 
 use super::{CellBlock, StorageBlock, World, WorldBlock};
 use iroha_crypto::Hash;
+use iroha_data_model::musubi::{
+    ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
+    MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
+};
 use mv::{Key, Value};
 use norito::codec::Encode;
 
@@ -214,92 +218,10 @@ impl WorldDeltaBuilder {
     }
 }
 
-/// Exhaustive semantic World visitor shared by delta and persistent baseline owners.
-/// Each owner supplies the hash of its actual borrowed value, excluding caches.
-pub(crate) trait WorldProjection {
-    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
-        &mut self,
-        name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String>;
-
-    fn append_cell_with<V: Value>(
-        &mut self,
-        name: &'static str,
-        cell: &CellBlock<'_, V>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String>;
-}
-
-impl<T: WorldProjection> WorldProjection for &mut T {
-    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
-        &mut self,
-        name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String> {
-        (**self).append_storage_with(name, storage, encode)
-    }
-    fn append_cell_with<V: Value>(
-        &mut self,
-        name: &'static str,
-        cell: &CellBlock<'_, V>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String> {
-        (**self).append_cell_with(name, cell, encode)
-    }
-}
-
-impl WorldProjection for WorldDeltaBuilder {
-    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
-        &mut self,
-        name: &'static str,
-        storage: &StorageBlock<'_, K, V, M>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String> {
-        Self::append_storage_with(self, name, storage, encode)
-    }
-
-    fn append_cell_with<V: Value>(
-        &mut self,
-        name: &'static str,
-        cell: &CellBlock<'_, V>,
-        encode: impl Fn(&V) -> Result<Hash, String>,
-    ) -> Result<(), String> {
-        Self::append_cell_with(self, name, cell, encode)
-    }
-}
-
-trait AppendWorldField {
-    fn append_world_field(
-        &self,
-        name: &'static str,
-        builder: &mut impl WorldProjection,
-    ) -> Result<(), String>;
-}
-
-impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> AppendWorldField
-    for StorageBlock<'_, K, V, M>
-{
-    fn append_world_field(
-        &self,
-        name: &'static str,
-        builder: &mut impl WorldProjection,
-    ) -> Result<(), String> {
-        builder.append_storage_with(name, self, hash_value)
-    }
-}
-
-impl<V: Value + Encode> AppendWorldField for CellBlock<'_, V> {
-    fn append_world_field(
-        &self,
-        name: &'static str,
-        builder: &mut impl WorldProjection,
-    ) -> Result<(), String> {
-        builder.append_cell_with(name, self, hash_value)
-    }
-}
+#[path = "world_projection/visitor.rs"]
+mod visitor;
+use visitor::AppendWorldField;
+pub(crate) use visitor::WorldProjection;
 
 macro_rules! append_world_field {
     ($world:ident, $builder:ident, executor) => {
@@ -311,6 +233,15 @@ macro_rules! append_world_field {
     };
     ($world:ident, $builder:ident, triggers) => {
         $world.triggers.append_world_projection(&mut $builder)?;
+    };
+    ($world:ident, $builder:ident, musubi_archive_availability) => {
+        $builder.append_musubi_archive_availability(&$world.musubi_archive_availability)?;
+    };
+    ($world:ident, $builder:ident, musubi_resolver_index) => {
+        $builder.append_musubi_resolver_index(&$world.musubi_resolver_index)?;
+    };
+    ($world:ident, $builder:ident, musubi_public_directory) => {
+        $builder.append_musubi_public_directory(&$world.musubi_public_directory)?;
     };
     ($world:ident, $builder:ident, $field:ident) => {
         $world
@@ -376,7 +307,7 @@ impl WorldBlock<'_> {
         Ok(identities)
     }
 
-    fn project_world(&self, mut builder: &mut impl WorldProjection) -> Result<(), String> {
+    fn project_world<P: WorldProjection>(&self, mut builder: &mut P) -> Result<(), P::Error> {
         with_world_overlay_fields!(append_world_fields, self, builder);
         Ok(())
     }
@@ -414,4 +345,4 @@ mod tests;
     )
 )]
 mod world_baseline;
-pub(in crate::state) use world_baseline::WorldStateBaseline;
+pub(in crate::state) use world_baseline::{WorldBaselineError, WorldStateBaseline};

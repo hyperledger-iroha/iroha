@@ -158,7 +158,7 @@ class ShippingArtifactTests(unittest.TestCase):
         self.observations.append(result.observations)
         return result
 
-    def network(self, root, fixture, env, lock_fds, *, harness, stages):
+    def network(self, root, fixture, env, lock_fds, *, harness, stages, inventories):
         self.network_calls += 1
         # Compile-only shipping copies and the completed priority CLI copy are
         # released before shipping codegen; the deferred Kagami copy stays frozen.
@@ -167,7 +167,11 @@ class ShippingArtifactTests(unittest.TestCase):
                              row["selection"] in {"network", "kagami"})
         self.assertIsNone(self.checkpoint)
         self.assertEqual(stages, gate.NETWORK_STAGES)
-        gate.run_stages(harness, fixture, env, stages, lock_fds)
+        self.assertEqual(inventories, {
+            row["path"]: self.names[row["selection"]] + ": test\n"
+            for row in self.observations[-1] if row["selection"] in self.names
+        })
+        gate.run_stages(harness, fixture, env, stages, lock_fds, inventories=inventories)
         if self.network_failure:
             raise gate.CheckError("fixture network failure")
 

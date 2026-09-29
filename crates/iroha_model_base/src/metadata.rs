@@ -24,34 +24,24 @@ mod model {
 
 impl ncore::SerializePayload for Metadata {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        // Metadata retains sequence-of-tuples bytes, including in packed mode.
+        // Metadata retains sequence-of-tuples bytes.
         // Project borrowed entry views without a second collection or payload staging.
         ncore::write_element_sequence::<MetadataEntryRef<'_>, _>(
             writer,
             self.0
                 .iter()
                 .map(|(name, json)| MetadataEntryRef(name, json)),
-            ncore::max_archive_len(),
         )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let packed = ncore::use_packed_seq();
-        let overhead = if packed {
-            8_usize.checked_add(self.0.len().checked_add(1)?.checked_mul(8)?)?
-        } else {
-            8
-        };
-        self.0.iter().try_fold(overhead, |total, (name, json)| {
+        self.0.iter().try_fold(8_usize, |total, (name, json)| {
             let len = MetadataEntryRef(name, json).encoded_len_exact()?;
-            let prefix = if packed {
-                0
-            } else {
-                ncore::len_prefix_len(len)
-            };
-            total.checked_add(prefix)?.checked_add(len)
+            total
+                .checked_add(ncore::len_prefix_len(len))?
+                .checked_add(len)
         })
     }
 }

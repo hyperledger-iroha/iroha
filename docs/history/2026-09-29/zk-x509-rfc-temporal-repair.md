@@ -58,8 +58,9 @@ and explicit clearing before cancellation truncates initialized cells. Receipts:
 The current source ledger charges 3,697,993,152 bytes of peak transformed buffers
 and leaves 596,974,144 bytes for the borrowed whole assembly after source,
 scratch and runtime reservations. The isolated maximum RFC owner alone occupies
-421,806,624 bytes. These capacity calculations do not establish whole-assembly
-admission, process RSS or address-space containment. Additional public fixed
+421,806,624 bytes. These capacity calculations alone do not establish admission;
+the integrated measurement below supplies whole-assembly evidence. Process RSS
+and address-space containment remain unverified. Additional public fixed
 recovery work is counted explicitly: 6,535 inverse transforms and
 32,549,109,760 butterflies. No latency improvement is inferred from the design.
 
@@ -92,7 +93,53 @@ before witness construction; it provides no whole-assembly payload measurement.
 Assembly errors now preserve that profile cause, and the recursive-erasure test
 must construct the canonical profile instead of returning success when it fails.
 
-A pinned rebuild on the amended frozen candidate must still construct and admit
-the actual maximum whole MAIN assembly and pass the complete focused controls.
-Only then can a fresh opt-level-three maximum credential attempt provide proof,
-backend/phase, elapsed-time and RSS evidence against the unchanged limits.
+## Pinned frozen-candidate results and test-fixture correction
+
+The subsequent ordinary locked/offline debug build completed in 1,208.82 seconds
+with no drift in its 20,877-entry source census. Its immutable binary is retained
+under `dist/zk-x509-prover-evidence/frozen-calendar-pinned-debug-20260928T172601Z`,
+with SHA-256
+`0e3dc07e3b6c74d89d4da0024babe03a7451cc376866f4909437b1b10a63b80e`.
+The source manifest is
+`76638ce92cc40a57e290e20027a1f10ea0e4672f683dffe0107ce834701c332c`.
+This is scoped algorithm evidence from a frozen historical Core candidate. The
+current main checkout has since retired the replay-binding IVM circuit and API;
+the older candidate's policy/API controls do not qualify those current surfaces.
+
+The profile constructor and actual maximum assembly controls both pass. The
+whole MAIN assembly owns 542,564,850 bytes, below its 596,974,144-byte admission
+allowance by 54,409,294 bytes. The previously failing profile pin now matches,
+and the assembly error-cause and mandatory recursive-scrub controls pass.
+The exact retained selections are:
+
+| Selection | Passed | Failed | Ignored | Seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Profile constructor and maximum assembly | 2 | 0 | 0 | 59.43 |
+| MAIN resources, replay and ownership | 85 | 0 | 0 | 184.46 |
+| Profile and native proof known answers | 26 | 0 | 0 | 284.39 |
+| Historical typed policy, wallet and unsigned derivation | 36 | 0 | 0 | 164.03 |
+| RFC native constraints, excluding two full-column preflights | 53 | 4 | 0 | 213.15 |
+| Source geometry | 9 | 0 | 0 | 0.39 |
+
+The four RFC failures remain recorded. They exposed stale test assumptions:
+the ordinary fixture has no revoked entries, the fixed non-padding schedule is
+284,014 rows, the independent affine degree inventory is `[0, 1, 847, 270, 563]`,
+and the new DER-authenticated calendar identity phase cannot use an all-zero
+synthetic positive row. The two-file correction uses the real 64-entry maximum
+fixture for the omission adversary and actual calendar component phases for the
+copy adversary. It preserves the rejection assertions, pins the observed exact
+degree inventory and independently recomputed family sum, and changes no
+production relation or limits. The test-only RFC descriptor digest becomes
+`e1e688eabe67ed71f7da49e07c0bccf25f92a047055367c1d68c741feb40c6fa`;
+the compiled 29-field engine profile remains unchanged.
+
+The exact preimages, postimages, patches and review are retained at
+`dist/zk-remediation/2026-09-29/x509-rfc-reviewed-amendment`.
+Only those two files were applied to the frozen candidate. Its successor census
+is `b66c0bb30a4f229a7f746fc963ae89b9ac367aa9a9137a726d0a4d6a06846c4b`.
+Scoped formatting passes; native reruns of the repaired controls remain pending.
+The prepared ordinary opt-level-three build will retain an immutable executable,
+rerun the exact controls and full-column source preflights, then attempt the
+complete maximum credential proof. No successful complete proof, 300-second
+latency result, 12-GiB RSS result or activation claim follows from these debug
+results.

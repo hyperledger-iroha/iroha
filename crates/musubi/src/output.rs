@@ -133,13 +133,14 @@ impl ErrorCode {
     }
 }
 /// One structured, secret-redacted command diagnostic.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     code: ErrorCode,
     message: String,
     context: BTreeMap<String, String>,
     help: Option<String>,
-    details: Option<(String, Value)>,
+    /// Boxed so `Result<_, Diagnostic>` stays small on every command path; details are rare.
+    details: Option<Box<(String, Value)>>,
 }
 impl Diagnostic {
     /// Construct a diagnostic with a stable public code.
@@ -178,11 +179,11 @@ impl Diagnostic {
     ///
     /// Human details and structured data receive the same redaction as successful output.
     #[must_use]
-    pub fn with_details(mut self, human: impl Into<String>, data: Value) -> Self {
-        self.details = Some((
+    pub fn with_details(mut self, human: impl Into<String>, data: &Value) -> Self {
+        self.details = Some(Box::new((
             sanitize_diagnostic_text(&human.into()),
-            redact_json_value(&data),
-        ));
+            redact_json_value(data),
+        )));
         self
     }
     /// Return the stable public code.
@@ -212,14 +213,14 @@ impl Diagnostic {
         if let Some(help) = &self.help {
             diagnostic.insert("help".to_owned(), Value::from(help.clone()));
         }
-        if let Some((_, data)) = &self.details {
+        if let Some((_, data)) = self.details.as_deref() {
             diagnostic.insert("details".to_owned(), data.clone());
         }
         Value::Object(diagnostic)
     }
     fn render_human(&self) -> String {
         let mut rendered = format!("error[{}]: {}\n", self.code.as_str(), self.message);
-        if let Some((human, _)) = &self.details {
+        if let Some((human, _)) = self.details.as_deref() {
             rendered.push_str(&terminated(human));
         }
         for (key, value) in &self.context {
@@ -679,7 +680,7 @@ mod tests {
             "test",
             Diagnostic::new(ErrorCode::Compiler, "tests failed").with_details(
                 "FAIL first: actual 29, expected 30\nFAIL second: private_key=secret-test-value",
-                details,
+                &details,
             ),
         );
         for format in [OutputFormat::Human, OutputFormat::Json] {

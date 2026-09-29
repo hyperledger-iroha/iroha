@@ -23,11 +23,9 @@
 //!   authoritative layout selection (unknown bits are rejected). Bare,
 //!   headerless decoders (`codec::Decode`) are internal-only for hashing/bench
 //!   scenarios and use the fixed v1 default flags.
-//! - Packed-seq and packed-struct remain opt-in via header flags. The v1
-//!   default header layout advertises `COMPACT_LEN` (`flags = 0x02`) for
-//!   per-value length prefixes; sequence length headers and packed-seq offsets
-//!   stay fixed `u64` in v1, and reserved layout bits are rejected when
-//!   decoding headers.
+//! - V1 has exactly two layouts: `COMPACT_LEN` (`0x02`, default) and
+//!   fixed-width per-value prefixes (`0x00`). Every other header bit is
+//!   rejected. Sequence count headers are always fixed `u64`.
 //!
 //! Helpers
 //! - [`SerializePayload`] owns object-safe bare serialization and size hints.
@@ -64,7 +62,7 @@ pub use core::{
     to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits, with_decode_limits_scope,
 };
 #[doc(hidden)]
-pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
+pub use core::{SequencePlan, SequenceSpan, plan_binary_sequence};
 struct ArchiveSlice {
     ptr: *mut u8,
     len: usize,
@@ -147,6 +145,8 @@ pub fn debug_trace_enabled() -> bool {
         false
     }
 }
+mod debug_trace;
+pub use debug_trace::trace_struct_decode;
 #[cfg(test)]
 mod trace_tests {
     use super::debug_trace_enabled;
@@ -9209,7 +9209,7 @@ where
 /// # Errors
 ///
 /// Returns a header, schema, layout, length, decompression, or resource-limit error. A count above
-/// `max_elements` is rejected before packed-sequence offsets or output storage are allocated.
+/// `max_elements` is rejected before element prefixes are read or output storage is allocated.
 pub fn inspect_stream_vec_len_bounded_from_reader<R, T>(
     reader: R,
     max_elements: usize,
@@ -9463,168 +9463,61 @@ where
         core::enforce_decode_sequence_length(v)?;
         core::stream::u64_to_usize(v)?
     };
-    let mut map;
-    if (flags & header_flags::PACKED_SEQ) == 0 {
-        let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
-            1usize
-        } else {
-            8usize
-        };
-        let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
-        let min_headers = entries
-            .checked_mul(per_entry)
-            .ok_or(Error::LengthMismatch)?;
-        if min_headers > remaining {
-            return Err(Error::LengthMismatch);
-        }
-        map = init(entries)?;
-        let mut key_buf = Vec::new();
-        let mut val_buf = Vec::new();
-        for _ in 0..entries {
-            let key_len = if (flags & header_flags::COMPACT_LEN) != 0 {
-                let v = read_varint_update(&mut digesting, &mut remaining)?;
-                core::enforce_decode_field_length(v)?;
-                core::stream::u64_to_usize(v)?
-            } else {
-                let v = read_u64_update(&mut digesting, &mut remaining)?;
-                core::enforce_decode_field_length(v)?;
-                core::stream::u64_to_usize(v)?
-            };
-            if key_len > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            try_resize_decode_buffer(&mut key_buf, key_len)?;
-            read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
-            let _gk = core::PayloadCtxGuard::enter(&key_buf);
-            let _key_depth = core::DecodeDepthGuard::enter()?;
-            let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
-            let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
-            drop(_key_depth);
-            drop(_gk);
-            let val_len = if (flags & header_flags::COMPACT_LEN) != 0 {
-                let v = read_varint_update(&mut digesting, &mut remaining)?;
-                core::enforce_decode_field_length(v)?;
-                core::stream::u64_to_usize(v)?
-            } else {
-                let v = read_u64_update(&mut digesting, &mut remaining)?;
-                core::enforce_decode_field_length(v)?;
-                core::stream::u64_to_usize(v)?
-            };
-            if val_len > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            try_resize_decode_buffer(&mut val_buf, val_len)?;
-            read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
-            let _gv = core::PayloadCtxGuard::enter(&val_buf);
-            let _value_depth = core::DecodeDepthGuard::enter()?;
-            let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
-            let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
-            insert(&mut map, key, value)?;
-        }
+    let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
+        1usize
     } else {
-        let offsets_len = entries.checked_add(1).ok_or(Error::LengthMismatch)?;
-        let offsets_bytes = offsets_len.checked_mul(16).ok_or(Error::LengthMismatch)?;
-        if offsets_bytes > remaining {
+        8usize
+    };
+    let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
+    let min_headers = entries
+        .checked_mul(per_entry)
+        .ok_or(Error::LengthMismatch)?;
+    if min_headers > remaining {
+        return Err(Error::LengthMismatch);
+    }
+    let mut map = init(entries)?;
+    let mut key_buf = Vec::new();
+    let mut val_buf = Vec::new();
+    for _ in 0..entries {
+        let key_len = if (flags & header_flags::COMPACT_LEN) != 0 {
+            let v = read_varint_update(&mut digesting, &mut remaining)?;
+            core::enforce_decode_field_length(v)?;
+            core::stream::u64_to_usize(v)?
+        } else {
+            let v = read_u64_update(&mut digesting, &mut remaining)?;
+            core::enforce_decode_field_length(v)?;
+            core::stream::u64_to_usize(v)?
+        };
+        if key_len > remaining {
             return Err(Error::LengthMismatch);
         }
-        let mut koffs = try_decode_vec_with_capacity(offsets_len)?;
-        let mut last = None;
-        for _ in 0..offsets_len {
-            let raw = read_u64_update(&mut digesting, &mut remaining)?;
-            let off = core::stream::u64_to_usize(raw)?;
-            if let Some(prev) = last {
-                if off < prev {
-                    return Err(Error::LengthMismatch);
-                }
-            } else if off != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            last = Some(off);
-            koffs.push(off);
-        }
-        let mut voffs = try_decode_vec_with_capacity(offsets_len)?;
-        let mut last = None;
-        for _ in 0..offsets_len {
-            let raw = read_u64_update(&mut digesting, &mut remaining)?;
-            let off = core::stream::u64_to_usize(raw)?;
-            if let Some(prev) = last {
-                if off < prev {
-                    return Err(Error::LengthMismatch);
-                }
-            } else if off != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            last = Some(off);
-            voffs.push(off);
-        }
-        let mut key_sizes = try_decode_vec_with_capacity(entries)?;
-        let mut val_sizes = try_decode_vec_with_capacity(entries)?;
-        for i in 0..entries {
-            let ksz = koffs[i + 1]
-                .checked_sub(koffs[i])
-                .ok_or(Error::LengthMismatch)?;
-            let vsz = voffs[i + 1]
-                .checked_sub(voffs[i])
-                .ok_or(Error::LengthMismatch)?;
-            core::enforce_decode_field_length(
-                u64::try_from(ksz).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            core::enforce_decode_field_length(
-                u64::try_from(vsz).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            key_sizes.push(ksz);
-            val_sizes.push(vsz);
-        }
-        let key_total = *koffs.last().unwrap_or(&0);
-        let val_total = *voffs.last().unwrap_or(&0);
-        let total_data_len = key_total
-            .checked_add(val_total)
-            .ok_or(Error::LengthMismatch)?;
-        if total_data_len > remaining {
+        try_resize_decode_buffer(&mut key_buf, key_len)?;
+        read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
+        let _gk = core::PayloadCtxGuard::enter(&key_buf);
+        let _key_depth = core::DecodeDepthGuard::enter()?;
+        let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
+        let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
+        drop(_key_depth);
+        drop(_gk);
+        let val_len = if (flags & header_flags::COMPACT_LEN) != 0 {
+            let v = read_varint_update(&mut digesting, &mut remaining)?;
+            core::enforce_decode_field_length(v)?;
+            core::stream::u64_to_usize(v)?
+        } else {
+            let v = read_u64_update(&mut digesting, &mut remaining)?;
+            core::enforce_decode_field_length(v)?;
+            core::stream::u64_to_usize(v)?
+        };
+        if val_len > remaining {
             return Err(Error::LengthMismatch);
         }
-        map = init(entries)?;
-        let mut keys = try_decode_vec_with_capacity(entries)?;
-        let mut key_buf = Vec::new();
-        let mut key_remaining = key_total;
-        for size in key_sizes {
-            if size > key_remaining || size > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            try_resize_decode_buffer(&mut key_buf, size)?;
-            read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
-            let _gk = core::PayloadCtxGuard::enter(&key_buf);
-            let _depth = core::DecodeDepthGuard::enter()?;
-            let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
-            let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
-            keys.push(key);
-            key_remaining = key_remaining
-                .checked_sub(size)
-                .ok_or(Error::LengthMismatch)?;
-        }
-        if key_remaining != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        let mut val_buf = Vec::new();
-        let mut val_remaining = val_total;
-        for (key, size) in keys.into_iter().zip(val_sizes) {
-            if size > val_remaining || size > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            try_resize_decode_buffer(&mut val_buf, size)?;
-            read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
-            let _gv = core::PayloadCtxGuard::enter(&val_buf);
-            let _depth = core::DecodeDepthGuard::enter()?;
-            let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
-            let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
-            val_remaining = val_remaining
-                .checked_sub(size)
-                .ok_or(Error::LengthMismatch)?;
-            insert(&mut map, key, value)?;
-        }
-        if val_remaining != 0 {
-            return Err(Error::LengthMismatch);
-        }
+        try_resize_decode_buffer(&mut val_buf, val_len)?;
+        read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
+        let _gv = core::PayloadCtxGuard::enter(&val_buf);
+        let _value_depth = core::DecodeDepthGuard::enter()?;
+        let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
+        let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
+        insert(&mut map, key, value)?;
     }
     if remaining != 0 {
         return Err(Error::LengthMismatch);
@@ -9634,11 +9527,7 @@ where
 }
 /// Collect a top-level `HashMap<K,V>` by streaming with minimal buffering.
 ///
-/// - Packed layout: reads varint sizes or u64 offsets for keys and values, then streams keys
-///   and values segments; stores decoded keys temporarily until values arrive.
-/// - Compat layout: streams entry-by-entry (len+key, len+value) without buffering.
-///
-/// Collect a top-level `BTreeMap<K,V>` by streaming with minimal buffering.
+/// Entries stream one by one (len+key, len+value) without buffering the payload.
 pub fn stream_hashmap_collect_from_reader<R, K, V>(reader: R) -> Result<HashMap<K, V>, Error>
 where
     R: Read,
@@ -9670,6 +9559,7 @@ where
         },
     )
 }
+/// Collect a top-level `BTreeMap<K,V>` by streaming with minimal buffering.
 pub fn stream_btreemap_collect_from_reader<R, K, V>(reader: R) -> Result<BTreeMap<K, V>, Error>
 where
     R: Read,
@@ -10021,34 +9911,17 @@ pub struct StreamMapIter<K, V> {
     flags: u8,
     entries: usize,
     idx: usize,
-    // packed path helpers
-    val_sizes: Option<Vec<usize>>,
-    keys: Option<Vec<Option<K>>>,
     digest: crc64fast::Digest,
     payload_remaining: usize,
-    values_remaining: Option<usize>,
     checksum: u64,
     flags_guard: core::DecodeFlagsGuard,
     decode_budget: Option<core::DecodeBudgetContext>,
-    _marker: std::marker::PhantomData<V>,
+    _marker: std::marker::PhantomData<(K, V)>,
     // Reusable buffers for key/value bodies
     kbuf: Vec<u8>,
     vbuf: Vec<u8>,
 }
 const STREAM_MAX_VARINT_BYTES: usize = 10;
-fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
-    let bytes = capacity
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or(Error::LengthMismatch)?;
-    core::reserve_decode_allocation(bytes)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve(capacity)
-        .map_err(|_| Error::AllocationFailed {
-            bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
-        })?;
-    Ok(values)
-}
 fn try_resize_decode_buffer(buffer: &mut Vec<u8>, length: usize) -> Result<(), Error> {
     if length > buffer.capacity() {
         let additional = length
@@ -10230,117 +10103,25 @@ where
             core::enforce_decode_sequence_length(v)?;
             core::stream::u64_to_usize(v)?
         };
-        if (flags & header_flags::PACKED_SEQ) == 0 {
-            let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
-                1usize
-            } else {
-                8usize
-            };
-            let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
-            let min_headers = entries
-                .checked_mul(per_entry)
-                .ok_or(Error::LengthMismatch)?;
-            if min_headers > remaining {
-                return Err(Error::LengthMismatch);
-            }
-        }
-        let mut val_sizes = None;
-        let mut keys = None;
-        let mut values_remaining = None;
-        if (flags & header_flags::PACKED_SEQ) != 0 {
-            let offsets_len = entries.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let offsets_bytes = offsets_len.checked_mul(16).ok_or(Error::LengthMismatch)?;
-            if offsets_bytes > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            let mut key_sizes = try_decode_vec_with_capacity(entries)?;
-            let mut v_sizes = try_decode_vec_with_capacity(entries)?;
-            let mut koffs = try_decode_vec_with_capacity(offsets_len)?;
-            let mut last = None;
-            for _ in 0..offsets_len {
-                let o = read_u64_update(&mut r, &mut digest, &mut remaining)?;
-                let off = core::stream::u64_to_usize(o)?;
-                if let Some(prev) = last {
-                    if off < prev {
-                        return Err(Error::LengthMismatch);
-                    }
-                } else if off != 0 {
-                    return Err(Error::LengthMismatch);
-                }
-                last = Some(off);
-                koffs.push(off);
-            }
-            let mut voffs = try_decode_vec_with_capacity(offsets_len)?;
-            let mut last = None;
-            for _ in 0..offsets_len {
-                let o = read_u64_update(&mut r, &mut digest, &mut remaining)?;
-                let off = core::stream::u64_to_usize(o)?;
-                if let Some(prev) = last {
-                    if off < prev {
-                        return Err(Error::LengthMismatch);
-                    }
-                } else if off != 0 {
-                    return Err(Error::LengthMismatch);
-                }
-                last = Some(off);
-                voffs.push(off);
-            }
-            for i in 0..entries {
-                let ksz = koffs[i + 1]
-                    .checked_sub(koffs[i])
-                    .ok_or(Error::LengthMismatch)?;
-                let vsz = voffs[i + 1]
-                    .checked_sub(voffs[i])
-                    .ok_or(Error::LengthMismatch)?;
-                core::enforce_decode_field_length(
-                    u64::try_from(ksz).map_err(|_| Error::LengthMismatch)?,
-                )?;
-                core::enforce_decode_field_length(
-                    u64::try_from(vsz).map_err(|_| Error::LengthMismatch)?,
-                )?;
-                key_sizes.push(ksz);
-                v_sizes.push(vsz);
-            }
-            let key_len = *koffs.last().unwrap_or(&0);
-            let val_len = *voffs.last().unwrap_or(&0);
-            let total_data_len = key_len.checked_add(val_len).ok_or(Error::LengthMismatch)?;
-            if total_data_len > remaining {
-                return Err(Error::LengthMismatch);
-            }
-            values_remaining = Some(val_len);
-            let mut ks = try_decode_vec_with_capacity(entries)?;
-            let mut kb = Vec::new();
-            let mut key_remaining = key_len;
-            for ksz in key_sizes {
-                if ksz > key_remaining {
-                    return Err(Error::LengthMismatch);
-                }
-                try_resize_decode_buffer(&mut kb, ksz)?;
-                read_exact_update(&mut r, &mut kb, &mut digest, &mut remaining)?;
-                let _g = core::PayloadCtxGuard::enter(&kb);
-                let _depth = core::DecodeDepthGuard::enter()?;
-                let ak = unsafe { &*(kb.as_ptr() as *const Archived<K>) };
-                ks.push(Some(guarded_try_deserialize(|| K::try_deserialize(ak))?));
-                key_remaining = key_remaining
-                    .checked_sub(ksz)
-                    .ok_or(Error::LengthMismatch)?;
-            }
-            if key_remaining != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            keys = Some(ks);
-            val_sizes = Some(v_sizes);
+        let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
+            1usize
+        } else {
+            8usize
+        };
+        let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let min_headers = entries
+            .checked_mul(per_entry)
+            .ok_or(Error::LengthMismatch)?;
+        if min_headers > remaining {
+            return Err(Error::LengthMismatch);
         }
         Ok(StreamMapIter {
             reader: r,
             flags,
             entries,
             idx: 0,
-            val_sizes,
-            keys,
             digest,
             payload_remaining: remaining,
-            values_remaining,
             checksum: header.checksum,
             flags_guard,
             decode_budget: None,
@@ -10419,44 +10200,22 @@ where
             .as_ref()
             .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
-        use core::header_flags;
         while self.idx < self.entries {
-            if (self.flags & header_flags::PACKED_SEQ) != 0 {
-                let vsz = self.val_sizes.as_ref().unwrap()[self.idx];
-                if let Some(remaining) = self.values_remaining.as_mut() {
-                    if vsz > *remaining {
-                        return Err(Error::LengthMismatch);
-                    }
-                    *remaining -= vsz;
-                }
-                if vsz > self.payload_remaining {
-                    return Err(Error::LengthMismatch);
-                }
-                try_resize_decode_buffer(&mut self.vbuf, vsz)?;
-                self.read_exact_update_vbuf()?;
-                self.idx += 1;
-            } else {
-                // read and skip key
-                let klen = self.read_len()?;
-                if klen > self.payload_remaining {
-                    return Err(Error::LengthMismatch);
-                }
-                try_resize_decode_buffer(&mut self.kbuf, klen)?;
-                self.read_exact_update_kbuf()?;
-                // read and skip value
-                let vlen = self.read_len()?;
-                if vlen > self.payload_remaining {
-                    return Err(Error::LengthMismatch);
-                }
-                try_resize_decode_buffer(&mut self.vbuf, vlen)?;
-                self.read_exact_update_vbuf()?;
-                self.idx += 1;
+            // read and skip key
+            let klen = self.read_len()?;
+            if klen > self.payload_remaining {
+                return Err(Error::LengthMismatch);
             }
-        }
-        if let Some(remaining) = self.values_remaining
-            && remaining != 0
-        {
-            return Err(Error::LengthMismatch);
+            try_resize_decode_buffer(&mut self.kbuf, klen)?;
+            self.read_exact_update_kbuf()?;
+            // read and skip value
+            let vlen = self.read_len()?;
+            if vlen > self.payload_remaining {
+                return Err(Error::LengthMismatch);
+            }
+            try_resize_decode_buffer(&mut self.vbuf, vlen)?;
+            self.read_exact_update_vbuf()?;
+            self.idx += 1;
         }
         if self.payload_remaining != 0 {
             return Err(Error::LengthMismatch);

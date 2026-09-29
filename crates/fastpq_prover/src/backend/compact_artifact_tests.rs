@@ -77,6 +77,7 @@ fn axt(fixture: &Fixture, bundle_frame: Vec<u8>) -> (FastpqAxtCompactArtifactV1,
             statement: super::super::tests::model(&prepared),
             binding: fixture.binding.clone(),
             metadata: FastpqAxtPublicMetadataV1 {
+                source_transfer_occurrences: metadata.source_transfer_occurrences.to_vec(),
                 parameter: metadata.parameter.to_owned(),
                 entry_hash: metadata.entry_hash.try_into().unwrap(),
                 committed_amount: metadata.committed_amount.map(|b| b.try_into().unwrap()),
@@ -227,7 +228,7 @@ fn all_axt_advertisements_must_match_independent_caller_context() {
     let fixture = Fixture::new(true);
     let (artifact, expected) = axt(&fixture, Vec::new());
     validate_axt_advertisement(&artifact, context(&fixture)).unwrap();
-    for index in 0..15 {
+    for index in 0..16 {
         let mut altered = artifact.clone();
         let field = match index {
             0 => {
@@ -285,6 +286,11 @@ fn all_axt_advertisements_must_match_independent_caller_context() {
             13 => {
                 altered.remote_spend_claims = Some(Vec::new());
                 "compact_artifact_remote_claims"
+            }
+            15 => {
+                altered.metadata.source_transfer_occurrences[0].source_success_receipt_digest[0] ^=
+                    1;
+                "compact_artifact_source_occurrences"
             }
             _ => {
                 altered.metadata.committed_amount = None;

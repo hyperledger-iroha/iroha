@@ -450,6 +450,10 @@ fn real_transfer_claim_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
     if !binding.remote_spend_intent_commitments.is_empty() {
         set_axt_remote_spend_claims(&mut batch, binding, &[real_transfer_claim(binding)])
             .expect("attach remote-spend claim preimage");
+        let occurrences =
+            source_occurrence::test_occurrences(&public, &[real_transfer_claim(binding)]);
+        set_axt_source_transfer_occurrences(&mut batch, binding, &occurrences)
+            .expect("attach source occurrence");
     }
     bind_axt_batch(&mut batch, binding, [0x42; 32], Some([0x24; 32]))
         .expect("bind transfer AXT batch");
@@ -507,7 +511,10 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
 
-fn public_metadata_bytes(batch: &TransitionBatch) -> AxtPublicMetadataBytes<'_> {
+fn public_metadata_bytes<'a>(
+    batch: &'a TransitionBatch,
+    occurrences: &'a [AxtSourceTransferOccurrenceV1],
+) -> AxtPublicMetadataBytes<'a> {
     AxtPublicMetadataBytes {
         parameter: &batch.parameter,
         entry_hash: &batch.metadata[ENTRY_HASH_METADATA_KEY],
@@ -518,6 +525,7 @@ fn public_metadata_bytes(batch: &TransitionBatch) -> AxtPublicMetadataBytes<'_> 
         expiry_slot: &batch.metadata[AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY],
         manifest_root: &batch.metadata[AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY],
         da_commitment: &batch.metadata[AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY],
+        source_transfer_occurrences: occurrences,
     }
 }
 
@@ -532,8 +540,8 @@ fn public_metadata_parsers_preserve_exact_errors_and_option_boundaries() {
         committed_amount: proof_bound_committed_amount(&batch).unwrap(),
         expiry_slot: proof_bound_expiry_slot(&batch).unwrap(),
     };
-    validate_axt_public_metadata(&binding, public_metadata_bytes(&batch), outer).unwrap();
-    let mut conflicting = public_metadata_bytes(&batch);
+    validate_axt_public_metadata(&binding, public_metadata_bytes(&batch, &[]), outer).unwrap();
+    let mut conflicting = public_metadata_bytes(&batch, &[]);
     conflicting.da_commitment = &[0; 32];
     let mut wrong_manifest = outer;
     wrong_manifest.manifest_root[0] ^= 1;
@@ -575,7 +583,7 @@ fn public_metadata_parsers_preserve_exact_errors_and_option_boundaries() {
                 _ => unreachable!(),
             };
             let public =
-                validate_axt_public_metadata(&binding, public_metadata_bytes(&changed), outer)
+                validate_axt_public_metadata(&binding, public_metadata_bytes(&changed, &[]), outer)
                     .unwrap_err();
             assert_eq!(
                 public.to_string(),
@@ -608,13 +616,17 @@ fn public_remote_facts_and_private_metadata_have_identical_acceptance() {
     };
     let binding = remote_transfer_binding();
     let batch = real_transfer_claim_batch(&binding);
+    let occurrences: Vec<AxtSourceTransferOccurrenceV1> = norito::decode_canonical(
+        &batch.metadata[AXT_FASTPQ_SOURCE_TRANSFER_OCCURRENCES_METADATA_KEY],
+    )
+    .unwrap();
     let transcripts = decode_transcripts(&batch.metadata).unwrap().unwrap();
     let public =
         public_claims_from_transcripts(&transcripts, PublicTransferLimits::default()).unwrap();
     let prepared = prepare_quantity_public_transfers(
         &batch.transitions,
         &public,
-        batch.public_inputs.clone(),
+        batch.public_inputs,
         ProofSemantics::AxtTransferClaim,
         PublicTransferLimits::default(),
     )
@@ -623,7 +635,7 @@ fn public_remote_facts_and_private_metadata_have_identical_acceptance() {
     require_remote_spend_transcript_linkage(&batch, &binding).unwrap();
     validate_axt_public_transfer_facts(
         &binding,
-        public_metadata_bytes(&batch),
+        public_metadata_bytes(&batch, &occurrences),
         &prepared,
         Some(core::slice::from_ref(&claim)),
     )
@@ -662,7 +674,7 @@ fn public_remote_facts_and_private_metadata_have_identical_acceptance() {
             require_remote_spend_transcript_linkage(&changed_batch, &changed_binding).unwrap_err();
         let public = validate_axt_public_transfer_facts(
             &changed_binding,
-            public_metadata_bytes(&batch),
+            public_metadata_bytes(&batch, &occurrences),
             &prepared,
             Some(&claims),
         )
@@ -681,7 +693,7 @@ fn public_remote_facts_and_private_metadata_have_identical_acceptance() {
     assert!(require_remote_spend_transcript_linkage(&corrupt_private, &binding).is_err());
     validate_axt_public_transfer_facts(
         &binding,
-        public_metadata_bytes(&corrupt_private),
+        public_metadata_bytes(&corrupt_private, &occurrences),
         &prepared,
         Some(&[claim]),
     )
@@ -1612,6 +1624,7 @@ fn compact_codec_fixture() -> iroha_data_model::fastpq::FastpqAxtCompactArtifact
             transcripts: Vec::new(),
         },
         metadata: FastpqAxtPublicMetadataV1 {
+            source_transfer_occurrences: Vec::new(),
             parameter: binding.parameter.clone(),
             entry_hash: [0x11; 32],
             committed_amount: None,
@@ -2161,3 +2174,6 @@ fn canonical_masked_axt_proof_roundtrip_and_context_mutations() {
     altered.proof[last] ^= 1;
     assert!(verify_axt_proof_envelope(&altered).is_err());
 }
+
+#[path = "tests/anchored.rs"]
+mod anchored;

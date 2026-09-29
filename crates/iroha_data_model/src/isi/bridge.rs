@@ -41,9 +41,6 @@ fn bridge_decode_flags() -> u8 {
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let proof = super::decode_aos_canonical_field::<crate::bridge::BridgeProof>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -59,9 +56,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
         let mut offset = 0usize;
         let receipt = super::decode_aos_canonical_field::<crate::bridge::BridgeReceipt>(
             super::read_aos_field(bytes, &mut offset, flags)?,

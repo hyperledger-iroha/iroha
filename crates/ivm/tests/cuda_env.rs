@@ -1,6 +1,6 @@
 //! CUDA environment and config gate regressions.
 #[cfg(feature = "cuda")]
-use ivm::{AccelerationConfig, GpuManager, IVM};
+use ivm::{AccelerationConfig, IVM};
 #[cfg(feature = "cuda")]
 use std::sync::{Mutex, MutexGuard, OnceLock};
 #[cfg(feature = "cuda")]
@@ -89,14 +89,7 @@ fn limit_gpu_count_respects_config() {
     cfg.enable_cuda = true;
     cfg.max_gpus = Some(1);
     ivm::set_acceleration_config(cfg);
-    let mgr = match GpuManager::shared() {
-        Some(m) => m,
-        None => {
-            eprintln!("Failed to init GpuManager");
-            return;
-        }
-    };
-    assert!(mgr.device_count() <= 1);
+    assert!(ivm::cuda_device_slots() <= 1);
 }
 #[cfg(feature = "cuda")]
 #[test]
@@ -110,13 +103,10 @@ fn disable_cuda_via_config() {
     cfg.enable_cuda = false;
     ivm::set_acceleration_config(cfg);
     let result = std::panic::catch_unwind(|| {
-        assert!(ivm::GpuManager::init().is_none());
-        ivm::GpuManager::shared()
+        assert!(!ivm::cuda_available());
+        assert_eq!(ivm::cuda_device_slots(), 0);
     });
-    match result {
-        Ok(shared) => assert!(shared.is_none(), "manager should not initialize GPUs"),
-        Err(_) => panic!("disable flag should not panic"),
-    }
+    assert!(result.is_ok(), "disable flag should not panic");
 }
 #[cfg(feature = "cuda")]
 #[test]
@@ -136,13 +126,10 @@ fn config_disable_marks_cuda_unavailable_without_gpu_probe() {
         Some("disabled by configuration")
     );
     assert!(!ivm::cuda_available());
-    assert!(
-        GpuManager::init().is_none(),
-        "disabled CUDA config should reject direct manager init"
-    );
-    assert!(
-        GpuManager::shared().is_none(),
-        "disabled CUDA config should reject cached manager init"
+    assert_eq!(
+        ivm::cuda_device_slots(),
+        0,
+        "disabled policy must refuse device selection"
     );
 }
 #[cfg(feature = "cuda")]

@@ -1,5 +1,3 @@
-const MERGE_CARRIERS_DIR: &str = "merge_carriers";
-const MERGE_CARRIER_MAX_BYTES: usize = 4 * 1024;
 const PRUNE_INTENT_FILE_NAME: &str = "prune_intent.norito";
 const PRUNE_INTENT_TEMP_FILE_NAME: &str = "prune_intent.norito.tmp";
 // Fixed framing plus a bounded canonical Vec<Hash>: Hash payload is 32 bytes,
@@ -14,21 +12,12 @@ const PRUNE_STAGE_BLOCK_INDEX: usize = 3;
 const PRUNE_STAGE_BLOCK_HASHES: usize = 4;
 const PRUNE_STAGE_BLOCK_DATA: usize = 5;
 const PRUNE_STAGE_DA_SIDECARS: usize = 6;
-const PRUNE_STAGE_MERGE_CARRIERS: usize = 7;
-const PRUNE_STAGE_MERGE_LOG: usize = 8;
 const PRUNE_STAGE_WSV_CHECKPOINTS: usize = 9;
 const PRUNE_STAGE_COMMIT_MANIFESTS: usize = 10;
 const PRUNE_STAGE_PIPELINE_SIDECARS: usize = 11;
 const PRUNE_STAGE_MEMORY: usize = 12;
 const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
 const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
-#[derive(Clone, Copy)]
-enum NativeAmxMergeAssociation<'a> {
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
-    Live(Option<&'a MergeLedgerEntry>),
-    Startup(Option<&'a MergeLedgerEntry>),
-    CommittedOnly,
-}
 /// Clears the in-process prune gate on every return and unwind path.
 #[derive(Debug)]
 struct PruneInProgressGuard<'a> {
@@ -267,26 +256,6 @@ type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTre
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct BlockReplicaKey {
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    executed_block_wire_len: u64,
-    executed_block_wire_hash: Hash,
-}
-type BlockReplicaRegistry = NestedMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
-#[derive(Debug, Default)]
-struct MergeCarrierIndex {
-    initialized: bool,
-    generation: u64,
-    by_height: BTreeMap<u64, MergeLedgerCarrierRecord>,
-    by_entry: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerCarrierRecord>,
-    #[cfg(test)]
-    directory_scans: usize,
-    #[cfg(test)]
-    full_inventory_clones: usize,
-}
 /// Exact retained output for one indexed-sidecar rewrite in a canonical prune.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::KuraPruneSidecarPairProjectionV3")]
@@ -517,67 +486,6 @@ pub enum FastpqProofEnqueueResult {
     /// Shutdown began before the snapshot's queue insertion was committed.
     RejectedShutdown,
 }
-/// Proof that Kura durably associated a canonical block with a v2 finality artifact.
-///
-/// Fields are intentionally private and the type has no public constructor.
-/// Kura creates a receipt only after the artifact file and its directory entry
-/// have been synchronously persisted.
-#[derive(Clone, Debug)]
-#[must_use]
-pub struct KuraV2CommitReceipt {
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    context_id: HeightContextId,
-    subject: BlockSubject,
-    certificate: QuorumCertificateRef,
-    artifact_hash: HashOf<V2FinalityArtifact>,
-}
-impl KuraV2CommitReceipt {
-    /// Return the durably associated block height.
-    #[must_use]
-    pub fn height(&self) -> u64 {
-        self.height
-    }
-    /// Return the durably associated canonical block hash.
-    #[must_use]
-    pub fn block_hash(&self) -> HashOf<BlockHeader> {
-        self.block_hash
-    }
-    /// Return the frozen height-context identifier.
-    #[must_use]
-    pub fn context_id(&self) -> HeightContextId {
-        self.context_id
-    }
-    /// Return the exact subject durably certified by Kura.
-    #[must_use]
-    pub fn subject(&self) -> BlockSubject {
-        self.subject
-    }
-    /// Return the exact CommitQC reference durably associated with the block.
-    #[must_use]
-    pub fn certificate(&self) -> QuorumCertificateRef {
-        self.certificate
-    }
-    /// Return the hash of the exact artifact bytes represented by this receipt.
-    #[must_use]
-    pub fn artifact_hash(&self) -> HashOf<V2FinalityArtifact> {
-        self.artifact_hash
-    }
-    #[cfg(test)]
-    pub(crate) fn for_test(artifact: &V2FinalityArtifact) -> Self {
-        v2_commit_receipt(artifact)
-    }
-}
-fn v2_commit_receipt(artifact: &V2FinalityArtifact) -> KuraV2CommitReceipt {
-    KuraV2CommitReceipt {
-        height: artifact.height,
-        block_hash: artifact.block_hash,
-        context_id: artifact.context_id(),
-        subject: artifact.subject,
-        certificate: artifact.commit_qc.as_ref(),
-        artifact_hash: HashOf::new(artifact),
-    }
-}
 #[derive(Clone, Default, Debug)]
 struct FastpqProofSidecarTelemetry;
 impl FastpqProofSidecarTelemetry {
@@ -775,22 +683,6 @@ pub(crate) enum CommitManifestBindingState {
     /// The checkpoint names a different manifest digest and must fail closed.
     Mismatched,
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::V2CommitAuthoritySeal")]
-#[derive(Encode)]
-struct V2CommitAuthoritySeal {
-    domain: String,
-    artifact: V2FinalityArtifact,
-}
-fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
-    Hash::new(
-        V2CommitAuthoritySeal {
-            domain: "iroha.v2.commit-authority-seal.v1".to_owned(),
-            artifact: artifact.clone(),
-        }
-        .encode(),
-    )
-}
 /// Immutable Kura proofs for one block's Kagemusha, validation-fee, and
 /// Parliament casting writes, authenticated by its exact finality artifact.
 #[derive(norito::NoritoSchema)]
@@ -880,83 +772,9 @@ impl CommitManifest {
             commit_authority_hash: None,
         }
     }
-    /// Bind the exact authenticated v2 finality artifact and its execution roots.
-    ///
-    /// The caller must first perform the artifact's structural and cryptographic verification.
-    /// Startup recovery rechecks the resulting manifest with
-    /// [`Self::binds_authenticated_v2_commit_authority`] before trusting either root.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
-    pub(crate) fn with_authenticated_v2_commit_authority(
-        mut self,
-        artifact: &V2FinalityArtifact,
-    ) -> Self {
-        let commitment = artifact.commit_qc.execution_commitment;
-        self.parent_state_root = Some(commitment.parent_state_root);
-        self.post_state_root = Some(commitment.post_state_root);
-        self.commit_qc_hash = Some(Hash::new(artifact.commit_qc.encode()));
-        self.commit_authority_hash = Some(v2_commit_authority_hash(artifact));
-        self
-    }
     fn encoded_hash(&self) -> Hash {
         Hash::new(self.encode())
     }
-    /// Return whether every retained root and authority byte matches this verified v2 artifact.
-    pub(crate) fn binds_authenticated_v2_commit_authority(
-        &self,
-        artifact: &V2FinalityArtifact,
-    ) -> bool {
-        let commitment = artifact.commit_qc.execution_commitment;
-        self.height == artifact.height
-            && self.block_hash == artifact.block_hash
-            && artifact.subject.block_hash == artifact.block_hash
-            && self.parent_state_root == Some(commitment.parent_state_root)
-            && self.post_state_root == Some(commitment.post_state_root)
-            && self.commit_qc_hash == Some(Hash::new(artifact.commit_qc.encode()))
-            && self.commit_authority_hash == Some(v2_commit_authority_hash(artifact))
-    }
-}
-#[derive(Clone, Copy, Debug)]
-struct BlockReplicaAdvert {
-    keeper_index: u32,
-    observed_at: Instant,
-}
-#[derive(Clone, Debug)]
-struct VerifiedKuraReplicaAuthority {
-    key: BlockReplicaKey,
-    network_id: NetworkId,
-    selected_keepers: Vec<(u32, PeerId)>,
-}
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::KuraReplicaKeeperScoreV1")]
-#[derive(Encode)]
-struct KuraReplicaKeeperScoreV1 {
-    domain: Vec<u8>,
-    network_id: NetworkId,
-    context_id: HeightContextId,
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    signer_index: u32,
-    signer: PeerId,
-}
-/// Local body availability for a canonical block known to Kura.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BlockBodyStatus {
-    /// Body is cached in memory.
-    Cached,
-    /// Body is present in `blocks.data`.
-    Inline,
-    /// Body is present only in the local sidecar cache.
-    LocalSidecar,
-    /// Body is not local, but enough peers have advertised replicas.
-    RemoteOnly {
-        /// Number of distinct matching peer adverts.
-        replicas: usize,
-    },
-    /// Body is neither local nor sufficiently replicated.
-    Missing,
 }
 #[derive(Clone, Copy, Debug)]
 enum FsyncTarget {
@@ -1086,80 +904,4 @@ struct CommitManifestReconciliation {
     pruned_manifests: bool,
     pruned_checkpoints: bool,
     retained_height: usize,
-}
-#[derive(Debug)]
-struct MergeLedgerLog {
-    /// Cleared after a failed mutation until a validated whole-owner reload.
-    resident_inventory_valid: bool,
-    /// Fast mode deliberately leaves the durable log opaque until a Strict restart.
-    history_deferred: bool,
-    file: Option<FileWrap>,
-    entries: Vec<MergeLedgerEntry>,
-    cache_capacity: usize,
-    total_entries: usize,
-    frames_by_hash: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerFrameIndex>,
-    frames_by_epoch: BTreeMap<u64, MergeLedgerFrameIndex>,
-    in_memory_entries: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerEntry>,
-    /// Latest execution coordinate and exact entry hash by route/incarnation.
-    ///
-    /// This index is rebuilt while the validated log is streamed at startup;
-    /// post-WSV recovery must never reverse-scan historical merge entries.
-    latest_execution_entries:
-        BTreeMap<(LaneId, DataSpaceId, Hash), (u64, HashOf<MergeLedgerEntry>)>,
-    append_recovery_offset: Option<u64>,
-    #[cfg(test)]
-    full_history_scans: usize,
-    #[cfg(test)]
-    indexed_lookups: usize,
-    #[cfg(test)]
-    indexed_lookup_hashes: BTreeSet<HashOf<MergeLedgerEntry>>,
-    #[cfg(test)]
-    indexed_membership_checks: usize,
-    #[cfg(test)]
-    complete_execution_scans: usize,
-    #[cfg(test)]
-    fail_next_append: bool,
-    #[cfg(test)]
-    fail_next_append_after: Option<MergeLedgerAppendFailurePoint>,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MergeLedgerFrameIndex {
-    frame_offset: u64,
-    payload_len: u32,
-    epoch_id: u64,
-    entry_hash: HashOf<MergeLedgerEntry>,
-}
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MergeLedgerAppendFailurePoint {
-    AfterLength,
-    AfterPayload,
-    AfterSync,
-}
-/// Durable sparse association between one committed merge entry and the exact
-/// global block whose compact reference ordered its application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::MergeLedgerCarrierRecord")]
-pub(crate) struct MergeLedgerCarrierRecord {
-    /// Carrier-record schema version. Only version one is accepted.
-    pub version: u8,
-    /// Canonical full-entry sidecar hash.
-    pub entry_hash: HashOf<MergeLedgerEntry>,
-    /// Contiguous merge-ledger epoch authenticated by the entry QC.
-    pub epoch_id: u64,
-    /// Sparse canonical global block height carrying the compact reference.
-    pub block_height: u64,
-    /// Exact canonical global block hash at `block_height`.
-    pub block_hash: HashOf<BlockHeader>,
-}
-impl MergeLedgerCarrierRecord {
-    fn new(entry: &MergeLedgerEntry, block: &SignedBlock) -> Self {
-        Self {
-            version: 1,
-            entry_hash: entry.canonical_hash(),
-            epoch_id: entry.epoch_id,
-            block_height: block.header().height().get(),
-            block_hash: block.hash(),
-        }
-    }
 }

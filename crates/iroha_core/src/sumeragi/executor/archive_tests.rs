@@ -11,10 +11,14 @@ use crate::{
         reputation_finalized::{ReputationFinalizedArchive, ReputationFinalizedArchiveBounds},
     },
     state::World,
-    sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+    sumeragi::{
+        block_store::KuraBlockStore,
+        crypto::BlsCrypto,
+        driver::traits::BlockStore as _,
+        test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+    },
 };
 use iroha_data_model::{
-    events::time::{TimeEvent, TimeInterval},
     isi::sorafs::SetSorafsReputationJournalAuthorityPolicy,
     sorafs::reputation::{
         REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
@@ -164,17 +168,34 @@ fn archive_files(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>
 fn context(
     chain: &CertifiedTestChain,
 ) -> (ExecutorContext, tokio::sync::broadcast::Receiver<EventBox>) {
-    let (events, receiver) = tokio::sync::broadcast::channel(16);
+    let (events, receiver) = tokio::sync::broadcast::channel(1024);
+    let crypto = Arc::new(BlsCrypto::new());
+    crypto
+        .admit_committee(
+            chain
+                .validators()
+                .iter()
+                .map(|(peer, pop)| (peer.public_key(), pop.as_slice())),
+        )
+        .unwrap();
     (
         ExecutorContext {
             state: Arc::clone(chain.state()),
+            native_context_archive: Arc::new(
+                NativeContextArchive::open(
+                    chain.kura(),
+                    chain.state().ivm_execution_budget(),
+                    chain.kura().native_context_archive_max_bytes(),
+                )
+                .unwrap(),
+            ),
             queue: None,
             staging: Staging::new(),
             events,
             genesis_account: chain.genesis_account().clone(),
             consensus_mode: ConsensusMode::Permissioned,
             applied: (1, chain.committed(1).core_hash()),
-            crypto: None,
+            crypto: Some(crypto),
             applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
             lane_blocks: std::sync::Arc::new(crate::sumeragi::lanes::merge::NoLanes),
         },
@@ -188,80 +209,112 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         state: &context.state,
         applied: context.applied,
         live: None,
+        finishing: None,
+        recovery: None,
         results: BTreeMap::new(),
         last_built: None,
         queue: context.queue.clone(),
         beacon: None,
         archives: Some(archives),
         pending_commit: None,
+        attestation: None,
+        quarantine_context: None,
     }
 }
 
-fn pending(chain: &CertifiedTestChain) -> (Block, Qc, PendingCommit) {
-    let committed = chain.committed(2);
-    let block = committed.block();
-    let header = committed.header().unwrap().clone();
-    let qc: Qc = norito::decode_canonical(&block.commit_certificate().unwrap().commit_qc).unwrap();
-    let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
-    let next = chain
-        .state()
-        .view()
-        .world()
-        .consensus_schedule()
-        .get(4)
+fn prepare_and_append(worker: &mut Worker<'_>, block: &Block, qc: &Qc) -> usize {
+    assert_eq!(worker.prepare(block, qc).unwrap(), Some(qc.result));
+    let original = worker
+        .live
+        .as_ref()
         .unwrap()
-        .height_config()
+        .native_contexts
+        .as_ref()
+        .unwrap()
+        .canonical_bytes()
+        .as_ptr() as usize;
+    KuraBlockStore::new(
+        Arc::clone(worker.state.kura()),
+        worker.context.crypto.as_ref().unwrap().clone(),
+        1,
+        worker.context.staging.clone(),
+        worker.state.ivm_execution_budget(),
+    )
+    .append(block, qc)
+    .unwrap();
+    original
+}
+
+fn hold_archive_completion(worker: &mut Worker<'_>, block: &Block, qc: &Qc) {
+    let original = prepare_and_append(worker, block, qc);
+    let root = worker
+        .archives
+        .as_ref()
+        .unwrap()
+        .reputation
+        .as_ref()
+        .unwrap()
+        .root()
+        .to_owned();
+    let hidden = root.with_extension("temporarily-unavailable");
+    std::fs::rename(&root, &hidden).unwrap();
+    let error = worker.commit(block, qc).unwrap_err();
+    std::fs::rename(&hidden, &root).unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("reputation archive capture failed"),
+        "{error}"
+    );
+    let pending = worker.pending_commit.as_ref().unwrap();
+    assert_eq!(
+        pending.native_contexts.canonical_bytes().as_ptr() as usize,
+        original
+    );
+    assert!(worker.live.as_ref().unwrap().overlay.is_none());
+}
+
+fn run(test: impl FnOnce() + Send + 'static) {
+    crate::sumeragi::threads::sumeragi_thread_builder("sumeragi-archive-test")
+        .spawn(test)
+        .unwrap()
+        .join()
         .unwrap();
-    let pending = PendingCommit {
-        header: header.clone(),
-        qc: qc.clone(),
-        state_hash: block.hash(),
-        next,
-        hashes: block
-            .external_entrypoints_slice()
-            .iter()
-            .map(TransactionEntrypoint::hash)
-            .collect(),
-        events: vec![EventBox::Time(TimeEvent {
-            interval: TimeInterval {
-                since_ms: 1,
-                length_ms: 1,
-            },
-        })],
-    };
-    (Block { header, payload }, qc, pending)
 }
 
 #[test]
 fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications()
 {
-    let mut chain = chain();
+    run(partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications_case);
+}
+
+fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications_case()
+ {
+    let chain = chain();
     let (directory, archives) = archives();
     archives.capture(&chain.state().view()).unwrap();
     let provider = archives.provider_ingest.as_ref().unwrap();
     let reputation = archives.reputation.as_ref().unwrap();
     let provider_before = provider.health_generation().unwrap();
     let reputation_before = reputation.health_generation().unwrap();
+    let (context, mut events) = context(&chain);
+    let mut worker = worker(&context, archives.clone());
+    let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+    let proposal = payload::decode(&block.payload).unwrap();
+    let TransactionEntrypoint::External(transaction) = &proposal.external_entrypoints_slice()[0]
+    else {
+        panic!("real fixture carries its signed external transaction")
+    };
+    let transaction = transaction.clone();
+    let entry_hash = transaction.hash_as_entrypoint();
     let (_clock, time) =
-        iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(1_750_000_000_099));
+        iroha_primitives::time::TimeSource::new_mock(proposal.header().creation_time());
     let queue = Arc::new(Queue::test(
         iroha_config::parameters::actual::Queue::default(),
         &time,
     ));
-    let clock_key =
-        iroha_crypto::KeyPair::from_seed(vec![0xCC; 32], iroha_crypto::Algorithm::Ed25519);
-    let transaction = chain.sign(
-        &clock_key,
-        [iroha_data_model::isi::Log::new(
-            iroha_data_model::Level::INFO,
-            "archive pending queue cleanup".into(),
-        )
-        .into()],
-        1_750_000_000_099,
-    );
-    let entry_hash = transaction.hash_as_entrypoint();
     let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
-        transaction.clone(),
+        transaction,
         &chain.network_id(),
         Duration::from_secs(1),
         chain.state().view().world().parameters().transaction(),
@@ -270,27 +323,54 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     )
     .unwrap();
     queue.push(accepted, chain.state().view()).unwrap();
+    worker.queue = Some(Arc::clone(&queue));
     assert!(queue.contains_entrypoint_hash(entry_hash));
-    assert_eq!(
-        chain.commit_at(1_750_000_000_100, vec![transaction]),
-        vec![true]
+    let original_contexts = prepare_and_append(&mut worker, &block, &qc);
+    let staged = context.staging.get(&qc.block_hash).unwrap();
+    assert!(
+        staged
+            .executed
+            .network_output_at(0)
+            .is_some_and(|(_, output)| output.result.is_ok()),
+        "the original queued transaction executes successfully"
     );
-    // The fixture performs real execution/prepare/store/State commit. It does not capture these
-    // archives: the exact pending decision below is the executor's post-publication seam.
+    assert_eq!(
+        worker.state.view().height(),
+        1,
+        "append does not publish State"
+    );
+    let hash = staged.executed.hash();
+    let input_hashes: Vec<_> = staged
+        .executed
+        .external_entrypoints_slice()
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect();
+    assert!(!input_hashes.is_empty());
     assert_eq!(provider.health_generation().unwrap(), provider_before);
     assert_eq!(reputation.health_generation().unwrap(), reputation_before);
-    let (mut context, mut events) = context(&chain);
-    context.queue = Some(Arc::clone(&queue));
-    let mut worker = worker(&context, archives.clone());
-    let (block, qc, retained) = pending(&chain);
-    let hash = retained.state_hash;
-    let input_hashes = retained.hashes.clone();
-    assert!(!input_hashes.is_empty());
-    worker.pending_commit = Some(retained);
     let root = reputation.root().to_owned();
     let hidden = root.with_extension("temporarily-unavailable");
     std::fs::rename(&root, &hidden).unwrap();
-    assert!(worker.commit(&block, &qc).is_err());
+    let error = worker.commit(&block, &qc).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("reputation archive capture failed"),
+        "{error}"
+    );
+    let retained_events = worker.pending_commit.as_ref().unwrap().events.len();
+    assert!(retained_events > 0);
+    assert_eq!(
+        worker
+            .pending_commit
+            .as_ref()
+            .unwrap()
+            .native_contexts
+            .canonical_bytes()
+            .as_ptr() as usize,
+        original_contexts
+    );
     assert_eq!(provider.health_generation().unwrap(), provider_before + 1);
     let original_provider_files = archive_files(&directory.path().join("provider"));
     assert!(!original_provider_files.is_empty());
@@ -311,12 +391,12 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     assert_eq!(worker.build(3, 0, 1 << 20), (vec![], false));
     assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
     assert!(
-        worker.live.is_none(),
+        worker.live.as_ref().unwrap().overlay.is_none(),
         "retry must not acquire another State overlay"
     );
     std::fs::rename(&hidden, &root).unwrap();
     assert_eq!(reputation.health_generation().unwrap(), reputation_before);
-    worker.commit(&block, &qc).unwrap();
+    let completed = worker.commit(&block, &qc).unwrap();
     assert_eq!(worker.applied, (2, qc.block_hash));
     assert!(worker.pending_commit.is_none());
     assert!(
@@ -334,23 +414,33 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     );
     assert_eq!(worker.state.view().height(), 2);
     assert_eq!(worker.state.view().latest_block_hash(), Some(hash));
-    assert!(events.try_recv().is_ok());
+    let mut emitted = 0;
+    while events.try_recv().is_ok() {
+        emitted += 1;
+    }
+    assert_eq!(
+        emitted, retained_events,
+        "publish every original real event once"
+    );
     assert!(events.try_recv().is_err());
-    assert!(worker.commit(&block, &qc).is_err());
+    assert_eq!(worker.commit(&block, &qc).unwrap(), completed);
     assert!(events.try_recv().is_err(), "completion cannot emit twice");
     assert_eq!(provider.health_generation().unwrap(), provider_before + 1);
 }
 
 #[test]
 fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate() {
-    let mut chain = chain();
+    run(pending_capture_rejects_substituted_header_qc_state_and_missing_certificate_case);
+}
+
+fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate_case() {
+    let chain = chain();
     let (_directory, archives) = archives();
     archives.capture(&chain.state().view()).unwrap();
-    chain.commit_at(1_750_000_000_100, vec![]);
     let (context, mut events) = context(&chain);
     let mut worker = worker(&context, archives.clone());
-    let (block, qc, retained) = pending(&chain);
-    worker.pending_commit = Some(retained);
+    let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+    hold_archive_completion(&mut worker, &block, &qc);
     let mut wrong_block = block.clone();
     wrong_block.header.height += 1;
     assert!(worker.prepare(&wrong_block, &qc).is_err());
@@ -400,6 +490,10 @@ fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate()
 
 #[test]
 fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen() {
+    run(archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen_case);
+}
+
+fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_reopen_case() {
     let chain = chain();
     let (directory, archives) = archives();
     let provider = archives.provider_ingest.as_ref().unwrap();
@@ -474,22 +568,84 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
 
 #[test]
 fn below_quorum_current_frame_cannot_finish_pending_archive_capture() {
-    let mut chain = chain();
+    run(below_quorum_current_frame_cannot_finish_pending_archive_capture_case);
+}
+
+fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
+    let chain = chain();
     let (_directory, archives) = archives();
     archives.capture(&chain.state().view()).unwrap();
+    let (context, mut events) = context(&chain);
+    let mut worker = worker(&context, archives.clone());
+    let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+    let below = chain.commit_qc(
+        2,
+        qc.block_hash,
+        qc.result,
+        block.header.attest,
+        Signers::BelowQuorum,
+    );
+    let committee = worker
+        .scheduled(2)
+        .unwrap()
+        .height_config()
+        .unwrap()
+        .committee;
+    assert!(
+        iroha_sumeragi::crypto::verify_qc(
+            &**worker.context.crypto.as_ref().unwrap(),
+            &iroha_sumeragi::crypto::NoAttestation,
+            &chain.instance(),
+            &block.header.epoch,
+            &committee,
+            &below,
+        )
+        .is_err(),
+        "negative durable frame has an actual insufficient signed quorum"
+    );
+    hold_archive_completion(&mut worker, &block, &qc);
     let generation = archives
         .provider_ingest
         .as_ref()
         .unwrap()
         .health_generation()
         .unwrap();
-    chain.commit_with(Some(1_750_000_000_100), vec![], Signers::BelowQuorum);
-    let (context, mut events) = context(&chain);
-    let mut worker = worker(&context, archives.clone());
-    let (block, qc, retained) = pending(&chain);
+    let retained = worker.pending_commit.take().unwrap();
+    drop(worker);
+    // Preserve the actual already-published pending owner. Only the negative
+    // durable frame's quorum bytes change; they never authorize a new capture.
+    let invalid_kura = crate::kura::Kura::blank_kura_for_testing();
+    let mut invalid_state = State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        Arc::clone(&invalid_kura),
+        crate::query::store::LiveQueryStore::start_test(),
+        "sumeragi-certified-test-chain".into(),
+        chain.network_id(),
+    );
+    for height in 1..=2 {
+        let mut frame = chain.committed(height).block().as_ref().clone();
+        if height == 2 {
+            let certificate = frame.commit_certificate().unwrap();
+            let invalid_certificate =
+                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    norito::to_bytes(&below).unwrap(),
+                    certificate.result_preimage().to_vec(),
+                );
+            frame = frame.with_commit_certificate(Some(invalid_certificate));
+        }
+        invalid_state.push_block_hash_for_testing(frame.hash());
+        invalid_kura.store_block(frame).unwrap();
+    }
+    let invalid_context = ExecutorContext {
+        state: Arc::new(invalid_state),
+        ..context.clone()
+    };
+    let mut worker = self::worker(&invalid_context, archives.clone());
     worker.pending_commit = Some(retained);
     assert!(worker.commit(&block, &qc).is_err());
     assert!(worker.pending_commit.is_some());
+    assert_eq!(worker.applied.0, 1);
     assert_eq!(
         archives
             .provider_ingest

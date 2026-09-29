@@ -49,7 +49,7 @@ pub fn prepare_global_beacon_transition_credential_v1(
     let network_id = transition.preparation.network_id;
     let index = transition
         .preparation
-        .roster
+        .committee
         .iter()
         .position(|seat| &seat.validator == local_validator)
         .and_then(|index| u16::try_from(index).ok())
@@ -57,7 +57,7 @@ pub fn prepare_global_beacon_transition_credential_v1(
         .ok_or(Rejected)?;
     let peers = transition
         .preparation
-        .roster
+        .committee
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();

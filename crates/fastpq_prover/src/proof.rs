@@ -1185,11 +1185,11 @@ struct FriFinalVerification<'a> {
 
 /// Fixed FRI geometry shared with the bounded compact verifier.
 #[cfg(test)]
-pub(crate) mod compact_fri_support {
+pub mod compact_fri_support {
     use super::*;
 
     /// Derive the existing bounded binary layer schedule from fixed geometry.
-    pub(crate) fn layer_lengths(
+    pub fn layer_lengths(
         domain_size: usize,
         arity: u32,
         max_reductions: u32,
@@ -1198,7 +1198,7 @@ pub(crate) mod compact_fri_support {
     }
 
     /// Derive the existing exact terminal degree bound for the joint quotient proof.
-    pub(crate) fn terminal_degree_bound(
+    pub fn terminal_degree_bound(
         domain_size: usize,
         blowup_factor: u32,
         arity: u32,
@@ -1206,6 +1206,34 @@ pub(crate) mod compact_fri_support {
     ) -> Result<usize> {
         super::fri_terminal_degree_bound(domain_size, blowup_factor, arity, layer_lengths)
     }
+}
+
+/// Check the opened initial index and every round/layer count before any hashing.
+#[cfg(any(test, feature = "dev-tools"))]
+fn check_fri_query_shape(
+    fri_query: &FriQueryOpening,
+    query_pos: usize,
+    initial_index: usize,
+    fri_layers: &[GoldilocksDigest384V1],
+    betas: &[GoldilocksFp4V1],
+    fri_layer_lengths: &[usize],
+) -> Result<()> {
+    if usize::try_from(fri_query.initial_index).ok() != Some(initial_index) {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    if fri_query.rounds.len() != betas.len() {
+        return Err(Error::FriChallengeLengthMismatch {
+            expected: betas.len(),
+            actual: fri_query.rounds.len(),
+        });
+    }
+    if fri_layers.len() != betas.len() + 1 || fri_layer_lengths.len() != fri_layers.len() {
+        return Err(Error::FriLayerLengthMismatch {
+            expected: betas.len() + 1,
+            actual: fri_layers.len(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(any(test, feature = "dev-tools"))]
@@ -1229,21 +1257,14 @@ fn verify_fri_query_chain(
     if arity == 0 {
         return Err(Error::FriArity(0));
     }
-    if usize::try_from(fri_query.initial_index).ok() != Some(initial_index) {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
-    if fri_query.rounds.len() != betas.len() {
-        return Err(Error::FriChallengeLengthMismatch {
-            expected: betas.len(),
-            actual: fri_query.rounds.len(),
-        });
-    }
-    if fri_layers.len() != betas.len() + 1 || fri_layer_lengths.len() != fri_layers.len() {
-        return Err(Error::FriLayerLengthMismatch {
-            expected: betas.len() + 1,
-            actual: fri_layers.len(),
-        });
-    }
+    check_fri_query_shape(
+        fri_query,
+        query_pos,
+        initial_index,
+        fri_layers,
+        betas,
+        fri_layer_lengths,
+    )?;
     let mut index = initial_index;
     ensure_canonical_fp4(initial_value, "fri_initial_value", &[query_pos])?;
     let mut value = initial_value;
@@ -1376,12 +1397,12 @@ fn verify_fri_final_opening(
 #[cfg(any(test, feature = "dev-tools"))]
 fn expected_fri_layer_lengths(
     domain_size: usize,
-    arity: u32,
+    requested_arity: u32,
     max_reductions: u32,
 ) -> Result<Vec<usize>> {
-    let arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
+    let arity = usize::try_from(requested_arity).map_err(|_| Error::FriArity(requested_arity))?;
     if arity != 2 {
-        return Err(Error::FriArity(arity as u32));
+        return Err(Error::FriArity(requested_arity));
     }
     if !domain_size.is_power_of_two() {
         return Err(Error::FriDomainSize {
@@ -2186,37 +2207,37 @@ mod tests {
             tx_set_hash: [0x55; 32],
             ordering_hash: [0x66; 32],
         };
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.dsid[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "dsid" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.slot = actual.slot.wrapping_add(1);
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "slot" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.old_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "old_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.new_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "new_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.perm_root[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
             Err(Error::PublicIoMismatch { field: "perm_root" })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.tx_set_hash[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
@@ -2224,7 +2245,7 @@ mod tests {
                 field: "tx_set_hash"
             })
         ));
-        let mut actual = expected.clone();
+        let mut actual = expected;
         actual.ordering_hash[0] ^= 0x01;
         assert!(matches!(
             ensure_public_io_matches(&expected, &actual),
@@ -2356,7 +2377,7 @@ mod tests {
         let query_count = domain.min(fastpq_isi::FASTPQ_FINAL_V1.fri.queries as usize);
         let chunk = domain.min(backend::lde_chunk_size(2).unwrap());
         proof.parameter = fastpq_isi::FASTPQ_FINAL_V1_ID.into();
-        proof.lde_domain_size = domain as u32;
+        proof.lde_domain_size = u32::try_from(domain).expect("sample LDE domain fits u32");
         proof.alphas = vec![fp4(0); AIR_COMPOSITION_ALPHA_COUNT];
         proof.betas = vec![fp4(0); rounds];
         proof.fri_layers = vec![zero; rounds + 1];
@@ -2386,7 +2407,7 @@ mod tests {
                 initial_index: 0,
                 rounds: (0..rounds)
                     .map(|round| FriRoundOpening {
-                        round: round as u32,
+                        round: u32::try_from(round).expect("sample FRI round fits u32"),
                         index: 0,
                         values: vec![fp4(0); 2],
                         folded_value: fp4(0),
@@ -2626,7 +2647,7 @@ mod tests {
         };
         let mut artifact = sample_backend_artifact();
         artifact.trace_commitment = commitment;
-        let proof = materialise_proof(public_io.clone(), artifact).expect("materialise proof");
+        let proof = materialise_proof(public_io, artifact).expect("materialise proof");
         assert_eq!(proof.commitment(), commitment);
         assert_eq!(proof.trace_commitment, commitment);
         assert_eq!(proof.public_io, public_io);

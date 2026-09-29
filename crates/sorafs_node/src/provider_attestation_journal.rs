@@ -39,7 +39,9 @@ use iroha_data_model::{
 #[cfg(test)]
 use norito::DecodeLimits;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use std::{collections::BTreeSet, fmt, sync::Arc, time::Duration};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::{fmt, sync::Arc, time::Duration};
 use thiserror::Error;
 const APPROVAL_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
 const INVENTORY_RUNTIME_QUALIFICATION_VERSION_V1: u8 = 1;
@@ -3631,7 +3633,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     /// # Errors
     ///
     /// Returns an error for clock, stale request/claim, signer, or persistence failure.
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) async fn approve_claim_with_signer<Signer>(
         &self,
@@ -3687,7 +3688,6 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     // configured handle, revision, policy, and local scope around readiness and
     // every fallible call. This operation additionally enforces structural
     // validity and snapshot stability.
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) async fn handoff_claim_with_inventory<Inventory>(
         &self,

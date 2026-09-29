@@ -1,11 +1,12 @@
 //! Work-driven proposing (§6.10): empty builds wait and never become blocks.
 
-use super::{Build, Core, Me};
+use super::{Build, Core, FreshBuild, Me};
 use crate::{
-    api::Action,
+    api::{Action, ControlWitnessContext},
     message::{Block, BlockHeader, Proposal, TimeoutCert, WireMessage},
     preimage,
     safety::RecordedProposal,
+    types::ControlWitness,
 };
 
 impl Core {
@@ -66,7 +67,7 @@ impl Core {
         }
     }
 
-    /// Push `BuildPayload{req}` with a fresh request id.
+    /// Request real work first; only its exact bounded result may request application control.
     fn request_build(&mut self) {
         if self.leader_eligible().is_none() || (self.view > 0 && cfg!(sumeragi_mutation = "ML13")) {
             self.build = Build::Idle;
@@ -75,6 +76,18 @@ impl Core {
         let budget = self.pm.exec_budget(self.cfg.params.e_max);
         let req = self.next_req;
         self.next_req = self.next_req.saturating_add(1);
+        self.fresh_build = Some(FreshBuild {
+            req,
+            context: ControlWitnessContext {
+                height: self.height,
+                view: self.view,
+                epoch: self.cfg.epoch.id,
+                parent_hash: self.tip.block_hash,
+                parent_result: self.tip.result,
+            },
+            control: None,
+            payload: None,
+        });
         self.out.push(Action::BuildPayload {
             req,
             height: self.height,
@@ -97,10 +110,10 @@ impl Core {
                 req,
                 deadline,
                 ready,
-            } if self.now >= deadline => {
+            } if deadline != u64::MAX && self.now >= deadline => {
                 // A missed build deadline is not a block. Keep the request wakeup
                 // and retry on the bounded interval or newly available work.
-                self.payload_ready(req, (Vec::new(), false), ready);
+                self.wait_for_work(req, ready, false);
             }
             Build::IdleWait { until, .. } if self.now >= until => self.request_build(),
             _ => {}
@@ -112,46 +125,128 @@ impl Core {
         match self.build {
             Build::Idle => None,
             Build::Scheduled(at) | Build::IdleWait { until: at, .. } => Some(at),
-            Build::Requested { deadline, .. } => Some(deadline),
+            Build::Requested { deadline, .. } => (deadline != u64::MAX).then_some(deadline),
         }
     }
 
-    /// On `PayloadBuilt{req}`: an answer to another request than the outstanding one is ignored.
-    /// `attest` is the application flag of a block with this payload (§3.7 A1).
+    /// Keep the first nonempty bounded payload until its exact control response arrives.
     pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>, attest: bool) {
-        if let Build::Requested {
+        if self.awaiting {
+            return;
+        }
+        let Build::Requested {
             req: outstanding,
             ready,
             ..
         } = self.build
-            && req == outstanding
-            && !self.awaiting
-        {
-            self.payload_ready(req, (payload, attest), ready);
+        else {
+            return;
+        };
+        let Some(fresh) = self.fresh_build.as_ref() else {
+            return;
+        };
+        if req != outstanding || req != fresh.req || fresh.payload.is_some() {
+            return;
         }
-    }
-
-    fn payload_ready(&mut self, req: u64, (payload, attest): (Vec<u8>, bool), ready: bool) {
-        // Invalid or absent work never substitutes a heartbeat block.
         let too_large =
             u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
         if payload.is_empty() || too_large {
-            if ready && !too_large {
-                // `PayloadReady{req}` already arrived: a transaction came in after the builder
-                // answered `EMPTY`.
-                self.request_build();
-            } else {
-                self.build = Build::IdleWait {
-                    req,
-                    until: self
-                        .now
-                        .saturating_add(self.cfg.params.payload_retry_interval),
-                };
-            }
+            self.wait_for_work(req, ready, too_large);
             return;
         }
+        let fresh = self
+            .fresh_build
+            .as_mut()
+            .expect("original fresh build retained");
+        fresh.payload = Some((payload, attest));
+        let context = fresh.context;
+        self.build = Build::Requested {
+            req,
+            deadline: u64::MAX,
+            ready,
+        };
+        self.out.push(Action::BuildControlWitness { req, context });
+        // MS47: a missing authenticated application response is silently invented.
+        if cfg!(sumeragi_mutation = "MS47") {
+            self.fresh_build.as_mut().unwrap().control = Some((ControlWitness::empty(), false));
+            self.finish_fresh_build();
+        }
+    }
+
+    fn wait_for_work(&mut self, req: u64, ready: bool, too_large: bool) {
+        self.fresh_build = None;
+        if ready && !too_large {
+            // A work notification already arrived before the empty builder response.
+            self.request_build();
+        } else {
+            self.build = Build::IdleWait {
+                req,
+                until: self
+                    .now
+                    .saturating_add(self.cfg.params.payload_retry_interval),
+            };
+        }
+    }
+
+    /// Exact request, view, epoch and both parent commitments prevent attaching a stale pulse.
+    pub(super) fn on_control_witness_built(
+        &mut self,
+        req: u64,
+        context: ControlWitnessContext,
+        witness: &ControlWitness,
+        attest: bool,
+    ) {
+        if self.awaiting {
+            return;
+        }
+        let Build::Requested {
+            req: outstanding, ..
+        } = self.build
+        else {
+            return;
+        };
+        let Some(fresh) = self.fresh_build.as_mut() else {
+            return;
+        };
+        if req != outstanding
+            || req != fresh.req
+            || fresh.payload.is_none()
+            || fresh.control.is_some()
+        {
+            return;
+        }
+        if !cfg!(sumeragi_mutation = "MS48")
+            && (context != fresh.context
+                || context.height != self.height
+                || context.view != self.view
+                || context.epoch != self.cfg.epoch.id
+                || context.parent_hash != self.tip.block_hash
+                || context.parent_result != self.tip.result)
+        {
+            return;
+        }
+        fresh.control = Some((*witness, attest));
+        self.finish_fresh_build();
+    }
+
+    fn finish_fresh_build(&mut self) {
+        let Build::Requested { req, .. } = self.build else {
+            return;
+        };
+        if !self.fresh_build.as_ref().is_some_and(|fresh| {
+            fresh.req == req && fresh.control.is_some() && fresh.payload.is_some()
+        }) {
+            return;
+        }
+        let mut fresh = self
+            .fresh_build
+            .take()
+            .expect("both original parts are complete");
+        let (payload, payload_attest) = fresh.payload.take().expect("original nonempty payload");
+        let (control, control_attest) =
+            fresh.control.take().expect("exact source control response");
         self.build = Build::Idle;
-        self.propose_fresh(payload, attest);
+        self.propose_fresh(payload, payload_attest || control_attest, &control);
     }
 
     /// On `PayloadReady{req}` (§6.10): wake the eligible leader's empty-build wait at any
@@ -186,7 +281,7 @@ impl Core {
 
     /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
     /// (§3.7 A1).
-    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool) {
+    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: &ControlWitness) {
         let Some(me) = self.leader_eligible() else {
             self.build = Build::Idle;
             return;
@@ -195,7 +290,9 @@ impl Core {
             return;
         }
         // MA7: the builder's flag is dropped.
-        let attest = attest && !cfg!(sumeragi_mutation = "MA7");
+        let boundary = self.height == self.cfg.epoch.last_height;
+        let attest = (attest && !cfg!(sumeragi_mutation = "MA7"))
+            || (boundary && !cfg!(sumeragi_mutation = "MS45"));
         let justify = if self.view == 0 {
             None
         } else {
@@ -206,6 +303,7 @@ impl Core {
         };
         let header = BlockHeader {
             instance: self.instance,
+            epoch: self.cfg.epoch.id,
             height: self.height,
             origin_view: self.view,
             parent_hash: self.tip.block_hash,
@@ -216,6 +314,7 @@ impl Core {
             skipped_leaders: self
                 .topo
                 .skipped_leader_keys(&self.cfg.committee, self.view),
+            control_witness: *control_witness,
             attest,
         };
         self.propose_block(Block { header, payload }, justify);
@@ -227,6 +326,7 @@ impl Core {
             return;
         };
         self.build = Build::Idle;
+        self.fresh_build = None;
         self.repropose = false;
         let bh = block.hash(&*self.crypto);
         self.put_body(bh, block.clone(), false);
@@ -251,7 +351,14 @@ impl Core {
             .and_then(|record| record.parent_commit_qc.clone());
         let bh = block.hash(&*self.crypto);
         let ad = preimage::att_digest(&*self.crypto, justify.as_ref(), parent_qc.as_ref());
-        let msg = preimage::prop_preimage(&self.instance, self.height, self.view, &bh, &ad);
+        let msg = preimage::prop_preimage(
+            &self.instance,
+            &self.cfg.epoch.id,
+            self.height,
+            self.view,
+            &bh,
+            &ad,
+        );
         let Some(sig) = self.sign(me, &msg) else {
             return;
         };

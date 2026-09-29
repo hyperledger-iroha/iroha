@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn bls_normal_pop_verified_key_requires_a_valid_pop() {
         let (pk, sk) = checked_seed_keypair(&[0x51; 32], Algorithm::BlsNormal).into_parts();
-        let (other_public_key, other_secret_key) =
+        let (other_public_key, other_secret) =
             checked_seed_keypair(&[0x52; 32], Algorithm::BlsNormal).into_parts();
         let pop = bls_normal_pop_prove(&sk).expect("pop");
         let key = BlsNormalPopVerifiedKey::new(&pk, &pop).expect("valid pop");
@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(key.payload().len(), 48);
         assert_eq!(key.clone(), key);
         assert!(format!("{key:?}").starts_with("BlsNormalPopVerifiedKey"));
-        let other_pop = bls_normal_pop_prove(&other_secret_key).expect("pop");
+        let other_pop = bls_normal_pop_prove(&other_secret).expect("pop");
         assert!(BlsNormalPopVerifiedKey::new(&pk, &other_pop).is_err());
         assert!(BlsNormalPopVerifiedKey::new(&other_public_key, &pop).is_err());
         assert!(BlsNormalPopVerifiedKey::new(&pk, &[]).is_err());
@@ -1323,37 +1323,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn borrowed_public_key_decode_validators_have_no_heap_units() {
-        for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa] {
-            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 0);
-        }
-    }
-
-    #[cfg(any(feature = "bls", feature = "gost", feature = "sm"))]
-    #[test]
-    fn allocating_public_key_decode_fallbacks_keep_explicit_heap_units() {
-        #[cfg(feature = "bls")]
-        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
-            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 2);
-        }
-        #[cfg(feature = "gost")]
-        for algorithm in [
-            Algorithm::Gost3410_2012_256ParamSetA,
-            Algorithm::Gost3410_2012_256ParamSetB,
-            Algorithm::Gost3410_2012_256ParamSetC,
-            Algorithm::Gost3410_2012_512ParamSetA,
-            Algorithm::Gost3410_2012_512ParamSetB,
-        ] {
-            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 12);
-        }
-        #[cfg(feature = "sm")]
-        assert_eq!(
-            public_key_validation_heap_units_for_decode(Algorithm::Sm2),
-            2
-        );
-    }
-
     #[cfg(feature = "sm")]
     #[test]
     fn maximum_accepted_sm2_public_key_payload_matches_protocol_ceiling() {
@@ -1520,8 +1489,7 @@ mod tests {
         let (algorithm, payload) = public_key
             .try_to_bytes()
             .expect("generated ML-DSA compact state");
-        PublicKeyFull::validate_bytes_for_decode(algorithm, payload)
-            .expect("borrowed ML-DSA decode validation");
+        public_key_decode::validate(algorithm, payload).expect("borrowed ML-DSA decode validation");
         assert_eq!(
             norito::core::SerializePayload::encoded_len_hint(compact),
             expected_hint
@@ -1572,11 +1540,12 @@ mod tests {
             0,
             "Norito, checked JSON, and formatting must not reparse ML-DSA key material"
         );
-        PublicKeyFull::from_bytes(algorithm, payload).expect("explicit full-key parsing succeeds");
+        parse_public_key_material(algorithm, payload)
+            .expect("explicit key-material parsing succeeds");
         assert_eq!(
             public_key_validation_call_count(),
             1,
-            "test counter must observe explicit full-key parsing"
+            "test counter must observe explicit key-material parsing"
         );
     }
     #[test]
@@ -1590,7 +1559,13 @@ mod tests {
         let archived = norito::from_bytes::<PublicKeyCompact>(&framed).expect("archive");
         let err = <PublicKeyCompact as norito::core::DeserializePayload>::try_deserialize(archived)
             .expect_err("invalid compact payload");
-        assert!(matches!(err, norito::core::Error::Message(_)));
+        assert!(matches!(
+            &err,
+            norito::core::Error::InvalidValue {
+                context: "public key"
+            }
+        ));
+        assert_eq!(err.to_string(), "invalid public key");
     }
     #[test]
     fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
@@ -1600,7 +1575,13 @@ mod tests {
             .expect("serialize raw compact bytes");
         let err = <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
             .expect_err("invalid compact payload");
-        assert!(matches!(err, norito::core::Error::Message(_)));
+        assert!(matches!(
+            &err,
+            norito::core::Error::InvalidValue {
+                context: "public key"
+            }
+        ));
+        assert_eq!(err.to_string(), "invalid public key");
     }
     #[test]
     fn public_key_compact_serialize_rejects_malformed_envelope() {
@@ -1679,11 +1660,11 @@ mod tests {
     #[test]
     fn public_key_compact_to_full_rejects_malformed_state_without_panic() {
         let malformed_payload = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
-        assert!(PublicKeyFull::try_from(&malformed_payload).is_err());
+        assert!(PublicKeyMaterial::try_from(&malformed_payload).is_err());
         let missing_tag = PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         };
-        assert!(PublicKeyFull::try_from(&missing_tag).is_err());
+        assert!(PublicKeyMaterial::try_from(&missing_tag).is_err());
     }
     #[test]
     fn public_key_compact_try_from_full_preserves_checked_payload() {
@@ -1694,31 +1675,36 @@ mod tests {
         let (algorithm, payload) = public_key
             .try_to_bytes()
             .expect("generated public key must be well-formed");
-        let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+        let PublicKeyMaterial::Decoded(full) =
+            parse_public_key_material(algorithm, payload).expect("full key parses")
+        else {
+            panic!("expected decoded key material");
+        };
         let compact = PublicKeyCompact::from(full);
         assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
         assert_eq!(compact.try_payload().expect("payload"), payload);
     }
     #[test]
-    fn public_key_full_try_payload_borrows_ed25519_payload() {
+    fn public_key_full_payload_borrows_ed25519_payload() {
         let public_key = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
             .public_key()
             .clone();
         let (algorithm, payload) = public_key
             .try_to_bytes()
             .expect("generated public key must be well-formed");
-        let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-        match full
-            .try_payload()
-            .expect("validated public key payload is encodable")
-        {
+        let PublicKeyMaterial::Decoded(full) =
+            parse_public_key_material(algorithm, payload).expect("full key parses")
+        else {
+            panic!("expected decoded key material");
+        };
+        match full.payload() {
             Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
             Cow::Owned(_) => panic!("Ed25519 full public key payload should borrow"),
         }
     }
     #[test]
     #[cfg(feature = "bls")]
-    fn public_key_full_try_payload_borrows_bls_payloads() {
+    fn public_key_full_payload_borrows_bls_payloads() {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             let public_key = checked_seed_keypair(&[0x42; 32], algorithm)
                 .public_key()
@@ -1726,11 +1712,12 @@ mod tests {
             let (algorithm, payload) = public_key
                 .try_to_bytes()
                 .expect("generated BLS public key must be well-formed");
-            let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-            match full
-                .try_payload()
-                .expect("validated BLS public key payload is encodable")
-            {
+            let PublicKeyMaterial::Decoded(full) =
+                parse_public_key_material(algorithm, payload).expect("full key parses")
+            else {
+                panic!("expected decoded key material");
+            };
+            match full.payload() {
                 Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
                 Cow::Owned(_) => panic!("BLS full public key payload should borrow"),
             }
@@ -1760,7 +1747,13 @@ mod tests {
         let archived = norito::from_bytes::<PublicKey>(&framed).expect("archive");
         let err = <PublicKey as norito::core::DeserializePayload>::try_deserialize(archived)
             .expect_err("invalid key");
-        assert!(matches!(err, norito::core::Error::Message(_)));
+        assert!(matches!(
+            &err,
+            norito::core::Error::InvalidValue {
+                context: "public key"
+            }
+        ));
+        assert_eq!(err.to_string(), "invalid public key");
     }
     #[test]
     fn public_key_norito_serialize_rejects_malformed_envelope() {
@@ -2241,10 +2234,14 @@ mod tests {
             let (direct, usage) = norito::core::with_decode_limits_measured(zero_budget(), || {
                 PublicKey::from_canonical_str_for_decode(&alias)
             });
+            let error = direct.expect_err("prefixed public key must be rejected");
             assert!(matches!(
-                direct,
-                Err(norito::core::Error::Message(message)) if message == "invalid public key"
+                &error,
+                norito::core::Error::InvalidValue {
+                    context: "public key"
+                }
             ));
+            assert_eq!(error.to_string(), "invalid public key");
             assert_eq!(usage.total_allocated_bytes(), 0);
 
             let (from_value, usage) =

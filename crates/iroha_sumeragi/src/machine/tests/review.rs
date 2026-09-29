@@ -214,10 +214,14 @@ fn review_init_configs_beyond_t_plus_2_are_refused() {
     };
     assert!(start(h.init(records.clone())).is_ok(), "t + 1 and t + 2");
     let mut extra = h.init(records.clone());
-    extra.configs.push((3, h.config(3)));
+    extra
+        .configs
+        .push((3, crate::types::ConfigSlot::Ready(h.config(3))));
     assert!(matches!(start(extra), Err(ConfigError::InvalidInit(_))));
     let mut twice = h.init(records.clone());
-    twice.configs.push((2, h.config(2)));
+    twice
+        .configs
+        .push((2, crate::types::ConfigSlot::Ready(h.config(2))));
     assert!(matches!(start(twice), Err(ConfigError::InvalidInit(_))));
 }
 
@@ -399,8 +403,10 @@ fn review_zero_payload_retry_refused_at_start() {
     )];
     let mut init = h.init(records);
     for (_, config) in &mut init.configs {
-        config.params.payload_retry_interval = 0;
-        config.params.block_time = 0;
+        if let crate::types::ConfigSlot::Ready(config) = config {
+            config.params.payload_retry_interval = 0;
+            config.params.block_time = 0;
+        }
     }
     let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
     let started = Core::new(

@@ -1,6 +1,8 @@
 //! Benchmarks for vectorized SIMD helpers in IVM.
 use criterion::Criterion;
-use ivm::{simd_lanes, vadd32, vadd64_auto, vand_auto, vor_auto, vrot32, vxor_auto};
+use ivm::{
+    simd_lanes, vadd32, vadd64_auto_into, vand_auto_into, vor_auto_into, vrot32, vxor_auto_into,
+};
 fn bench_vadd32(c: &mut Criterion) {
     let a = [1u32, 2, 3, 4];
     let b = [4u32, 3, 2, 1];
@@ -22,9 +24,11 @@ fn bench_vadd64_auto(c: &mut Criterion) {
     let lanes = simd_lanes();
     let a: Vec<u32> = (0..lanes as u32).collect();
     let b: Vec<u32> = (0..lanes as u32).rev().collect();
-    c.bench_function("vadd64_auto", |bch| {
+    let mut output = vec![0; lanes];
+    c.bench_function("vadd64_auto_into", |bch| {
         bch.iter(|| {
-            std::hint::black_box(vadd64_auto(&a, &b));
+            vadd64_auto_into(&a, &b, &mut output);
+            std::hint::black_box(&output);
         })
     });
 }
@@ -32,9 +36,11 @@ fn bench_vand_auto(c: &mut Criterion) {
     let lanes = simd_lanes();
     let a: Vec<u32> = vec![0xFFFF_FFFF; lanes];
     let b: Vec<u32> = vec![0x0F0F_0F0F; lanes];
-    c.bench_function("vand_auto", |bch| {
+    let mut output = vec![0; lanes];
+    c.bench_function("vand_auto_into", |bch| {
         bch.iter(|| {
-            std::hint::black_box(vand_auto(&a, &b));
+            vand_auto_into(&a, &b, &mut output);
+            std::hint::black_box(&output);
         })
     });
 }
@@ -42,9 +48,11 @@ fn bench_vxor_auto(c: &mut Criterion) {
     let lanes = simd_lanes();
     let a: Vec<u32> = vec![0xAAAA_AAAA; lanes];
     let b: Vec<u32> = vec![0x5555_5555; lanes];
-    c.bench_function("vxor_auto", |bch| {
+    let mut output = vec![0; lanes];
+    c.bench_function("vxor_auto_into", |bch| {
         bch.iter(|| {
-            std::hint::black_box(vxor_auto(&a, &b));
+            vxor_auto_into(&a, &b, &mut output);
+            std::hint::black_box(&output);
         })
     });
 }
@@ -52,9 +60,11 @@ fn bench_vor_auto(c: &mut Criterion) {
     let lanes = simd_lanes();
     let a: Vec<u32> = vec![0xF0F0_F0F0; lanes];
     let b: Vec<u32> = vec![0x0F0F_0F0F; lanes];
-    c.bench_function("vor_auto", |bch| {
+    let mut output = vec![0; lanes];
+    c.bench_function("vor_auto_into", |bch| {
         bch.iter(|| {
-            std::hint::black_box(vor_auto(&a, &b));
+            vor_auto_into(&a, &b, &mut output);
+            std::hint::black_box(&output);
         })
     });
 }

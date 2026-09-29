@@ -20,10 +20,13 @@ require the packaged ABI-24 Rust bridge for the current runtime identifier. Priv
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
-The IVM replay-binding backend label is `halo2/pasta/ivm-replay-binding-v1`;
-its canonical circuit ID is `halo2/pasta/ipa/ivm-replay-binding-v1`. These
-are distinct registry fields. The proof binds public commitments; validators
-establish execution validity through authenticated VM replay.
+Identifier policies expose an immutable `ToriiRamFheProfile` through the existing
+`GetIdentifierPoliciesAsync()` response. Its unsigned dimensions, encrypted-input
+mode and exact initializer descriptor hash are validated during decoding; absent
+profiles remain `null`. The profile describes public parameters and does not grant
+execution-proof availability.
+
+Binding-only IVM verifier labels are retired and rejected. Production proof-backed IVM invocation remains closed until the complete native execution relation and finalized State authority are implemented and qualified.
 
 Privacy archive queries and validation run on the caller's ordinary stack. They
 do not create enlarged-stack threads. Native result bounds, owned input snapshots

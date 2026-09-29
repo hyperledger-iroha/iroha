@@ -4,6 +4,11 @@ use super::*;
 use crate::{OperationKind, PublicInputs, StateTransition};
 use std::collections::BTreeSet;
 
+/// Merkle role of one fixture FRI round; fixture round counts are tiny.
+fn fri_role(round: usize) -> MerkleTreeRoleV1 {
+    MerkleTreeRoleV1::Fri(u32::try_from(round).expect("fixture FRI round fits u32"))
+}
+
 fn fp4(value: u64) -> GoldilocksFp4V1 {
     GoldilocksFp4V1::from_base(value).expect("canonical Goldilocks test value")
 }
@@ -1225,11 +1230,11 @@ fn parallel_merkle_levels_match_scalar_trees_across_roles_padding_and_worker_cou
         MerkleTreeRoleV1::Fri(0),
         MerkleTreeRoleV1::Fri(17),
     ] {
-        for count in [0, 1, 3, 31, 63, 64, 65, 129] {
+        for count in [0_u64, 1, 3, 31, 63, 64, 65, 129] {
             let leaves = (0..count)
                 .map(|index| {
                     GoldilocksDigest384V1::new(core::array::from_fn(|lane| {
-                        1 + 7 * index as u64 + 13 * lane as u64
+                        1 + 7 * index + 13 * lane as u64
                     }))
                     .unwrap()
                 })
@@ -1717,6 +1722,52 @@ fn fri_terminal_leaf_commits_every_value_in_domain_order() {
         ));
     }
 }
+/// Rebuild every retained commitment independently and replay the original
+/// root/beta schedule, including all four extension-field lanes.
+fn assert_retained_fri_schedule(
+    retained: &FriOpeningLayers,
+    reference: &mut Transcript,
+    mut domain: FriDomain,
+) {
+    for (round, layer) in retained.layer_values.iter().enumerate() {
+        let terminal = round + 1 == retained.layer_values.len();
+        let leaves = if terminal {
+            hash_fri_terminal_leaves(round, layer).unwrap()
+        } else {
+            hash_fri_leaves_with_mode(round, layer, 2, ExecutionMode::Cpu).unwrap()
+        };
+        let root = merkle_root_with_mode(&leaves, fri_role(round), ExecutionMode::Cpu).unwrap();
+        assert_eq!(retained.roots[round], root);
+        if terminal {
+            reference.append_fri_final(root);
+        } else {
+            reference.append_fri_layer(round, root);
+            let beta = reference.challenge_beta(round);
+            assert_eq!(retained.betas[round], beta);
+            assert_eq!(
+                retained.layer_values[round + 1],
+                fold_round(layer, 2, beta, domain).unwrap(),
+            );
+            domain = domain.folded(2);
+        }
+    }
+}
+
+/// Every opening carries the complete terminal layer under its duplicate-parent root.
+fn assert_retained_terminal_openings(retained: &FriOpeningLayers, openings: &[FriQueryOpening]) {
+    for opening in openings {
+        assert_eq!(opening.final_values, *retained.layer_values.last().unwrap());
+        assert_eq!(opening.final_merkle_path.len(), 1);
+        let round = retained.layer_values.len() - 1;
+        let terminal = hash_fri_chunk(round, 0, &opening.final_values).unwrap();
+        assert_eq!(opening.final_merkle_path[0].as_fastpq(), terminal);
+        assert_eq!(
+            retained.roots[round],
+            merkle_node_hash(fri_role(round), 1, 0, terminal, terminal).unwrap(),
+        );
+    }
+}
+
 #[test]
 fn retained_fri_layers_preserve_full_field_roots_transcript_and_opening_bytes() {
     for (length, offset, mode) in [
@@ -1741,38 +1792,10 @@ fn retained_fri_layers_preserve_full_field_roots_transcript_and_opening_bytes() 
         let mut retained =
             fold_with_fri_opening_layers(&values, &params, &mut transcript, mode).unwrap();
         assert_eq!(retained.layer_values[0], values);
-        let mut domain =
+        let domain =
             FriDomain::from_lde_parameters(params.lde_root, params.lde_log_size, length, offset)
                 .unwrap();
-        // Rebuild every commitment independently and replay the original
-        // root/beta schedule, including all four extension-field lanes.
-        for (round, layer) in retained.layer_values.iter().enumerate() {
-            let terminal = round + 1 == retained.layer_values.len();
-            let leaves = if terminal {
-                hash_fri_terminal_leaves(round, layer).unwrap()
-            } else {
-                hash_fri_leaves_with_mode(round, layer, 2, ExecutionMode::Cpu).unwrap()
-            };
-            let root = merkle_root_with_mode(
-                &leaves,
-                MerkleTreeRoleV1::Fri(round as u32),
-                ExecutionMode::Cpu,
-            )
-            .unwrap();
-            assert_eq!(retained.roots[round], root);
-            if terminal {
-                reference.append_fri_final(root);
-            } else {
-                reference.append_fri_layer(round, root);
-                let beta = reference.challenge_beta(round);
-                assert_eq!(retained.betas[round], beta);
-                assert_eq!(
-                    retained.layer_values[round + 1],
-                    fold_round(layer, 2, beta, domain).unwrap(),
-                );
-                domain = domain.folded(2);
-            }
-        }
+        assert_retained_fri_schedule(&retained, &mut reference, domain);
         assert_eq!(transcript.state, reference.state);
         let sampled = sample_queries(length, 136, &mut transcript).unwrap();
         assert_eq!(
@@ -1806,24 +1829,7 @@ fn retained_fri_layers_preserve_full_field_roots_transcript_and_opening_bytes() 
                 retained.opening_trees.as_ref().unwrap().tree_build_count(),
                 0
             );
-            for opening in actual {
-                assert_eq!(opening.final_values, *retained.layer_values.last().unwrap());
-                assert_eq!(opening.final_merkle_path.len(), 1);
-                let round = retained.layer_values.len() - 1;
-                let terminal = hash_fri_chunk(round, 0, &opening.final_values).unwrap();
-                assert_eq!(opening.final_merkle_path[0].as_fastpq(), terminal);
-                assert_eq!(
-                    retained.roots[round],
-                    merkle_node_hash(
-                        MerkleTreeRoleV1::Fri(round as u32),
-                        1,
-                        0,
-                        terminal,
-                        terminal
-                    )
-                    .unwrap(),
-                );
-            }
+            assert_retained_terminal_openings(&retained, &actual);
         }
         // Explicit duplicate and upper-half indices exercise occurrence
         // order even when the transcript happens to sample another set.
@@ -1928,7 +1934,7 @@ fn transcript_initialisation_separates_the_quotient_integer_and_terminal_schema(
     let public_io = PublicIO::default();
     let transcript =
         Transcript::initialise(&public_io, params.name, 1, TRANSCRIPT_TAG_INIT).unwrap();
-    let old_payload = norito::core::to_bytes(&(1_u16, params.name, public_io.clone())).unwrap();
+    let old_payload = norito::core::to_bytes(&(1_u16, params.name, public_io)).unwrap();
     let old_state = hash_bytes_v1(
         TRANSCRIPT_ROLE_V1,
         b"initialise",
@@ -2111,12 +2117,8 @@ fn fri_layers_match_reference_harness() {
         round += 1;
     }
     let terminal_leaf = hash_fri_chunk(round, 0, &current).expect("complete terminal leaf");
-    let final_root = merkle_root_with_mode(
-        &[terminal_leaf],
-        MerkleTreeRoleV1::Fri(round as u32),
-        ExecutionMode::Cpu,
-    )
-    .expect("complete terminal root");
+    let final_root = merkle_root_with_mode(&[terminal_leaf], fri_role(round), ExecutionMode::Cpu)
+        .expect("complete terminal root");
     reference_transcript.append_fri_final(final_root);
     reference_layers.push(final_root);
     assert_eq!(layers, reference_layers);
@@ -2176,12 +2178,8 @@ fn fri_reference_detects_mutation() {
         round += 1;
     }
     let terminal_leaf = hash_fri_chunk(round, 0, &current).expect("complete terminal leaf");
-    let final_root = merkle_root_with_mode(
-        &[terminal_leaf],
-        MerkleTreeRoleV1::Fri(round as u32),
-        ExecutionMode::Cpu,
-    )
-    .expect("complete terminal root");
+    let final_root = merkle_root_with_mode(&[terminal_leaf], fri_role(round), ExecutionMode::Cpu)
+        .expect("complete terminal root");
     reference_transcript.append_fri_final(final_root);
     mutated_layers.push(final_root);
     assert_ne!(baseline_layers, mutated_layers);

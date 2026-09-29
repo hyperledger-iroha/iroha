@@ -104,6 +104,11 @@ impl GoldilocksFp4V1 {
 
     /// Add two extension elements.
     #[must_use]
+    #[allow(
+        clippy::should_implement_trait,
+        reason = "re-exported inherent field API called as `.add` across the crate; \
+                  switching to `core::ops::Add` would change the public surface"
+    )]
     pub fn add(self, other: Self) -> Self {
         Self {
             coefficients: core::array::from_fn(|index| {
@@ -114,6 +119,11 @@ impl GoldilocksFp4V1 {
 
     /// Subtract two extension elements.
     #[must_use]
+    #[allow(
+        clippy::should_implement_trait,
+        reason = "re-exported inherent field API called as `.sub` across the crate; \
+                  switching to `core::ops::Sub` would change the public surface"
+    )]
     pub fn sub(self, other: Self) -> Self {
         Self {
             coefficients: core::array::from_fn(|index| {
@@ -124,6 +134,11 @@ impl GoldilocksFp4V1 {
 
     /// Multiply two extension elements modulo `X^4 - 7`.
     #[must_use]
+    #[allow(
+        clippy::should_implement_trait,
+        reason = "re-exported inherent field API called as `.mul` across the crate; \
+                  switching to `core::ops::Mul` would change the public surface"
+    )]
     pub fn mul(self, other: Self) -> Self {
         let mut product = [0_u64; 7];
         for left in 0..4 {
@@ -202,7 +217,7 @@ impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksFp4V1 {
 ///
 /// This is arithmetic normalization, not admission of noncanonical proof cells.
 #[inline]
-pub(crate) fn add_base(left: u64, right: u64) -> u64 {
+pub fn add_base(left: u64, right: u64) -> u64 {
     let left = reduce_base(left);
     let right = reduce_base(right);
     let sum = left.wrapping_add(right);
@@ -218,7 +233,7 @@ pub(crate) fn add_base(left: u64, right: u64) -> u64 {
 
 /// Subtract arbitrary u64 representatives with a canonical, nonnegative result.
 #[inline]
-pub(crate) fn sub_base(left: u64, right: u64) -> u64 {
+pub fn sub_base(left: u64, right: u64) -> u64 {
     let left = reduce_base(left);
     let right = reduce_base(right);
     if left >= right {
@@ -231,7 +246,7 @@ pub(crate) fn sub_base(left: u64, right: u64) -> u64 {
 
 /// Multiply arbitrary u64 representatives and return their canonical field product.
 #[inline]
-pub(crate) fn mul_base(left: u64, right: u64) -> u64 {
+pub fn mul_base(left: u64, right: u64) -> u64 {
     reduce_wide(u128::from(left) * u128::from(right))
 }
 
@@ -358,17 +373,21 @@ mod tests {
         }
     }
 
+    /// Narrow a residue modulo the Goldilocks prime, which always fits `u64`.
+    fn oracle_residue(value: u128) -> u64 {
+        u64::try_from(value % u128::from(GOLDILOCKS_MODULUS_V1)).expect("residue is below p")
+    }
+
     fn oracle_add(left: u64, right: u64) -> u64 {
-        ((u128::from(left) + u128::from(right)) % u128::from(GOLDILOCKS_MODULUS_V1)) as u64
+        oracle_residue(u128::from(left) + u128::from(right))
     }
 
     fn oracle_sub(left: u64, right: u64) -> u64 {
-        ((u128::from(left) + 2 * u128::from(GOLDILOCKS_MODULUS_V1) - u128::from(right))
-            % u128::from(GOLDILOCKS_MODULUS_V1)) as u64
+        oracle_residue(u128::from(left) + 2 * u128::from(GOLDILOCKS_MODULUS_V1) - u128::from(right))
     }
 
     fn oracle_mul(left: u64, right: u64) -> u64 {
-        (u128::from(left) * u128::from(right) % u128::from(GOLDILOCKS_MODULUS_V1)) as u64
+        oracle_residue(u128::from(left) * u128::from(right))
     }
 
     fn check_base(left: u64, right: u64) {
@@ -419,10 +438,7 @@ mod tests {
             u64::MAX,
         ];
         for left in values {
-            assert_eq!(
-                reduce_base(left),
-                (u128::from(left) % u128::from(GOLDILOCKS_MODULUS_V1)) as u64
-            );
+            assert_eq!(reduce_base(left), oracle_residue(u128::from(left)));
             for right in values {
                 check_base(left, right);
             }
@@ -497,7 +513,7 @@ mod tests {
         for _ in 0..256 {
             let mut sample = || {
                 GoldilocksFp4V1::new(core::array::from_fn(|_| {
-                    (u128::from(next_word(&mut state)) % u128::from(GOLDILOCKS_MODULUS_V1)) as u64
+                    oracle_residue(u128::from(next_word(&mut state)))
                 }))
                 .unwrap()
             };

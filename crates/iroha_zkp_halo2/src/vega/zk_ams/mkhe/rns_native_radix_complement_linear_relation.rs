@@ -43,6 +43,9 @@ use crate::{
 };
 
 #[cfg(test)]
+use super::rns_native_bulletproof_common::{self as bulletproof_common, hash_v1};
+
+#[cfg(test)]
 const VERSION_V1: u8 = 1;
 #[cfg(test)]
 const FLAGS_V1: u8 = 0;
@@ -722,11 +725,7 @@ fn canonical_residual_digest_v1(
 
 #[cfg(test)]
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(CODEC_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(bytes);
-    hash.finalize()
+    bulletproof_common::codec_digest_v1(CODEC_DOMAIN_V1, VERSION_V1, bytes)
 }
 
 #[cfg(test)]
@@ -860,43 +859,11 @@ fn initial_transcript_state_v1(
 }
 
 #[cfg(test)]
-fn hash_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(bytes);
-    hash.finalize()
-}
-
-#[cfg(test)]
 fn derive_challenge_v1(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
 ) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-    for attempt in 0_u8..128 {
-        let mut input = Vec::with_capacity(CHALLENGE_DOMAIN_V1.len() + state.len() + 6);
-        input.extend_from_slice(CHALLENGE_DOMAIN_V1);
-        input.extend_from_slice(state);
-        input.extend_from_slice(&ordinal.to_be_bytes());
-        input.push(attempt);
-        let mut low = input.clone();
-        low.push(0);
-        input.push(1);
-        let mut wide = [0_u8; 64];
-        wide[..32].copy_from_slice(&hash_v1(&low));
-        wide[32..].copy_from_slice(&hash_v1(&input));
-        let challenge = Scalar::from_uniform_le_bytes(wide);
-        wide.fill(0);
-        if !challenge.is_zero() {
-            state.push(2);
-            state.extend_from_slice(&ordinal.to_be_bytes());
-            state.push(attempt);
-            state.extend_from_slice(&challenge.to_le_bytes());
-            *ordinal = ordinal
-                .checked_add(1)
-                .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-            return Ok(challenge);
-        }
-    }
-    Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
+    bulletproof_common::derive_challenge_v1(CHALLENGE_DOMAIN_V1, state, ordinal)
 }
 
 #[cfg(test)]
@@ -943,18 +910,7 @@ where
     }
 
     fn take_v1(&mut self, count: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
-        let end = self
-            .cursor
-            .checked_add(count)
-            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
-        let value = self.core.bytes.get(self.cursor..end).ok_or(
-            GeneralizedBulletproofErrorV1::ProofLength {
-                actual: self.core.bytes.len(),
-                expected: end,
-            },
-        )?;
-        self.cursor = end;
-        Ok(value)
+        bulletproof_common::take_v1(self.core.bytes, &mut self.cursor, count)
     }
 
     fn finish_v1(self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeRadixComplementLinearErrorV1> {
@@ -971,27 +927,13 @@ where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
     fn read_scalar(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; SCALAR_BYTES_V1] = self
-            .take_v1(SCALAR_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        let scalar = Scalar::from_le_bytes_exact(encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
-        self.state.push(0);
-        self.state.extend_from_slice(&encoded);
-        Ok(scalar)
+        let encoded = self.take_v1(SCALAR_BYTES_V1)?;
+        bulletproof_common::absorb_scalar_v1(&mut self.state, encoded)
     }
 
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
-        let encoded: [u8; POINT_BYTES_V1] = self
-            .take_v1(POINT_BYTES_V1)?
-            .try_into()
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        let point = Point::from_non_identity_wire_bytes_exact(&encoded)
-            .map_err(|_| GeneralizedBulletproofErrorV1::PointEncoding)?;
-        self.state.push(1);
-        self.state.extend_from_slice(&encoded);
-        Ok(point)
+        let encoded = self.take_v1(POINT_BYTES_V1)?;
+        bulletproof_common::absorb_point_v1(&mut self.state, encoded)
     }
 
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {

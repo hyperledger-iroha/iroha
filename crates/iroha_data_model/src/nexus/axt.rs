@@ -40,6 +40,14 @@ pub const AXT_ANCHORED_SPEND_HANDLE_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for a fresh issuer signature over one exact anchored spend.
 pub const AXT_ANCHORED_SPEND_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:axt:anchored-spend:issuer-signature:v1\0";
+/// Domain separator for one claimed successful source execution receipt.
+pub const AXT_SOURCE_SUCCESS_RECEIPT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:axt:source-success-receipt:digest:v1\0";
+/// Domain separator for the complete public facts of one ordered transfer.
+pub const AXT_SOURCE_TRANSFER_DIGEST_DOMAIN_V1: &[u8] = b"iroha:axt:source-transfer:digest:v1\0";
+/// Domain separator for one source receipt and exact ordered transfer occurrence.
+pub const AXT_SOURCE_TRANSFER_OCCURRENCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:axt:source-transfer-occurrence:digest:v1\0";
 
 /// Domain separator for the exact ordered transaction wires in a finalized AXT anchor.
 pub const AXT_ORDERED_TRANSACTION_SET_DOMAIN_V1: &[u8] =
@@ -659,8 +667,8 @@ pub struct AxtFastpqBinding {
     /// Canonical sorted commitments linking this proof's exact transfer
     /// statements to independently authenticated [`RemoteSpendIntent`] handles.
     ///
-    /// Generic proofs that are not consumed by `USE_ASSET_HANDLE` leave this
-    /// empty. Handle-bound proofs must include every exact replay identity,
+    /// Proofs without anchored remote spends leave this empty. Spend-bound
+    /// proofs must include every exact replay identity,
     /// descriptor, asset, dataspace, operation, accounts, and effective amount
     /// tuple that may use the proof. The proof does not itself grant authority.
     /// Duplicates, non-canonical ordering, and sets larger than
@@ -1588,8 +1596,8 @@ pub enum AxtHandleBudgetConsumeError {
     /// Cumulative consumption exceeded the issuer-signed remaining allowance.
     #[error("handle budget cumulative consumption exceeds remaining allowance")]
     RemainingExceeded,
-    /// Cumulative consumption exceeded the issuer-signed per-use allowance.
-    #[error("handle budget cumulative consumption exceeds per-use allowance")]
+    /// One spend exceeded the issuer-signed per-use allowance.
+    #[error("handle budget spend exceeds per-use allowance")]
     PerUseExceeded,
 }
 impl AxtHandleBudgetRecord {
@@ -1625,7 +1633,9 @@ impl AxtHandleBudgetRecord {
     ///
     /// Returns [`AxtHandleBudgetConsumeError::ZeroAmount`] for an empty persisted
     /// record, or the corresponding limit error when cumulative consumption
-    /// exceeds the issuer-signed `remaining` or `per_use` allowance.
+    /// exceeds the issuer-signed `remaining` allowance. A cumulative record
+    /// cannot recover individual per-use amounts; admission checks those when
+    /// each spend is consumed.
     pub fn validate_for_key(
         &self,
         key: &AxtHandleBudgetKey,
@@ -1651,6 +1661,15 @@ impl AxtHandleBudgetRecord {
         if amount.is_zero() {
             return Err(AxtHandleBudgetConsumeError::ZeroAmount);
         }
+        key.validate()?;
+        if key
+            .budget
+            .per_use
+            .as_ref()
+            .is_some_and(|limit| amount > limit)
+        {
+            return Err(AxtHandleBudgetConsumeError::PerUseExceeded);
+        }
         let consumed = self.consumed.checked_add(amount)?;
         Self::validate_consumed_for_key(&consumed, key)?;
         self.consumed = consumed;
@@ -1668,14 +1687,6 @@ impl AxtHandleBudgetRecord {
         }
         if consumed > &key.budget.remaining {
             return Err(AxtHandleBudgetConsumeError::RemainingExceeded);
-        }
-        if key
-            .budget
-            .per_use
-            .as_ref()
-            .is_some_and(|limit| consumed > limit)
-        {
-            return Err(AxtHandleBudgetConsumeError::PerUseExceeded);
         }
         Ok(())
     }
@@ -1958,7 +1969,7 @@ pub struct SpendOp {
     #[norito(required)]
     pub amount: Option<Quantity>,
 }
-/// Intent forwarded to a dataspace via `USE_ASSET_HANDLE`.
+/// Intent bound to an anchored remote spend in its target dataspace.
 #[derive(
     Clone,
     Debug,
@@ -2070,6 +2081,10 @@ pub struct AxtAnchoredSpendDraftV1 {
     /// Exact hidden-amount commitment mirror, when applicable.
     #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
+    /// Claimed successful source execution, resolved from finalized State at admission.
+    pub source_receipt: AxtSourceSuccessReceiptV1,
+    /// Exact ordered source transfer whose proof-bound claim consumes this handle.
+    pub source_occurrence: AxtSourceTransferOccurrenceV1,
 }
 
 /// Canonical payload covered by the fresh issuer signature on one AXT spend.
@@ -2104,6 +2119,11 @@ pub struct AxtAnchoredSpendIssuerPayloadV1 {
     /// Hidden-amount commitment mirror, when applicable.
     #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
+    /// Digest of the exact claimed successful source execution receipt.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub source_success_receipt_digest: [u8; 32],
+    /// Exact ordered source transfer occurrence authorized by this signature.
+    pub source_occurrence: AxtSourceTransferOccurrenceV1,
     /// Exact authoritative finalized source-state anchor.
     pub anchor: AxtFinalizedSpendAnchorV1,
     /// Exact positive expiry authenticated for this spend.
@@ -2140,10 +2160,9 @@ pub struct AxtAnchoredSpendIssuerAuthorizationV1 {
     pub issuer_signature: Signature,
 }
 
-/// Admission-ready AXT spend with a mandatory finalized anchor and fresh signature.
-// TODO: replace the envelope's `AxtHandleFragment` collection with this type and
-// route block admission, CoreHost, and the IVM syscall through one WSV resolver
-// once the qualification/state tranche has finished changing shared Core state.
+/// Issuer-signed AXT spend carrying a claimed source receipt and exact occurrence.
+// TODO: route block admission, CoreHost, and the IVM syscall through one verified
+// finalized-State resolver. Constructing this value grants no authorization.
 #[derive(
     Clone,
     Debug,
@@ -2192,6 +2211,164 @@ pub struct AxtAnchoredSpendReplayKeyV1 {
     pub nonce: AxtSpendNonceV1,
 }
 
+impl AxtAnchoredSpendReplayKeyV1 {
+    /// Validate the durable issuer nonce identity after decoding persisted state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid asset incarnation or a zero nonce. Admission must also
+    /// compare the complete issuer context with current authoritative State.
+    pub fn validate(&self) -> Result<(), AxtAnchoredSpendReplayKeyValidationErrorV1> {
+        self.issuer_context
+            .validate()
+            .map_err(AxtAnchoredSpendReplayKeyValidationErrorV1::IssuerContext)?;
+        self.nonce
+            .validate()
+            .map_err(AxtAnchoredSpendReplayKeyValidationErrorV1::Nonce)
+    }
+}
+
+/// Permanent identity of one physical transfer in a finalized source execution.
+///
+/// The key deliberately excludes issuer nonce, handle, proof, transfer digest, and
+/// receipt claims. Changing any of those cannot make the same ordered source
+/// transfer available a second time. State must authenticate the anchor and
+/// source execution before consuming this key.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSourceTransferReplayKeyV1")]
+pub struct AxtSourceTransferReplayKeyV1 {
+    /// Genesis-derived source network.
+    pub network_id: NetworkId,
+    /// Source dataspace within the finalized block.
+    pub dataspace_id: DataSpaceId,
+    /// Source execution lane within the finalized block.
+    pub lane_id: LaneId,
+    /// Exact canonical finalized source block header.
+    pub block_header_hash: HashOf<BlockHeader>,
+    /// Position of the successful source transaction in the block.
+    pub source_tx_index: u32,
+    /// Position of the ordered transfer transcript in that execution.
+    pub transcript_index: u32,
+    /// Position of the transfer within that transcript.
+    pub delta_index: u32,
+}
+
+impl AxtSourceTransferReplayKeyV1 {
+    /// Extract the physical coordinate claimed by a structurally valid spend.
+    ///
+    /// # Errors
+    /// Rejects malformed public bindings. This does not authenticate the
+    /// finalized source anchor, receipt, or transfer occurrence.
+    pub fn from_spend_v1(
+        spend: &AxtAnchoredSpendV1,
+    ) -> Result<Self, AxtAnchoredSpendValidationErrorV1> {
+        spend.issuer_payload_v1()?;
+        let anchor = &spend.authorization.anchor;
+        let occurrence = &spend.draft.source_occurrence;
+        Ok(Self {
+            network_id: anchor.network_id,
+            dataspace_id: anchor.dataspace_id,
+            lane_id: anchor.lane_id,
+            block_header_hash: anchor.block_header_hash,
+            source_tx_index: occurrence.source_tx_index,
+            transcript_index: occurrence.transcript_index,
+            delta_index: occurrence.delta_index,
+        })
+    }
+
+    /// Validate the persistent physical coordinate after snapshot decoding.
+    ///
+    /// # Errors
+    /// Rejects missing source identity or an out-of-range source coordinate.
+    pub fn validate(&self) -> Result<(), AxtSourceTransferReplayKeyValidationErrorV1> {
+        if axt_logical_hash_is_zero(self.network_id.as_bytes()) {
+            return Err(AxtSourceTransferReplayKeyValidationErrorV1::Network);
+        }
+        if axt_logical_hash_is_zero(self.block_header_hash.as_ref()) {
+            return Err(AxtSourceTransferReplayKeyValidationErrorV1::BlockHeader);
+        }
+        if self.source_tx_index as usize >= MAX_AXT_FINALIZED_TRANSACTIONS_V1 {
+            return Err(AxtSourceTransferReplayKeyValidationErrorV1::TransactionIndex);
+        }
+        if self.transcript_index as usize >= MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 {
+            return Err(AxtSourceTransferReplayKeyValidationErrorV1::TranscriptIndex);
+        }
+        if self.delta_index as usize >= MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1 {
+            return Err(AxtSourceTransferReplayKeyValidationErrorV1::DeltaIndex);
+        }
+        Ok(())
+    }
+}
+
+/// Invalid permanent physical-transfer replay identity.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtSourceTransferReplayKeyValidationErrorV1 {
+    /// Source network identity is absent.
+    #[error("AXT source transfer replay key has no network identity")]
+    Network,
+    /// Finalized source block identity is absent.
+    #[error("AXT source transfer replay key has no finalized block header")]
+    BlockHeader,
+    /// Transaction position exceeds the bounded canonical source block.
+    #[error("AXT source transfer replay key transaction index is out of range")]
+    TransactionIndex,
+    /// Transcript position exceeds the maximum proof-bound transfer count.
+    #[error("AXT source transfer replay key transcript index is out of range")]
+    TranscriptIndex,
+    /// Delta position exceeds the maximum proof-bound transfer count.
+    #[error("AXT source transfer replay key delta index is out of range")]
+    DeltaIndex,
+}
+
+/// Permanent witness that one source transfer consumed one issuer nonce.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSourceTransferReplayRecordV1")]
+pub struct AxtSourceTransferReplayRecordV1 {
+    /// Fresh issuer authorization consumed by this physical transfer.
+    pub issuer_nonce: AxtAnchoredSpendReplayKeyV1,
+    /// Exact consensus slot in which the spend was applied.
+    pub consumed_slot: u64,
+}
+
+/// Invalid durable issuer nonce identity for an anchored AXT spend.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtAnchoredSpendReplayKeyValidationErrorV1 {
+    /// The issuer context does not identify a registered asset incarnation.
+    #[error("AXT spend replay key has an invalid issuer context: {0}")]
+    IssuerContext(AxtAssetIncarnationValidationError),
+    /// A zero nonce cannot authenticate a spend.
+    #[error("AXT spend replay key has an invalid nonce: {0}")]
+    Nonce(AxtSpendNonceValidationErrorV1),
+}
+
 impl AxtAnchoredSpendDraftV1 {
     fn validate_binding_v1(
         &self,
@@ -2225,6 +2402,23 @@ impl AxtAnchoredSpendDraftV1 {
         if self.handle.asset_definition_id != self.intent.op.asset_definition_id {
             return Err(AxtAnchoredSpendValidationErrorV1::AssetDefinition);
         }
+        if !self.handle.scope.iter().any(|scope| scope == "transfer") {
+            return Err(AxtAnchoredSpendValidationErrorV1::Scope);
+        }
+        if self.handle.subject.account != self.intent.op.from {
+            return Err(AxtAnchoredSpendValidationErrorV1::Subject);
+        }
+        if self
+            .handle
+            .subject
+            .origin_dsid
+            .is_some_and(|origin| origin != anchor.dataspace_id)
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::OriginDataspace);
+        }
+        if self.amount.as_ref() != self.intent.op.amount.as_ref() {
+            return Err(AxtAnchoredSpendValidationErrorV1::AmountMirror);
+        }
         let proof = self
             .proof
             .as_ref()
@@ -2240,6 +2434,9 @@ impl AxtAnchoredSpendDraftV1 {
             .map_err(|_| AxtAnchoredSpendValidationErrorV1::Proof)?;
         if envelope.da_commitment != Some(anchor.da_manifest_digest.into()) {
             return Err(AxtAnchoredSpendValidationErrorV1::DaManifest);
+        }
+        if envelope.amount_commitment != self.amount_commitment {
+            return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitmentMirror);
         }
         if let Some(clear_amount) = self.intent.op.amount.as_ref() {
             if self.amount_commitment.is_some() || envelope.amount_commitment.is_some() {
@@ -2262,14 +2459,69 @@ impl AxtAnchoredSpendDraftV1 {
                 return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
             }
         }
-        if self.amount_commitment != envelope.amount_commitment {
-            return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
+        self.source_occurrence
+            .validate()
+            .map_err(AxtAnchoredSpendValidationErrorV1::SourceOccurrence)?;
+        if self.source_receipt.finalized_anchor_digest != anchor.digest_v1()
+            || self
+                .source_receipt
+                .source_tx_commitment
+                .iter()
+                .all(|byte| *byte == 0)
+            || self
+                .source_receipt
+                .post_transaction_state_root
+                .iter()
+                .all(|byte| *byte == 0)
+            || self
+                .source_receipt
+                .effect_set_digest
+                .iter()
+                .all(|byte| *byte == 0)
+            || usize::try_from(self.source_receipt.source_tx_index)
+                .map_or(true, |index| index >= MAX_AXT_FINALIZED_TRANSACTIONS_V1)
+            || self.source_receipt.source_tx_commitment
+                != self.source_occurrence.source_tx_commitment
+            || self.source_receipt.source_tx_index != self.source_occurrence.source_tx_index
+            || self.source_receipt.digest_v1()
+                != self.source_occurrence.source_success_receipt_digest
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::SourceReceipt);
         }
-        // source_tx_commitment identifies one execution, not the whole ordered set.
-        // The FASTPQ owner must verify its exact membership in the anchored canonical
-        // transaction wires and compare the proof's PublicIO roots/set digest. This
-        // model-only signature/shape check cannot authenticate opaque proof bytes,
-        // including the hidden-amount commitment equation.
+        let binding = envelope
+            .fastpq_binding
+            .as_ref()
+            .ok_or(AxtAnchoredSpendValidationErrorV1::Proof)?;
+        if self.intent.op.kind != "transfer"
+            || !matches!(
+                binding.claim_type.as_str(),
+                "tx_predicate" | "value_conservation"
+            )
+            || !binding
+                .source_tx_commitment
+                .eq_ignore_ascii_case(&hex::encode(self.source_occurrence.source_tx_commitment))
+            || binding
+                .remote_spend_intent_commitments
+                .binary_search(&self.source_occurrence.remote_spend_claim_commitment)
+                .is_err()
+        {
+            return Err(AxtAnchoredSpendValidationErrorV1::SourceClaim);
+        }
+        if let Some(amount) = self.intent.op.amount.as_ref() {
+            let expected_claim = compute_remote_spend_intent_commitment_v1(
+                AxtHandleReplayKey::from_handle(anchor.dataspace_id, &self.handle),
+                &self.intent.op.asset_definition_id,
+                &self.intent.op.kind,
+                &self.intent.op.from,
+                &self.intent.op.to,
+                amount,
+            );
+            if expected_claim != self.source_occurrence.remote_spend_claim_commitment {
+                return Err(AxtAnchoredSpendValidationErrorV1::SourceClaim);
+            }
+        }
+        // These fields are issuer-bound claims. Only the finalized State owner
+        // and FASTPQ verifier can authenticate source success and occurrence.
         Ok(AxtAnchoredSpendIssuerPayloadV1 {
             handle_replay_key: AxtHandleReplayKey::from_handle(anchor.dataspace_id, &self.handle),
             handle_digest: axt_framed_digest_v1(
@@ -2280,6 +2532,8 @@ impl AxtAnchoredSpendDraftV1 {
             proof_digest: axt_framed_digest_v1(AXT_ANCHORED_SPEND_PROOF_DIGEST_DOMAIN_V1, proof),
             amount: self.amount.clone(),
             amount_commitment: self.amount_commitment,
+            source_success_receipt_digest: self.source_receipt.digest_v1(),
+            source_occurrence: self.source_occurrence,
             anchor: *anchor,
             expiry_slot,
             nonce,
@@ -2406,6 +2660,21 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
     /// Handle and intent target different asset definitions.
     #[error("AXT anchored spend asset-definition binding is invalid")]
     AssetDefinition,
+    /// Issuer-signed capability does not authorize a transfer.
+    #[error("AXT anchored spend handle does not authorize transfers")]
+    Scope,
+    /// Issuer-signed capability subject differs from the transfer source.
+    #[error("AXT anchored spend transfer source differs from the handle subject")]
+    Subject,
+    /// Explicit issuer-signed source dataspace differs from the finalized anchor.
+    #[error("AXT anchored spend origin dataspace differs from the finalized anchor")]
+    OriginDataspace,
+    /// Clear amount does not match the intent, or a hidden amount was revealed.
+    #[error("AXT anchored spend amount mirror is invalid")]
+    AmountMirror,
+    /// The issuer-signed amount commitment differs from the proof envelope.
+    #[error("AXT anchored spend amount commitment differs from the proof envelope")]
+    AmountCommitmentMirror,
     /// Proof is absent, oversized, malformed, or bound to another policy manifest.
     #[error("AXT anchored spend proof binding is invalid")]
     Proof,
@@ -2418,6 +2687,15 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
     /// Hidden commitment is missing or differs between spend and proof envelope.
     #[error("AXT anchored spend amount commitment binding is invalid")]
     AmountCommitment,
+    /// Claimed source success receipt does not match this anchor and occurrence.
+    #[error("AXT anchored spend source success receipt binding is invalid")]
+    SourceReceipt,
+    /// Claimed ordered source transfer occurrence is structurally invalid.
+    #[error("AXT anchored spend source transfer occurrence is invalid: {0}")]
+    SourceOccurrence(AxtSourceTransferOccurrenceErrorV1),
+    /// The proof does not commit this exact source execution and remote spend claim.
+    #[error("AXT anchored spend source transfer claim binding is invalid")]
+    SourceClaim,
     /// Reusable handle signature is invalid for authoritative WSV context.
     #[error("AXT anchored spend handle signature is invalid")]
     HandleSignature,
@@ -2428,6 +2706,213 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
     #[error("AXT anchored spend signing failed")]
     Cryptography,
 }
+/// Claimed source receipt preimage for one successful finalized execution.
+///
+/// The success domain is intentional, but constructing this value does not
+/// authenticate execution. The finalized State owner must resolve and compare
+/// the exact receipt before the digest can authorize a remote spend.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSourceSuccessReceiptV1")]
+pub struct AxtSourceSuccessReceiptV1 {
+    /// Digest of the exact authoritative finalized anchor.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub finalized_anchor_digest: [u8; 32],
+    /// Exact source execution-call commitment, distinct from transaction inclusion.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub source_tx_commitment: [u8; 32],
+    /// Zero-based position in the anchor's ordered canonical transaction wires.
+    pub source_tx_index: u32,
+    /// State root immediately after this transaction executed successfully.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub post_transaction_state_root: [u8; 32],
+    /// Digest of the complete ordered effects emitted by this execution.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub effect_set_digest: [u8; 32],
+}
+
+impl AxtSourceSuccessReceiptV1 {
+    /// Commit the complete claimed successful-execution receipt preimage.
+    #[must_use]
+    pub fn digest_v1(&self) -> [u8; 32] {
+        axt_framed_digest_v1(AXT_SOURCE_SUCCESS_RECEIPT_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// Claimed exact transfer occurrence within one successful source execution.
+///
+/// The receipt and transfer digests must be resolved against authoritative
+/// finalized state before admission. The FASTPQ verifier separately binds
+/// this public coordinate to its ordered transfer transcript and proof trace.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::axt::AxtSourceTransferOccurrenceV1")]
+pub struct AxtSourceTransferOccurrenceV1 {
+    /// Exact source execution-call commitment.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub source_tx_commitment: [u8; 32],
+    /// Digest of the claimed successful-execution receipt.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub source_success_receipt_digest: [u8; 32],
+    /// Zero-based position of the source execution in finalized transaction wires.
+    pub source_tx_index: u32,
+    /// Zero-based position of the ordered transfer transcript.
+    pub transcript_index: u32,
+    /// Zero-based position of the transfer within that transcript.
+    pub delta_index: u32,
+    /// Zero-based transfer-pair ordinal across all ordered transcripts.
+    pub pair_ordinal: u32,
+    /// Digest of complete public transfer facts, including before/after balances.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub transfer_digest: [u8; 32],
+    /// Exact authenticated handle/intent claim commitment using this occurrence.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub remote_spend_claim_commitment: [u8; 32],
+}
+
+impl AxtSourceTransferOccurrenceV1 {
+    /// Check required digests and bounded finalized/proof coordinates.
+    ///
+    /// # Errors
+    /// Returns the first missing digest or out-of-range coordinate. This structural check does not
+    /// authenticate a finalized receipt or authorize a spend.
+    pub fn validate(&self) -> Result<(), AxtSourceTransferOccurrenceErrorV1> {
+        for (field, digest) in [
+            (
+                AxtSourceTransferOccurrenceFieldV1::SourceExecution,
+                &self.source_tx_commitment,
+            ),
+            (
+                AxtSourceTransferOccurrenceFieldV1::SuccessReceipt,
+                &self.source_success_receipt_digest,
+            ),
+            (
+                AxtSourceTransferOccurrenceFieldV1::Transfer,
+                &self.transfer_digest,
+            ),
+            (
+                AxtSourceTransferOccurrenceFieldV1::RemoteClaim,
+                &self.remote_spend_claim_commitment,
+            ),
+        ] {
+            if digest.iter().all(|byte| *byte == 0) {
+                return Err(AxtSourceTransferOccurrenceErrorV1::MissingDigest(field));
+            }
+        }
+        for (field, index, maximum) in [
+            (
+                AxtSourceTransferCoordinateFieldV1::SourceTransaction,
+                self.source_tx_index,
+                MAX_AXT_FINALIZED_TRANSACTIONS_V1,
+            ),
+            (
+                AxtSourceTransferCoordinateFieldV1::Transcript,
+                self.transcript_index,
+                MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1,
+            ),
+            (
+                AxtSourceTransferCoordinateFieldV1::Delta,
+                self.delta_index,
+                MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1,
+            ),
+            (
+                AxtSourceTransferCoordinateFieldV1::PairOrdinal,
+                self.pair_ordinal,
+                MAX_REMOTE_SPEND_INTENT_COMMITMENTS_V1,
+            ),
+        ] {
+            if index as usize >= maximum {
+                return Err(AxtSourceTransferOccurrenceErrorV1::CoordinateOutOfRange(
+                    field,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Commit the receipt, exact ordered coordinate, transfer, and handle claim.
+    #[must_use]
+    pub fn digest_v1(&self) -> [u8; 32] {
+        axt_framed_digest_v1(AXT_SOURCE_TRANSFER_OCCURRENCE_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+/// One required digest in a source transfer occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxtSourceTransferOccurrenceFieldV1 {
+    /// Exact source execution-call commitment.
+    SourceExecution,
+    /// Successful-execution receipt digest.
+    SuccessReceipt,
+    /// Complete public transfer fact digest.
+    Transfer,
+    /// Handle/intent claim commitment.
+    RemoteClaim,
+}
+
+/// One bounded coordinate in a claimed source transfer occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxtSourceTransferCoordinateFieldV1 {
+    /// Position in canonical finalized source transaction wires.
+    SourceTransaction,
+    /// Position in ordered transfer transcripts for that execution.
+    Transcript,
+    /// Position within the selected transfer transcript.
+    Delta,
+    /// Position among all transfer pairs in transcript order.
+    PairOrdinal,
+}
+
+/// Structural error for a claimed source transfer occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum AxtSourceTransferOccurrenceErrorV1 {
+    /// A required digest is the all-zero absence sentinel.
+    #[error("AXT source transfer occurrence has an absent {0:?} digest")]
+    MissingDigest(AxtSourceTransferOccurrenceFieldV1),
+    /// One claimed coordinate exceeds its V1 finalized-block or proof ceiling.
+    #[error("AXT source transfer occurrence has an out-of-range {0:?} coordinate")]
+    CoordinateOutOfRange(AxtSourceTransferCoordinateFieldV1),
+}
+
+/// Commit the complete public facts of one ordered transfer delta.
+///
+/// The digest omits private sparse-Merkle witness paths. Its caller must use
+/// the exact delta at the claimed transcript/delta coordinate.
+#[must_use]
+pub fn axt_source_transfer_digest_v1(
+    delta: &crate::fastpq::FastpqPublicTransferDeltaV1,
+) -> [u8; 32] {
+    axt_framed_digest_v1(AXT_SOURCE_TRANSFER_DIGEST_DOMAIN_V1, delta)
+}
+
 /// Canonical claim binding one proof-resolved remote spend to one authenticated handle use.
 #[derive(
     Clone,
@@ -2520,38 +3005,6 @@ pub fn compute_remote_spend_claim_commitment_v1(statement: &AxtRemoteSpendClaimV
             .expect("fixed remote-spend commitment statement must encode canonically"),
     );
     Hash::new(payload).into()
-}
-/// Recorded handle usage for commit validation.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::axt::AxtHandleFragment")]
-pub struct AxtHandleFragment {
-    /// Handle presented by the caller.
-    pub handle: AssetHandle,
-    /// Intent bound to the handle and dataspace.
-    pub intent: RemoteSpendIntent,
-    /// Optional proof attached to the handle.
-    #[norito(required)]
-    pub proof: Option<ProofBlob>,
-    /// Cleartext amount associated with the intent, or `None` for a hidden amount.
-    #[norito(required)]
-    pub amount: Option<Quantity>,
-    /// Optional commitment corresponding to the effective amount.
-    #[norito(required)]
-    pub amount_commitment: Option<[u8; 32]>,
 }
 /// Canonical fingerprint for a handle usage recorded in the replay ledger.
 #[derive(
@@ -2805,8 +3258,8 @@ pub struct AxtEnvelopeRecord {
     pub touches: Vec<AxtTouchFragment>,
     /// Proof fragments per dataspace.
     pub proofs: Vec<AxtProofFragment>,
-    /// Handle fragments recorded during execution.
-    pub handles: Vec<AxtHandleFragment>,
+    /// Issuer-signed source-anchored spends selected for this envelope.
+    pub spends: Vec<AxtAnchoredSpendV1>,
     /// Exact height of the block that persists this envelope.
     pub commit_height: u64,
 }

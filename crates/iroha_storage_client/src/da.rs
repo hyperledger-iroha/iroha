@@ -465,7 +465,7 @@ pub enum ProofOrigin {
 }
 impl ProofOrigin {
     /// Stable JSON label for this origin.
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Sampled => "sampled",
             Self::Explicit => "explicit",
@@ -827,7 +827,7 @@ pub(crate) mod tests {
         ]))
     }
 
-    pub(crate) fn manifest_response() -> DaManifestResponse {
+    pub fn manifest_response() -> DaManifestResponse {
         let (manifest, _) = sample_manifest_and_payload();
         let bytes = norito::to_bytes(&manifest).expect("manifest frame");
         DaManifestResponse {
@@ -1248,9 +1248,10 @@ pub(crate) mod tests {
             chunk_root,
             storage_ticket: StorageTicketId::new([0; 32]),
             total_size: payload.len() as u64,
-            chunk_size: chunks
-                .first()
-                .map_or(payload.len() as u32, |chunk| chunk.length),
+            chunk_size: chunks.first().map_or_else(
+                || u32::try_from(payload.len()).expect("payload length fits in u32"),
+                |chunk| chunk.length,
+            ),
             total_stripes: u32::try_from(chunks.len()).expect("stripe count fits in u32"),
             shards_per_stripe: 1,
             erasure_profile,

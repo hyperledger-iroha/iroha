@@ -1,67 +1,59 @@
-# IVM Architecture Refactor Plan
+# IVM architecture and remaining first-release work
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+IVM is the single concrete execution engine. Kotodama lives in
+`crates/kotodama_lang` and compiles only IVM bytecode. This record describes
+implementation boundaries; the [completion goals](kotodama_ivm_completion.md)
+own current evidence and the remaining release gates. ABI V1 replaces unfinished
+interfaces directly, with no compatibility engine, decoder or calling path.
 
-## Goals
+## Implemented boundaries
 
-1. **Focused runtime API** – group construction and host-policy entry points while
-   keeping `IVM` as the single concrete first-release engine.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+- `ivm::runtime` groups `IvmBuilder`, `IvmConfig`, acceleration and stack policies.
+  Lifecycle methods remain on concrete `IVM`; no facade trait or second engine is
+  required. Hosts own transaction scheduling and publication; the VM has no
+  second block scheduler.
+- `runtime::SyscallDispatcher` wraps ordinary and shared hosts. `IVM::set_host`,
+  default construction install that dispatcher. The interpreter's
+  syscall owner enforces admission, deterministic charging and privacy checks;
+  typed host adapters validate their pointer envelopes and semantic payloads.
+  Custom instrumentation must preserve those checks.
+- `kotodama_lang` owns parsing, semantic analysis, IR/lowering, register allocation
+  and bytecode emission. `ivm_abi` owns shared calling, schema and syscall contracts;
+  artifact admission owns static bytecode/interface validation.
+- All compiled calls use bounded caller-owned tables. Cohesive call-frame,
+  execution and gas modules enforce the final V1 convention. Core and SDKs consume
+  canonical argument records and authenticated exact return counts.
+- Runtime acceleration preferences come from `iroha_config` and are passed
+  explicitly through configuration APIs. `IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`
+  and similar environment controls are debug/test aids; shipping release binaries
+  ignore them. Configuration remains operator-visible and defaults enabled.
 
-## Phase Breakdown
+## Remaining ownership and qualification
 
-### Phase 1 – Runtime API (complete)
-- Group `IvmBuilder`, `IvmConfig`, acceleration policy, and stack policy in the
-  `runtime` module.
-- Keep lifecycle methods on the concrete `IVM`. The first release has no second
-  engine, so an abstraction trait would add an unowned API without isolating any
-  implementation.
-- Keep syscall policy enforcement in the dispatcher boundary described below.
+Continue separating touched interpreter, compiler and host responsibilities into
+cohesive modules inside their existing dependency boundaries. Do not introduce
+facade-only crates or duplicate semantics. Keep shared numeric algorithms and
+recursive equality identical between constant folding and execution.
 
-**Security / performance impact**: The concrete API avoids a bypass-prone or
-speculative engine abstraction while the dispatcher centralizes host policy.
+Complete allocation admission before VM construction/growth, root and nested
+execution, and host scratch. Preserve one original pool through live borrowers,
+configuration changes and callback-driven release. Retention and active execution
+have separate admission limits; local capacity changes scheduling, never ledger
+validity or gas.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
+Finish automatic target packaging, independent device/kernel qualification,
+authenticated public workload cost selection and qualified fallback/quarantine.
+The process-owned Metal pipelines and per-kernel completion receipts are component
+boundaries, not evidence for every device or fastest-path selection. CUDA release
+artifacts still require all ten reproducible PTX families and signed provenance.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+Complete the exhaustive State authority codecs, derivation checks, range witnesses
+and atomic persistence/recovery root owner before the private execution relation
+and anchored AXT cutover. Binding-only proofs plus native replay do not satisfy
+that execution relation. Keep production private-input and incomplete remote-spend
+gates until sound replacements and every producer/consumer are qualified.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
-
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
-
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
-
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
-
-## Immediate next steps
-
-- Audit public re-exports to ensure only the runtime API and deliberately public
-  APIs leak out of the crate.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+The completion record also tracks Musubi's concrete publication adapters and the
+unchanged candidate's language, memory, proof, native/SDK, hardware and mandatory
+four-validator DA/RBC evidence. Physical runners and signing/deployment custody
+are required inputs; unavailable evidence remains an open gate.

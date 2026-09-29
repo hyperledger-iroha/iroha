@@ -67,18 +67,11 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-const IZANAMI_SUMERAGI_QUEUE_COMMANDS: usize = 4_096;
-const IZANAMI_SUMERAGI_QUEUE_BODIES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
 const IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
         .get();
-const IZANAMI_SUMERAGI_BODY_SOURCE_BYTES: usize =
-    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
 const IZANAMI_MAX_TOTAL_CONNECTIONS: usize =
     MAX_VALIDATORS_PER_HEIGHT - 1 + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
-const IZANAMI_SUMERAGI_QUEUE_CHUNKS: i64 = 4_096;
-const IZANAMI_SUMERAGI_QUEUE_READY_BODIES: i64 = 256;
 const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
@@ -2261,41 +2254,6 @@ fn workload_account_count(config: &ChaosConfig) -> usize {
     } else {
         baseline
     }
-}
-fn izanami_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
-    let effect_work_capacity = (IZANAMI_SUMERAGI_QUEUE_COMMANDS
-        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-        .max(1);
-    iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-        validator_count,
-        effect_work_capacity,
-        IZANAMI_SUMERAGI_QUEUE_BODIES,
-        IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-    )
-    .wrap_err_with(|| {
-        format!(
-            "Izanami Sumeragi lifecycle geometry is inadmissible for {validator_count} validators"
-        )
-    })?;
-    let shared_ownership_capacity =
-        iroha_config::parameters::actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-            effect_work_capacity,
-            IZANAMI_SUMERAGI_QUEUE_BODIES,
-        )
-        .wrap_err("Izanami Sumeragi exact-output shared capacity overflowed")?;
-    iroha_config::parameters::actual::validate_sumeragi_v2_exact_output_geometry(
-        shared_ownership_capacity,
-        IZANAMI_MAX_TOTAL_CONNECTIONS,
-    )
-    .wrap_err("Izanami Sumeragi exact-output geometry is inadmissible")?;
-    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-        validator_count,
-        IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-        IZANAMI_SUMERAGI_BODY_SOURCE_BYTES,
-    )
-    .ok_or_else(|| {
-        eyre!("Izanami Sumeragi body-byte geometry overflowed for {validator_count} validators")
-    })
 }
 #[cfg(test)]
 fn make_network_builder(
@@ -10989,21 +10947,6 @@ mod tests {
             pool.attempt_order_preview_at_with_preference(now + Duration::from_secs(61), Some(0)),
             vec![0, 1, 2]
         );
-    }
-    #[test]
-    fn izanami_sumeragi_capacity_geometry_covers_legal_committee_scales() -> Result<()> {
-        for validator_count in [4, 7, MAX_VALIDATORS_PER_HEIGHT] {
-            assert_eq!(
-                izanami_sumeragi_body_bytes(validator_count)?,
-                (validator_count + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
-                    * IZANAMI_SUMERAGI_BODY_SOURCE_BYTES
-            );
-        }
-        assert_eq!(
-            IZANAMI_MAX_TOTAL_CONNECTIONS,
-            MAX_VALIDATORS_PER_HEIGHT - 1 + IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES
-        );
-        Ok(())
     }
     #[test]
     fn submission_metadata_increments_counter() {

@@ -1,4 +1,4 @@
-//! Benchmarks for signature generation and verification across TC26 GOST and baseline curves.
+//! Benchmarks for the five admitted GOST parameter sets and baseline signature algorithms.
 #[cfg(feature = "gost")]
 use criterion::{BenchmarkId, Criterion};
 #[cfg(feature = "gost")]

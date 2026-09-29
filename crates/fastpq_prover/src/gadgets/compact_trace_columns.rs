@@ -79,12 +79,18 @@ pub fn smt_row_from_cells<F: Copy>(cells: &[F; SMT_COLUMNS]) -> SmtRow<F> {
 }
 
 /// Decode a canonical base-field hash opening of exactly the fixed width.
+///
+/// # Errors
+/// Returns an error when the opening has another width or a noncanonical cell.
 pub fn decode_hash_row(cells: &[u64]) -> Result<CompactRow> {
     let cells = canonical_cells::<HASH_COLUMNS>(cells, "compact_hash_opening")?;
     Ok(hash_row_from_cells(cells))
 }
 
 /// Decode a canonical base-field SMT opening of exactly the fixed width.
+///
+/// # Errors
+/// Returns an error when the opening has another width or a noncanonical cell.
 pub fn decode_smt_row(cells: &[u64]) -> Result<SmtRow> {
     let cells = canonical_cells::<SMT_COLUMNS>(cells, "compact_smt_opening")?;
     Ok(smt_row_from_cells(cells))

@@ -282,15 +282,75 @@ pub(in crate::backend) fn from_compact(
         &challenges.indices,
     )?;
     let plans = opening_plans(&geometry, &challenges.indices, limits)?;
+    let terminal_values = proof.queries[0].fri.final_values.clone();
+    let openings = collect_legacy_openings(
+        proof,
+        &geometry,
+        &challenges,
+        plans.rounds.len(),
+        &terminal_values,
+    )?;
+    let oracles = share_oracle_openings(&binding, &geometry, &plans, proof, openings.oracles)?;
+    let rounds = share_fri_openings(
+        &binding,
+        &geometry,
+        plans,
+        proof,
+        openings.fri,
+        &terminal_values,
+    )?;
+    Ok(SharedProof {
+        row_root: proof.row_root,
+        mixed_root: proof.mixed_root,
+        quotient_root: proof.quotient_root,
+        fri_roots: proof.fri_roots.clone(),
+        rows: oracles.rows,
+        queries: oracles.queries,
+        row_siblings: oracles.row_siblings,
+        mixed_siblings: oracles.mixed_siblings,
+        quotient_siblings: oracles.quotient_siblings,
+        rounds,
+        terminal_values,
+    })
+}
+
+/// Repeated legacy openings regrouped by committed tree; every path borrows the proof.
+struct LegacyOpenings<'a> {
+    oracles: LegacyOracleOpenings<'a>,
+    fri: LegacyFriOpenings<'a>,
+}
+
+/// Distinct complete rows plus the row, mixed and quotient paths of every query.
+struct LegacyOracleOpenings<'a> {
+    row_values: BTreeMap<usize, Vec<u64>>,
+    row_paths: Vec<(usize, &'a [WireDigest])>,
+    mixed_paths: Vec<(usize, &'a [WireDigest])>,
+    quotient_paths: Vec<(usize, &'a [WireDigest])>,
+}
+
+/// Distinct binary FRI groups per round plus every repeated terminal path.
+struct LegacyFriOpenings<'a> {
+    group_values: Vec<BTreeMap<usize, [GoldilocksFp4V1; 2]>>,
+    group_paths: Vec<Vec<(usize, &'a [WireDigest])>>,
+    terminal_paths: Vec<(usize, &'a [WireDigest])>,
+}
+
+/// Check every repeated legacy FRI carry and regroup the openings by tree.
+fn collect_legacy_openings<'a>(
+    proof: &'a CompactProof,
+    geometry: &Geometry,
+    challenges: &Challenges,
+    round_count: usize,
+    terminal_values: &[GoldilocksFp4V1],
+) -> Result<LegacyOpenings<'a>> {
     let mut row_values = BTreeMap::new();
     let mut row_paths = Vec::with_capacity(2 * proof.queries.len());
     let mut mixed_paths = Vec::with_capacity(proof.queries.len());
     let mut quotient_paths = Vec::with_capacity(proof.queries.len());
     let mut group_values: Vec<BTreeMap<usize, [GoldilocksFp4V1; 2]>> =
-        (0..plans.rounds.len()).map(|_| BTreeMap::new()).collect();
+        (0..round_count).map(|_| BTreeMap::new()).collect();
     let mut group_paths: Vec<Vec<(usize, &[WireDigest])>> =
-        (0..plans.rounds.len()).map(|_| Vec::new()).collect();
-    let terminal_values = proof.queries[0].fri.final_values.clone();
+        (0..round_count).map(|_| Vec::new()).collect();
     let mut terminal_paths = Vec::with_capacity(proof.queries.len());
     for (position, query) in proof.queries.iter().enumerate() {
         let initial = challenges.indices[position];
@@ -353,11 +413,44 @@ pub(in crate::backend) fn from_compact(
         }
         terminal_paths.push((0, query.fri.final_merkle_path.as_slice()));
     }
-    let rows = row_values
+    Ok(LegacyOpenings {
+        oracles: LegacyOracleOpenings {
+            row_values,
+            row_paths,
+            mixed_paths,
+            quotient_paths,
+        },
+        fri: LegacyFriOpenings {
+            group_values,
+            group_paths,
+            terminal_paths,
+        },
+    })
+}
+
+/// Deduplicated row and oracle tables with their canonical minimal frontiers.
+struct SharedOracleOpenings {
+    rows: Vec<SharedRow>,
+    queries: Vec<SharedQuery>,
+    row_siblings: Vec<WireDigest>,
+    mixed_siblings: Vec<WireDigest>,
+    quotient_siblings: Vec<WireDigest>,
+}
+
+/// Rehash the distinct row, mixed and quotient leaves and extract each frontier.
+fn share_oracle_openings(
+    binding: &Binding,
+    geometry: &Geometry,
+    plans: &OpeningPlans,
+    proof: &CompactProof,
+    openings: LegacyOracleOpenings<'_>,
+) -> Result<SharedOracleOpenings> {
+    let rows = openings
+        .row_values
         .into_iter()
         .map(|(index, values)| {
             Ok(SharedRow {
-                index: index as u32,
+                index: table_index(index)?,
                 values: RowValues::from_vec(values)?,
             })
         })
@@ -400,41 +493,61 @@ pub(in crate::backend) fn from_compact(
         })
         .collect::<Result<Vec<_>>>()?;
     let row_siblings = extract_frontier(
-        &binding,
+        binding,
         geometry.lde_rows,
         &plans.rows,
         MerkleTreeRoleV1::AirTrace,
         proof.row_root,
         &row_leaves,
-        &row_paths,
+        &openings.row_paths,
     )?;
     let mixed_siblings = extract_frontier(
-        &binding,
+        binding,
         geometry.lde_rows,
         &plans.queries,
         MerkleTreeRoleV1::Lde,
         proof.mixed_root,
         &mixed_leaves,
-        &mixed_paths,
+        &openings.mixed_paths,
     )?;
     let quotient_siblings = extract_frontier(
-        &binding,
+        binding,
         geometry.lde_rows,
         &plans.queries,
         MerkleTreeRoleV1::AirComposition,
         proof.quotient_root,
         &quotient_leaves,
-        &quotient_paths,
+        &openings.quotient_paths,
     )?;
+    Ok(SharedOracleOpenings {
+        rows,
+        queries,
+        row_siblings,
+        mixed_siblings,
+        quotient_siblings,
+    })
+}
+
+/// Rehash the distinct FRI groups, extract every round frontier and check the terminal path.
+fn share_fri_openings(
+    binding: &Binding,
+    geometry: &Geometry,
+    plans: OpeningPlans,
+    proof: &CompactProof,
+    openings: LegacyFriOpenings<'_>,
+    terminal_values: &[GoldilocksFp4V1],
+) -> Result<Vec<SharedRound>> {
     let mut rounds = Vec::with_capacity(plans.rounds.len());
-    for (round, values) in group_values.into_iter().enumerate() {
+    for (round, values) in openings.group_values.into_iter().enumerate() {
         let groups = values
             .into_iter()
-            .map(|(index, values)| SharedGroup {
-                index: index as u32,
-                values,
+            .map(|(index, values)| {
+                Ok(SharedGroup {
+                    index: table_index(index)?,
+                    values,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         exact_indices(
             groups.iter().map(|group| group.index),
             &plans.rounds[round].indices,
@@ -449,44 +562,43 @@ pub(in crate::backend) fn from_compact(
             })
             .collect::<Result<Vec<_>>>()?;
         let siblings = extract_frontier(
-            &binding,
+            binding,
             geometry.fri_lengths[round] / 2,
             &plans.rounds[round],
-            MerkleTreeRoleV1::Fri(round as u32),
+            fri_role(round)?,
             proof.fri_roots[round],
             &leaves,
-            &group_paths[round],
+            &openings.group_paths[round],
         )?;
         rounds.push(SharedRound { groups, siblings });
     }
     let final_round = rounds.len();
-    let terminal_leaf = binding.fri(final_round, 0, &terminal_values)?;
+    let terminal_leaf = binding.fri(final_round, 0, terminal_values)?;
     let terminal_plan = IndexedPlan {
         indices: vec![0],
         plan: plans.terminal,
     };
     extract_frontier(
-        &binding,
+        binding,
         1,
         &terminal_plan,
-        MerkleTreeRoleV1::Fri(final_round as u32),
+        fri_role(final_round)?,
         proof.fri_roots[final_round],
         &[(0, terminal_leaf)],
-        &terminal_paths,
+        &openings.terminal_paths,
     )?;
-    Ok(SharedProof {
-        row_root: proof.row_root,
-        mixed_root: proof.mixed_root,
-        quotient_root: proof.quotient_root,
-        fri_roots: proof.fri_roots.clone(),
-        rows,
-        queries,
-        row_siblings,
-        mixed_siblings,
-        quotient_siblings,
-        rounds,
-        terminal_values,
-    })
+    Ok(rounds)
+}
+
+/// Narrow one transcript-derived table index to its `u32` wire field.
+fn table_index(index: usize) -> Result<u32> {
+    u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })
+}
+
+/// Tree role of one FRI round, whose ordinal is below the fixed layer count.
+fn fri_role(round: usize) -> Result<MerkleTreeRoleV1> {
+    let round = u32::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?;
+    Ok(MerkleTreeRoleV1::Fri(round))
 }
 
 fn insert_equal<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, V>, key: K, value: V) -> Result<()> {
@@ -657,6 +769,21 @@ fn preflight_shared(
         query_count,
         limits,
     )?;
+    check_shared_fri_shapes(proof, limits, geometry, query_count)?;
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let bytes = norito::core::encoded_frame_len(proof)?;
+    check_limit("max_proof_bytes", bytes, limits.max_proof_bytes)?;
+    check_shared_canonical_values(proof)?;
+    Ok(bytes)
+}
+
+/// Bound every FRI group table, round frontier and the complete terminal vector.
+fn check_shared_fri_shapes(
+    proof: &SharedProof,
+    limits: VerifyLimits,
+    geometry: &Geometry,
+    query_count: usize,
+) -> Result<()> {
     for (round, opening) in proof.rounds.iter().enumerate() {
         let leaf_count = geometry.fri_lengths[round] / 2;
         if opening.groups.is_empty() || opening.groups.len() > query_count.min(leaf_count) {
@@ -687,9 +814,11 @@ fn preflight_shared(
             "shared terminal must contain the complete natural-order evaluations",
         ));
     }
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let bytes = norito::core::encoded_frame_len(proof)?;
-    check_limit("max_proof_bytes", bytes, limits.max_proof_bytes)?;
+    Ok(())
+}
+
+/// Reject any noncanonical base or extension value in every shared table.
+fn check_shared_canonical_values(proof: &SharedProof) -> Result<()> {
     for (row, opening) in proof.rows.iter().enumerate() {
         for (column, &value) in opening.values.iter().enumerate() {
             canonical_base(value, "shared_complete_row", &[row, column])?;
@@ -709,7 +838,7 @@ fn preflight_shared(
     for (position, &value) in proof.terminal_values.iter().enumerate() {
         canonical_extension(value, &[proof.rounds.len(), position])?;
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn sorted_indices(indices: impl Iterator<Item = u32>, length: usize) -> Result<()> {
@@ -933,6 +1062,18 @@ pub(super) fn verify_shared_recorded(
     }
     // Every table set/count and frontier is now exact. No leaf or node hash has
     // run; proof-supplied indices cannot redirect an authentication plan.
+    authenticate_shared_tables(&binding, &plans, proof, work)?;
+    let carries = check_shared_relation(relation, &geometry, &challenges, proof, work)?;
+    check_shared_fri_carries(&geometry, &challenges, proof, carries, work)
+}
+
+/// Hash every distinct shared leaf and authenticate each tree against its root.
+fn authenticate_shared_tables(
+    binding: &Binding,
+    plans: &OpeningPlans,
+    proof: &SharedProof,
+    work: &mut SharedVerificationWork,
+) -> Result<()> {
     let row_leaves = proof
         .rows
         .iter()
@@ -942,7 +1083,7 @@ pub(super) fn verify_shared_recorded(
         })
         .collect::<Result<Vec<_>>>()?;
     authenticate_shared(
-        &binding,
+        binding,
         &plans.rows.plan,
         MerkleTreeRoleV1::AirTrace,
         proof.row_root,
@@ -959,7 +1100,7 @@ pub(super) fn verify_shared_recorded(
         })
         .collect::<Result<Vec<_>>>()?;
     authenticate_shared(
-        &binding,
+        binding,
         &plans.queries.plan,
         MerkleTreeRoleV1::Lde,
         proof.mixed_root,
@@ -976,7 +1117,7 @@ pub(super) fn verify_shared_recorded(
         })
         .collect::<Result<Vec<_>>>()?;
     authenticate_shared(
-        &binding,
+        binding,
         &plans.queries.plan,
         MerkleTreeRoleV1::AirComposition,
         proof.quotient_root,
@@ -994,9 +1135,9 @@ pub(super) fn verify_shared_recorded(
             })
             .collect::<Result<Vec<_>>>()?;
         authenticate_shared(
-            &binding,
+            binding,
             &plans.rounds[round].plan,
-            MerkleTreeRoleV1::Fri(round as u32),
+            fri_role(round)?,
             proof.fri_roots[round],
             &leaves,
             &opening.siblings,
@@ -1007,14 +1148,26 @@ pub(super) fn verify_shared_recorded(
     work.fri_leaves += 1;
     let terminal_leaf = binding.fri(final_round, 0, &proof.terminal_values)?;
     authenticate_shared(
-        &binding,
+        binding,
         &plans.terminal,
-        MerkleTreeRoleV1::Fri(final_round as u32),
+        fri_role(final_round)?,
         proof.fri_roots[final_round],
         &[terminal_leaf],
         &[],
         work,
-    )?;
+    )
+}
+
+/// Recompute each query's mixed and quotient values from its authenticated rows.
+///
+/// Returns every query's joint FRI carry at its initial index, in query order.
+fn check_shared_relation(
+    relation: &impl FixedAir,
+    geometry: &Geometry,
+    challenges: &Challenges,
+    proof: &SharedProof,
+    work: &mut SharedVerificationWork,
+) -> Result<Vec<(usize, GoldilocksFp4V1)>> {
     let weights = AirQuotientDomain::new(&FASTPQ_FINAL_V1, geometry.lde_rows)?;
     let mut carries = Vec::with_capacity(proof.queries.len());
     for (position, query) in proof.queries.iter().enumerate() {
@@ -1044,6 +1197,17 @@ pub(super) fn verify_shared_recorded(
                 .value_at(index, query.quotient, query.mixed)?,
         ));
     }
+    Ok(carries)
+}
+
+/// Fold every carry through the authenticated FRI groups, then check the terminal.
+fn check_shared_fri_carries(
+    geometry: &Geometry,
+    challenges: &Challenges,
+    proof: &SharedProof,
+    mut carries: Vec<(usize, GoldilocksFp4V1)>,
+    work: &mut SharedVerificationWork,
+) -> Result<()> {
     let mut domain = geometry.domain;
     for (round, opening) in proof.rounds.iter().enumerate() {
         let output_len = geometry.fri_lengths[round] / 2;
@@ -1061,9 +1225,11 @@ pub(super) fn verify_shared_recorded(
             .collect::<Result<Vec<_>>>()?;
         for (position, (index, value)) in carries.iter_mut().enumerate() {
             let group_index = *index % output_len;
+            let wire_index =
+                u32::try_from(group_index).map_err(|_| shape("missing derived FRI group"))?;
             let group = opening
                 .groups
-                .binary_search_by_key(&(group_index as u32), |group| group.index)
+                .binary_search_by_key(&wire_index, |group| group.index)
                 .map_err(|_| shape("missing derived FRI group"))?;
             if opening.groups[group].values[*index / output_len] != *value {
                 return Err(Error::QueryMismatch { index: position });
@@ -1088,8 +1254,9 @@ pub(super) fn verify_shared_recorded(
 }
 
 fn shared_row(rows: &[SharedRow], index: usize) -> Result<&[u64]> {
+    let wire_index = u32::try_from(index).map_err(|_| shape("missing derived complete row"))?;
     let position = rows
-        .binary_search_by_key(&(index as u32), |row| row.index)
+        .binary_search_by_key(&wire_index, |row| row.index)
         .map_err(|_| shape("missing derived complete row"))?;
     Ok(&rows[position].values)
 }
@@ -1168,12 +1335,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn candidate_prover_preflight_rejects_limits_before_private_columns_and_ntt() {
-        let air = candidate_prover_air();
-        let limits = candidate_prover_limits();
-        preflight_prover(&air, limits).unwrap();
-        let cases = [
+    /// Each single-limit restriction with its expected limit name and actual value.
+    fn restricted_prover_limits(limits: VerifyLimits) -> [(VerifyLimits, &'static str, usize); 7] {
+        [
             (
                 VerifyLimits {
                     max_batch_bytes: 0,
@@ -1230,8 +1394,15 @@ mod tests {
                 "max_proof_bytes",
                 4_017_376,
             ),
-        ];
-        for (restricted, expected_limit, expected_actual) in cases {
+        ]
+    }
+
+    #[test]
+    fn candidate_prover_preflight_rejects_limits_before_private_columns_and_ntt() {
+        let air = candidate_prover_air();
+        let limits = candidate_prover_limits();
+        preflight_prover(&air, limits).unwrap();
+        for (restricted, expected_limit, expected_actual) in restricted_prover_limits(limits) {
             // Empty columns cannot enter an NTT. The policy error must precede
             // even their shape rejection, and the AIR preparation above panics.
             assert!(matches!(
@@ -1373,13 +1544,13 @@ mod tests {
             fri_roots: vec![digest; 18],
             rows: (0..rows)
                 .map(|index| SharedRow {
-                    index: index as u32,
+                    index: u32::try_from(index).unwrap(),
                     values: RowValues::zero(),
                 })
                 .collect(),
             queries: (0..queries)
                 .map(|index| SharedQuery {
-                    index: index as u32,
+                    index: u32::try_from(index).unwrap(),
                     mixed: GoldilocksFp4V1::ZERO,
                     quotient: GoldilocksFp4V1::ZERO,
                 })
@@ -1397,7 +1568,7 @@ mod tests {
                     SharedRound {
                         groups: (0..groups)
                             .map(|index| SharedGroup {
-                                index: index as u32,
+                                index: u32::try_from(index).unwrap(),
                                 values: [GoldilocksFp4V1::ZERO; 2],
                             })
                             .collect(),
@@ -1817,143 +1988,252 @@ mod tests {
         assert!(work.parent_hashes > 0 && work.fri_leaves > 0);
     }
 
-    #[test]
-    fn nonconstant_next_row_relation_rejects_coherently_reproved_stride_one_and_swapped_rows() {
-        use crate::backend::{field_pow, mul_mod, sub_mod};
+    const RECURRENCE_TRACE_ROWS: usize = 65_536;
+    const RECURRENCE_LDE_ROWS: usize = 524_288;
 
-        const TRACE_ROWS: usize = 65_536;
-        const LDE_ROWS: usize = 524_288;
+    #[derive(Clone, Copy, Debug)]
+    enum NextMapping {
+        Correct,
+        StrideOne,
+        Swapped,
+    }
 
-        #[derive(Clone, Copy, Debug)]
-        enum NextMapping {
-            Correct,
-            StrideOne,
-            Swapped,
-        }
+    // All923 test slots are real polynomials: the selected recurrence,
+    // 341 zero current columns,341 zero next columns, then240 nonzero
+    // multiples of the recurrence. No production relation is replaced.
+    fn recurrence_slots(recurrence: u64, current: &[u64], next: &[u64]) -> Vec<u64> {
+        let mut slots = Vec::with_capacity(923);
+        slots.push(recurrence);
+        slots.extend_from_slice(&current[1..]);
+        slots.extend_from_slice(&next[1..]);
+        slots.extend((2..=241).map(|scale| crate::backend::mul_mod(recurrence, scale)));
+        assert_eq!(slots.len(), 923);
+        slots
+    }
 
-        // All923 test slots are real polynomials: the selected recurrence,
-        // 341 zero current columns,341 zero next columns, then240 nonzero
-        // multiples of the recurrence. No production relation is replaced.
-        fn slots(recurrence: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-            let mut slots = Vec::with_capacity(923);
-            slots.push(recurrence);
-            slots.extend_from_slice(&current[1..]);
-            slots.extend_from_slice(&next[1..]);
-            slots.extend((2..=241).map(|scale| mul_mod(recurrence, scale)));
-            assert_eq!(slots.len(), 923);
-            Ok(slots)
-        }
+    struct RecurrenceAir {
+        mapping: NextMapping,
+        trace_generator: u64,
+        lde_generator: u64,
+    }
 
-        struct RecurrenceAir {
-            mapping: NextMapping,
-            trace_generator: u64,
-            lde_generator: u64,
-        }
+    struct PreparedRecurrence {
+        mapping: NextMapping,
+        trace_generator: u64,
+        values: Vec<u64>,
+    }
 
-        struct PreparedRecurrence {
-            mapping: NextMapping,
-            trace_generator: u64,
-            values: Vec<u64>,
-        }
+    impl PreparedAir for PreparedRecurrence {
+        fn evaluator(&self) -> ProverEvaluator<'_> {
+            use crate::backend::{mul_mod, sub_mod};
 
-        impl PreparedAir for PreparedRecurrence {
-            fn evaluator(&self) -> ProverEvaluator<'_> {
-                Box::new(move |index, _, current, next| {
-                    // The real engine always supplies physical stride-eight
-                    // rows. Select the deliberately wrong committed row here
-                    // to model the faulty producer mapping explicitly.
-                    assert_eq!(current.len(), 342);
-                    assert_eq!(current[0], self.values[index]);
-                    assert!(current[1..].iter().all(|&value| value == 0));
-                    assert_eq!(next.len(), 342);
-                    assert_eq!(next[0], self.values[(index + 8) % LDE_ROWS]);
-                    assert!(next[1..].iter().all(|&value| value == 0));
-                    let (left, right) = match self.mapping {
-                        NextMapping::Correct => (current[0], next[0]),
-                        NextMapping::StrideOne => (current[0], self.values[(index + 1) % LDE_ROWS]),
-                        NextMapping::Swapped => (next[0], current[0]),
-                    };
-                    slots(
-                        sub_mod(right, mul_mod(self.trace_generator, left)),
-                        current,
-                        next,
-                    )
-                })
-            }
-        }
-
-        impl FixedAir for RecurrenceAir {
-            fn schema(&self) -> FixedAirSchema {
-                FixedAirSchema {
-                    trace_rows: TRACE_ROWS,
-                    width: 342,
-                    constraints: 923,
-                    identity: "shared-opening-test:next-row-recurrence:v1",
-                }
-            }
-
-            fn statement_bytes(&self) -> &[u8] {
-                b"shared-opening-test:next-equals-trace-generator-times-current"
-            }
-
-            fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-                if current.len() != 342 || next.len() != 342 {
-                    return Err(shape("recurrence fixture requires complete342-column rows"));
-                }
+            Box::new(move |index, _, current, next| {
+                // The real engine always supplies physical stride-eight
+                // rows. Select the deliberately wrong committed row here
+                // to model the faulty producer mapping explicitly.
+                assert_eq!(current.len(), 342);
+                assert_eq!(current[0], self.values[index]);
+                assert!(current[1..].iter().all(|&value| value == 0));
+                assert_eq!(next.len(), 342);
+                assert_eq!(next[0], self.values[(index + 8) % RECURRENCE_LDE_ROWS]);
+                assert!(next[1..].iter().all(|&value| value == 0));
                 let (left, right) = match self.mapping {
-                    NextMapping::Correct => (next[0], current[0]),
-                    // This adversarial producer uses f(X)=X^8. Its alternate
-                    // next value is known exactly at x*g_L, so all quotient,
-                    // FRI and Merkle data can be recomputed coherently for the
-                    // wrong stride instead of merely corrupting a path.
+                    NextMapping::Correct => (current[0], next[0]),
                     NextMapping::StrideOne => {
-                        (field_pow(mul_mod(point, self.lde_generator), 8), current[0])
+                        (current[0], self.values[(index + 1) % RECURRENCE_LDE_ROWS])
                     }
-                    NextMapping::Swapped => (current[0], next[0]),
+                    NextMapping::Swapped => (next[0], current[0]),
                 };
-                slots(
-                    sub_mod(left, mul_mod(self.trace_generator, right)),
+                Ok(recurrence_slots(
+                    sub_mod(right, mul_mod(self.trace_generator, left)),
                     current,
                     next,
-                )
-            }
+                ))
+            })
+        }
+    }
 
-            fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
-                let exponent = match self.mapping {
-                    NextMapping::Correct => 1,
-                    NextMapping::StrideOne => 8,
-                    NextMapping::Swapped => TRACE_ROWS - 1,
-                };
-                let values = (0..LDE_ROWS)
-                    .map(|index| {
-                        let point = mul_mod(
-                            FASTPQ_FINAL_V1.omega_coset,
-                            field_pow(self.lde_generator, index as u64),
-                        );
-                        field_pow(point, exponent as u64)
-                    })
-                    .collect();
-                Ok(Box::new(PreparedRecurrence {
-                    mapping: self.mapping,
-                    trace_generator: self.trace_generator,
-                    values,
-                }))
+    impl FixedAir for RecurrenceAir {
+        fn schema(&self) -> FixedAirSchema {
+            FixedAirSchema {
+                trace_rows: RECURRENCE_TRACE_ROWS,
+                width: 342,
+                constraints: 923,
+                identity: "shared-opening-test:next-row-recurrence:v1",
             }
         }
 
-        let trace_generator = FixedTraceDomain::new(&FASTPQ_FINAL_V1, TRACE_ROWS)
+        fn statement_bytes(&self) -> &[u8] {
+            b"shared-opening-test:next-equals-trace-generator-times-current"
+        }
+
+        fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
+            use crate::backend::{field_pow, mul_mod, sub_mod};
+
+            if current.len() != 342 || next.len() != 342 {
+                return Err(shape("recurrence fixture requires complete342-column rows"));
+            }
+            let (left, right) = match self.mapping {
+                NextMapping::Correct => (next[0], current[0]),
+                // This adversarial producer uses f(X)=X^8. Its alternate
+                // next value is known exactly at x*g_L, so all quotient,
+                // FRI and Merkle data can be recomputed coherently for the
+                // wrong stride instead of merely corrupting a path.
+                NextMapping::StrideOne => {
+                    (field_pow(mul_mod(point, self.lde_generator), 8), current[0])
+                }
+                NextMapping::Swapped => (current[0], next[0]),
+            };
+            Ok(recurrence_slots(
+                sub_mod(left, mul_mod(self.trace_generator, right)),
+                current,
+                next,
+            ))
+        }
+
+        fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
+            use crate::backend::{field_pow, mul_mod};
+
+            let exponent = match self.mapping {
+                NextMapping::Correct => 1,
+                NextMapping::StrideOne => 8,
+                NextMapping::Swapped => RECURRENCE_TRACE_ROWS - 1,
+            };
+            let values = (0..RECURRENCE_LDE_ROWS)
+                .map(|index| {
+                    let point = mul_mod(
+                        FASTPQ_FINAL_V1.omega_coset,
+                        field_pow(self.lde_generator, index as u64),
+                    );
+                    field_pow(point, exponent as u64)
+                })
+                .collect();
+            Ok(Box::new(PreparedRecurrence {
+                mapping: self.mapping,
+                trace_generator: self.trace_generator,
+                values,
+            }))
+        }
+    }
+
+    /// Replace one opening with the genuine committed row at `mapped_index`.
+    ///
+    /// Its path authenticates at the mapped coordinate, while the intended
+    /// current/next coordinate must reject it.
+    fn remap_opening(
+        prepared: &PreparedTrace,
+        values: &mut Vec<u64>,
+        path: &mut Vec<WireDigest>,
+        intended_index: usize,
+        mapped_index: usize,
+    ) {
+        *values = prepared
+            .replay
+            .selected_rows(&[mapped_index])
+            .unwrap()
+            .pop()
+            .unwrap();
+        *path = prepared.rows.path(mapped_index).unwrap();
+        let native_path = path
+            .iter()
+            .copied()
+            .map(WireDigest::as_fastpq)
+            .collect::<Vec<_>>();
+        let plan = |index| {
+            MultiproofPlan::new(
+                RECURRENCE_LDE_ROWS,
+                &[index],
+                MultiproofLimits {
+                    max_depth: 19,
+                    max_queried_leaves: 1,
+                    max_siblings: 19,
+                    max_parent_hashes: 19,
+                },
+            )
+            .unwrap()
+        };
+        prepared
+            .binding
+            .verify_tree(
+                &plan(mapped_index),
+                MerkleTreeRoleV1::AirTrace,
+                prepared.rows.root(),
+                &[prepared.binding.row(mapped_index, values).unwrap()],
+                &native_path,
+            )
+            .unwrap();
+        assert!(
+            prepared
+                .binding
+                .verify_tree(
+                    &plan(intended_index),
+                    MerkleTreeRoleV1::AirTrace,
+                    prepared.rows.root(),
+                    &[prepared.binding.row(intended_index, values).unwrap()],
+                    &native_path
+                )
+                .is_err()
+        );
+    }
+
+    /// Export the producer's wrong mapping as real committed rows with genuine paths.
+    fn assert_remapped_openings_rejected(
+        producer: &RecurrenceAir,
+        prepared: &PreparedTrace,
+        compact: &CompactProof,
+        mapping: NextMapping,
+    ) {
+        let mut remapped = compact.clone();
+        for query in &mut remapped.queries {
+            let index = query.index as usize;
+            let physical_next = (index + 8) % RECURRENCE_LDE_ROWS;
+            match mapping {
+                NextMapping::StrideOne => remap_opening(
+                    prepared,
+                    &mut query.next,
+                    &mut query.next_path,
+                    physical_next,
+                    (index + 1) % RECURRENCE_LDE_ROWS,
+                ),
+                NextMapping::Swapped => {
+                    remap_opening(
+                        prepared,
+                        &mut query.current,
+                        &mut query.current_path,
+                        index,
+                        physical_next,
+                    );
+                    remap_opening(
+                        prepared,
+                        &mut query.next,
+                        &mut query.next_path,
+                        physical_next,
+                        index,
+                    );
+                }
+                NextMapping::Correct => unreachable!(),
+            }
+        }
+        assert!(from_compact(producer, &remapped, conversion_limits()).is_err());
+    }
+
+    #[test]
+    fn nonconstant_next_row_relation_rejects_coherently_reproved_stride_one_and_swapped_rows() {
+        use crate::backend::field_pow;
+
+        let trace_generator = FixedTraceDomain::new(&FASTPQ_FINAL_V1, RECURRENCE_TRACE_ROWS)
             .unwrap()
             .generator;
         let domain = FriDomain::from_lde_parameters(
             FASTPQ_FINAL_V1.lde_root,
             FASTPQ_FINAL_V1.lde_log_size,
-            LDE_ROWS,
+            RECURRENCE_LDE_ROWS,
             FASTPQ_FINAL_V1.omega_coset,
         )
         .unwrap();
         let lde_generator = domain.coset_generator(1);
         assert_eq!(field_pow(lde_generator, 8), trace_generator);
-        assert_eq!(next_index(LDE_ROWS - 1, LDE_ROWS), 7);
+        assert_eq!(next_index(RECURRENCE_LDE_ROWS - 1, RECURRENCE_LDE_ROWS), 7);
         let intended = RecurrenceAir {
             mapping: NextMapping::Correct,
             trace_generator,
@@ -1962,7 +2242,7 @@ mod tests {
         for (mapping, exponent) in [
             (NextMapping::Correct, 1),
             (NextMapping::StrideOne, 8),
-            (NextMapping::Swapped, TRACE_ROWS - 1),
+            (NextMapping::Swapped, RECURRENCE_TRACE_ROWS - 1),
         ] {
             let producer = RecurrenceAir {
                 mapping,
@@ -1973,11 +2253,11 @@ mod tests {
             // or malicious producer; it cannot advertise a replacement AIR.
             assert_eq!(producer.schema(), intended.schema());
             assert_eq!(producer.statement_bytes(), intended.statement_bytes());
-            let trace = (0..TRACE_ROWS)
+            let trace = (0..RECURRENCE_TRACE_ROWS)
                 .map(|index| field_pow(trace_generator, (index * exponent) as u64))
                 .collect::<Vec<_>>();
             assert_ne!(trace[0], trace[1], "each probe must be nonconstant");
-            let mut columns = vec![vec![0; TRACE_ROWS]; 342];
+            let mut columns = vec![vec![0; RECURRENCE_TRACE_ROWS]; 342];
             columns[0] = trace;
             let prepared = prepare_trace(&producer, &columns).unwrap();
             drop(columns);
@@ -2020,82 +2300,7 @@ mod tests {
                     // replacement is a real committed row with a genuine path.
                     // Its path authenticates at the mapped coordinate, while
                     // the intended current/next coordinate must reject it.
-                    let mut remapped = compact.clone();
-                    let remap = |values: &mut Vec<u64>,
-                                 path: &mut Vec<WireDigest>,
-                                 intended_index,
-                                 mapped_index| {
-                        *values = prepared
-                            .replay
-                            .selected_rows(&[mapped_index])
-                            .unwrap()
-                            .pop()
-                            .unwrap();
-                        *path = prepared.rows.path(mapped_index).unwrap();
-                        let native_path = path
-                            .iter()
-                            .copied()
-                            .map(WireDigest::as_fastpq)
-                            .collect::<Vec<_>>();
-                        let plan = |index| {
-                            MultiproofPlan::new(
-                                LDE_ROWS,
-                                &[index],
-                                MultiproofLimits {
-                                    max_depth: 19,
-                                    max_queried_leaves: 1,
-                                    max_siblings: 19,
-                                    max_parent_hashes: 19,
-                                },
-                            )
-                            .unwrap()
-                        };
-                        prepared
-                            .binding
-                            .verify_tree(
-                                &plan(mapped_index),
-                                MerkleTreeRoleV1::AirTrace,
-                                prepared.rows.root(),
-                                &[prepared.binding.row(mapped_index, values).unwrap()],
-                                &native_path,
-                            )
-                            .unwrap();
-                        assert!(
-                            prepared
-                                .binding
-                                .verify_tree(
-                                    &plan(intended_index),
-                                    MerkleTreeRoleV1::AirTrace,
-                                    prepared.rows.root(),
-                                    &[prepared.binding.row(intended_index, values).unwrap()],
-                                    &native_path
-                                )
-                                .is_err()
-                        );
-                    };
-                    for query in &mut remapped.queries {
-                        let index = query.index as usize;
-                        let physical_next = (index + 8) % LDE_ROWS;
-                        match mapping {
-                            NextMapping::StrideOne => remap(
-                                &mut query.next,
-                                &mut query.next_path,
-                                physical_next,
-                                (index + 1) % LDE_ROWS,
-                            ),
-                            NextMapping::Swapped => {
-                                remap(
-                                    &mut query.current,
-                                    &mut query.current_path,
-                                    index,
-                                    physical_next,
-                                );
-                                remap(&mut query.next, &mut query.next_path, physical_next, index);
-                            }
-                            NextMapping::Correct => unreachable!(),
-                        }
-                    }
-                    assert!(from_compact(&producer, &remapped, conversion_limits()).is_err());
+                    assert_remapped_openings_rejected(&producer, &prepared, &compact, mapping);
                 }
             }
         }

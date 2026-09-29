@@ -45,11 +45,13 @@ fn extend(
         ))
     };
     output_test_support::install_network(&mut block, vec![output]).unwrap();
-    let (crypto, committee) = ProofCrypto::new(&fixture.validators).unwrap();
-    let result = result(&block, committee);
+    let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+    let result = result(&block, &parent.commitment.schedule.current);
     let payload = block.canonical_resultless_proposal().encode_wire().unwrap();
     let header = CoreHeader {
+        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
         instance: fixture.verifier().instance(),
+        epoch: core_epoch(&parent.commitment.schedule.current).unwrap().id,
         height,
         origin_view: 0,
         parent_hash: parent.core_hash,
@@ -63,6 +65,7 @@ fn extend(
     let mut qc = Qc {
         kind: VoteKind::Commit,
         instance: header.instance,
+        epoch: header.epoch,
         height,
         view: 0,
         block_hash: header.hash(&crypto),
@@ -71,9 +74,10 @@ fn extend(
         signers: Bitmap::new(4),
         agg_sig: AggregateSignature([0; 96]),
         attestations: vec![],
+        attestation_witness: None,
     };
     sign_qc(&mut qc, &fixture.keys, &[0, 1, 2]);
-    block.set_commit_certificate(Some(CommitCertificate::new(
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         norito::encode_canonical(&header).unwrap(),
         norito::encode_canonical(&qc).unwrap(),
         result.preimage().unwrap(),
@@ -252,7 +256,7 @@ fn checkpoint_lag_two_binding_and_height_exhaustion_refuse() {
     );
     verifier.verify(&third).unwrap();
     let mut checkpoint = verifier.export_checkpoint(&third).unwrap();
-    checkpoint.decisions[0].next_committee_digest[0] ^= 1;
+    checkpoint.decisions[0].schedule.current.leader_seed[0] ^= 1;
     assert!(
         SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &fixture.network, CHAIN)
             .is_err()
@@ -290,7 +294,8 @@ fn publication_proof_authenticates_both_phases_and_canonical_current_wire() {
         assert_eq!(tip.committee.len(), 4);
         let block = tip.decode_checked().unwrap();
         let qc: Qc =
-            norito::decode_canonical(&block.block.commit_certificate().unwrap().commit_qc).unwrap();
+            norito::decode_canonical(block.block.commit_certificate().unwrap().commit_qc())
+                .unwrap();
         assert_eq!(qc.signers.count_ones(), 3);
         assert!(
             SumeragiFinalityVerifier::from_trusted_checkpoint(
@@ -344,11 +349,16 @@ fn publication_proof_rejects_signed_failure_replay_phase_and_output_substitution
     );
     let mut corrupt = valid.clone();
     let mut block = corrupt.lineage[1].decode_checked().unwrap().block;
-    let mut certificate = block.commit_certificate().unwrap().clone();
-    let mut qc: Qc = norito::decode_canonical(&certificate.commit_qc).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let consensus_header = certificate.consensus_header().to_vec();
+    let result_preimage = certificate.result_preimage().to_vec();
+    let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     qc.agg_sig.0[0] ^= 1;
-    certificate.commit_qc = norito::encode_canonical(&qc).unwrap();
-    block.set_commit_certificate(Some(certificate));
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        consensus_header,
+        norito::encode_canonical(&qc).unwrap(),
+        result_preimage,
+    )));
     corrupt.lineage[1].block_wire = block.encode_wire().unwrap();
     assert!(verify_sorafs_publication_v1(&fixture.network, &checkpoint, &tx, &corrupt).is_err());
     let mut truncated = valid.clone();

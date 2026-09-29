@@ -28,7 +28,7 @@ pub fn lane(class: Class) -> usize {
     }
 }
 
-fn attestations_size(attestations: &[Vec<u8>]) -> u64 {
+fn attestations_size(attestations: &[crate::message::AttestationSignature]) -> u64 {
     attestations.iter().map(|a| 4 + len64(a.len())).sum()
 }
 
@@ -42,6 +42,10 @@ fn qc_size(qc: &Qc) -> u64 {
         + len64(qc.signers.as_bytes().len())
         + 96
         + attestations_size(&qc.attestations)
+        + 1
+        + qc.attestation_witness
+            .as_ref()
+            .map_or(0, |w| 4 + len64(w.as_slice().len()))
 }
 
 fn opt_qc_size(qc: Option<&Qc>) -> u64 {
@@ -53,7 +57,17 @@ fn tc_size(tc: &TimeoutCert) -> u64 {
 }
 
 fn header_size(header: &BlockHeader) -> u64 {
-    32 + 8 + 8 + 32 + 32 + 32 + 4 + 4 + 8 + 40 * len64(header.skipped_leaders.len())
+    32 + 8
+        + 8
+        + 32
+        + 32
+        + 32
+        + 4
+        + 4
+        + 8
+        + 40 * len64(header.skipped_leaders.len())
+        + 8
+        + len64(header.control_witness.len())
 }
 
 fn block_size(block: &Block) -> u64 {
@@ -79,7 +93,16 @@ pub fn approx_size(msg: &WireMessage) -> u64 {
                 + 96
         }
         WireMessage::Vote(v) => {
-            1 + 32 + 8 + 8 + 32 + 32 + 4 + 96 + v.attestation.as_ref().map_or(0, |a| len64(a.len()))
+            1 + 32
+                + 8
+                + 8
+                + 32
+                + 32
+                + 4
+                + 96
+                + v.attestation.as_ref().map_or(0, |a| {
+                    8 + len64(a.signature.len()) + len64(a.witness.as_slice().len())
+                })
         }
         WireMessage::Qc(qc) => qc_size(qc),
         WireMessage::Timeout(t) => 32 + 8 + 8 + opt_qc_size(t.high_pqc.as_ref()) + 4 + 96,
@@ -103,6 +126,9 @@ pub fn approx_size(msg: &WireMessage) -> u64 {
         }
         WireMessage::BlockRequest(_) => 32 + 8 + 32,
         WireMessage::BlockResponse(r) => 32 + block_size(&r.block),
+        WireMessage::ApplicationControl(message) => {
+            32 + 40 + 8 + 64 + 8 + len64(message.bytes.len())
+        }
     };
     body + 16
 }

@@ -2,7 +2,7 @@
 
 use manyhow::Emitter;
 use quote::{ToTokens, quote};
-use syn::{DeriveInput, Item, Meta, Path, Token, parse_quote, punctuated::Punctuated};
+use syn::{DeriveInput, Item, ItemStruct, Meta, Path, Token, parse_quote, punctuated::Punctuated};
 
 use crate::EmitterExt;
 
@@ -149,6 +149,27 @@ fn nonliteral_or_unknown_metadata_is_rejected() {
     }
 }
 
+/// The derive paths and `norito_schema` identities declared on a generated struct.
+fn derives_and_schema_identities(item: &ItemStruct) -> (Vec<String>, Vec<String>) {
+    let mut derives = Vec::new();
+    let mut identities = Vec::new();
+    for attribute in &item.attrs {
+        if attribute.path().is_ident("derive") {
+            let paths = attribute
+                .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+                .expect("derive paths");
+            derives.extend(paths.iter().map(|path| path.to_token_stream().to_string()));
+        }
+        if attribute.path().is_ident("norito_schema") {
+            let identity = attribute
+                .parse_args::<Meta>()
+                .expect("explicit generated identity");
+            identities.push(identity.to_token_stream().to_string());
+        }
+    }
+    (derives, identities)
+}
+
 #[test]
 fn expansion_declares_only_the_child_identity_and_preserves_builder_fields() {
     let input: DeriveInput = parse_quote! {
@@ -183,28 +204,13 @@ fn expansion_declares_only_the_child_identity_and_preserves_builder_fields() {
         .map(|field| field.ident.as_ref().expect("named field").to_string())
         .collect();
     assert_eq!(fields, ["id", "tags"]);
-    let mut derives = Vec::new();
-    let mut identities = Vec::new();
-    for attribute in &builder.attrs {
-        if attribute.path().is_ident("derive") {
-            let paths = attribute
-                .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
-                .expect("derive paths");
-            derives.extend(paths.iter().map(ToTokens::to_token_stream));
-        }
-        if attribute.path().is_ident("norito_schema") {
-            let identity = attribute
-                .parse_args::<Meta>()
-                .expect("explicit generated identity");
-            identities.push(identity.to_token_stream().to_string());
-        }
-    }
+    let (derives, identities) = derives_and_schema_identities(builder);
     assert_eq!(
         identities,
         [quote!(name = "captured::NewAsset").to_string()]
     );
     assert_eq!(
-        derives.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        derives,
         [
             "Debug",
             "Clone",

@@ -44,7 +44,7 @@ def allocation(value):
     for pair in range(1,6):
         for variant in ('one_lane','four_lane'):
             caps={name:budget.FileBudget(f'pair{pair}.{variant}.{name}',
-                  65536 if name in ('canonical_proof','native_finality','native_queries','native_facts','native_request','native_bundle')
+                  65536 if name in ('canonical_proof','native_carrier','native_queries','native_facts','native_request','native_bundle')
                   else 4*budget.MIB if name=='collector_journal' else budget.MIB)
                   for name in budget.RUN_FILE_FIELDS}
             rows.append(budget.RunBudget(pair,variant,geometry,**caps))
@@ -133,7 +133,7 @@ class TrialFactory(CommandFactory):
         if '--out-dir' in argv:operation='generator'
         elif '--challenge' in argv:operation='readiness'
         elif 'load' in argv:operation='load'
-        elif 'collect-scaling-inputs' in argv:operation='vectors'
+        elif len(argv) > 6 and argv[6] == 'collect':operation='vectors'
         else:operation=argv[6]
         self.operations.append(operation);self.before(operation,argv)
         index=len(self.calls);self.calls.append((argv,kwargs))
@@ -156,11 +156,11 @@ class TrialFactory(CommandFactory):
                 committed_height=max(100,self.trial._scheduled+1))
         elif operation=='vectors':
             path=Path(flag('context'))
-            value=dict(version=1,operation='collect_scaling_inputs',invocation_id=flag('invocation-id'),
-                client_config_sha256=flag('client-config-sha256'),context_sha256=flag('context-sha256'),
+            value=dict(version=1,operation='collect_native_inputs',invocation_id=flag('invocation-id'),
+                genesis_sha256=flag('signed-genesis-sha256'),genesis_bytes=Path(flag('signed-genesis')).stat().st_size,context_sha256=flag('context-sha256'),
                 context_bytes=path.stat().st_size,committed_height=max(100,self.trial._scheduled+1),
-                finality_count=max(100,self.trial._scheduled+1),query_count=self.trial._scheduled)
-            for role in ('finality','queries'):
+                carrier_count=max(100,self.trial._scheduled+1),query_count=self.trial._scheduled)
+            for role in ('carrier','queries'):
                 digest,size=self._publish(role,Path(flag(role+'-out')));value[role+'_sha256']=digest;value[role+'_bytes']=size
         elif operation=='facts':
             digest,size=self._publish('facts',Path(flag('facts-output')))

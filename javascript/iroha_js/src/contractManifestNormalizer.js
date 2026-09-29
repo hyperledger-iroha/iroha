@@ -1,6 +1,6 @@
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { Buffer } from "buffer";
-import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
 import { assertString } from "./instructionBuilderPrimitives.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
@@ -413,12 +413,12 @@ export function createContractManifestNormalizer(
     } else {
       if (
         argumentSchema.fields.length === 0 ||
-        argumentSchema.fields.length > 13 ||
+        argumentSchema.fields.length > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 ||
         argumentSchema.fields.length !== params.length
       ) {
         fail(
           V_CODE_INVALID_OBJECT,
-          `${name}.argument_schema.fields must exactly match 1..13 declared parameters`,
+          `${name}.argument_schema.fields must exactly match 1..8192 declared parameters`,
           `${name}.argument_schema.fields`,
         );
       }
@@ -452,10 +452,10 @@ export function createContractManifestNormalizer(
           );
         }
       });
-      if (argumentWords > 13) {
+      if (argumentWords > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}.argument_schema exceeds the V1 13-word argument window`,
+          `${name}.argument_schema exceeds the V1 8192-word argument table`,
           `${name}${TEXT_ARGUMENT_SCHEMA}`,
         );
       }
@@ -479,10 +479,10 @@ export function createContractManifestNormalizer(
           `${name}.return_schema`,
         );
       }
-      if (analysis.wordCount > 13) {
+      if (analysis.wordCount > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}.return_schema exceeds the V1 13-word return window`,
+          `${name}.return_schema exceeds the V1 8192-word result table`,
           `${name}.return_schema`,
         );
       }

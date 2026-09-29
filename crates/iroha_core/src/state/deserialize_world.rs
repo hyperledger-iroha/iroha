@@ -1,3 +1,19 @@
+#[path = "deserialize_world_musubi_live.rs"]
+mod musubi_live;
+#[path = "deserialize_world_musubi_source_work.rs"]
+pub(in crate::state) mod musubi_source_work;
+pub(in crate::state) use musubi_live::validate_musubi_live_projection_cut;
+use musubi_live::validate_musubi_live_projections;
+
+#[path = "deserialize_world_musubi_derived.rs"]
+mod musubi_derived;
+#[path = "deserialize_world_musubi_universal.rs"]
+pub(in crate::state) mod musubi_universal;
+#[path = "deserialize_world_proof_tag_index.rs"]
+mod proof_tag_index;
+#[path = "deserialize_world_verifying_key_index.rs"]
+mod verifying_key_index;
+
 struct MusubiPersistedState<'a> {
     namespace_bindings: &'a Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
     packages: &'a Storage<MusubiPackageIdV1, MusubiPackageRecordV1>,
@@ -5508,133 +5524,6 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
     }
     Ok(())
 }
-fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
-    let world = world.view();
-    for (archive_id, archive) in world.musubi_archives().iter() {
-        let mut active_locations = 0_usize;
-        let mut healthy_providers = BTreeSet::new();
-        let mut maximum_location_revision = 1_u64;
-        for (key, location) in world
-            .musubi_archive_locations()
-            .iter()
-            .filter(|(key, _)| key.archive_id == *archive_id)
-        {
-            maximum_location_revision = maximum_location_revision.max(location.revision);
-            if location.state == MusubiArchiveLocationStateV1::Retired {
-                continue;
-            }
-            if archive
-                .location_ids
-                .binary_search(&key.location_id)
-                .is_err()
-            {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_locations",
-                    "non-retired location is absent from its archive directory",
-                ));
-            }
-            let current =
-                crate::smartcontracts::isi::musubi::current_location_providers(location, &world);
-            let current_count = current.as_ref().map_or(0, Vec::len);
-            let expected_state = if current_count
-                >= usize::from(iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1)
-            {
-                MusubiArchiveLocationStateV1::Healthy
-            } else {
-                MusubiArchiveLocationStateV1::Degraded
-            };
-            if location.state != expected_state {
-                return Err(invalid_musubi_state(
-                    "musubi_archive_locations",
-                    "archive-location lifecycle state disagrees with current SoraFS evidence",
-                ));
-            }
-            if let Some(providers) = current {
-                active_locations = active_locations.checked_add(1).ok_or_else(|| {
-                    invalid_musubi_state(
-                        "musubi_archive_availability",
-                        "active archive-location count overflows usize",
-                    )
-                })?;
-                healthy_providers.extend(providers);
-            }
-        }
-        if archive.location_revision != maximum_location_revision {
-            return Err(invalid_musubi_state(
-                "musubi_archives",
-                "archive location revision is not the exact maximum retained location revision",
-            ));
-        }
-        let active_locations = u8::try_from(active_locations).map_err(|_| {
-            invalid_musubi_state(
-                "musubi_archive_availability",
-                "active archive-location count overflows u8",
-            )
-        })?;
-        let healthy_replicas = u16::try_from(healthy_providers.len()).map_err(|_| {
-            invalid_musubi_state(
-                "musubi_archive_availability",
-                "healthy provider count overflows u16",
-            )
-        })?;
-        let expected_availability =
-            if healthy_replicas >= iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1 {
-                iroha_data_model::musubi::MusubiStorageAvailabilityV1::Selectable
-            } else if active_locations > 0 && healthy_replicas > 0 {
-                iroha_data_model::musubi::MusubiStorageAvailabilityV1::BelowQuorum
-            } else {
-                iroha_data_model::musubi::MusubiStorageAvailabilityV1::Unavailable
-            };
-        let projection = world
-            .musubi_archive_availability()
-            .get(archive_id)
-            .ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_archive_availability",
-                    "archive is missing its availability projection",
-                )
-            })?;
-        if projection.active_locations != active_locations
-            || projection.healthy_replicas != healthy_replicas
-            || projection.availability != expected_availability
-        {
-            return Err(invalid_musubi_state(
-                "musubi_archive_availability",
-                "availability projection is not the exact result of current SoraFS evidence",
-            ));
-        }
-    }
-    for (_, row) in world.musubi_resolver_index().iter() {
-        if row.index_revision < row.selection.storage.index_revision {
-            return Err(invalid_musubi_state(
-                "musubi_resolver_index",
-                "resolver row predates its embedded availability projection",
-            ));
-        }
-    }
-    for (_, entry) in world.musubi_public_directory().iter() {
-        let maximum_row_revision = world
-            .musubi_resolver_index()
-            .iter()
-            .filter(|(release, _)| release.package == entry.package)
-            .map(|(_, row)| row.index_revision)
-            .max()
-            .ok_or_else(|| {
-                invalid_musubi_state(
-                    "musubi_public_directory",
-                    "directory package has no resolver rows",
-                )
-            })?;
-        if entry.index_revision < maximum_row_revision {
-            return Err(invalid_musubi_state(
-                "musubi_public_directory",
-                "directory entry predates its package resolver rows",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn invalid_global_beacon_persistence(message: impl Into<String>) -> json::Error {
     json::Error::InvalidField {
         field: "world.global_beacon".to_owned(),
@@ -7130,6 +7019,9 @@ mod validation_fee_registry_restore_tests {
         let snapshot = json::to_value(&state).expect("serialize validation-fee restore fixture");
         KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
@@ -7287,6 +7179,9 @@ mod validation_fee_registry_restore_tests {
         let kura = Kura::blank_kura_for_testing();
         let error = build_state(
             BuildStateInputs {
+                execution_budget: mv::allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
                 lane_manifests: Arc::new(LaneManifestRegistry::empty()),
                 canonical_runtime,
                 world,
@@ -7295,7 +7190,6 @@ mod validation_fee_registry_restore_tests {
                     .expect("fund emergency-fast fixture membership"),
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
-                lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
                 ivm: IVM::new(0),
                 nexus: iroha_config::parameters::actual::Nexus::default(),
                 chain_id: "validation-fee-emergency-fast"
@@ -7449,11 +7343,124 @@ fn validate_da_pin_persistence(world: &World) -> Result<(), json::Error> {
 #[path = "deserialize_world_da_pin_tests.rs"]
 mod da_pin_persistence_tests;
 
+fn validate_domain_endorsement_index_cut(
+    endorsements: &impl StorageReadOnly<HashOf<DomainEndorsement>, DomainEndorsementRecord>,
+    by_domain: &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>,
+    cut: &str,
+) -> Result<(), json::Error> {
+    let invalid = |message: &str| json::Error::InvalidField {
+        field: "domain_endorsements_by_domain".to_owned(),
+        message: format!("invalid {cut} endorsement index: {message}"),
+    };
+    let mut indexed = BTreeSet::new();
+    for (domain, hashes) in by_domain.iter() {
+        if hashes.is_empty() {
+            return Err(invalid("empty domain entry"));
+        }
+        let mut previous_height = None;
+        for hash in hashes {
+            let record = endorsements
+                .get(hash)
+                .ok_or_else(|| invalid("index references a missing endorsement"))?;
+            if &record.endorsement.domain_id != domain {
+                return Err(invalid("endorsement belongs to a different domain"));
+            }
+            if !indexed.insert(*hash) {
+                return Err(invalid("endorsement is indexed more than once"));
+            }
+            if previous_height.is_some_and(|height| height > record.accepted_at_height) {
+                return Err(invalid("endorsement acceptance heights decrease"));
+            }
+            previous_height = Some(record.accepted_at_height);
+        }
+    }
+    if indexed.len() != endorsements.len() {
+        return Err(invalid("index omits an authoritative endorsement"));
+    }
+    Ok(())
+}
+
+fn validate_domain_endorsement_index(world: &World) -> Result<(), json::Error> {
+    {
+        let endorsements = world.domain_endorsements.view();
+        let by_domain = world.domain_endorsements_by_domain.view();
+        validate_domain_endorsement_index_cut(&endorsements, &by_domain, "current")?;
+    }
+    // Check the actual retained MV predecessor without deriving intra-block
+    // append order from records that only retain an acceptance height.
+    let endorsements = world.domain_endorsements.block_and_revert();
+    let by_domain = world.domain_endorsements_by_domain.block_and_revert();
+    validate_domain_endorsement_index_cut(&endorsements, &by_domain, "predecessor")
+}
+
+#[cfg(test)]
+#[path = "deserialize_world_domain_endorsement_tests.rs"]
+mod domain_endorsement_persistence_tests;
+
+#[cfg(test)]
+#[path = "deserialize_world_kagemusha_registry_tests.rs"]
+mod kagemusha_registry_persistence_tests;
+
+/// A decoded snapshot is quarantined canonical data until same-pool admission and the
+/// separately authenticated current/revert chain cuts validate its authority graph.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+struct NativeScheduleSnapshot {
+    revert: Option<crate::sumeragi::schedule::ConsensusSchedule>,
+    blocks: crate::sumeragi::schedule::ConsensusSchedule,
+}
+fn take_native_consensus_schedule(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &mv::allocation::AllocationBudget,
+) -> Result<Cell<crate::sumeragi::schedule::RetainedConsensusSchedule>, StateRestoreError> {
+    use crate::sumeragi::schedule::{RetainedConsensusSchedule, ScheduleError};
+    let snapshot: NativeScheduleSnapshot = take_required(map, "consensus_schedule")?;
+    let classify = |error: ScheduleError| match error {
+        local @ (ScheduleError::Admission(_) | ScheduleError::Allocator { .. }) => {
+            StateRestoreError::NativeSchedule(local)
+        }
+        invalid => StateRestoreError::Serialization(json::Error::InvalidField {
+            field: "world.consensus_schedule".into(),
+            message: invalid.to_string(),
+        }),
+    };
+    let current = RetainedConsensusSchedule::admit(&snapshot.blocks, budget).map_err(classify)?;
+    let undo = snapshot
+        .revert
+        .as_ref()
+        .map(|source| RetainedConsensusSchedule::admit(source, budget))
+        .transpose()
+        .map_err(classify)?;
+    // Both exact nested owners exist before either EBR generation is installed. These
+    // untracked outer controls are not claimed as covered by the schedule graph's ledger.
+    Ok(Cell::from_values_charged(
+        current,
+        undo,
+        mv::cell::CellAllocationCharges::new(
+            concread::ebrcell::Untracked,
+            concread::ebrcell::Untracked,
+        ),
+    ))
+}
+
+#[cfg(test)]
+fn expect_completed_restore_rejection(error: StateRestoreError) -> json::Error {
+    match error {
+        StateRestoreError::Serialization(error) => error,
+        local => panic!("unexpected local restore refusal: {local}"),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn parse_world(
+/// Decode the original World allocation before any full rollback validation starts.
+/// Its large per-field decoding temporaries must leave the stack before the next
+/// phase acquires the complete original writer inventory. The only caller below
+/// immediately performs every existing validation and index rebuild in order.
+#[inline(never)]
+fn decode_world_fields(
+    execution_budget: &mv::allocation::AllocationBudget,
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
-) -> Result<World, json::Error> {
+) -> Result<World, StateRestoreError> {
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
         if let Some(unknown) = actual.iter().find(|key| !expected.contains(&key.as_str())) {
@@ -7461,7 +7468,8 @@ fn parse_world(
                 field: format!("world.{unknown}"),
                 message: "unknown field is not permitted in a signed first-release snapshot"
                     .to_owned(),
-            });
+            }
+            .into());
         }
         if !actual
             .iter()
@@ -7471,15 +7479,18 @@ fn parse_world(
             return Err(json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "snapshot world fields are not in canonical schema order".to_owned(),
-            });
+            }
+            .into());
         }
     }
     let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
-    let consensus_schedule = take_required(&mut map, "consensus_schedule")?;
+    let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
     let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
+    let domain_endorsements_by_domain: Storage<DomainId, Vec<HashOf<DomainEndorsement>>> =
+        take_required(&mut map, "domain_endorsements_by_domain")?;
     let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
     let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
     let account_aliases = take_required(&mut map, "account_aliases")?;
@@ -7553,7 +7564,8 @@ fn parse_world(
                 message: format!(
                     "AXT incarnation references unregistered asset definition {asset_definition_id}"
                 ),
-            });
+            }
+            .into());
         }
     }
     for (asset_definition_id, _) in definitions.iter() {
@@ -7563,14 +7575,67 @@ fn parse_world(
                 message: format!(
                     "registered asset definition {asset_definition_id} has no AXT incarnation"
                 ),
-            });
+            }
+            .into());
         }
     }
     let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
         take_required(&mut map, "axt_replay_ledger")?;
+    let axt_spend_nonce_ledger: Storage<AxtAnchoredSpendReplayKeyV1, u64> =
+        take_required(&mut map, "axt_spend_nonce_ledger")?;
+    let axt_source_transfer_replay_ledger: Storage<
+        AxtSourceTransferReplayKeyV1,
+        AxtSourceTransferReplayRecordV1,
+    > = take_required(&mut map, "axt_source_transfer_replay_ledger")?;
     let axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord> =
         take_required(&mut map, "axt_handle_budget_ledger")?;
     {
+        {
+            let nonces = axt_spend_nonce_ledger.view();
+            for (key, _) in nonces.iter() {
+                key.validate().map_err(|error| json::Error::InvalidField {
+                    field: "world.axt_spend_nonce_ledger".to_owned(),
+                    message: error.to_string(),
+                })?;
+            }
+            let transfers = axt_source_transfer_replay_ledger.view();
+            if nonces.iter().count() != transfers.iter().count() {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_source_transfer_replay_ledger".to_owned(),
+                    message: "source transfers and issuer nonces must be consumed together"
+                        .to_owned(),
+                }
+                .into());
+            }
+            let mut referenced_nonces = BTreeSet::new();
+            for (key, record) in transfers.iter() {
+                key.validate().map_err(|error| json::Error::InvalidField {
+                    field: "world.axt_source_transfer_replay_ledger".to_owned(),
+                    message: error.to_string(),
+                })?;
+                record
+                    .issuer_nonce
+                    .validate()
+                    .map_err(|error| json::Error::InvalidField {
+                        field: "world.axt_source_transfer_replay_ledger".to_owned(),
+                        message: error.to_string(),
+                    })?;
+                if record.consumed_slot == 0
+                    || key.network_id != record.issuer_nonce.issuer_context.network_id
+                    || key.dataspace_id != record.issuer_nonce.issuer_context.asset_dsid
+                    || nonces.get(&record.issuer_nonce) != Some(&record.consumed_slot)
+                    || !referenced_nonces.insert(record.issuer_nonce)
+                {
+                    return Err(json::Error::InvalidField {
+                        field: "world.axt_source_transfer_replay_ledger".to_owned(),
+                        message:
+                            "source transfer replay record does not match its durable issuer nonce"
+                                .to_owned(),
+                    }
+                    .into());
+                }
+            }
+        }
         {
             let ledger = axt_handle_budget_ledger.view();
             for (key, record) in ledger.iter() {
@@ -7621,7 +7686,8 @@ fn parse_world(
                             "active AXT policy for dataspace {} has no permanent counter ratchet",
                             dataspace.as_u64()
                         ),
-                    });
+                    }
+                    .into());
                 }
                 let expected = counter.map_or(0, AxtHandleCounterRecord::next);
                 if policy.next_handle_counter != expected {
@@ -7633,7 +7699,7 @@ fn parse_world(
                             dataspace.as_u64(),
                             expected
                         ),
-                    });
+                    }.into());
                 }
                 let expected_generation =
                     counter.map_or(0, AxtHandleCounterRecord::authorization_generation);
@@ -7646,7 +7712,7 @@ fn parse_world(
                             dataspace.as_u64(),
                             expected_generation
                         ),
-                    });
+                    }.into());
                 }
             }
             let replay = axt_replay_ledger.view();
@@ -7669,7 +7735,8 @@ fn parse_world(
                             key.sub_nonce,
                             counter.next()
                         ),
-                    });
+                    }
+                    .into());
                 }
                 if counter.authorization_generation() < key.handle_era {
                     return Err(json::Error::InvalidField {
@@ -7679,7 +7746,8 @@ fn parse_world(
                             key.handle_era,
                             counter.authorization_generation()
                         ),
-                    });
+                    }
+                    .into());
                 }
             }
             let budgets = axt_handle_budget_ledger.view();
@@ -7700,7 +7768,7 @@ fn parse_world(
                             "AXT budget family for dataspace {} has an unadvanced permanent ratchet",
                             key.asset_dsid().as_u64()
                         ),
-                    });
+                    }.into());
                 }
                 if key.authorization_generation() > counter.authorization_generation() {
                     return Err(json::Error::InvalidField {
@@ -7710,11 +7778,14 @@ fn parse_world(
                             key.authorization_generation(),
                             counter.authorization_generation()
                         ),
-                    });
+                    }.into());
                 }
             }
         }
     }
+    let kagemusha_verifier_registry: Cell<
+        iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1,
+    > = take_required(&mut map, "kagemusha_verifier_registry")?;
     let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
@@ -7885,6 +7956,7 @@ fn parse_world(
     let musubi_maintainer_directory = take_required(&mut map, "musubi_maintainer_directory")?;
     let musubi_releases = take_required(&mut map, "musubi_releases")?;
     let musubi_archives = take_required(&mut map, "musubi_archives")?;
+    let musubi_pin_outbox_high_waters = take_musubi_pin_outbox_high_waters(&mut map)?;
     let musubi_provider_bundle_attestations =
         take_required(&mut map, "musubi_provider_bundle_attestations")?;
     let musubi_archive_locations = take_required(&mut map, "musubi_archive_locations")?;
@@ -7904,7 +7976,7 @@ fn parse_world(
     let musubi_registry_policy = take_musubi_registry_policy(&mut map)?;
     let musubi_resolver_index_revision = take_musubi_resolver_index_revision(&mut map)?;
     let musubi_replication_shortfall_releases =
-        take_musubi_replication_shortfall_releases(&mut map)?;
+        take_musubi_replication_shortfall_releases(&mut map, execution_budget)?;
     let soracloud_sequence_watermark: Cell<u64> =
         take_required(&mut map, "soracloud_sequence_watermark")?;
     let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
@@ -8125,7 +8197,7 @@ fn parse_world(
     let da_pin_intents_by_manifest = take_required(&mut map, "da_pin_intents_by_manifest")?;
     let da_pin_intents_by_lane_epoch = take_required(&mut map, "da_pin_intents_by_lane_epoch")?;
     reject_unknown(&map, "world")?;
-    let mut world = World(Box::new(WorldData {
+    let world = World(Box::new(WorldData {
         parameters,
         peers,
         consensus_schedule,
@@ -8218,7 +8290,10 @@ fn parse_world(
         axt_handle_counters,
         axt_asset_incarnations,
         axt_replay_ledger,
+        axt_spend_nonce_ledger,
+        axt_source_transfer_replay_ledger,
         axt_handle_budget_ledger,
+        kagemusha_verifier_registry,
         tx_sequences,
         triggers,
         executor,
@@ -8270,6 +8345,7 @@ fn parse_world(
         musubi_maintainer_directory,
         musubi_releases,
         musubi_archives,
+        musubi_pin_outbox_high_waters,
         musubi_provider_bundle_attestations,
         musubi_archive_locations,
         musubi_locations_by_pin,
@@ -8354,7 +8430,7 @@ fn parse_world(
         domain_committees,
         domain_endorsement_policies,
         domain_endorsements,
-        domain_endorsements_by_domain: Storage::default(),
+        domain_endorsements_by_domain,
         public_lane_validators: Storage::default(),
         public_lane_stake_shares: Storage::default(),
         public_lane_rewards: Storage::default(),
@@ -8437,6 +8513,25 @@ fn parse_world(
         sccp_light_client_stride_index: Storage::default(),
         external_event_buf,
     }));
+    Ok(world)
+}
+
+fn parse_world(
+    execution_budget: &mv::allocation::AllocationBudget,
+    map: SnapshotJsonMap<'_>,
+    ivm_seed: &IvmSeed<'_, World>,
+) -> Result<World, StateRestoreError> {
+    let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
+    world
+        .try_block_and_revert(execution_budget)?
+        .kagemusha_verifier_registry
+        .get()
+        .validate()
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.kagemusha_verifier_registry".to_owned(),
+            message: format!("invalid predecessor verifier authority: {error}"),
+        })?;
+    validate_domain_endorsement_index(&world)?;
     validate_da_pin_persistence(&world)?;
     validator_committee::validate_persisted_progress(&world.view()).map_err(|message| {
         json::Error::InvalidField {
@@ -8444,6 +8539,8 @@ fn parse_world(
             message,
         }
     })?;
+    proof_tag_index::validate_proof_tag_index(&world)?;
+    verifying_key_index::validate_verifying_key_index(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
     super::retail_daily_limit_state::validate_persistence(&mut world).map_err(|message| {
         json::Error::InvalidField {
@@ -8470,7 +8567,8 @@ fn parse_world(
                     message:
                         "Parliament attempt storage key differs from its embedded canonical id"
                             .into(),
-                });
+                }
+                .into());
             }
             attempt
                 .validate()
@@ -8506,7 +8604,8 @@ fn parse_world(
                 return Err(json::Error::InvalidField {
                     field: "governance_proposals".into(),
                     message: reason.to_owned(),
-                });
+                }
+                .into());
             }
             if proposal.kind.fingerprint() != *proposal_id {
                 return Err(json::Error::InvalidField {
@@ -8514,7 +8613,8 @@ fn parse_world(
                     message:
                         "governance proposal storage key differs from its exact typed fingerprint"
                             .to_owned(),
-                });
+                }
+                .into());
             }
             if proposal
                 .kind
@@ -8525,7 +8625,8 @@ fn parse_world(
                     field: "governance_proposals".into(),
                     message: "governance proposal operator differs from its retained proposer"
                         .to_owned(),
-                });
+                }
+                .into());
             }
             let governed_subject = proposal.kind.governed_subject_id_v1().map_err(|error| {
                 json::Error::InvalidField {
@@ -8565,7 +8666,7 @@ fn parse_world(
                     message:
                         "governance Parliament attempt history is not an exact contiguous sequence"
                             .to_owned(),
-                });
+                }.into());
                 }
                 if attempt.policy_version()
                     != crate::governance::parliament::PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
@@ -8574,7 +8675,8 @@ fn parse_world(
                         field: "parliament_attempts".into(),
                         message: "governance Parliament attempt has a non-V1 policy version"
                             .to_owned(),
-                    });
+                    }
+                    .into());
                 }
                 if let Some(certificate) = attempt.certificate() {
                     let certificate_subject = match certificate.expected_head {
@@ -8595,7 +8697,7 @@ fn parse_world(
                         field: "parliament_attempts".into(),
                         message: "Parliament certificate differs from its exact governance proposal effect"
                             .to_owned(),
-                    });
+                    }.into());
                     }
                 }
                 let is_latest = index + 1 == proposal_attempts.len();
@@ -8612,7 +8714,7 @@ fn parse_world(
                     message:
                         "a non-latest Parliament attempt is not a retryable terminal predecessor"
                             .to_owned(),
-                });
+                }.into());
             }
             }
             let latest_attempt = proposal_attempts.last().copied();
@@ -8631,7 +8733,7 @@ fn parse_world(
                 message:
                     "governance proposal status does not match its exact Parliament attempt outcome"
                         .to_owned(),
-            });
+            }.into());
             }
         }
         crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
@@ -8665,8 +8767,10 @@ fn parse_world(
                 .get(),
         }
         .validate()?;
+        musubi_derived::validate_musubi_derived_cuts(&world)?;
+        musubi_universal::validate_musubi_universal_projection_cuts(&world, execution_budget)?;
         validate_musubi_governance_provenance(&world)?;
-        validate_musubi_live_projections(&world)?;
+        validate_musubi_live_projections(&world, execution_budget)?;
         world
             .validate_numeric_asset_invariants()
             .map_err(|message| json::Error::InvalidField {
@@ -8894,6 +8998,7 @@ mod asset_transfer_control_persistence_tests {
 }
 
 struct BuildStateInputs {
+    execution_budget: mv::allocation::AllocationBudget,
     lane_manifests: LaneManifestRegistryHandle,
     canonical_runtime: Cell<SnapshotNexusRuntime>,
     world: World,
@@ -8901,7 +9006,6 @@ struct BuildStateInputs {
     transactions: TransactionsStorage,
     commit_topology: Cell<Vec<PeerId>>,
     prev_commit_topology: Cell<Vec<PeerId>>,
-    lane_consensus_contexts: Cell<LaneConsensusContextsV1>,
     ivm: IVM,
     nexus: iroha_config::parameters::actual::Nexus,
     chain_id: iroha_model_base::chain::ChainId,
@@ -8919,6 +9023,7 @@ fn build_state(
     emergency_fast: bool,
 ) -> Result<Box<State>, MergeLedgerCommitError> {
     let BuildStateInputs {
+        execution_budget,
         lane_manifests,
         canonical_runtime,
         world,
@@ -8926,7 +9031,6 @@ fn build_state(
         transactions,
         commit_topology,
         prev_commit_topology,
-        lane_consensus_contexts,
         ivm,
         nexus,
         chain_id,
@@ -9027,7 +9131,8 @@ fn build_state(
         query_projection_checkpoint: query_projection_checkpoint_journal,
     } = load_state_journals(&kura, canonical_query_index_status, allow_durable_recovery);
     let active_runtime = allow_durable_recovery && !emergency_fast;
-    let pipeline = default_pipeline();
+    let mut pipeline = default_pipeline();
+    pipeline.ivm_execution_max_bytes = execution_budget.limit_bytes();
     let pipeline_parallelism = if active_runtime {
         PipelineParallelism::new(&pipeline)
     } else {
@@ -9073,7 +9178,6 @@ fn build_state(
         transactions,
         commit_topology,
         prev_commit_topology,
-        lane_consensus_contexts,
         da_commitments: PublicationRwLock::new(DaCommitmentStore::default()),
         da_confidential_compute: PublicationRwLock::new(ConfidentialComputeStore::default()),
         da_receipt_cursors,
@@ -9088,6 +9192,7 @@ fn build_state(
         da_pin_intents: PublicationRwLock::new(DaPinStore::default()),
         lane_relays: PublicationRwLock::new(LaneRelayStore::default()),
         lane_manifests: PublicationRwLock::new(lane_manifests),
+        provisional_emergency_lane_manifests_consumed: false,
         lane_privacy_registry: PublicationRwLock::new(Arc::new(LanePrivacyRegistry::empty())),
         lane_compliance: parking_lot::RwLock::new(None),
         da_index_hydration_fence: parking_lot::Mutex::new(()),
@@ -9102,12 +9207,22 @@ fn build_state(
         stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
             stateless_cache_cap,
         )),
-        trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(pipeline_cache_size)),
-        contract_query_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
+        trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
             pipeline_cache_size,
+            PreparedContractCache::with_execution_budget(
+                pipeline_cache_size,
+                execution_budget.clone(),
+            ),
+        )),
+        contract_query_ivm_cache: parking_lot::Mutex::new(IvmCache::with_prepared_contract_cache(
+            pipeline_cache_size,
+            PreparedContractCache::with_execution_budget(
+                pipeline_cache_size,
+                execution_budget.clone(),
+            ),
         )),
         pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
-            PreparedContractCache::with_capacity(pipeline_cache_size),
+            PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget),
         ),
         crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
         nexus: parking_lot::RwLock::new(nexus),
@@ -9125,9 +9240,9 @@ fn build_state(
         gov: default_governance(),
         content: default_content_cfg(),
         settlement: iroha_config::parameters::actual::Settlement::default(),
-        kagemusha_v1_runtime_verifier: Arc::new(
+        kagemusha_v1_runtime_verifier: PublicationRwLock::new(Arc::new(
             crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
-        ),
+        )),
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,
@@ -9138,7 +9253,6 @@ fn build_state(
         telemetry,
         lane_lifecycle_lock: PublicationMutex::default(),
         geometry_publication: parking_lot::Mutex::new(None),
-        pending_replay_publication: None,
         tiered_startup_geometry: None,
         queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
         state_commit_lock: Arc::new(PublicationMutex::default()),
@@ -9193,13 +9307,8 @@ fn build_state(
             .expect("Parliament citizen count must fit into u64");
         telemetry_seed.record_citizens_total(citizens_total);
     }
-    if allow_durable_recovery && state.kura.emergency_fast_startup_enabled() {
-        iroha_logger::warn!(
-            "emergency Fast snapshot restore left merge authority and query journals deferred until a Strict restart"
-        );
-    } else if allow_durable_recovery && !state.kura.provisional_snapshot_bootstrap_pending() {
-        state.recover_merge_ledger_from_kura()?;
-    }
+    // Native node preparation owns durable replay. Restoring a snapshot does not
+    // activate an independent legacy merge-ledger or finality-sidecar recovery path.
     Ok(state)
 }
 fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
@@ -9228,6 +9337,8 @@ fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         ivm_cache_max_decoded_ops:
             iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
         ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        ivm_execution_max_bytes:
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
         overlay_max_instructions:
             iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
@@ -9374,9 +9485,16 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
         message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
     })
 }
+/// Reuse the validated publication fixture for direct State commit controls.
+#[cfg(test)]
+pub(in crate::state) fn seeded_musubi_publication_world_for_testing() -> World {
+    decode_tests::seeded_musubi_publication_snapshot().0
+}
+
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+    include!("deserialize_world_musubi_live_tests.rs");
     use crate::query::store::LiveQueryStore;
     use iroha_crypto::SignatureOf;
     use iroha_data_model::account::AccountDetails;
@@ -9544,6 +9662,9 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let error = match parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse election fixture"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -9557,7 +9678,7 @@ mod decode_tests {
         };
         assert!(matches!(
             error,
-            json::Error::InvalidField { ref field, ref message }
+            StateRestoreError::Serialization(json::Error::InvalidField { ref field, ref message })
                 if field == "elections" && message.contains("below the minimum")
         ));
     }
@@ -9790,10 +9911,16 @@ mod decode_tests {
             &world.musubi_locations_by_provider,
         )?;
         validate_musubi_persisted_snapshot(world)?;
-        validate_musubi_live_projections(world)
+        validate_musubi_live_projections(
+            world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
     }
     #[allow(clippy::too_many_lines)]
-    fn seeded_musubi_publication_snapshot()
+    pub(super) fn seeded_musubi_publication_snapshot()
     -> (World, MusubiReleaseIdV1, ArchiveId, MusubiPackageSelectorV1) {
         let mut world = World::default();
         let package = musubi_package("atomic-publication");
@@ -10008,137 +10135,18 @@ mod decode_tests {
             .insert(selector.clone(), directory);
         world.musubi_resolver_index_revision =
             Cell::new(MusubiResolverIndexRevisionV1::new(2).expect("resolver revision"));
-        world.musubi_replication_shortfall_releases = Cell::new(1);
+        world.musubi_replication_shortfall_releases = crate::state::scalar_cell_custody::fixture(1);
         (world, release, archive_id, selector)
     }
-    #[allow(clippy::too_many_lines)]
-    fn seed_provider_attested_location(
-        world: &mut World,
-        release: &MusubiReleaseIdV1,
-        archive_id: ArchiveId,
-    ) -> MusubiProviderBundleAttestationKeyV1 {
-        let archive = world
-            .musubi_archives
-            .view()
-            .get(&archive_id)
-            .cloned()
-            .expect("seeded archive");
-        let verification_lock_digest = world
-            .musubi_releases
-            .view()
-            .get(release)
-            .map(|record| record.manifest.verification_lock_digest)
-            .expect("seeded release");
-        let provider_keypair = KeyPair::try_from_seed(vec![70; 32], Algorithm::Ed25519)
-            .expect("derive deterministic provider key");
-        let provider_owner = AccountId::new(provider_keypair.public_key().clone());
-        let provider_id = ProviderId::new([0x31; 32]);
-        let replication_order = ReplicationOrderId::new([0x32; 32]);
-        let location_id = MusubiArchiveLocationIdV1::new([0x33; 32]);
-        let completion_authority = ProviderIngestCompletionAuthorityV1::new(
-            provider_owner.clone(),
-            ProviderIngestCompletionSignerPolicyV1 {
-                policy_id: [0x34; 32],
-                revision: 1,
-                predecessor_digest: None,
-                policy_digest: [0x35; 32],
-            },
-        );
-        let binding = MusubiProviderBundleVerificationBindingV1 {
-            network_id: archive.staging_receipt.payload.binding.network_id,
-            provider_id,
-            completed_by: provider_owner,
-            completion_authority,
-            replication_order,
-            assignment_revision: 1,
-            completion_epoch: 1,
-            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
-                height: 2,
-                block_hash: [0x36; 32],
-            },
-            archive_id,
-            bundle_digest: archive.commitment.bundle_digest,
-            descriptor_digest: archive.commitment.descriptor_digest,
-            semantic_release_manifest_digest: archive
-                .staging_receipt
-                .payload
-                .binding
-                .semantic_release_manifest_digest,
-            verification_lock_digest,
-            source_tree_digest: archive.commitment.source_tree_digest,
-        };
-        let payload = MusubiProviderBundleVerificationPayloadV1 {
-            version: MUSUBI_REGISTRY_VERSION_V1,
-            binding: binding.clone(),
-        };
-        let attestation = MusubiProviderBundleVerificationAttestationV1 {
-            approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
-                public_key: provider_keypair.public_key().clone(),
-                signature: SignatureOf::try_from_hash(
-                    provider_keypair.private_key(),
-                    payload.signing_hash(),
-                )
-                .expect("sign provider bundle attestation"),
-            }],
-            payload,
-        };
-        attestation
-            .verify(&binding)
-            .expect("provider bundle attestation fixture verifies");
-        let attestation_key = attestation.key();
-        let attestation_reference = attestation.reference();
-        let attestation_record = MusubiProviderBundleAttestationRecordV1 {
-            key: attestation_key,
-            attestation_digest: attestation.digest(),
-            attestation,
-            registered_by: archive.registered_by.clone(),
-            registered_at_height: 2,
-        };
-        attestation_record
-            .validate()
-            .expect("valid provider attestation record");
-        let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
-            archive_id,
-            replication_order,
-            &[attestation_reference],
-        )
-        .expect("valid provider attestation set");
-        let location = MusubiArchiveLocationV1 {
-            location_id,
-            archive_id,
-            pin_manifest: ManifestDigest::new([0x37; 32]),
-            replication_order,
-            providers: vec![provider_id],
-            provider_attestation_set_digest,
-            renew_after_epoch: 1,
-            expires_at_epoch: 2,
-            finalized_height: 2,
-            revision: 2,
-            state: MusubiArchiveLocationStateV1::Degraded,
-        };
-        location.validate().expect("valid archive location fixture");
-        let mut updated_archive = archive;
-        updated_archive.location_revision = 2;
-        updated_archive.location_ids = vec![location_id];
-        updated_archive
-            .validate()
-            .expect("archive contains the exact current location directory");
-        world.musubi_archives.insert(archive_id, updated_archive);
-        world
-            .musubi_provider_bundle_attestations
-            .insert(attestation_key, attestation_record);
-        world
-            .musubi_archive_locations
-            .insert(location.key(), location);
-        attestation_key
-    }
+    include!("deserialize_world_musubi_source_fixture.rs");
     #[test]
     fn musubi_publication_snapshot_validates_replication_shortfall_aggregate() {
         let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
         validate_musubi_publication_snapshot(&baseline)
             .expect("one release on an unavailable archive has shortfall count one");
         let (mut mismatched, _, _, _) = seeded_musubi_publication_snapshot();
-        mismatched.musubi_replication_shortfall_releases = Cell::new(0);
+        mismatched.musubi_replication_shortfall_releases =
+            crate::state::scalar_cell_custody::fixture(0);
         let error = validate_musubi_publication_snapshot(&mismatched)
             .expect_err("a stale persisted shortfall aggregate must fail closed");
         assert!(
@@ -10146,6 +10154,375 @@ mod decode_tests {
                 .to_string()
                 .contains("musubi_replication_shortfall_releases"),
             "unexpected shortfall mismatch diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_secondary_projections_reject_current_and_predecessor_mutations() {
+        let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
+        musubi_derived::validate_musubi_derived_cuts(&baseline)
+            .expect("the retained current and predecessor projections are exact");
+        for mutation in 0..3 {
+            let (world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+            let directory_row = world
+                .musubi_maintainer_directory
+                .view()
+                .first_key_value()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .expect("seeded owner directory row");
+            let reference_row = world
+                .musubi_archive_reverse_references
+                .view()
+                .get(&archive_id)
+                .cloned()
+                .expect("seeded archive reverse-reference row");
+            let field = match mutation {
+                0 => {
+                    let mut block = world.musubi_maintainer_directory.block();
+                    block.remove(directory_row.0.clone());
+                    block.commit();
+                    "musubi_maintainer_directory"
+                }
+                1 => {
+                    let mut block = world.musubi_archive_reverse_references.block();
+                    block.remove(archive_id);
+                    block.commit();
+                    "musubi_archive_reverse_references"
+                }
+                2 => {
+                    let mut block = world.musubi_replication_shortfall_releases.block();
+                    *block.get_mut() = 0;
+                    block.commit();
+                    "musubi_replication_shortfall_releases"
+                }
+                _ => unreachable!(),
+            };
+            let error = musubi_derived::validate_musubi_derived_cuts(&world)
+                .expect_err("a missing or stale current projection must be rejected");
+            assert!(
+                error.to_string().contains(field) && error.to_string().contains("current"),
+                "unexpected current-cut diagnostic: {error}"
+            );
+            match mutation {
+                0 => {
+                    let mut block = world.musubi_maintainer_directory.block();
+                    block.insert(directory_row.0, directory_row.1);
+                    block.commit();
+                }
+                1 => {
+                    let mut block = world.musubi_archive_reverse_references.block();
+                    block.insert(archive_id, reference_row);
+                    block.commit();
+                }
+                2 => {
+                    let mut block = world.musubi_replication_shortfall_releases.block();
+                    *block.get_mut() = 1;
+                    block.commit();
+                }
+                _ => unreachable!(),
+            }
+            let error = musubi_derived::validate_musubi_derived_cuts(&world)
+                .expect_err("repairing the current cut must not conceal a bad predecessor");
+            assert!(
+                error.to_string().contains(field) && error.to_string().contains("predecessor"),
+                "unexpected predecessor-cut diagnostic: {error}"
+            );
+        }
+    }
+    #[test]
+    fn musubi_live_availability_rejects_current_and_predecessor_mutations() {
+        let (world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+        validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect("both retained availability cuts match their SoraFS evidence");
+        let original = world
+            .musubi_archive_availability
+            .view()
+            .get(&archive_id)
+            .cloned()
+            .expect("seeded availability row");
+        let mut stale = original.clone();
+        stale.active_locations = 1;
+        stale
+            .validate()
+            .expect("stale row remains independently canonical");
+        let mut block = world.musubi_archive_availability.block();
+        block.insert(archive_id, stale);
+        block.commit();
+        let error = validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect_err("current availability cannot invent an active location");
+        assert!(
+            error.to_string().contains("musubi_archive_availability")
+                && error.to_string().contains("current"),
+            "unexpected current-cut diagnostic: {error}"
+        );
+        let mut block = world.musubi_archive_availability.block();
+        block.insert(archive_id, original);
+        block.commit();
+        let error = validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect_err("repairing current availability cannot hide the stale predecessor");
+        assert!(
+            error.to_string().contains("musubi_archive_availability")
+                && error.to_string().contains("predecessor"),
+            "unexpected predecessor-cut diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_live_availability_rejects_orphan_rows() {
+        let (mut world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+        let mut orphan = *world
+            .musubi_archive_availability
+            .view()
+            .get(&archive_id)
+            .expect("seeded availability row");
+        orphan.archive_id = ArchiveId::new([0xD1; 32]);
+        orphan
+            .validate()
+            .expect("orphan row is independently valid");
+        world
+            .musubi_archive_availability
+            .insert(orphan.archive_id, orphan);
+        let error = validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect_err("a valid availability row cannot name an absent archive");
+        assert!(
+            error.to_string().contains("musubi_archive_availability")
+                && error.to_string().contains("current"),
+            "unexpected orphan diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_publication_preflight_rejects_current_and_replacement_availability() {
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let (world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+        let original = *world
+            .musubi_archive_availability
+            .view()
+            .get(&archive_id)
+            .expect("seeded availability row");
+        let mut stale = original;
+        stale.active_locations = 1;
+        stale.validate().expect("stale row is independently valid");
+        {
+            let mut block = world.block();
+            block
+                .musubi_archive_availability
+                .insert(archive_id, original);
+            crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
+                &mut block,
+                &mv::allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
+                2,
+                &nexus,
+                &BTreeMap::new(),
+                None,
+                None,
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+            .expect("an exact touched availability row remains publishable");
+            block.musubi_archive_availability.insert(archive_id, stale);
+            let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
+                &mut block,
+                &mv::allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
+                2,
+                &nexus,
+                &BTreeMap::new(),
+                None,
+                None,
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection) else {
+                panic!("a stale current availability row must fail before publication");
+            };
+            assert!(
+                error.contains("musubi_archive_availability"),
+                "unexpected current-cut diagnostic: {error}"
+            );
+        }
+        assert_eq!(
+            world.musubi_archive_availability.view().get(&archive_id),
+            Some(&original),
+            "failed preparation cannot publish the invalid row"
+        );
+        let mut first = world.musubi_archive_availability.block();
+        first.insert(archive_id, stale);
+        first.commit();
+        let mut second = world.musubi_archive_availability.block();
+        second.insert(archive_id, original);
+        second.commit();
+        let mut replacement = world.block_and_revert();
+        assert_eq!(
+            replacement.musubi_archive_availability.get(&archive_id),
+            Some(&stale),
+            "replacement starts from the rollback-visible predecessor"
+        );
+        let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
+            &mut replacement,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            2,
+            &nexus,
+            &BTreeMap::new(),
+            None,
+            None,
+        )
+        .map_err(crate::execution_attempt::expect_completed_rejection) else {
+            panic!("a stale rollback cut must fail before replacement publication");
+        };
+        assert!(
+            error.contains("musubi_archive_availability"),
+            "unexpected rollback-cut diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_publication_preflight_rechecks_changed_archive_evidence() {
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let (world, _, archive_id, _) = seeded_musubi_publication_snapshot();
+        let mut changed = world
+            .musubi_archives
+            .view()
+            .get(&archive_id)
+            .cloned()
+            .expect("seeded archive row");
+        changed
+            .location_ids
+            .push(MusubiArchiveLocationIdV1::new([0x44; 32]));
+        changed
+            .validate()
+            .expect("a stale directory remains intrinsically canonical");
+        let mut block = world.block();
+        block.musubi_archives.insert(archive_id, changed);
+        let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
+            &mut block,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            2,
+            &nexus,
+            &BTreeMap::new(),
+            None,
+            None,
+        )
+        .map_err(crate::execution_attempt::expect_completed_rejection) else {
+            panic!("changed archive evidence must revalidate availability before publication");
+        };
+        assert!(
+            error.contains("musubi_archives"),
+            "unexpected changed-source diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_live_attestation_cut_rejects_missing_current_and_predecessor_evidence() {
+        let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
+        let key = seed_provider_attested_location(&mut world, &release, archive_id);
+        validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect("the attested location is valid on both retained cuts");
+        let record = world
+            .musubi_provider_bundle_attestations
+            .view()
+            .get(&key)
+            .cloned()
+            .expect("seeded exact provider attestation");
+        let mut removal = world.musubi_provider_bundle_attestations.block();
+        removal.remove(key);
+        removal.commit();
+        let error = validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect_err("current location must retain its exact attestation");
+        assert!(
+            error
+                .to_string()
+                .contains("missing exact provider attestation")
+                && error.to_string().contains("current"),
+            "unexpected current-cut diagnostic: {error}"
+        );
+        let mut repair = world.musubi_provider_bundle_attestations.block();
+        repair.insert(key, record);
+        repair.commit();
+        let error = validate_musubi_live_projections(
+            &world,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+        )
+        .map_err(expect_completed_restore_rejection)
+        .expect_err("repairing current evidence cannot hide a missing predecessor row");
+        assert!(
+            error
+                .to_string()
+                .contains("missing exact provider attestation")
+                && error.to_string().contains("predecessor"),
+            "unexpected predecessor-cut diagnostic: {error}"
+        );
+    }
+    #[test]
+    fn musubi_publication_preflight_rejects_removed_provider_attestation() {
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
+        let key = seed_provider_attested_location(&mut world, &release, archive_id);
+        let mut block = world.block();
+        block.musubi_provider_bundle_attestations.remove(key);
+        let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
+            &mut block,
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            2,
+            &nexus,
+            &BTreeMap::new(),
+            None,
+            None,
+        )
+        .map_err(crate::execution_attempt::expect_completed_rejection) else {
+            panic!("missing provider evidence must fail before World publication");
+        };
+        assert!(
+            error.contains("missing exact provider attestation"),
+            "unexpected publication diagnostic: {error}"
+        );
+        drop(block);
+        assert!(
+            world
+                .musubi_provider_bundle_attestations
+                .view()
+                .get(&key)
+                .is_some(),
+            "failed preparation cannot publish attestation deletion"
         );
     }
     #[test]
@@ -10236,7 +10613,8 @@ mod decode_tests {
                 releases: Vec::new(),
             },
         );
-        universal_only.musubi_replication_shortfall_releases = Cell::new(0);
+        universal_only.musubi_replication_shortfall_releases =
+            crate::state::scalar_cell_custody::fixture(0);
         let error = validate_musubi_publication_snapshot(&universal_only)
             .expect_err("a universal resolver row cannot survive without its home release");
         assert!(
@@ -10356,6 +10734,12 @@ mod decode_tests {
         validate_musubi_publication_snapshot(&replayed)
             .expect("an exact projection replay preserves the complete snapshot");
     }
+    // Keep the exact-source projection checks together with their complete
+    // assertion matrix, outside the snapshot decoder implementation.
+    mod musubi_universal_tests {
+        use super::*;
+        include!("deserialize_world_musubi_universal_tests.rs");
+    }
     #[test]
     fn take_parameters_cell_accepts_canonical_mv_envelope() {
         let expected = Parameters::default();
@@ -10438,6 +10822,9 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse governed pool World"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -10446,6 +10833,7 @@ mod decode_tests {
                 _marker: PhantomData,
             },
         )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
         .expect("restore governed pool World");
         assert_eq!(
             restored
@@ -10461,6 +10849,9 @@ mod decode_tests {
         }
         let corrupt = json::to_json(&world).expect("serialize corrupt governed pool projection");
         let error = match parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&corrupt, "world").expect("parse corrupt World"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -10468,7 +10859,9 @@ mod decode_tests {
                 ivm: &ivm,
                 _marker: PhantomData,
             },
-        ) {
+        )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+        {
             Ok(_) => panic!("missing governed pool root must fail restore"),
             Err(error) => error,
         };
@@ -10504,6 +10897,9 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse finalized settlement World"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -10512,6 +10908,7 @@ mod decode_tests {
                 _marker: PhantomData,
             },
         )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
         .expect("restore every private-settlement map");
 
         assert_eq!(restored.private_settlement_governance.view().len(), 2);
@@ -10568,6 +10965,9 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse prepared settlement World"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -10576,6 +10976,7 @@ mod decode_tests {
                 _marker: PhantomData,
             },
         )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
         .expect("restore prepared settlement lock map");
         assert_eq!(
             restored.private_settlement_staged_locks.view().len(),
@@ -10617,6 +11018,9 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let error = match parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse adversarial World"),
             &IvmSeed {
                 operation_index_budget: &operation_index_budget,
@@ -10624,7 +11028,9 @@ mod decode_tests {
                 ivm: &ivm,
                 _marker: PhantomData,
             },
-        ) {
+        )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+        {
             Ok(_) => panic!("duplicate recipient output must fail before rebuilding the index"),
             Err(error) => error,
         };
@@ -10659,16 +11065,28 @@ mod decode_tests {
             "authoritative SoraFS alias records must remain in the canonical snapshot"
         );
         parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse default World"),
             &seed,
         )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
         .expect("canonical World must decode while rebuilding skipped account indexes");
 
         let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
         map.remove("account_aliases")
             .expect("canonical World contains account_aliases");
 
-        let error = match parse_world(map, &seed) {
+        let error = match parse_world(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            map,
+            &seed,
+        )
+        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+        {
             Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
             Err(error) => error,
         };
@@ -10683,7 +11101,16 @@ mod decode_tests {
         for retired_field in ["council", "parliament_bodies"] {
             let injected = format!("{encoded_prefix},\"{retired_field}\":[]}}");
             let error = SnapshotJsonMap::parse(&injected, "world")
-                .and_then(|map| parse_world(map, &seed))
+                .and_then(|map| {
+                    parse_world(
+                        &mv::allocation::AllocationBudget::new(
+                            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                        ),
+                        map,
+                        &seed,
+                    )
+                    .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+                })
                 .err()
                 .expect("retired caller-selected council state must fail closed");
             assert!(
@@ -10746,6 +11173,9 @@ mod decode_tests {
         let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
         let restored = KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+            execution_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             lane_manifests: state.lane_manifests.read().clone(),
             kura,
             query_handle: LiveQueryStore::start_test(),
@@ -11177,15 +11607,19 @@ mod decode_tests {
         );
         let mut map = SnapshotJsonMap::from_owned(map);
         assert_eq!(
-            *take_musubi_replication_shortfall_releases(&mut map)
-                .expect("canonical shortfall count")
-                .view()
-                .get(),
+            *take_musubi_replication_shortfall_releases(
+                &mut map,
+                &crate::state::scalar_cell_custody::default_budget()
+            )
+            .expect("canonical shortfall count")
+            .view()
+            .get(),
             7
         );
-        let error = take_musubi_replication_shortfall_releases(&mut SnapshotJsonMap::from_owned(
-            json::native::Map::new(),
-        ))
+        let error = take_musubi_replication_shortfall_releases(
+            &mut SnapshotJsonMap::from_owned(json::native::Map::new()),
+            &crate::state::scalar_cell_custody::default_budget(),
+        )
         .err()
         .expect("missing shortfall count must fail cleanly");
         assert!(
@@ -11195,6 +11629,48 @@ mod decode_tests {
             "unexpected missing-shortfall error: {error}"
         );
     }
+    #[test]
+    fn funded_scalar_restore_preserves_both_cuts_and_refuses_local_capacity_separately() {
+        let raw = r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9}}"#;
+        let demand = mv::cell::CellInitialization::<u64>::allocation_layouts()
+            .into_iter()
+            .map(|layout| layout.size())
+            .sum::<usize>();
+        let pool = mv::allocation::AllocationBudget::new(demand - 1);
+        let mut map = SnapshotJsonMap::parse(raw, "world").unwrap();
+        let error = take_musubi_replication_shortfall_releases(&mut map, &pool)
+            .err()
+            .unwrap();
+        assert!(matches!(error, StateRestoreError::Admission(_)));
+        assert_eq!(pool.reserved_bytes(), 0);
+        // Logical refusal did not consume the original encoded field.
+        pool.set_limit_bytes(demand);
+        let value = take_musubi_replication_shortfall_releases(&mut map, &pool).unwrap();
+        assert_eq!(*value.view().get(), 9);
+        assert_eq!(*value.predecessor_view().get(), Some(6));
+        assert_eq!(pool.reserved_bytes(), demand);
+        for raw in [
+            r#"{"musubi_replication_shortfall_releases":{"blocks":9,"revert":6}}"#,
+            r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"extra":0}}"#,
+            r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"blocks":9}}"#,
+        ] {
+            let budget = mv::allocation::AllocationBudget::new(demand);
+            let mut map = SnapshotJsonMap::parse(raw, "world").unwrap();
+            let error = take_musubi_replication_shortfall_releases(&mut map, &budget)
+                .err()
+                .unwrap();
+            assert!(
+                matches!(error, StateRestoreError::Serialization(_)),
+                "exact signed field identity remains mandatory"
+            );
+            assert_eq!(
+                budget.reserved_bytes(),
+                0,
+                "failed parsing abandons only unused physical shells"
+            );
+        }
+    }
+
     #[test]
     fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
         use norito::json::JsonKeyCodec;

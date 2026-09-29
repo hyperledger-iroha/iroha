@@ -11,7 +11,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::{DurableV2FinalityTelemetrySummary, Kura},
+    kura::Kura,
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::Queue,
     state::{State, WorldReadOnly},
@@ -686,40 +686,6 @@ pub struct AxtRejectHint {
     pub next_handle_counter: u64,
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
-}
-struct CommitQcTelemetryPublisher {
-    metrics: Arc<Metrics>,
-    update: StdRwLock<()>,
-}
-impl CommitQcTelemetryPublisher {
-    fn new(metrics: Arc<Metrics>) -> Self {
-        Self {
-            metrics,
-            update: StdRwLock::new(()),
-        }
-    }
-    fn publish(&self, summary: DurableV2FinalityTelemetrySummary) {
-        let _update_guard = self
-            .update
-            .write()
-            .expect("commit QC telemetry summary lock poisoned");
-        let current = (
-            self.metrics.sumeragi_commit_qc_height.get(),
-            self.metrics.sumeragi_commit_qc_view.get(),
-        );
-        if summary.position() < current {
-            return;
-        }
-        self.metrics.sumeragi_commit_qc_height.set(summary.height());
-        self.metrics.sumeragi_commit_qc_view.set(summary.view());
-        self.metrics.sumeragi_commit_qc_epoch.set(summary.epoch());
-        self.metrics
-            .sumeragi_commit_qc_signatures_total
-            .set(summary.signatures_total());
-        self.metrics
-            .sumeragi_commit_qc_validator_set_len
-            .set(summary.validator_set_len());
-    }
 }
 /// Slice of metrics used to be used from within [`State`].
 ///
@@ -1970,16 +1936,6 @@ impl StateTelemetry {
         self.refresh_lane_metadata_cache();
         self.record_lane_governance_statuses(&statuses);
     }
-    /// Record the outcome of applying a Nexus lane lifecycle plan.
-    pub fn record_lane_lifecycle_outcome(&self, result: &str) {
-        if !self.enabled {
-            return;
-        }
-        self.metrics
-            .nexus_lane_lifecycle_applied_total
-            .with_label_values(&[result])
-            .inc();
-    }
     /// Update telemetry gauges reflecting governance seal status per lane.
     pub fn record_lane_governance_statuses(&self, statuses: &[LaneManifestStatus]) {
         if !self.enabled {
@@ -2432,13 +2388,6 @@ impl StateTelemetry {
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-    /// Publish a Kura-authenticated durable v2 finality summary monotonically.
-    pub(crate) fn record_durable_v2_finality_summary(
-        &self,
-        summary: DurableV2FinalityTelemetrySummary,
-    ) {
-        self.commit_qc_publisher.publish(summary);
-    }
     /// Record the latest storage budget usage for a component.
     pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
         if !self.is_enabled() {
@@ -2660,52 +2609,6 @@ impl StateTelemetry {
             entry.detached_fallback = summary.detached_fallback;
             entry.quarantine_executed = summary.quarantine_executed;
         });
-    }
-    /// Record finality information derived from a lane relay envelope.
-    pub fn record_lane_relay_finality(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        block_height: u64,
-        head_height: u64,
-        rbc_bytes_total: u64,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        let lag = head_height.saturating_sub(block_height);
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        self.metrics.set_lane_block_height(
-            lane_label.as_str(),
-            dataspace_label.as_str(),
-            block_height,
-        );
-        self.metrics
-            .set_lane_finality_lag(lane_label.as_str(), dataspace_label.as_str(), lag);
-        self.with_lane_snapshot(lane_id, |entry| {
-            entry.block_height = block_height;
-            entry.finality_lag_slots = lag;
-            entry.rbc_bytes_total = rbc_bytes_total;
-        });
-    }
-    #[cfg(test)]
-    /// Record use of emergency validator overrides during lane relay validation.
-    pub fn record_lane_relay_emergency_override(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        outcome: &str,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        self.metrics
-            .lane_relay_emergency_override_total
-            .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), outcome])
-            .inc();
     }
     fn with_dataspace_snapshot<F>(&self, lane_id: LaneId, dataspace_id: DataSpaceId, update: F)
     where
@@ -3143,17 +3046,6 @@ impl StateTelemetry {
                 .fraud_psp_missing_assessment_total
                 .with_label_values(&labels)
                 .inc();
-        }
-    }
-    #[cfg(test)]
-    /// Record that a merge-ledger entry was committed.
-    pub fn record_merge_ledger_entry(&self, epoch_id: u64, global_state_root: &iroha_crypto::Hash) {
-        if self.is_enabled() {
-            self.metrics.merge_ledger_entries_total.inc();
-            self.metrics.merge_ledger_latest_epoch.set(epoch_id);
-            if let Ok(mut guard) = self.metrics.merge_ledger_latest_root_hex.write() {
-                *guard = Some(global_state_root.to_string());
-            }
         }
     }
     /// Record a Kaigi relay registration event.
@@ -5755,10 +5647,6 @@ impl Telemetry {
     [set_torii_zk_prover_inflight(inflight: u64) => .torii_zk_prover_inflight.set(inflight);]
     /// Set the number of background prover attachments pending processing.
     [set_torii_zk_prover_pending(pending: u64) => .torii_zk_prover_pending.set(pending);]
-    /// Set the number of IVM prove helper jobs currently proving.
-    [set_torii_zk_ivm_prove_inflight(inflight: u64) => .torii_zk_ivm_prove_inflight.set(inflight);]
-    /// Set the number of IVM prove helper jobs queued (waiting for an inflight slot).
-    [set_torii_zk_ivm_prove_queued(queued: u64) => .torii_zk_ivm_prove_queued.set(queued);]
     }
     /// Record bytes processed and duration for the last background prover scan.
     pub fn record_torii_zk_prover_scan(&self, bytes: u64, millis: u64) {
@@ -6256,6 +6144,7 @@ impl Actor {
             return Err(StatusSnapshotError::Disabled);
         }
         refresh_sumeragi_mode(&self.metrics);
+        refresh_ivm_execution_budget_metrics(&self.metrics, &self.state.ivm_execution_budget());
         let local_removed = {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
@@ -6703,6 +6592,50 @@ fn refresh_ivm_cache_metrics(metrics: &Metrics) {
     metrics
         .ivm_cache_decode_time_ns_total
         .set(stats.decode_time_ns_total);
+    let memory = ivm::cache_memory::memory_stats();
+    let as_metric = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    metrics
+        .ivm_cache_memory_resident_bytes
+        .set(as_metric(memory.measured_resident_bytes()));
+    metrics
+        .ivm_cache_memory_active_bytes
+        .set(as_metric(memory.active_bytes));
+    metrics
+        .ivm_cache_memory_retained_bytes
+        .set(as_metric(memory.retained_bytes));
+    metrics
+        .ivm_cache_memory_shared_reclaimable_bytes
+        .set(as_metric(memory.shared_reclaimable_bytes));
+    metrics
+        .ivm_cache_memory_shared_borrowed_bytes
+        .set(as_metric(memory.shared_borrowed_bytes));
+    metrics
+        .ivm_cache_memory_shared_evicted_live_bytes
+        .set(as_metric(memory.shared_evicted_live_bytes));
+    metrics
+        .ivm_cache_memory_unclassified_retained_bytes
+        .set(as_metric(memory.unclassified_retained_bytes()));
+    metrics
+        .ivm_cache_memory_peak_bytes
+        .set(as_metric(memory.peak_reserved_bytes));
+    metrics
+        .ivm_cache_memory_unmeasured_owners
+        .set(as_metric(memory.unmeasured_active_owners));
+}
+fn refresh_ivm_execution_budget_metrics(
+    metrics: &Metrics,
+    budget: &mv::allocation::AllocationBudget,
+) {
+    let as_metric = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    metrics
+        .ivm_execution_memory_reserved_bytes
+        .set(as_metric(budget.reserved_bytes()));
+    metrics
+        .ivm_execution_memory_peak_bytes
+        .set(as_metric(budget.peak_reserved_bytes()));
+    metrics
+        .ivm_execution_memory_limit_bytes
+        .set(as_metric(budget.limit_bytes()));
 }
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
     !block.is_empty() || block.header().is_genesis()
@@ -6817,14 +6750,6 @@ pub fn start(
             OnShutdown::Abort,
         ),
     ))
-}
-/// Project the frozen reducer-owned mode, never a configuration candidate or
-/// the default of an unrelated metrics registry. No owner means unknown mode.
-fn refresh_sumeragi_mode(metrics: &Metrics) {
-    let mode_tag = crate::sumeragi::v2_status::v2_status()
-        .map(|status| status.height_context.mode.tag())
-        .unwrap_or_default();
-    metrics.set_sumeragi_mode_tag(mode_tag);
 }
 
 #[cfg(all(feature = "telemetry", test))]
@@ -7391,17 +7316,6 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
         telemetry.observe_da_chunking_seconds(0.25);
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
-    }
-    #[test]
-    fn state_telemetry_conversion_shares_durable_qc_publisher() {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let state_telemetry = StateTelemetry::new(metrics, true);
-        let expected_publisher = Arc::clone(&state_telemetry.commit_qc_publisher);
-        let telemetry = Telemetry::from(state_telemetry);
-        assert!(Arc::ptr_eq(
-            &telemetry.commit_qc_publisher,
-            &expected_publisher
-        ));
     }
     #[test]
     fn isi_metrics_record_when_enabled() {
@@ -8279,51 +8193,6 @@ mod tests {
             .expect("lane snapshot");
         assert!(updated.manifest_required);
         assert!(updated.manifest_ready);
-    }
-    #[test]
-    fn lane_relay_emergency_override_metric_increments() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let lane_id = LaneId::new(0);
-        let dataspace_id = DataSpaceId::new(7);
-        let lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                id: lane_id,
-                dataspace_id,
-                alias: "alpha".to_string(),
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("lane catalog");
-        telemetry.set_nexus_catalogs(&lane_catalog, &DataSpaceCatalog::default());
-        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "applied");
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .lane_relay_emergency_override_total
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "applied",])
-                .get(),
-            1
-        );
-    }
-    #[test]
-    fn lane_relay_emergency_override_metric_skips_when_disabled() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::UNIVERSAL;
-        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
-        let lane_label = lane_id.as_u32().to_string();
-        let dataspace_label = dataspace_id.as_u64().to_string();
-        assert_eq!(
-            metrics
-                .lane_relay_emergency_override_total
-                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
-                .get(),
-            0
-        );
     }
     #[test]
     fn amx_metrics_recorded() {
@@ -9407,87 +9276,6 @@ mod tests {
         tel.set_highest_qc_height(64);
         assert_eq!(metrics.sumeragi_highest_qc_height.get(), 64);
     }
-    #[test]
-    fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
-        use crate::{status, sumeragi::v2_status};
-        use iroha_data_model::block::consensus_v2 as wire;
-        let _guard = status::rbc_status_test_guard();
-        struct ClearStatusOnDrop;
-        impl Drop for ClearStatusOnDrop {
-            fn drop(&mut self) {
-                v2_status::clear_v2_status();
-            }
-        }
-        let _cleanup = ClearStatusOnDrop;
-        v2_status::clear_v2_status();
-        let metrics = Metrics::default();
-        let exported_mode = || {
-            metrics
-                .status_snapshot(&Default::default())
-                .sumeragi
-                .expect("public consensus telemetry")
-                .mode_tag
-        };
-        assert_eq!(exported_mode(), "", "an unstarted reducer has no mode");
-        let mut snapshot = wire::SumeragiV2Status {
-            protocol_version: wire::PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"telemetry node"),
-            build_fingerprint: Hash::new(b"telemetry build"),
-            config_fingerprint: Hash::new(b"telemetry config"),
-            restart_required: false,
-            height_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"telemetry height context",
-            ))),
-            height: 7,
-            view: 0,
-            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: wire::SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: 6,
-            last_committed_subject: None,
-            height_context: wire::SumeragiV2HeightContextStatus {
-                epoch: 0,
-                epoch_end_height: 100,
-                mode: wire::ConsensusMode::Npos,
-                epoch_seed: [0; 32],
-                validator_count: 4,
-                quorum: wire::DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
-            },
-            last_commit_qc: None,
-            liveness: Default::default(),
-            beacon_horizon: None,
-        };
-        for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
-            snapshot.height_context.mode = mode;
-            v2_status::set_v2_status(snapshot.clone());
-            refresh_sumeragi_mode(&metrics);
-            assert_eq!(exported_mode(), mode.tag());
-        }
-        v2_status::clear_v2_status();
-        refresh_sumeragi_mode(&metrics);
-        assert_eq!(
-            exported_mode(),
-            "",
-            "a cleared owner cannot leave a stale mode"
-        );
-        let mode_cache = Arc::clone(&metrics.sumeragi_mode_tag);
-        assert!(
-            std::thread::spawn(move || {
-                let _lock = mode_cache.write().expect("unpoisoned mode cache");
-                panic!("poison the mode cache");
-            })
-            .join()
-            .is_err()
-        );
-        assert_eq!(exported_mode(), "", "a failed cache must not invent a mode");
-    }
     #[cfg(feature = "telemetry")]
     #[test]
     fn queue_backpressure_metrics_updated() {
@@ -10197,14 +9985,6 @@ mod tests {
         use super::*;
         include!("telemetry/classified_status_tests.rs");
     }
-    mod finality_test_fixture {
-        use super::*;
-        include!("telemetry/finality_test_fixture.rs");
-    }
-    mod output_publication_authorization_tests {
-        use super::*;
-        include!("telemetry/output_publication_authorization_tests.rs");
-    }
     impl SystemUnderTest {
         fn new() -> Self {
             let metrics = Arc::new(Metrics::default());
@@ -10585,6 +10365,38 @@ mod tests {
             stats0.decode_failures,
             "decode failures should not increase on successful decode"
         );
+    }
+    #[test]
+    fn ivm_cache_memory_metrics_preserve_snapshot_accounting() {
+        let metrics = Metrics::default();
+        refresh_ivm_cache_metrics(&metrics);
+        let active = metrics.ivm_cache_memory_active_bytes.get();
+        let retained = metrics.ivm_cache_memory_retained_bytes.get();
+        let resident = metrics.ivm_cache_memory_resident_bytes.get();
+        assert_eq!(resident, active.saturating_add(retained));
+        assert_eq!(
+            retained,
+            metrics.ivm_cache_memory_shared_reclaimable_bytes.get()
+                + metrics.ivm_cache_memory_shared_borrowed_bytes.get()
+                + metrics.ivm_cache_memory_shared_evicted_live_bytes.get()
+                + metrics.ivm_cache_memory_unclassified_retained_bytes.get()
+        );
+        assert!(metrics.ivm_cache_memory_peak_bytes.get() >= resident);
+    }
+    #[test]
+    fn ivm_execution_memory_metrics_follow_original_pool_through_shrink_and_release() {
+        let metrics = Metrics::default();
+        let budget = mv::allocation::AllocationBudget::new(128);
+        let held = budget.try_reserve_bytes(80).expect("initial reservation");
+        budget.set_limit_bytes(64);
+        refresh_ivm_execution_budget_metrics(&metrics, &budget);
+        assert_eq!(metrics.ivm_execution_memory_reserved_bytes.get(), 80);
+        assert_eq!(metrics.ivm_execution_memory_peak_bytes.get(), 80);
+        assert_eq!(metrics.ivm_execution_memory_limit_bytes.get(), 64);
+        drop(held);
+        refresh_ivm_execution_budget_metrics(&metrics, &budget);
+        assert_eq!(metrics.ivm_execution_memory_reserved_bytes.get(), 0);
+        assert_eq!(metrics.ivm_execution_memory_peak_bytes.get(), 80);
     }
     #[tokio::test]
     async fn sumeragi_backpressure_counters_increment() {

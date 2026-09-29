@@ -57,7 +57,7 @@ class LoadFiles:
         self._allocation = allocation
         self._caps = (allocation.run.transaction_trace, allocation.journal)
         self._outputs = (paths.transaction_trace, paths.collector_journal)
-        self._stage = paths.transaction_trace.with_name(paths.transaction_trace.name + '.collecting')
+        self._stage = paths.transaction_trace.with_name(paths.transaction_trace.name + '.publishing')
         self._worker,self._worker_sha=worker,worker_sha256
         self._snapshot = (tuple(getattr(paths,n) for n in paths.__dataclass_fields__),worker,worker_sha256,
                           tuple((cap.label,cap.max_bytes) for cap in self._caps))
@@ -139,7 +139,7 @@ class LoadFiles:
         require((tuple(getattr(self.paths,n) for n in self.paths.__dataclass_fields__),self._worker,self._worker_sha,
                  tuple((cap.label,cap.max_bytes) for cap in self._caps))==self._snapshot
                 and self._outputs==(self.paths.transaction_trace,self.paths.collector_journal)
-                and self._stage==self.paths.transaction_trace.with_name(self.paths.transaction_trace.name+'.collecting'))
+                and self._stage==self.paths.transaction_trace.with_name(self.paths.transaction_trace.name+'.publishing'))
         self._validate_directories()
         for path,(fd,identity) in self._files.items():
             require(_file_identity(os.fstat(fd))==identity

@@ -1,6 +1,6 @@
-//! Independent public inputs for bounded MixedScale DEEP artifact fixtures.
+//! Independent public inputs for bounded `MixedScale` DEEP artifact fixtures.
 //!
-//! These facts reproduce the one- or two-occurrence MixedScale source constants.
+//! These facts reproduce the one- or two-occurrence `MixedScale` source constants.
 //! Neither the statement, roots, ordering hash nor AXT expectations are read from a proof.
 
 use super::*;
@@ -16,7 +16,7 @@ use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
 /// Complete caller expectations derived before either retained artifact is read.
-pub(super) struct CaptureFixture {
+pub struct CaptureFixture {
     pub(super) statement: FastpqPublicTransferStatementV1,
     pub(super) expected: ExpectedStatement,
     binding: AxtFastpqBinding,
@@ -33,144 +33,47 @@ impl CaptureFixture {
 
     /// Select the known fixture count before constructing or reading any artifact.
     pub(super) fn with_occurrences(occurrences: usize) -> Self {
+        Self::with_accounts(occurrences, None)
+    }
+
+    /// Two independent transfers using four caller-selected full account identities.
+    pub(super) fn with_independent_accounts(
+        accounts: [iroha_data_model::account::AccountId; 4],
+    ) -> Self {
+        Self::with_accounts(2, Some(accounts))
+    }
+
+    /// Change only an independently selected public AXT context, before proving.
+    pub(super) fn replace_binding(&mut self, binding: AxtFastpqBinding) {
+        fastpq_prover::validate_axt_transfer_claim_binding(&binding).unwrap();
+        self.binding = binding;
+    }
+
+    fn with_accounts(
+        occurrences: usize,
+        accounts: Option<[iroha_data_model::account::AccountId; 4]>,
+    ) -> Self {
         assert!((1..=2).contains(&occurrences));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let mut maximum = [0xff; 64];
-        maximum[63] = 0x7f;
-        let mut sender = Quantity::from_canonical_numeric(
-            Numeric::try_new(BigInt::from_twos_bytes(&maximum).unwrap(), 0).unwrap(),
-        )
-        .unwrap()
-        .try_sub(&Quantity::one())
-        .unwrap();
-        let mut receiver =
-            Quantity::from_canonical_numeric(Numeric::try_new(1_u32, 28).unwrap()).unwrap();
         let batch_hash = Hash::new(b"compact AXT public entry");
-        let mut claims = Vec::new();
-        let mut remote = Vec::new();
-        for counter in 1..=occurrences {
-            let next_sender = sender.try_sub(&Quantity::one()).unwrap();
-            let next_receiver = receiver.try_add(&Quantity::one()).unwrap();
-            let delta = FastpqPublicTransferDeltaV1 {
-                from_account: (*ALICE_ID).clone(),
-                to_account: (*BOB_ID).clone(),
-                asset_definition: asset.clone(),
-                amount: Quantity::one(),
-                from_balance_before: sender,
-                from_balance_after: next_sender.clone(),
-                to_balance_before: receiver,
-                to_balance_after: next_receiver.clone(),
-            };
-            let mut digest = PoseidonByteHasher::new();
-            delta.from_account.encode_to(&mut digest);
-            delta.to_account.encode_to(&mut digest);
-            delta.asset_definition.encode_to(&mut digest);
-            delta.amount.encode_to(&mut digest);
-            digest.update(batch_hash.as_ref());
-            remote.push(AxtRemoteSpendClaimV1::new(
-                AxtHandleReplayKey::from_parts(
-                    DataSpaceId::new(7),
-                    AxtHandleIssuerContextV1::default().asset_definition_incarnation,
-                    [8; 32],
-                    u64::try_from(counter).unwrap(),
-                    1,
-                    LaneId::new(0),
-                ),
-                asset.clone(),
-                "transfer",
-                delta.from_account.to_string(),
-                delta.to_account.to_string(),
-                delta.amount.clone(),
-            ));
-            claims.push(FastpqPublicTransferTranscriptV1 {
-                batch_hash,
-                deltas: vec![delta],
-                authority_digest: Hash::new(b"caller-authenticated execution authority"),
-                poseidon_preimage_digest: Some(Hash::prehashed(digest.finalize())),
-            });
-            sender = next_sender;
-            receiver = next_receiver;
-        }
-        let mut dsid = [0; 16];
-        dsid[..8].copy_from_slice(&7_u64.to_le_bytes());
-        let inputs = PublicInputs {
-            dsid,
-            slot: 123,
-            old_root: Hash::new(b"caller expected old touched-balance root").into(),
-            new_root: Hash::new(b"caller expected new touched-balance root").into(),
-            perm_root: Hash::new(b"caller expected permission context").into(),
-            tx_set_hash: Hash::new(b"caller expected transaction set").into(),
-        };
-        // This builds only the bounded touched tree, never a proof trace or LDE.
-        let (rows, inputs, ordering_hash, private) = materialize_quantity_public_transfers(
-            &claims,
-            inputs,
-            ProofSemantics::AxtTransferClaim,
-            PublicTransferLimits::default(),
-            TransferSmtBuildLimits::for_update_limit(2 * occurrences).unwrap(),
-        )
-        .unwrap()
-        .into_parts();
-        drop(private);
-        let statement = FastpqPublicTransferStatementV1 {
-            public_inputs: FastpqPublicInputs {
-                dsid: inputs.dsid,
-                slot: inputs.slot,
-                old_root: inputs.old_root,
-                new_root: inputs.new_root,
-                perm_root: inputs.perm_root,
-                tx_set_hash: inputs.tx_set_hash,
-            },
-            ordering_hash: ordering_hash.into(),
-            transitions: rows
-                .into_iter()
-                .map(|row| FastpqStateTransition {
-                    key: row.key,
-                    pre_value: row.pre_value,
-                    post_value: row.post_value,
-                    operation: FastpqOperationKind::Transfer,
-                })
-                .collect(),
-            transcripts: claims,
-        };
-        let expected = ExpectedStatement {
-            inputs: statement.public_inputs,
-            ordering_hash: statement.ordering_hash,
-            public_statement_digest: Hash::new(norito::encode_canonical(&statement).unwrap())
-                .into(),
-        };
+        let (claims, mut remote) =
+            mixed_scale_claims(occurrences, &asset, batch_hash, accounts.as_ref());
+        let (statement, expected) = materialized_statement(claims, occurrences);
+        // Match claims to chronological source transfers before canonical remote sorting.
+        let mut source_occurrences = source_occurrences(&remote, &statement, batch_hash);
+        source_occurrences.sort_by_key(|occurrence| occurrence.remote_spend_claim_commitment);
         remote.sort_by_key(compute_remote_spend_claim_commitment_v1);
-        let mut binding = binding();
-        binding.source_tx_commitment = hex::encode(batch_hash.as_ref());
-        binding.claim_type = "tx_predicate".into();
-        binding.claim_digest = hex::encode([2; 32]);
-        binding.witness_commitment = hex::encode([3; 32]);
-        binding.policy_commitment = hex::encode([4; 32]);
-        binding.verified_effect_type = "transfer".into();
-        binding.corridor = "corridor".into();
-        binding.effect_binding = Some(AxtEffectBinding {
-            destination_domain: None,
-            destination_account_id: None,
-            vault_account_id: None,
-            issuance_account_id: None,
-            source_asset_definition_id: Some(asset.to_string()),
-            destination_asset_definition_id: None,
-            source_amount_i64: None,
-            destination_amount_i64: None,
-        });
-        binding.remote_spend_intent_commitments = remote
-            .iter()
-            .map(compute_remote_spend_claim_commitment_v1)
-            .collect();
+        let binding = capture_binding(&asset, batch_hash, &remote);
         let outer_amount = 5 * u128::try_from(occurrences).unwrap();
         Self {
             statement,
             expected,
             binding,
             metadata: FastpqAxtPublicMetadataV1 {
+                source_transfer_occurrences: source_occurrences,
                 parameter: AXT_DEFAULT_PARAMETER.into(),
                 entry_hash: batch_hash.into(),
                 // Retain the original five-unit outer mirror per occurrence,
@@ -202,8 +105,206 @@ impl CaptureFixture {
     }
 }
 
+/// Reconstruct the ordered full-domain `MixedScale` transfers and remote-spend preimages.
+///
+/// The sender starts one unit below the maximum full-domain quantity and the
+/// receiver at one unit of scale 28; every occurrence moves exactly one unit.
+fn mixed_scale_claims(
+    occurrences: usize,
+    asset: &AssetDefinitionId,
+    batch_hash: Hash,
+    accounts: Option<&[iroha_data_model::account::AccountId; 4]>,
+) -> (
+    Vec<FastpqPublicTransferTranscriptV1>,
+    Vec<AxtRemoteSpendClaimV1>,
+) {
+    let mut maximum = [0xff; 64];
+    maximum[63] = 0x7f;
+    let mut sender = Quantity::from_canonical_numeric(
+        Numeric::try_new(BigInt::from_twos_bytes(&maximum).unwrap(), 0).unwrap(),
+    )
+    .unwrap()
+    .try_sub(&Quantity::one())
+    .unwrap();
+    let mut receiver =
+        Quantity::from_canonical_numeric(Numeric::try_new(1_u32, 28).unwrap()).unwrap();
+    let initial_sender = sender.clone();
+    let initial_receiver = receiver.clone();
+    let mut claims = Vec::new();
+    let mut remote = Vec::new();
+    for counter in 1..=occurrences {
+        let (from, to) = match accounts {
+            Some(accounts) => {
+                sender = initial_sender.clone();
+                receiver = initial_receiver.clone();
+                (
+                    &accounts[2 * (counter - 1)],
+                    &accounts[2 * (counter - 1) + 1],
+                )
+            }
+            None => (&*ALICE_ID, &*BOB_ID),
+        };
+        let next_sender = sender.try_sub(&Quantity::one()).unwrap();
+        let next_receiver = receiver.try_add(&Quantity::one()).unwrap();
+        let delta = FastpqPublicTransferDeltaV1 {
+            from_account: from.clone(),
+            to_account: to.clone(),
+            asset_definition: asset.clone(),
+            amount: Quantity::one(),
+            from_balance_before: sender,
+            from_balance_after: next_sender.clone(),
+            to_balance_before: receiver,
+            to_balance_after: next_receiver.clone(),
+        };
+        let mut digest = PoseidonByteHasher::new();
+        delta.from_account.encode_to(&mut digest);
+        delta.to_account.encode_to(&mut digest);
+        delta.asset_definition.encode_to(&mut digest);
+        delta.amount.encode_to(&mut digest);
+        digest.update(batch_hash.as_ref());
+        remote.push(AxtRemoteSpendClaimV1::new(
+            AxtHandleReplayKey::from_parts(
+                DataSpaceId::new(7),
+                AxtHandleIssuerContextV1::default().asset_definition_incarnation,
+                [8; 32],
+                u64::try_from(counter).unwrap(),
+                1,
+                LaneId::new(0),
+            ),
+            asset.clone(),
+            "transfer",
+            delta.from_account.to_string(),
+            delta.to_account.to_string(),
+            delta.amount.clone(),
+        ));
+        claims.push(FastpqPublicTransferTranscriptV1 {
+            batch_hash,
+            deltas: vec![delta],
+            authority_digest: Hash::new(b"caller-authenticated execution authority"),
+            poseidon_preimage_digest: Some(Hash::prehashed(digest.finalize())),
+        });
+        sender = next_sender;
+        receiver = next_receiver;
+    }
+    (claims, remote)
+}
+
+/// Materialize the canonical statement and the caller's independent expectation.
+fn materialized_statement(
+    claims: Vec<FastpqPublicTransferTranscriptV1>,
+    occurrences: usize,
+) -> (FastpqPublicTransferStatementV1, ExpectedStatement) {
+    let mut dsid = [0; 16];
+    dsid[..8].copy_from_slice(&7_u64.to_le_bytes());
+    let inputs = PublicInputs {
+        dsid,
+        slot: 123,
+        old_root: Hash::new(b"caller expected old touched-balance root").into(),
+        new_root: Hash::new(b"caller expected new touched-balance root").into(),
+        perm_root: Hash::new(b"caller expected permission context").into(),
+        tx_set_hash: Hash::new(b"caller expected transaction set").into(),
+    };
+    // This builds only the bounded touched tree, never a proof trace or LDE.
+    let (rows, inputs, ordering_hash, private) = materialize_quantity_public_transfers(
+        &claims,
+        inputs,
+        ProofSemantics::AxtTransferClaim,
+        PublicTransferLimits::default(),
+        TransferSmtBuildLimits::for_update_limit(2 * occurrences).unwrap(),
+    )
+    .unwrap()
+    .into_parts();
+    drop(private);
+    let statement = FastpqPublicTransferStatementV1 {
+        public_inputs: FastpqPublicInputs {
+            dsid: inputs.dsid,
+            slot: inputs.slot,
+            old_root: inputs.old_root,
+            new_root: inputs.new_root,
+            perm_root: inputs.perm_root,
+            tx_set_hash: inputs.tx_set_hash,
+        },
+        ordering_hash: ordering_hash.into(),
+        transitions: rows
+            .into_iter()
+            .map(|row| FastpqStateTransition {
+                key: row.key,
+                pre_value: row.pre_value,
+                post_value: row.post_value,
+                operation: FastpqOperationKind::Transfer,
+            })
+            .collect(),
+        transcripts: claims,
+    };
+    let expected = ExpectedStatement {
+        inputs: statement.public_inputs,
+        ordering_hash: statement.ordering_hash,
+        public_statement_digest: Hash::new(norito::encode_canonical(&statement).unwrap()).into(),
+    };
+    (statement, expected)
+}
+
+/// Outer AXT binding over the source commitment and the sorted remote preimages.
+fn capture_binding(
+    asset: &AssetDefinitionId,
+    batch_hash: Hash,
+    remote: &[AxtRemoteSpendClaimV1],
+) -> AxtFastpqBinding {
+    let mut binding = binding();
+    binding.source_tx_commitment = hex::encode(batch_hash.as_ref());
+    binding.claim_type = "tx_predicate".into();
+    binding.claim_digest = hex::encode([2; 32]);
+    binding.witness_commitment = hex::encode([3; 32]);
+    binding.policy_commitment = hex::encode([4; 32]);
+    binding.verified_effect_type = "transfer".into();
+    binding.corridor = "corridor".into();
+    binding.effect_binding = Some(AxtEffectBinding {
+        destination_domain: None,
+        destination_account_id: None,
+        vault_account_id: None,
+        issuance_account_id: None,
+        source_asset_definition_id: Some(asset.to_string()),
+        destination_asset_definition_id: None,
+        source_amount_i64: None,
+        destination_amount_i64: None,
+    });
+    binding.remote_spend_intent_commitments = remote
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    binding
+}
+
+/// One public source occurrence per ordered transcript, linked to its remote claim.
+fn source_occurrences(
+    remote: &[AxtRemoteSpendClaimV1],
+    statement: &FastpqPublicTransferStatementV1,
+    batch_hash: Hash,
+) -> Vec<iroha_data_model::nexus::AxtSourceTransferOccurrenceV1> {
+    remote
+        .iter()
+        .zip(&statement.transcripts)
+        .enumerate()
+        .map(|(ordinal, (claim, transcript))| {
+            let ordinal = u32::try_from(ordinal).unwrap();
+            iroha_data_model::nexus::AxtSourceTransferOccurrenceV1 {
+                source_success_receipt_digest: [0x51; 32],
+                source_tx_commitment: batch_hash.into(),
+                source_tx_index: 0,
+                transcript_index: ordinal,
+                delta_index: 0,
+                pair_ordinal: ordinal,
+                transfer_digest: iroha_data_model::nexus::axt_source_transfer_digest_v1(
+                    &transcript.deltas[0],
+                ),
+                remote_spend_claim_commitment: compute_remote_spend_claim_commitment_v1(claim),
+            }
+        })
+        .collect()
+}
+
 /// Finite public facade limits with the normal 512 KiB child and 64-query envelope.
-pub(super) fn capture_policy() -> VerificationLimits {
+pub fn capture_policy() -> VerificationLimits {
     let mut limits = policy();
     limits.transport.max_wire_bytes = 1024 * 1024;
     limits.transport.max_bundle_frame_bytes = 1024 * 1024;
@@ -231,7 +332,7 @@ pub(super) fn capture_policy() -> VerificationLimits {
 }
 
 /// Read a bounded, SHA-addressed output of the existing fresh public producer test.
-pub(super) fn read_capture(variable: &str, label: &str) -> Vec<u8> {
+pub fn read_capture(variable: &str, label: &str) -> Vec<u8> {
     use std::io::Read;
     let path = std::path::PathBuf::from(std::env::var_os(variable).expect(variable))
         .canonicalize()

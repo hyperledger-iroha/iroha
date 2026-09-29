@@ -22,9 +22,9 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
 ROOT = Path(__file__).resolve().parents[1]
 
 # These modules deliberately convert worker failures into request/provider
-# errors. A bare blocking task here would run outside the physical worker's
-# suppression and would therefore signal process shutdown before its JoinError
-# was handled.
+# errors or a supervised fatal ingress error. A bare blocking task here would
+# run outside the physical worker's suppression, signaling process shutdown
+# before its JoinError was handled.
 NO_BARE_BLOCKING = (
     "crates/iroha_torii/src/lib.rs",
     "crates/iroha_torii/src/lib_pipeline_handlers.rs",
@@ -54,6 +54,9 @@ NO_BARE_BLOCKING = (
     "crates/irohad/src/runtime_provider_broker/platform_provider_clients_03.rs",
     "crates/irohad/src/sorafs_provider_ingest_finalized_query.rs",
     "crates/irohad/src/sorafs_provider_ingest_runtime.rs",
+    "crates/irohad/src/sorafs_provider_ingest_runtime/https_source.rs",
+    "crates/irohad/src/external_software_signer/musubi_attestation.rs",
+    "crates/irohad/src/musubi_publication_service/private_tls_ingress.rs",
     "crates/irohad/src/sorafs_reputation_runtime.rs",
     "crates/irohad/src/sorafs_hedging_billing_runtime.rs",
     "crates/irohad/src/soracloud_runtime.rs",
@@ -141,9 +144,6 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk.rs": (
-        "let pk = crate::panic_hook::catch_unwind_suppressed",
-    ),
     "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
@@ -187,7 +187,13 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_fee_quote_tests.rs",
         "executor_initial_batch_authorization_tests.rs",
         "executor_initial_permission_authority.rs",
+        "executor_execution_fee.rs",
+        "executor_execution_effects.rs",
         "executor_contract_dispatch_tests.rs",
+        "executor_raw_ivm_work_tests.rs",
+        "executor_effect_budget_tests.rs",
+        "executor_final_promotion_permission_tests.rs",
+        "executor_final_promotion_account_permission_tests.rs",
         "executor_sorafs_repair_tests.rs",
         "executor_stream_token_custody_permission_tests.rs",
         "executor_cross_scope_permission_tests.rs",
@@ -202,6 +208,8 @@ AUDITED_SOURCE_PATHS = (
     Path("crates/irohad"),
     Path("crates/iroha_core/src/panic_hook.rs"),
     Path("crates/iroha_core/src/zk"),
+    Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture_support.rs"),
+    Path("crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message"),
     *CORE_RECOVERY_SOURCE_PATHS,
     *CORE_RECOVERY_SUPPORT_PATHS,
 )

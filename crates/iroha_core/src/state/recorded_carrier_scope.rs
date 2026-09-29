@@ -22,6 +22,9 @@ impl State {
             Some(carrier),
             |block| {
                 let guard = witness::begin_exec_witness_capture().map_err(&recording_error)?;
+                block
+                    .bind_original_execution_recorder()
+                    .map_err(&recording_error)?;
                 stage(block)?;
                 Ok(guard)
             },
@@ -45,6 +48,9 @@ impl State {
         let mut recording = None;
         let block = self.block_and_revert_with_pristine_carrier_stage(carrier, |block| {
             let guard = witness::begin_exec_witness_capture().map_err(&recording_error)?;
+            block
+                .bind_original_execution_recorder()
+                .map_err(&recording_error)?;
             stage(block)?;
             recording = Some(guard);
             Ok(())

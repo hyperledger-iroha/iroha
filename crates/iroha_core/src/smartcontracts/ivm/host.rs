@@ -7,6 +7,8 @@
 //! uniformly and prevents direct world state mutations from the VM.
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
+mod tlv_transport;
+
 use super::cache::PreparedContractCache;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
@@ -45,13 +47,12 @@ use iroha_data_model::{
         smart_contract_code as scode, zk as DMZk,
     },
     nexus::{
-        AxtAssetIncarnationV1, AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord,
-        AxtHandleBudgetConsumeError, AxtHandleBudgetKey, AxtHandleBudgetRecord, AxtHandleFragment,
-        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
-        AxtPolicySnapshot, AxtPolicySnapshotValidationError,
-        AxtProofEnvelope as ModelAxtProofEnvelope, AxtProofFragment, AxtRejectContext,
-        AxtRejectReason, AxtReplayRecord, AxtTouchFragment, AxtTouchSpec as ModelAxtTouchSpec,
-        ProofBlob as ModelProofBlob, TouchManifest as ModelTouchManifest, UniversalAccountId,
+        AxtAnchoredSpendV1, AxtAssetIncarnationV1, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
+        AxtEnvelopeRecord, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
+        AxtPolicySnapshotValidationError, AxtProofEnvelope as ModelAxtProofEnvelope,
+        AxtProofFragment, AxtRejectContext, AxtRejectReason, AxtTouchFragment,
+        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
+        TouchManifest as ModelTouchManifest, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX,
@@ -107,7 +108,7 @@ use ivm::codec::{decode_canonical_norito, encode_canonical_norito};
 use ivm::{
     self, CoreHost as IvmCodecHost, IVM, PointerType,
     analysis::{self, AmxLimits, ProgramAnalysis},
-    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
+    axt::{self, ProofBlob, TouchManifest},
     core_query::{
         AccountView, AssetDefinitionView, AssetView, CoreQueryEntityTagV1, DomainView, NftView,
         QUERY_PAGE_CAPACITY_V1, QuantityV1, QueryPageV1,
@@ -132,6 +133,7 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
+use tlv_transport::NestedReturnTransport;
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
 const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
@@ -226,6 +228,7 @@ enum AxtProofAdmission {
     // TODO: Admit this path only after the exact source roots and transaction
     // set are authenticated by an authoritative finalized/QC-backed source-state anchor.
     StandaloneUnanchored,
+    #[cfg(test)]
     AuthenticatedHandle,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,46 +236,6 @@ struct AxtIssuerKeyBinding {
     manifest_root: [u8; 32],
     issuer: UniversalAccountId,
     public_key: PublicKey,
-}
-struct ExactProofConsumption<'proof> {
-    proof: &'proof ProofBlob,
-    consumed: Vec<[u8; 32]>,
-}
-struct ExactProofConsumptionIndex<'proof> {
-    groups: Vec<ExactProofConsumption<'proof>>,
-    buckets: BTreeMap<(Option<u64>, Hash), Vec<usize>>,
-}
-impl<'proof> ExactProofConsumptionIndex<'proof> {
-    fn new() -> Self {
-        Self {
-            groups: Vec::new(),
-            buckets: BTreeMap::new(),
-        }
-    }
-    fn index(&mut self, proof: &'proof ProofBlob) -> usize {
-        let key = (proof.expiry_slot, Hash::new(&proof.payload));
-        if let Some(index) = self.buckets.get(&key).and_then(|bucket| {
-            bucket
-                .iter()
-                .copied()
-                .find(|index| self.groups[*index].proof == proof)
-        }) {
-            return index;
-        }
-        let index = self.groups.len();
-        self.groups.push(ExactProofConsumption {
-            proof,
-            consumed: Vec::new(),
-        });
-        self.buckets.entry(key).or_default().push(index);
-        index
-    }
-    fn consume(&mut self, index: usize, commitment: [u8; 32]) {
-        self.groups[index].consumed.push(commitment);
-    }
-    fn into_groups(self) -> impl Iterator<Item = ExactProofConsumption<'proof>> {
-        self.groups.into_iter()
-    }
 }
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = ivm::gas::HOST_BYTE_GAS_BASE;
 const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = ivm::gas::SYSCALL_GAS_PER_BYTE;
@@ -392,6 +355,7 @@ pub(crate) fn current_axt_slot_for_state(state: &(impl StateReadOnly + ?Sized)) 
 }
 /// Convert a registered definition policy and exact AXT intent dataspace into
 /// the public balance scope that the remote proof is claiming.
+#[cfg(test)]
 pub(crate) const fn remote_spend_asset_scope_from_policy(
     policy: AssetBalancePolicy,
     asset_dsid: DataSpaceId,
@@ -651,9 +615,6 @@ pub struct CoreHostImpl<QS> {
     args: Option<iroha_primitives::json::Json>,
     // Canonical schema-bound record for a parameterized contract entrypoint.
     entrypoint_argument_record: Option<ivm::PreparedArgumentRecord>,
-    // Pointer returned by GET_PUBLIC_INPUT for the prepared record. The
-    // subsequent decode syscall must present this exact immutable allocation.
-    prepared_argument_record_pointer: Option<u64>,
     // Trigger identifier for the current execution (time/by-call triggers).
     current_trigger_id: Option<TriggerId>,
     // Block creation timestamp (UTC ms) for the current execution.
@@ -676,13 +637,6 @@ pub struct CoreHostImpl<QS> {
     axt_state: Option<Arc<axt::HostAxtState>>,
     // Completed AXT envelopes awaiting export into WSV/block artifacts.
     completed_axt: Vec<axt::HostAxtState>,
-    // Transaction-wide spend totals for normalized issuer-signed handle
-    // families. This survives AXT_BEGIN/COMMIT cycles and is drained with the
-    // completed envelope artifacts.
-    axt_handle_budget_ledger: Arc<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>>,
-    // Immutable durable spend totals used only when the transaction overlay
-    // has not touched a handle family yet.
-    axt_handle_budget_base: AxtBudgetBase,
     // Snapshots of streaming session capabilities advertised by the VM.
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
@@ -724,8 +678,6 @@ pub struct CoreHostImpl<QS> {
     axt_asset_policies: Arc<BTreeMap<AssetDefinitionId, AssetBalancePolicy>>,
     // Exact live asset-definition incarnations frozen from WSV for state-free AXT runs.
     axt_asset_incarnations: Arc<BTreeMap<AssetDefinitionId, AxtAssetIncarnationV1>>,
-    // Bounded replay ledger hydrated from WSV.
-    axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     // Slot for which cached AXT proofs were verified.
     axt_proof_cache_slot: Option<u64>,
     // Cache of per-dataspace proofs validated in the current slot.
@@ -761,11 +713,6 @@ const MAX_NESTED_CONTRACT_CALL_DEPTH: usize = 32;
 /// Slot storing a live queryable state reference for a host run.
 pub struct QueryStateSlot<QRef> {
     state: Option<QRef>,
-}
-enum AxtBudgetBase {
-    FreshEmpty,
-    Owned(Arc<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>>),
-    QueryRequired,
 }
 impl<QRef> Default for QueryStateSlot<QRef> {
     fn default() -> Self {
@@ -944,8 +891,6 @@ impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
 }
 /// Query-state access shim for host types that may or may not carry a state reference.
 pub trait QueryStateAccess {
-    /// Whether this slot can resolve an AXT budget family from live state.
-    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool;
     /// Query-state reference type for a given borrow lifetime.
     type Ref<'a>: QueryStateExecute + QueryStateRefOps
     where
@@ -954,7 +899,6 @@ pub trait QueryStateAccess {
     fn get(&self) -> Option<Self::Ref<'_>>;
 }
 impl QueryStateAccess for NoQueryState {
-    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool = false;
     type Ref<'a>
         = QueryStateRef<'a, 'a, 'a>
     where
@@ -967,7 +911,6 @@ impl<QRef> QueryStateAccess for QueryStateSlot<QRef>
 where
     QRef: Copy + QueryStateExecute + QueryStateRefOps,
 {
-    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool = true;
     type Ref<'a>
         = QRef
     where
@@ -976,7 +919,15 @@ where
         self.state
     }
 }
-fn map_query_validation_error(error: &ValidationFail) -> ivm::VMError {
+fn map_query_validation_error(
+    error: &crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
+) -> ivm::VMError {
+    let error = match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            return reason.clone().into_vm_error();
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+    };
     match error {
         ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
         _ => ivm::VMError::DecodeError,
@@ -1016,7 +967,7 @@ impl<R: StateReadOnly> IvmQueryValidator for HostQueryValidator<'_, R> {
         &mut self,
         authority: &AccountId,
         query: &QueryRequest,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         self.state
             .world()
             .executor()
@@ -1088,7 +1039,9 @@ fn execute_optional_singular_query_on_state<R: StateReadOnly>(
     let limits = QueryLimits::from_pipeline(state.pipeline());
     let validated = match ValidQueryRequest::validate_for_ivm(request, &mut validator, limits) {
         Ok(validated) => validated,
-        Err(ValidationFail::QueryFailed(error)) if is_missing_query_error(&error) => {
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            ValidationFail::QueryFailed(error),
+        )) if is_missing_query_error(&error) => {
             return Ok((None, QueryExecutionStats::default()));
         }
         Err(error) => return Err(map_query_validation_error(&error)),
@@ -1233,8 +1186,6 @@ pub struct SubscriptionContext {
 }
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
-    /// Clone one cumulative AXT handle-family budget record from live state.
-    fn axt_handle_budget_record(&self, key: &AxtHandleBudgetKey) -> Option<AxtHandleBudgetRecord>;
     /// Return the governed smart-contract heap ceiling in bytes.
     fn smart_contract_heap_limit(&self) -> u64;
     /// Parse and canonicalize an account alias literal using the current dataspace catalog.
@@ -1313,7 +1264,7 @@ pub trait QueryStateRefOps {
         &self,
         cache: &PreparedContractCache,
         code_hash: Hash,
-    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError>;
+    ) -> Result<ivm::PreparedContract, ivm::VMError>;
     /// Resolve subscription context for a trigger identifier.
     ///
     /// # Errors
@@ -1877,22 +1828,6 @@ fn visit_storage_positions(
     Ok(std::ops::ControlFlow::Continue(()))
 }
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
-    fn axt_handle_budget_record(&self, key: &AxtHandleBudgetKey) -> Option<AxtHandleBudgetRecord> {
-        match *self {
-            QueryStateRef::View(view) => view.world().axt_handle_budget_ledger().get(key).cloned(),
-            QueryStateRef::QueryView(view) => {
-                view.world().axt_handle_budget_ledger().get(key).cloned()
-            }
-            QueryStateRef::Block(block) => {
-                block.world().axt_handle_budget_ledger().get(key).cloned()
-            }
-            QueryStateRef::Transaction(transaction) => transaction
-                .world()
-                .axt_handle_budget_ledger()
-                .get(key)
-                .cloned(),
-        }
-    }
     fn smart_contract_heap_limit(&self) -> u64 {
         match *self {
             QueryStateRef::View(view) => view.world().parameters().smart_contract().memory().get(),
@@ -2111,7 +2046,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         &self,
         cache: &PreparedContractCache,
         code_hash: Hash,
-    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError> {
+    ) -> Result<ivm::PreparedContract, ivm::VMError> {
         let prepared = match *self {
             QueryStateRef::View(view) => {
                 crate::smartcontracts::code::with_code_bytes(view, &code_hash, |bytes| {
@@ -2469,7 +2404,6 @@ struct NestedContractCallHostSnapshot {
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     args: Option<iroha_primitives::json::Json>,
     entrypoint_argument_record: Option<ivm::PreparedArgumentRecord>,
-    prepared_argument_record_pointer: Option<u64>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     default: ivm::host::DefaultHostForwardedCallCheckpoint,
     nft_seq: u64,
@@ -2478,12 +2412,10 @@ struct NestedContractCallHostSnapshot {
     durable_read_paths_complete: bool,
     axt_state: Option<Arc<axt::HostAxtState>>,
     completed_axt_len: usize,
-    axt_handle_budget_ledger: Arc<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>>,
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
-    axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
     axt_proof_cache_slot: Option<u64>,
     axt_proof_cache: Arc<BTreeMap<DataSpaceId, CachedProofEntry>>,
     last_axt_reject: Option<AxtRejectContext>,
@@ -2935,7 +2867,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nft_seq: 0,
             args: None,
             entrypoint_argument_record: None,
-            prepared_argument_record_pointer: None,
             current_trigger_id: None,
             current_block_time_ms: None,
             current_block_height: None,
@@ -2946,8 +2877,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
-            axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
-            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -2972,7 +2901,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_asset_policies: Arc::new(BTreeMap::new()),
             axt_asset_incarnations: Arc::new(BTreeMap::new()),
-            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
@@ -3065,7 +2993,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nft_seq: 0,
             args: None,
             entrypoint_argument_record: None,
-            prepared_argument_record_pointer: None,
             current_trigger_id: None,
             current_block_time_ms: None,
             current_block_height: None,
@@ -3076,8 +3003,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
-            axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
-            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -3102,7 +3027,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_asset_policies: Arc::new(BTreeMap::new()),
             axt_asset_incarnations: Arc::new(BTreeMap::new()),
-            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_proof_cache_slot: None,
             axt_proof_cache: Arc::new(BTreeMap::new()),
             last_axt_reject: None,
@@ -3152,7 +3076,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nft_seq: 0,
             args: Some(args),
             entrypoint_argument_record: None,
-            prepared_argument_record_pointer: None,
             current_trigger_id: None,
             current_block_time_ms: None,
             current_block_height: None,
@@ -3163,8 +3086,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             nested_contract_call_journals: Vec::new(),
             axt_state: None,
             completed_axt: Vec::new(),
-            axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
-            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -3185,7 +3106,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
-            axt_replay_ledger: Arc::new(BTreeMap::new()),
             axt_policy_snapshot: None,
             axt_issuer_keys: Arc::new(BTreeMap::new()),
             axt_asset_policies: Arc::new(BTreeMap::new()),
@@ -3213,14 +3133,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         );
         host.args = None;
         host.entrypoint_argument_record = record;
-        host.prepared_argument_record_pointer = None;
         host
     }
     /// Replace the current contract-entrypoint argument record.
     pub fn set_entrypoint_argument_record(&mut self, record: Option<ivm::PreparedArgumentRecord>) {
         self.args = None;
         self.entrypoint_argument_record = record;
-        self.prepared_argument_record_pointer = None;
     }
     /// Enable the contract syscall surface for an unauthenticated local debug run.
     ///
@@ -5092,9 +5010,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Drain completed AXT states so deterministic proof replay can persist them after
     /// verification using the same lane/height materialization as raw execution.
     pub(crate) fn drain_completed_axt_states(&mut self) -> Vec<axt::HostAxtState> {
-        let completed = mem::take(&mut self.completed_axt);
-        self.axt_handle_budget_ledger = Arc::new(BTreeMap::new());
-        completed
+        mem::take(&mut self.completed_axt)
     }
     /// Test helper: seed the ballot verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5162,7 +5078,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             || !self.durable_state_authorizations.is_empty()
             || self.axt_state.is_some()
             || !self.completed_axt.is_empty()
-            || !self.axt_handle_budget_ledger.is_empty()
             || self.instruction_queue_violation.is_some())
         {
             return Err(ValidationFail::NotPermitted(
@@ -5684,39 +5599,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         AXT_GAS_BASE.saturating_add(AXT_GAS_PER_BYTE.saturating_mul(bytes))
     }
-    fn axt_use_gas(
-        input_len: usize,
-        attached_proof_present: bool,
-        selected_proof: Option<&ProofBlob>,
-    ) -> u64 {
-        // Attached proof bytes are already part of `input_len`. A proof reused
-        // from the per-dataspace state is not present in the syscall inputs,
-        // but its envelope is still decoded while resolving the effective
-        // amount and checking the proof-bound intent commitment.
-        let fallback_proof_len = if attached_proof_present {
-            0
-        } else {
-            selected_proof.map_or(0, |proof| proof.payload.len())
-        };
-        Self::axt_gas(input_len.saturating_add(fallback_proof_len))
-    }
     fn axt_commit_gas(state: &axt::HostAxtState) -> u64 {
         let entries = state
             .touches()
             .len()
             .saturating_add(state.proofs().len())
-            .saturating_add(state.handles().len());
-        // Commit re-resolves every handle against its final selected proof.
-        // Charge a reused proof once per handle because its payload is decoded
-        // once per handle, even when multiple handles share one dataspace proof.
-        let revalidated_proof_bytes = state.handles().iter().fold(0_usize, |bytes, usage| {
-            let selected_proof = usage
-                .proof
-                .as_ref()
-                .or_else(|| state.proofs().get(&usage.intent.asset_dsid));
-            bytes.saturating_add(selected_proof.map_or(0, |proof| proof.payload.len()))
-        });
-        Self::axt_gas(entries.saturating_add(revalidated_proof_bytes))
+            .saturating_add(state.spends().len());
+        Self::axt_gas(entries)
     }
     fn relative_durable_state_key<'a>(
         key: &'a StatePath,
@@ -6308,45 +6197,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .and_then(|snapshot| snapshot.entries.iter().find(|entry| entry.dsid == dsid))
             .map(|binding| binding.policy)
     }
-    /// Return the exact AXT policy/issuer/key tuple installed by state hydration.
-    #[cfg(test)]
-    pub(crate) fn axt_hydrated_authorization_for_tests(
-        &self,
-        dsid: DataSpaceId,
-    ) -> Option<(AxtPolicyEntry, UniversalAccountId, PublicKey)> {
-        let policy = self.policy_entry_for(dsid)?;
-        let issuer = self.axt_issuer_keys.get(&dsid)?;
-        Some((policy, issuer.issuer, issuer.public_key.clone()))
-    }
     fn current_axt_policy_version(&self) -> Option<u64> {
         self.axt_policy_snapshot
             .as_ref()
             .map(|snapshot| snapshot.version)
     }
-    fn prune_axt_replay_ledger(&mut self, current_slot: u64) {
-        let retention_slots = self.axt_timing.replay_retention_slots.get();
-        let stale: Vec<_> = self
-            .axt_replay_ledger
-            .iter()
-            .filter(|(_, entry)| entry.is_expired(current_slot, retention_slots))
-            .map(|(key, _)| *key)
-            .collect();
-        for key in stale {
-            Arc::make_mut(&mut self.axt_replay_ledger).remove(&key);
-        }
-    }
-    fn replay_retain_until_slot(&self, handle: &AssetHandle, current_slot: u64) -> u64 {
-        let expiry_slot =
-            self.axt_expiry_slot_with_skew(handle.expiry_slot, handle.max_clock_skew_ms);
-        let retention_cap =
-            current_slot.saturating_add(self.axt_timing.replay_retention_slots.get());
-        expiry_slot.max(retention_cap)
-    }
-    /// Atomically hydrate AXT timing, policy, issuer keys, and replay state.
+    /// Atomically hydrate AXT timing, policy, issuer keys, and asset context.
     ///
-    /// Policy construction and replay-ledger projection complete before the
-    /// host is mutated. Entries already expired at the snapshot's current AXT
-    /// slot are omitted. A successful replacement aborts any active envelope,
+    /// Policy construction and authorization projection complete before the
+    /// host is mutated. A successful replacement aborts any active envelope,
     /// because its proofs were admitted under the previous policy or timing.
     ///
     /// # Errors
@@ -6366,15 +6225,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             timing.slot_length_ms,
             timing.max_clock_skew_ms,
         )?;
-        let current_slot = current_axt_slot_for_state(state)
+        let _current_slot = current_axt_slot_for_state(state)
             .ok_or(AxtPolicySnapshotValidationError::AuthenticatedLedgerTimeUnavailable)?;
-        let retention_slots = timing.replay_retention_slots.get();
-        let mut replay_ledger = BTreeMap::new();
-        for (key, entry) in state.world().axt_replay_ledger().iter() {
-            if !entry.is_expired(current_slot, retention_slots) {
-                replay_ledger.insert(*key, entry.clone());
-            }
-        }
         let asset_policies = state
             .world()
             .asset_definitions_iter()
@@ -6411,28 +6263,37 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 );
             }
         }
-        let handle_budget_base = if QS::SUPPORTS_LIVE_AXT_BUDGET_LOOKUP {
-            AxtBudgetBase::QueryRequired
-        } else {
-            AxtBudgetBase::Owned(Arc::new(
-                state
-                    .world()
-                    .axt_handle_budget_ledger()
-                    .iter()
-                    .map(|(key, record)| (key.clone(), record.clone()))
-                    .collect(),
-            ))
-        };
         self.axt_timing = timing;
         self.set_network_id(*state.network_id());
-        self.axt_replay_ledger = Arc::new(replay_ledger);
         self.install_validated_axt_policy_snapshot(&snapshot, policy);
         self.axt_issuer_keys = Arc::new(issuer_keys);
         self.axt_asset_policies = Arc::new(asset_policies);
         self.axt_asset_incarnations = Arc::new(asset_incarnations);
-        self.axt_handle_budget_base = handle_budget_base;
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
+    }
+    fn map_axt_fastpq_error(
+        &mut self,
+        error: fastpq_prover::Error,
+        context: &str,
+        dsid: DataSpaceId,
+        lane: LaneId,
+    ) -> ivm::VMError {
+        if matches!(
+            error,
+            fastpq_prover::Error::LocalAllocationUnavailable { .. }
+        ) {
+            return ivm::VMError::ExecutionDeferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable,
+            );
+        }
+        self.record_axt_reject(
+            AxtRejectReason::Proof,
+            Some(dsid),
+            Some(lane),
+            format!("{context}: {error}"),
+        );
+        ivm::VMError::PermissionDenied
     }
     fn verify_fastpq_envelope_binding(
         &mut self,
@@ -6451,13 +6312,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         };
         fastpq_prover::validate_axt_transfer_claim_binding(binding).map_err(|err| {
-            self.record_axt_reject(
-                AxtRejectReason::Proof,
-                Some(dsid),
-                Some(policy.target_lane),
-                format!("generic AXT proof admission requires a witnessed transfer claim: {err}"),
-            );
-            ivm::VMError::PermissionDenied
+            self.map_axt_fastpq_error(
+                err,
+                "generic AXT proof admission requires a witnessed transfer claim",
+                dsid,
+                policy.target_lane,
+            )
         })?;
         if binding.source_dsid != dsid.as_u64() {
             self.record_axt_reject(
@@ -6470,13 +6330,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         fastpq_prover::verify_axt_proof_envelope_with_outer_metadata(envelope, expiry_slot)
             .map_err(|err| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    format!("FASTPQ verification failed: {err}"),
-                );
-                ivm::VMError::PermissionDenied
+                self.map_axt_fastpq_error(
+                    err,
+                    "FASTPQ verification failed",
+                    dsid,
+                    policy.target_lane,
+                )
             })?;
         Ok(())
     }
@@ -6736,31 +6595,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn len_to_u32(len: usize) -> Result<u32, ivm::VMError> {
         u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
     }
-    fn alloc_tlv_payload(
-        vm: &mut IVM,
-        pointer_type: PointerType,
-        payload: &[u8],
-    ) -> Result<u64, ivm::VMError> {
-        let out = Self::encode_tlv_payload(pointer_type, payload)?;
-        vm.alloc_host_tlv(&out)
-    }
-    fn encode_tlv_payload(
-        pointer_type: PointerType,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, ivm::VMError> {
-        let payload_len = Self::len_to_u32(payload.len())?;
-        let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
-        out.push(1);
-        out.extend_from_slice(&payload_len.to_be_bytes());
-        out.extend_from_slice(payload);
-        let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
-        out.extend_from_slice(&h);
-        Ok(out)
-    }
-    fn alloc_norito_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
-        Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
-    }
     fn snapshot_nested_contract_call(&mut self) -> NestedContractCallHostSnapshot {
         let output_count_before = self.instruction_queue_count;
         let output_bytes_before = self.instruction_queue_encoded_bytes;
@@ -6779,7 +6613,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             args: self.args.take(),
             entrypoint_argument_record: self.entrypoint_argument_record.take(),
-            prepared_argument_record_pointer: self.prepared_argument_record_pointer,
             fastpq_batch_entries: self.fastpq_batch_entries.take(),
             default: self.default.begin_forwarded_call(),
             nft_seq: self.nft_seq,
@@ -6788,12 +6621,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete: self.state_access_log.durable_read_paths_complete,
             axt_state: self.axt_state.clone(),
             completed_axt_len: self.completed_axt.len(),
-            axt_handle_budget_ledger: self.axt_handle_budget_ledger.clone(),
             zk_verified_ballot: self.zk_verified_ballot.clone(),
             zk_verified_tally: self.zk_verified_tally.clone(),
             zk_last_env_hash_ballot: self.zk_last_env_hash_ballot.clone(),
             zk_last_env_hash_tally: self.zk_last_env_hash_tally.clone(),
-            axt_replay_ledger: self.axt_replay_ledger.clone(),
             axt_proof_cache_slot: self.axt_proof_cache_slot,
             axt_proof_cache: self.axt_proof_cache.clone(),
             last_axt_reject: self.last_axt_reject.clone(),
@@ -6816,7 +6647,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_entrypoint_authorization,
             args,
             entrypoint_argument_record,
-            prepared_argument_record_pointer,
             fastpq_batch_entries,
             default,
             nft_seq,
@@ -6825,12 +6655,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete,
             axt_state,
             completed_axt_len,
-            axt_handle_budget_ledger,
             zk_verified_ballot,
             zk_verified_tally,
             zk_last_env_hash_ballot,
             zk_last_env_hash_tally,
-            axt_replay_ledger,
             axt_proof_cache_slot,
             axt_proof_cache,
             last_axt_reject,
@@ -6853,7 +6681,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = current_entrypoint_authorization;
         self.args = args;
         self.entrypoint_argument_record = entrypoint_argument_record;
-        self.prepared_argument_record_pointer = prepared_argument_record_pointer;
         self.fastpq_batch_entries = fastpq_batch_entries;
         if matches!(outcome, NestedContractCallOutcome::Commit) {
             if !self.default.commit_forwarded_call(default) {
@@ -6935,12 +6762,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.axt_state = axt_state;
         self.completed_axt.truncate(completed_axt_len);
-        self.axt_handle_budget_ledger = axt_handle_budget_ledger;
         self.zk_verified_ballot = zk_verified_ballot;
         self.zk_verified_tally = zk_verified_tally;
         self.zk_last_env_hash_ballot = zk_last_env_hash_ballot;
         self.zk_last_env_hash_tally = zk_last_env_hash_tally;
-        self.axt_replay_ledger = axt_replay_ledger;
         self.axt_proof_cache_slot = axt_proof_cache_slot;
         self.axt_proof_cache = axt_proof_cache;
         self.last_axt_reject = last_axt_reject;
@@ -7054,7 +6879,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn prepare_nested_contract(
         &self,
         identity: &crate::smartcontracts::code::BoundContractIdentity,
-    ) -> Result<Arc<ivm::PreparedContract>, ivm::VMError> {
+    ) -> Result<ivm::PreparedContract, ivm::VMError> {
         if let Some(prepared) = self.prepared_contract_cache.get(identity.code_hash) {
             return Ok(prepared);
         }
@@ -7437,6 +7262,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .entrypoint_descriptor(&entrypoint_name)
             .and_then(|descriptor| descriptor.return_schema.clone())
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
+        // Fund the complete public return envelope before child entry. Its exact backing is
+        // partitioned from this original credit after execution, without another pool admission.
+        let return_transport = NestedReturnTransport::reserve(
+            self.prepared_contract_cache.execution_budget(),
+            Self::affordable_nested_return_record_bytes(vm, reserved_gas, 0, request_gas),
+        )?;
         let mut child_vm = self
             .prepared_contract_cache
             .checkout_runtime(
@@ -7444,7 +7275,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 child_gas_limit,
                 child_heap_limit,
             )
-            .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
+            .map_err(|error| ivm::VMError::metered(request_gas, error))?;
         if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
             let code_len = child_vm.memory.code_len();
             child_vm.set_register(1, code_len);
@@ -7469,7 +7300,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(callee_authorization);
         self.args = None;
         self.entrypoint_argument_record = call_context.prepared_argument_record().cloned();
-        self.prepared_argument_record_pointer = None;
         self.fastpq_batch_entries = None;
         self.nested_contract_call_depth += 1;
         // The parent instruction keeps its own reservation while every nested
@@ -7528,14 +7358,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .map_err(|rollback_error| ivm::VMError::metered(total_gas, rollback_error))?;
                     return Err(error);
                 }
-                let ptr = match Self::alloc_norito_bytes(vm, &encoded_return) {
+                let ptr = match return_transport.publish(vm, &encoded_return) {
                     Ok(ptr) => ptr,
                     Err(err) => {
-                        self.finish_nested_contract_call(
+                        let rollback = self.finish_nested_contract_call(
                             snapshot.take().ok_or(ivm::VMError::DecodeError)?,
                             NestedContractCallOutcome::Rollback,
-                        )
-                        .map_err(|rollback_error| {
+                        );
+                        // Allocator refusal abandons the whole attempt even if cleanup fails.
+                        if err.execution_deferral().is_some() {
+                            return Err(err.into_unmetered());
+                        }
+                        rollback.map_err(|rollback_error| {
                             ivm::VMError::metered(total_gas, rollback_error)
                         })?;
                         return Err(ivm::VMError::metered(total_gas, err));
@@ -7555,11 +7389,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Ok(total_gas)
             }
             Err(err) => {
-                self.finish_nested_contract_call(
+                let rollback = self.finish_nested_contract_call(
                     snapshot.take().ok_or(ivm::VMError::DecodeError)?,
                     NestedContractCallOutcome::Rollback,
-                )
-                .map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
+                );
+                // The outer attempt must retry even if rollback also detects an error.
+                if err.execution_deferral().is_some() {
+                    return Err(err.into_unmetered());
+                }
+                rollback.map_err(|error| ivm::VMError::metered(actual_gas(request_gas), error))?;
                 Err(ivm::VMError::metered(actual_gas(request_gas), err))
             }
         }
@@ -9347,1047 +9185,48 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )?;
         Ok(gas)
     }
-    fn authenticate_axt_handle_usage(
-        &mut self,
-        vm: &IVM,
-        usage: &axt::HandleUsage,
-    ) -> Result<(), ivm::VMError> {
-        let dsid = usage.intent.asset_dsid;
-        let Some(network_id) = self.network_id else {
+    fn handle_axt_stage_anchored_spend(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
+        self.clear_axt_reject();
+        let Some(state_view) = self.axt_state.as_ref() else {
             self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                Some(usage.handle.target_lane),
-                "AXT issuer authentication requires the exact genesis-derived network id",
+                AxtRejectReason::Descriptor,
+                None,
+                None,
+                "AXT_STAGE_ANCHORED_SPEND invoked before AXT_BEGIN",
             );
             return Err(ivm::VMError::PermissionDenied);
         };
-        let Some(policy) = self.policy_entry_for(dsid) else {
-            self.record_axt_reject(
-                AxtRejectReason::MissingPolicy,
-                Some(dsid),
-                Some(usage.handle.target_lane),
-                "no policy entry for handle issuer authentication",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        };
-        let Some(issuer) = self.axt_issuer_keys.get(&dsid).cloned() else {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                Some(policy.target_lane),
-                "committed AXT policy has no unambiguous single-key issuer",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        };
-        if issuer.manifest_root != policy.manifest_root {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                Some(policy.target_lane),
-                "cached AXT issuer key does not match the active manifest root",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let asset_definition_incarnation =
-            self.stable_axt_asset_incarnation(&usage.intent, usage.handle.target_lane)?;
-        if usage.handle.issuer_context.asset_definition_incarnation != asset_definition_incarnation
-        {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                Some(policy.target_lane),
-                "issuer-signed handle carries a stale asset-definition incarnation",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let model_usage = AxtHandleFragment::try_from(usage).map_err(|error| {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                Some(policy.target_lane),
-                format!("failed to canonicalize handle for issuer authentication: {error:?}"),
-            );
-            ivm::VMError::PermissionDenied
-        })?;
-        let issuer_context = AxtHandleIssuerContextV1 {
-            network_id,
-            asset_dsid: dsid,
-            asset_definition_incarnation,
-            issuer: issuer.issuer,
-            issuer_manifest_root: policy.manifest_root,
-            code_root: vm.code_hash(),
-            abi_version: u16::from(vm.abi_version()),
-            abi_hash: ivm::syscalls::compute_abi_hash(vm.syscall_policy()),
-        };
-        model_usage
-            .handle
-            .verify_issuer_signature_v1(issuer_context, &issuer.public_key)
-            .map_err(|_| {
-                self.record_axt_reject(
-                    AxtRejectReason::PolicyDenied,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    "AXT handle issuer signature is invalid",
-                );
-                ivm::VMError::PermissionDenied
-            })?;
-        // TODO: Wire the finalized source-state anchor and fresh exact-spend issuer
-        // authorization into runtime admission. The reusable handle signature covers
-        // a capability and budget, but does not authenticate the selected intent,
-        // proof, effective amount, or the proof's source roots and transaction set.
-        // A valid caller-generated proof cannot supply those missing trusted facts.
-        self.record_axt_reject(
-            AxtRejectReason::Proof,
-            Some(dsid),
-            Some(usage.handle.target_lane),
-            crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
-        );
-        Err(ivm::VMError::PermissionDenied)
-    }
-    #[allow(clippy::too_many_lines)]
-    fn enforce_axt_policy(&mut self, usage: &axt::HandleUsage) -> Result<(), ivm::VMError> {
-        let dsid = usage.intent.asset_dsid;
-        let model_usage = AxtHandleFragment::try_from(usage)?;
-        let key = AxtHandleReplayKey::from_handle(dsid, &model_usage.handle);
-        let budget_key = AxtHandleBudgetKey::from_handle(&model_usage.handle);
-        let mut policy_bounds: Option<(u64, u64)> = None;
-        let mut policy_lane: Option<LaneId> = None;
-        let mut record_slot: u64 = 0;
-        if let Some(snapshot) = &self.axt_policy_snapshot {
-            let binding = snapshot.entries.iter().find(|entry| entry.dsid == dsid);
-            let Some(binding) = binding else {
-                self.record_axt_reject_detail(
-                    AxtRejectReason::MissingPolicy,
-                    Some(dsid),
-                    Some(usage.handle.target_lane),
-                    "no policy entry for dataspace",
-                    None,
-                    None,
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            };
-            let policy = binding.policy;
-            let completed_handles = self
-                .completed_axt
-                .iter()
-                .flat_map(|state| state.handles().iter());
-            let active_handles = self
-                .axt_state
-                .iter()
-                .flat_map(|state| state.handles().iter());
-            let prior_handle_count = completed_handles
-                .chain(active_handles)
-                .filter(|prior| prior.intent.asset_dsid == dsid)
-                .count();
-            let expected_sub_nonce = u64::try_from(prior_handle_count)
-                .ok()
-                .and_then(|count| policy.next_handle_counter.checked_add(count))
-                .ok_or_else(|| {
-                    self.record_axt_reject_detail(
-                        AxtRejectReason::SubNonce,
-                        Some(dsid),
-                        Some(policy.target_lane),
-                        "AXT handle counter is exhausted",
-                        Some(policy.active_handle_era),
-                        Some(policy.next_handle_counter),
-                    );
-                    ivm::VMError::PermissionDenied
-                })?;
-            policy_bounds = Some((policy.active_handle_era, expected_sub_nonce));
-            policy_lane = Some(policy.target_lane);
-            record_slot = policy.current_slot;
-            let policy_root_zeroed = policy.manifest_root.iter().all(|byte| *byte == 0);
-            let handle_root_zeroed = usage
-                .handle
-                .manifest_view_root
-                .iter()
-                .all(|byte| *byte == 0);
-            let mut rejection: Option<(AxtRejectReason, String, Option<u64>, Option<u64>)> = None;
-            if policy_root_zeroed || handle_root_zeroed {
-                rejection = Some((
-                    AxtRejectReason::Manifest,
-                    "policy or handle manifest root is zeroed".to_owned(),
-                    Some(policy.active_handle_era),
-                    Some(policy.next_handle_counter),
-                ));
-            } else if policy.target_lane != usage.handle.target_lane {
-                rejection = Some((
-                    AxtRejectReason::Lane,
-                    format!(
-                        "handle lane {} does not match policy lane {}",
-                        usage.handle.target_lane.as_u32(),
-                        policy.target_lane.as_u32()
-                    ),
-                    Some(policy.active_handle_era),
-                    Some(policy.next_handle_counter),
-                ));
-            } else if policy.manifest_root.as_slice() != usage.handle.manifest_view_root.as_slice()
-            {
-                rejection = Some((
-                    AxtRejectReason::Manifest,
-                    format!(
-                        "handle manifest root {} does not match policy {}",
-                        hex::encode(&usage.handle.manifest_view_root),
-                        hex::encode(policy.manifest_root)
-                    ),
-                    Some(policy.active_handle_era),
-                    Some(policy.next_handle_counter),
-                ));
-            } else {
-                let mut working_policy = policy;
-                working_policy.next_handle_counter = expected_sub_nonce;
-                if let Err(error) = iroha_data_model::nexus::next_axt_handle_sub_nonce(
-                    &working_policy,
-                    &model_usage.handle,
-                ) {
-                    let reason = match error {
-                        iroha_data_model::nexus::AxtHandleSequenceError::EraMismatch { .. } => {
-                            AxtRejectReason::HandleEra
-                        }
-                        iroha_data_model::nexus::AxtHandleSequenceError::SubNonceMismatch {
-                            ..
-                        }
-                        | iroha_data_model::nexus::AxtHandleSequenceError::CounterExhausted => {
-                            AxtRejectReason::SubNonce
-                        }
-                    };
-                    rejection = Some((
-                        reason,
-                        error.to_string(),
-                        Some(policy.active_handle_era),
-                        Some(expected_sub_nonce),
-                    ));
-                }
-            }
-            if rejection.is_none() {
-                let requested_skew_ms = usage
-                    .handle
-                    .max_clock_skew_ms
-                    .map_or(self.axt_timing.max_clock_skew_ms, u64::from);
-                if requested_skew_ms > self.axt_timing.max_clock_skew_ms {
-                    rejection = Some((
-                        AxtRejectReason::Expiry,
-                        format!(
-                            "handle requested max_clock_skew_ms={} exceeding configured bound {}",
-                            requested_skew_ms, self.axt_timing.max_clock_skew_ms
-                        ),
-                        Some(policy.active_handle_era),
-                        Some(expected_sub_nonce),
-                    ));
-                } else {
-                    let expiry_slot = self.axt_expiry_slot_with_skew(
-                        usage.handle.expiry_slot,
-                        usage.handle.max_clock_skew_ms,
-                    );
-                    if policy.current_slot > 0 && policy.current_slot > expiry_slot {
-                        rejection = Some((
-                            AxtRejectReason::Expiry,
-                            format!(
-                                "handle expired for current policy slot={} (expiry_slot={expiry_slot})",
-                                policy.current_slot
-                            ),
-                            Some(policy.active_handle_era),
-                            Some(expected_sub_nonce),
-                        ));
-                    }
-                }
-            }
-            if let Some((reason, detail, next_handle_era, next_sub_nonce)) = rejection {
-                self.record_axt_reject_detail(
-                    reason,
-                    Some(dsid),
-                    Some(policy.target_lane),
-                    detail,
-                    next_handle_era,
-                    next_sub_nonce,
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-        }
-        if record_slot == 0 {
-            record_slot = self
-                .axt_policy_snapshot
-                .as_ref()
-                .and_then(Self::policy_current_slot)
-                .unwrap_or(0);
-        }
-        let retention_slots = self.axt_timing.replay_retention_slots.get();
-        self.prune_axt_replay_ledger(record_slot);
-        if let Some(entry) = self.axt_replay_ledger.get(&key)
-            && !entry.is_expired(record_slot, retention_slots)
-        {
-            let (next_handle_era, next_sub_nonce) =
-                policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
-            let lane = policy_lane.or(Some(usage.handle.target_lane));
-            self.record_axt_reject_detail(
-                AxtRejectReason::ReplayCache,
-                Some(dsid),
-                lane,
-                format!(
-                    "handle replay detected (used_slot={}, retain_until_slot={})",
-                    entry.used_slot, entry.retain_until_slot
-                ),
-                next_handle_era,
-                next_sub_nonce,
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        // The explicit checks above own snapshot-backed sequence validation,
-        // including the per-envelope base+prior-handle offset. Calling the
-        // snapshot policy again would recheck every handle against the
-        // unadvanced base counter and reject the second valid same-dataspace
-        // handle.
-        let mandatory_result = if self.axt_policy_snapshot.is_some() {
-            Ok(())
-        } else {
-            self.axt_policy.allow_handle(usage)
-        };
-        if mandatory_result.is_err() {
-            let (next_handle_era, next_sub_nonce) =
-                policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
-            let lane = policy_lane.or(Some(usage.handle.target_lane));
-            self.record_axt_reject_detail(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                lane,
-                "mandatory policy denied handle usage",
-                next_handle_era,
-                next_sub_nonce,
-            );
-            return mandatory_result;
-        }
-        let hook_result = self
-            .axt_policy_hook
-            .as_ref()
-            .map_or(Ok(()), |policy_hook| policy_hook.allow_handle(usage));
-        if hook_result.is_err() {
-            let (next_handle_era, next_sub_nonce) =
-                policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
-            let lane = policy_lane.or(Some(usage.handle.target_lane));
-            self.record_axt_reject_detail(
-                AxtRejectReason::PolicyDenied,
-                Some(dsid),
-                lane,
-                "policy hook denied handle usage",
-                next_handle_era,
-                next_sub_nonce,
-            );
-            return hook_result;
-        }
-        let retain_until_slot = self.replay_retain_until_slot(&usage.handle, record_slot);
-        Arc::make_mut(&mut self.axt_replay_ledger).insert(
-            key,
-            AxtReplayRecord {
-                dataspace: dsid,
-                budget_key,
-                used_slot: record_slot,
-                retain_until_slot,
-            },
-        );
-        Ok(())
-    }
-    fn validate_axt_remote_spend_commitment(
-        &mut self,
-        usage: &axt::HandleUsage,
-        proof: &ProofBlob,
-    ) -> Result<(), ivm::VMError> {
-        axt::validate_remote_spend_intent_commitment(
-            &usage.handle,
-            &usage.intent,
-            &usage.amount,
-            proof,
-        )
-        .map_err(|error| {
-            self.record_axt_reject(
-                AxtRejectReason::Proof,
-                Some(usage.intent.asset_dsid),
-                Some(usage.handle.target_lane),
-                "FASTPQ proof does not commit to the exact remote spend intent",
-            );
-            error
-        })
-    }
-    fn validate_axt_proof_covers_handle_expiry(
-        &mut self,
-        usage: &axt::HandleUsage,
-        proof: &ProofBlob,
-    ) -> Result<(), ivm::VMError> {
-        if proof
-            .expiry_slot
-            .is_some_and(|expiry_slot| expiry_slot < usage.handle.expiry_slot)
-        {
-            self.record_axt_reject(
-                AxtRejectReason::Expiry,
-                Some(usage.intent.asset_dsid),
-                Some(usage.handle.target_lane),
-                "FASTPQ proof expires before the authenticated handle",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        Ok(())
-    }
-    fn resolve_axt_handle_amount(
-        &mut self,
-        intent: &RemoteSpendIntent,
-        target_lane: LaneId,
-        proof: Option<&ProofBlob>,
-    ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
-        if proof.is_some_and(|proof| {
-            crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload)
-        }) {
-            self.record_axt_reject(
-                AxtRejectReason::Proof,
-                Some(intent.asset_dsid),
-                Some(target_lane),
-                format!(
-                    "proof payload exceeds the {}-byte decode limit",
-                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
-                ),
-            );
+        let tlv = Self::expect_tlv(vm, vm.register(10), PointerType::AxtAnchoredSpendV1)?;
+        // The canonical proof is capped at 2 MiB; this larger envelope ceiling
+        // leaves room for signed source metadata while bounding decode work.
+        const MAX_SPEND_FRAME_BYTES_V1: usize = 4 * 1024 * 1024;
+        if tlv.payload.len() > MAX_SPEND_FRAME_BYTES_V1 {
             return Err(ivm::VMError::NoritoInvalid);
         }
-        axt::resolve_handle_amount(intent, proof).map_err(|err| {
-            let (reason, detail) = match err {
-                axt::HandleAmountResolutionError::MissingAmount => (
-                    AxtRejectReason::Budget,
-                    "redacted remote spend amount has no qualified private proof relation",
-                ),
-                axt::HandleAmountResolutionError::InvalidProofEnvelope => (
-                    AxtRejectReason::Proof,
-                    "proof payload is not a canonical AXT proof envelope",
-                ),
-                axt::HandleAmountResolutionError::Mismatch => (
-                    AxtRejectReason::Budget,
-                    "intent amount does not match proof committed amount",
-                ),
-                axt::HandleAmountResolutionError::ZeroAmount => {
-                    (AxtRejectReason::Budget, "handle amount must be non-zero")
-                }
-                axt::HandleAmountResolutionError::InvalidProofScalar => (
-                    AxtRejectReason::Proof,
-                    "proof committed amount is not a canonical V1 u128 scalar",
-                ),
-                axt::HandleAmountResolutionError::CommitmentMismatch => (
-                    AxtRejectReason::Proof,
-                    "proof amount commitment does not bind its canonical statement",
-                ),
-            };
-            self.record_axt_reject(reason, Some(intent.asset_dsid), Some(target_lane), detail);
-            err.to_vm_error()
-        })
-    }
-    fn validate_axt_remote_spend_asset_policy(
-        &mut self,
-        intent: &RemoteSpendIntent,
-        target_lane: LaneId,
-    ) -> Result<(), ivm::VMError> {
-        let balance_policy = if let Some(state_ref) = self.query_state.get() {
-            state_ref.asset_balance_policy(&intent.op.asset_definition_id)
-        } else {
-            self.axt_asset_policies
-                .get(&intent.op.asset_definition_id)
-                .copied()
-                .ok_or(ivm::VMError::DecodeError)
-        };
-        let balance_policy = match balance_policy {
-            Ok(policy) => policy,
-            Err(error) => {
-                self.record_axt_reject(
-                    AxtRejectReason::PolicyDenied,
-                    Some(intent.asset_dsid),
-                    Some(target_lane),
-                    "remote-spend asset definition is not registered",
-                );
-                return Err(error);
-            }
-        };
-        let source_scope = remote_spend_asset_scope_from_policy(balance_policy, intent.asset_dsid);
-        axt::validate_remote_spend_asset_scope(intent.asset_dsid, source_scope).map_err(|error| {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(target_lane),
-                "remote-spend asset does not belong to the intent dataspace",
-            );
-            error
-        })
-    }
-    fn stable_axt_asset_incarnation(
-        &mut self,
-        intent: &RemoteSpendIntent,
-        target_lane: LaneId,
-    ) -> Result<AxtAssetIncarnationV1, ivm::VMError> {
-        let result = if let Some(state_ref) = self.query_state.get() {
-            state_ref.stable_axt_asset_incarnation(&intent.op.asset_definition_id)
-        } else {
-            self.axt_asset_incarnations
-                .get(&intent.op.asset_definition_id)
-                .copied()
-                .ok_or(ivm::VMError::PermissionDenied)
-                .and_then(|incarnation| {
-                    incarnation
-                        .validate()
-                        .map_err(|_| ivm::VMError::PermissionDenied)?;
-                    Ok(incarnation)
-                })
-        };
-        result.map_err(|error| {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(target_lane),
-                "remote-spend asset was registered, unregistered, or re-registered in this block",
-            );
-            error
-        })
-    }
-    fn validate_axt_remote_spends_at_commit(
-        &mut self,
-        state: &axt::HostAxtState,
-    ) -> Result<(), ivm::VMError> {
-        // Digest buckets avoid comparing every large proof payload with every
-        // handle. Exact equality within a matching bucket remains the final
-        // collision-safe identity check. Fallback groups are indexed once by
-        // dataspace so repeated uses neither rehash nor rescan their payload.
-        let mut consumed_by_proof = ExactProofConsumptionIndex::new();
-        let mut fallback_group_by_dsid = BTreeMap::new();
-        for (dsid, proof) in state.proofs() {
-            let group_index = consumed_by_proof.index(proof);
-            fallback_group_by_dsid.insert(*dsid, group_index);
-        }
-        for usage in state.handles() {
-            if let Some(origin_dsid) = usage.handle.subject.origin_dsid
-                && !state.expected_dsids().contains(&origin_dsid)
-            {
-                self.record_axt_reject(
-                    AxtRejectReason::Descriptor,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            if usage.handle.asset_definition_id != usage.intent.op.asset_definition_id {
-                self.record_axt_reject(
-                    AxtRejectReason::PolicyDenied,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "issuer-signed handle asset does not match remote spend intent asset",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            let incarnation =
-                self.stable_axt_asset_incarnation(&usage.intent, usage.handle.target_lane)?;
-            if usage.handle.issuer_context.asset_definition_incarnation != incarnation {
-                self.record_axt_reject(
-                    AxtRejectReason::PolicyDenied,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "issuer-signed handle carries a stale asset-definition incarnation",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            let (proof, proof_group_index) = if let Some(proof) = usage.proof.as_ref() {
-                let group_index = consumed_by_proof.index(proof);
-                (proof, group_index)
-            } else {
-                let proof = state
-                    .proofs()
-                    .get(&usage.intent.asset_dsid)
-                    .ok_or_else(|| {
-                        self.record_axt_reject(
-                            AxtRejectReason::Proof,
-                            Some(usage.intent.asset_dsid),
-                            Some(usage.handle.target_lane),
-                            "missing FASTPQ proof for remote spend intent commitment",
-                        );
-                        ivm::VMError::PermissionDenied
-                    })?;
-                let group_index = *fallback_group_by_dsid
-                    .get(&usage.intent.asset_dsid)
-                    .ok_or_else(|| {
-                        self.record_axt_reject(
-                            AxtRejectReason::Proof,
-                            Some(usage.intent.asset_dsid),
-                            Some(usage.handle.target_lane),
-                            "missing indexed FASTPQ fallback proof",
-                        );
-                        ivm::VMError::PermissionDenied
-                    })?;
-                (proof, group_index)
-            };
-            self.validate_axt_remote_spend_asset_policy(&usage.intent, usage.handle.target_lane)?;
-            self.validate_axt_proof_covers_handle_expiry(usage, proof)?;
-            // A per-dataspace proof may be installed or replaced after a
-            // handle was recorded. Re-resolve against the exact proof that
-            // will be materialized so host acceptance cannot diverge from
-            // block admission on its committed scalar or amount commitment.
-            let resolved = self.resolve_axt_handle_amount(
-                &usage.intent,
-                usage.handle.target_lane,
-                Some(proof),
-            )?;
-            if resolved.amount != usage.amount {
-                self.record_axt_reject(
-                    AxtRejectReason::Budget,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "final FASTPQ proof changes the resolved handle amount",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            if resolved.amount_commitment != usage.amount_commitment {
-                self.record_axt_reject(
-                    AxtRejectReason::Budget,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "final FASTPQ proof changes the resolved amount commitment",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            if resolved.amount > usage.handle.budget.remaining
-                || usage
-                    .handle
-                    .budget
-                    .per_use
-                    .as_ref()
-                    .is_some_and(|per_use| &resolved.amount > per_use)
-            {
-                self.record_axt_reject(
-                    AxtRejectReason::Budget,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "final FASTPQ proof exceeds the authenticated handle budget",
-                );
-                return Err(ivm::VMError::PermissionDenied);
-            }
-            self.validate_axt_remote_spend_commitment(usage, proof)?;
-            let commitment = axt::expected_remote_spend_intent_commitment_v1(
-                &usage.handle,
-                &usage.intent,
-                &resolved.amount,
-            )
-            .map_err(|error| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(usage.intent.asset_dsid),
-                    Some(usage.handle.target_lane),
-                    "remote-spend handle cannot be represented by the proof commitment",
-                );
-                error
-            })?;
-            consumed_by_proof.consume(proof_group_index, commitment);
-        }
-        for group in consumed_by_proof.into_groups() {
-            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&group.proof.payload) {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    None,
-                    None,
-                    format!(
-                        "final FASTPQ proof exceeds the {}-byte decode limit",
-                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
-                    ),
-                );
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-            let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
-                .map_err(|_| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    None,
-                    None,
-                    "final FASTPQ proof is not a canonical AXT proof envelope",
-                );
-                ivm::VMError::NoritoInvalid
-            })?;
-            let facts = axt::AxtProofUseFacts::from_verified_envelope(envelope);
-            if let Err(error) = facts.validate_remote_spend_consumption(&group.consumed) {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    None,
-                    None,
-                    "FASTPQ remote-spend claims were not consumed exactly once",
-                );
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
-    fn axt_handle_budget_record(
-        &self,
-        key: &axt::HandleBudgetKey,
-    ) -> Result<Option<AxtHandleBudgetRecord>, ivm::VMError> {
-        if let Some(record) = self.axt_handle_budget_ledger.get(key) {
-            return Ok(Some(record.clone()));
-        }
-        match &self.axt_handle_budget_base {
-            AxtBudgetBase::FreshEmpty => Ok(None),
-            AxtBudgetBase::Owned(records) => Ok(records.get(key).cloned()),
-            AxtBudgetBase::QueryRequired => self
-                .query_state
-                .get()
-                .ok_or(ivm::VMError::PermissionDenied)
-                .map(|state| state.axt_handle_budget_record(key)),
-        }
-    }
-    fn stage_axt_handle_budget_updates(
-        &mut self,
-        state: &axt::HostAxtState,
-    ) -> Result<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>, ivm::VMError> {
-        let mut updates: BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord> = BTreeMap::new();
-        for usage in state.handles() {
-            let dsid = usage.intent.asset_dsid;
-            let key = axt::try_handle_budget_key(dsid, &usage.handle).map_err(|error| {
-                self.record_axt_reject(
-                    AxtRejectReason::PolicyDenied,
-                    Some(dsid),
-                    Some(usage.handle.target_lane),
-                    "handle fields cannot form a canonical budget identity",
-                );
-                error
-            })?;
-            let record = match updates.entry(key.clone()) {
-                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let record = match self.axt_handle_budget_record(entry.key()) {
-                        Ok(record) => record.unwrap_or_else(AxtHandleBudgetRecord::empty),
-                        Err(error) => {
-                            self.record_axt_reject(
-                                AxtRejectReason::PolicyDenied,
-                                Some(dsid),
-                                Some(usage.handle.target_lane),
-                                "hydrated handle-budget state requires an attached live query snapshot",
-                            );
-                            return Err(error);
-                        }
-                    };
-                    entry.insert(record)
-                }
-            };
-            if let Err(error) = record.try_consume(&key, &usage.amount, 0) {
-                let (reason, detail) = match error {
-                    AxtHandleBudgetConsumeError::InvalidAssetIncarnation(_) => (
-                        AxtRejectReason::PolicyDenied,
-                        "handle budget identity contains an invalid asset-definition incarnation",
-                    ),
-                    AxtHandleBudgetConsumeError::ZeroAmount => (
-                        AxtRejectReason::Budget,
-                        "handle budget consumption amount is zero",
-                    ),
-                    AxtHandleBudgetConsumeError::Arithmetic(_) => (
-                        AxtRejectReason::Budget,
-                        "shared handle budget arithmetic overflow",
-                    ),
-                    AxtHandleBudgetConsumeError::RemainingExceeded => (
-                        AxtRejectReason::Budget,
-                        "shared handle budget exceeded across completed AXT envelopes",
-                    ),
-                    AxtHandleBudgetConsumeError::PerUseExceeded => (
-                        AxtRejectReason::Budget,
-                        "per-use handle budget exceeded across completed AXT envelopes",
-                    ),
-                };
-                self.record_axt_reject(reason, Some(dsid), Some(usage.handle.target_lane), detail);
-                return Err(ivm::VMError::PermissionDenied);
-            }
-        }
-        Ok(updates)
-    }
-    fn commit_axt_handle_budget_updates(
-        &mut self,
-        updates: BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>,
-    ) {
-        Arc::make_mut(&mut self.axt_handle_budget_ledger).extend(updates);
-    }
-    #[allow(clippy::too_many_lines)]
-    fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        self.clear_axt_reject();
-        if self.axt_state.is_none() {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                None,
-                None,
-                "AXT_USE_ASSET_HANDLE invoked before AXT_BEGIN",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let handle_ptr = vm.register(10);
-        let handle_tlv = Self::expect_tlv(vm, handle_ptr, PointerType::AssetHandle)?;
-        let mut gas_len = handle_tlv.payload.len();
-        let handle: AssetHandle = Self::decode_header(handle_tlv.payload)?;
-        let binding = handle.binding_array().ok_or_else(|| {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                None,
-                Some(handle.target_lane),
-                "handle binding is not 32 bytes",
-            );
-            ivm::VMError::NoritoInvalid
-        })?;
-        if handle.manifest_view_root.len() != 32 {
-            self.record_axt_reject(
-                AxtRejectReason::Manifest,
-                None,
-                Some(handle.target_lane),
-                "handle manifest root must be 32 bytes",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let intent_ptr = vm.register(11);
-        let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
-        gas_len = gas_len.saturating_add(intent_tlv.payload.len());
-        let intent: RemoteSpendIntent = Self::decode_header(intent_tlv.payload)?;
-        let (state_binding, dsid_expected, origin_expected, has_touch) = {
-            let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
-            (
-                state_ref.binding(),
-                state_ref.expected_dsids().contains(&intent.asset_dsid),
-                handle
-                    .subject
-                    .origin_dsid
-                    .is_none_or(|origin| state_ref.expected_dsids().contains(&origin)),
-                state_ref.has_touch(&intent.asset_dsid),
-            )
-        };
-        if binding != state_binding {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                None,
-                Some(handle.target_lane),
-                "handle binding does not match descriptor",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if !dsid_expected {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "intent references undeclared dataspace",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if !origin_expected {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "authenticated handle origin dataspace is not declared by the bound AXT descriptor",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if !has_touch {
-            self.record_axt_reject(
-                AxtRejectReason::Descriptor,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "missing AXT_TOUCH for dataspace",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.handle_era == 0 {
-            self.record_axt_reject(
-                AxtRejectReason::HandleEra,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle era is zero",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.sub_nonce == 0 {
-            self.record_axt_reject(
-                AxtRejectReason::SubNonce,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle sub-nonce is zero",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.expiry_slot == 0 {
-            self.record_axt_reject(
-                AxtRejectReason::Expiry,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle expiry slot is zero",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.scope.is_empty() {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle scope is empty",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.scope.iter().all(|scope| scope != &intent.op.kind) {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle scope does not permit intent kind",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.subject.account != intent.op.from {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle subject does not match intent sender",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.asset_definition_id != intent.op.asset_definition_id {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "issuer-signed handle asset does not match remote spend intent asset",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if handle.group_binding.composability_group_id.is_empty() {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle composability group id is empty",
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        let proof_ptr = vm.register(12);
-        let proof = if proof_ptr == 0 {
-            None
-        } else {
-            let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
-            gas_len = gas_len.saturating_add(proof_tlv.payload.len());
-            let blob: ProofBlob = Self::decode_header(proof_tlv.payload).inspect_err(|_| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "proof payload failed to decode",
-                );
-            })?;
-            axt::validate_proof_blob(&blob)?;
-            Some(blob)
-        };
-        let selected_proof = proof.as_ref().or_else(|| {
-            self.axt_state
-                .as_ref()
-                .and_then(|state| state.proofs().get(&intent.asset_dsid))
-        });
-        let gas = Self::axt_use_gas(gas_len, proof.is_some(), selected_proof);
+        let gas = Self::axt_gas(tlv.payload.len());
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-        let selected_proof = selected_proof.cloned();
-        let resolved_amount =
-            self.resolve_axt_handle_amount(&intent, handle.target_lane, selected_proof.as_ref())?;
-        let amount = resolved_amount.amount;
-        if &amount > &handle.budget.remaining {
-            self.record_axt_reject(
-                AxtRejectReason::Budget,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                format!(
-                    "handle budget exceeded (requested={}, remaining={})",
-                    amount, handle.budget.remaining
-                ),
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if let Some(per_use) = handle.budget.per_use.as_ref()
-            && &amount > per_use
+        let spend: AxtAnchoredSpendV1 = decode_canonical_norito(tlv.payload)?;
+        let dsid = spend.draft.intent.asset_dsid;
+        if !state_view.expected_dsids().contains(&dsid)
+            || spend.draft.handle.axt_binding != AxtBinding::new(state_view.binding())
+            || spend.issuer_payload_v1().is_err()
         {
             self.record_axt_reject(
-                AxtRejectReason::Budget,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                format!("per-use budget exceeded (requested={amount}, per_use={per_use})"),
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(spend.draft.handle.target_lane),
+                "signed anchored spend has inconsistent public binding",
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Err(error) = axt::validate_asset_handle(&handle) {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "handle fields are not canonical, authenticated, or usable",
-            );
-            return Err(error);
-        }
-        if let Err(error) = axt::validate_remote_spend_intent(&intent) {
-            self.record_axt_reject(
-                AxtRejectReason::PolicyDenied,
-                Some(intent.asset_dsid),
-                Some(handle.target_lane),
-                "remote spend intent fields are not canonical or usable",
-            );
-            return Err(error);
-        }
-        self.validate_axt_remote_spend_asset_policy(&intent, handle.target_lane)?;
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof,
-            amount,
-            amount_commitment: resolved_amount.amount_commitment,
-        };
-        if let Some(blob) = selected_proof.as_ref() {
-            self.validate_axt_proof_covers_handle_expiry(&usage, blob)?;
-        }
-        // Capability authentication is deliberately cheaper and earlier than
-        // the attacker-amplifiable FASTPQ verification below.
-        self.authenticate_axt_handle_usage(vm, &usage)?;
-        if let Some(blob) = usage.proof.as_ref() {
-            let policy = self
-                .policy_entry_for(usage.intent.asset_dsid)
-                .ok_or_else(|| {
-                    self.record_axt_reject(
-                        AxtRejectReason::MissingPolicy,
-                        Some(usage.intent.asset_dsid),
-                        Some(usage.handle.target_lane),
-                        "no policy entry for dataspace",
-                    );
-                    ivm::VMError::PermissionDenied
-                })?;
-            self.validate_axt_proof(
-                usage.intent.asset_dsid,
-                blob,
-                policy,
-                AxtProofAdmission::AuthenticatedHandle,
-            )?;
-        }
-        if let Some(blob) = selected_proof.as_ref() {
-            self.validate_axt_remote_spend_commitment(&usage, blob)?;
-        }
-        self.enforce_axt_policy(&usage)?;
-        let output_count_before = self.instruction_queue_count;
-        let output_bytes_before = self.instruction_queue_encoded_bytes;
-        let output_violation_before = self.instruction_queue_violation;
-        if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(256)) {
+        // This is only a producer for the signed wire. State remains the sole
+        // owner of finalized-source, issuer-key, nonce, budget and effect
+        // admission, and currently rejects every nonempty spend before effects.
+        if !self.try_reserve_output(1, tlv.payload.len().saturating_add(128)) {
             return Err(ivm::VMError::PermissionDenied);
         }
-        let usage_for_logging = usage.clone();
-        let record_result = {
-            let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
-            state.record_handle(usage)
-        };
-        if let Err(err) = record_result {
-            self.instruction_queue_count = output_count_before;
-            self.instruction_queue_encoded_bytes = output_bytes_before;
-            self.instruction_queue_violation = output_violation_before;
-            self.record_axt_reject(
-                AxtRejectReason::Budget,
-                Some(usage_for_logging.intent.asset_dsid),
-                Some(usage_for_logging.handle.target_lane),
-                format!("handle recording failed: {err:?}"),
-            );
-            return Err(err);
-        }
+        Arc::make_mut(self.axt_state.as_mut().expect("active envelope checked"))
+            .record_spend(spend)?;
         Ok(gas)
     }
     fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, ivm::VMError> {
@@ -10403,20 +9242,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         let gas = Self::axt_commit_gas(state);
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-        // Fail closed for already-recorded handles as well as new USE calls. Do this
-        // before taking the active envelope or staging any persistent budget writes.
-        if let Some(usage) = state.handles().first() {
-            let dsid = usage.intent.asset_dsid;
-            let lane = usage.handle.target_lane;
-            self.clear_axt_reject();
-            self.record_axt_reject(
-                AxtRejectReason::Proof,
-                Some(dsid),
-                Some(lane),
-                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
-            );
-            return Err(ivm::VMError::PermissionDenied);
-        }
         self.clear_axt_reject();
         let state = self
             .axt_state
@@ -10449,11 +9274,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     });
                     #[cfg(feature = "telemetry")]
                     if let Some(telemetry) = self.telemetry.as_ref() {
-                        let lane = state
-                            .handles()
-                            .first()
-                            .map_or_else(|| LaneId::new(0), |h| h.handle.target_lane);
-                        telemetry.inc_amx_abort(lane, "budget");
+                        telemetry.inc_amx_abort(LaneId::new(0), "budget");
                     }
                     let dataspace = state
                         .expected_dsids()
@@ -10484,25 +9305,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 }
             }
         }
-        if let Err(error) = self.validate_axt_remote_spends_at_commit(&state) {
-            self.axt_state = Some(state);
-            return Err(error);
-        }
         if let Err(error) = state.validate_commit() {
             self.axt_state = Some(state);
             return Err(error);
         }
-        let budget_updates = match self.stage_axt_handle_budget_updates(&state) {
-            Ok(updates) => updates,
-            Err(error) => {
-                self.axt_state = Some(state);
-                return Err(error);
-            }
-        };
-        // No fallible operation follows the ledger merge: candidate updates
-        // were computed against the prior transaction totals and are committed
-        // atomically with retention of this completed envelope.
-        self.commit_axt_handle_budget_updates(budget_updates);
         let state = Arc::try_unwrap(state).unwrap_or_else(|state| (*state).clone());
         self.completed_axt.push(state);
         Ok(gas)
@@ -10550,23 +9356,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })
             .collect();
         proofs.sort_by_key(|fragment| fragment.dsid);
-        let mut handles: Vec<AxtHandleFragment> = state.handle_fragments().to_vec();
-        handles.sort_by_key(|fragment| {
-            (
-                fragment.handle.axt_binding.as_bytes().to_owned(),
-                fragment.handle.handle_era,
-                fragment.handle.sub_nonce,
-                fragment.intent.asset_dsid,
-                fragment.amount.clone(),
-            )
-        });
         AxtEnvelopeRecord {
             binding,
             lane,
             descriptor,
             touches,
             proofs,
-            handles,
+            // Preserve the exact signed wire and VM call order. State alone
+            // authenticates source finality, issuer authority, and replay.
+            spends: state.spends().to_vec(),
             commit_height,
         }
     }
@@ -10621,7 +9419,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             tx.record_axt_envelope(envelope)
                 .map_err(ValidationFail::InstructionFailed)?;
         }
-        self.axt_handle_budget_ledger = Arc::new(BTreeMap::new());
         Ok(())
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -10784,8 +9581,6 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | ivm::syscalls::SYSCALL_STATE_VALUE_DECODE
                 | ivm::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
-                | ivm::syscalls::SYSCALL_ENCODE_INT
-                | ivm::syscalls::SYSCALL_DECODE_INT
                 | ivm::syscalls::SYSCALL_JSON_ENCODE
                 | ivm::syscalls::SYSCALL_JSON_DECODE
                 | ivm::syscalls::SYSCALL_JSON_OBJECT
@@ -10841,6 +9636,9 @@ impl<QS> CoreHostImpl<QS> {
     }
 }
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
+    fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
+        self.entrypoint_argument_record.clone()
+    }
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
@@ -10897,14 +9695,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         };
         if let Some(quote) = state_quote {
             return Ok(quote);
-        }
-        if number == ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
-            && let Some(prepared) = self.entrypoint_argument_record.as_ref()
-        {
-            let record_pointer = self
-                .prepared_argument_record_pointer
-                .ok_or(ivm::VMError::DecodeError)?;
-            return prepared.decode_gas_quote(vm, record_pointer);
         }
         if Self::is_codec_forwarded_syscall(number) {
             return self.codec_host.prepare_syscall(number, vm);
@@ -11052,7 +9842,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_AXT_TOUCH
             | ivm::syscalls::SYSCALL_VERIFY_DS_PROOF
-            | ivm::syscalls::SYSCALL_USE_ASSET_HANDLE
+            | ivm::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND
             | ivm::syscalls::SYSCALL_AXT_COMMIT => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
@@ -11949,7 +10739,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
                     let name = Self::decode_name_payload(tlv.payload)?;
                     if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
-                        self.prepared_argument_record_pointer = None;
                         if let Some(record) = self.entrypoint_argument_record.as_ref() {
                             if !is_type_allowed_for_policy(
                                 vm.syscall_policy(),
@@ -11960,15 +10749,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                                     type_id: PointerType::NoritoBytes as u16,
                                 });
                             }
-                            let guest_binding = record.binding_bytes().as_slice();
-                            let bytes = u64::try_from(guest_binding.len()).unwrap_or(u64::MAX);
+                            let canonical_record = record.canonical_bytes();
+                            let bytes = u64::try_from(canonical_record.len()).unwrap_or(u64::MAX);
                             let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
                                 PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes),
                             );
                             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            let ptr = Self::alloc_norito_bytes(vm, guest_binding)?;
+                            let ptr = Self::alloc_norito_bytes(vm, canonical_record)?;
                             vm.set_register(10, ptr);
-                            self.prepared_argument_record_pointer = Some(ptr);
                             return Ok(gas);
                         }
                         let Some(args) = self.args.as_ref() else {
@@ -12482,21 +11270,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     vm.set_register(10, total);
                     Ok(gas)
                 }
-                ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
-                    if self.entrypoint_argument_record.is_some() =>
-                {
-                    let prepared = self
-                        .entrypoint_argument_record
-                        .as_ref()
-                        .cloned()
-                        .ok_or(ivm::VMError::DecodeError)?;
-                    let record_pointer = self
-                        .prepared_argument_record_pointer
-                        .ok_or(ivm::VMError::DecodeError)?;
-                    let gas = prepared.install_into_vm(vm, record_pointer)?;
-                    self.prepared_argument_record_pointer = None;
-                    Ok(gas)
-                }
                 // Norito serialization and numeric helpers delegate to the IVM codec host.
                 forwarded if Self::is_codec_forwarded_syscall(forwarded) => {
                     self.codec_host.syscall(forwarded, vm)
@@ -12659,7 +11432,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
                 ivm::syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
                 ivm::syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-                ivm::syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
+                ivm::syscalls::SYSCALL_AXT_STAGE_ANCHORED_SPEND => {
+                    self.handle_axt_stage_anchored_spend(vm)
+                }
                 // All other allowed stateful operations must be routed via ISIs
                 // before this host can execute them directly.
                 _ => Err(ivm::VMError::metered_not_implemented(
@@ -12725,10 +11500,7 @@ mod pointer_abi_tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use ivm::{
-        axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
-        syscalls as ivm_sys,
-    };
+    use ivm::syscalls as ivm_sys;
     pub(super) fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
         let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         v.extend_from_slice(&type_id.to_be_bytes());
@@ -12741,16 +11513,33 @@ mod pointer_abi_tests {
         v.extend_from_slice(h.as_ref());
         v
     }
+    pub(super) fn establish_authenticated_axt_ledger_time(state: &State, slot: u64) {
+        let timestamp_ms = slot
+            .checked_mul(state.nexus.read().axt.slot_length_ms.get())
+            .expect("AXT fixture timestamp fits u64");
+        let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
+        let block = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("first height is nonzero"),
+            None,
+            None,
+            timestamp_ms,
+            0,
+        ))
+        .build_with_signature(0, signer.private_key());
+        state
+            .kura()
+            .store_block(Arc::new(block.clone()))
+            .expect("store authenticated ledger-time fixture block");
+        state.append_committed_block_header_for_tests(block.header().clone());
+        assert_eq!(
+            state.latest_block_creation_time_ms_fast(),
+            Some(timestamp_ms),
+            "fixture ledger time comes from the committed block header"
+        );
+    }
     fn store_state_path_tlv(vm: &mut IVM, path: &impl AsRef<str>) -> u64 {
         let path: StatePath = path.as_ref().parse().expect("valid durable-state path");
         store_tlv(vm, PointerType::NoritoBytes, &norito_blob(&path))
-    }
-    fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
-        let binding = AxtPolicyBinding { dsid, policy };
-        AxtPolicySnapshot {
-            version: AxtPolicySnapshot::compute_version(&[binding]),
-            entries: vec![binding],
-        }
     }
     fn fixture_account(label: &str) -> AccountId {
         match label {
@@ -13074,7 +11863,6 @@ seiyaku ReadOnlyBinding {
             ivm_sys::SYSCALL_AXT_TOUCH,
             ivm_sys::SYSCALL_AXT_COMMIT,
             ivm_sys::SYSCALL_VERIFY_DS_PROOF,
-            ivm_sys::SYSCALL_USE_ASSET_HANDLE,
         ] {
             assert_eq!(
                 host.execution_class.ensure_syscall_allowed(syscall),
@@ -13139,7 +11927,6 @@ seiyaku ReadOnlyBinding {
             ivm_sys::SYSCALL_AXT_TOUCH,
             ivm_sys::SYSCALL_AXT_COMMIT,
             ivm_sys::SYSCALL_VERIFY_DS_PROOF,
-            ivm_sys::SYSCALL_USE_ASSET_HANDLE,
         ] {
             assert_eq!(
                 host.execution_class.ensure_syscall_allowed(syscall),
@@ -13526,49 +12313,6 @@ seiyaku PrivilegedBinding {
             "a contract runtime context must never fall back to untyped durable state"
         );
     }
-    fn fixture_account_literal(label: &str) -> String {
-        fixture_account(label).to_string()
-    }
-    fn fixture_axt_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1])
-            .expect("valid AXT fixture asset id")
-    }
-    fn fixture_axt_asset_incarnation(seed: u8) -> AxtAssetIncarnationV1 {
-        let mut bytes = [seed; Hash::LENGTH];
-        bytes[Hash::LENGTH - 1] |= 1;
-        AxtAssetIncarnationV1::try_from_bytes(bytes)
-            .expect("AXT replay-key fixture incarnation must be canonical and non-zero")
-    }
-    fn fixture_axt_budget_key_for_replay_key(key: &AxtHandleReplayKey) -> AxtHandleBudgetKey {
-        let mut issuer_context = AxtHandleIssuerContextV1::default();
-        issuer_context.asset_dsid = key.asset_dsid;
-        issuer_context.asset_definition_incarnation = key.asset_definition_incarnation;
-        AxtHandleBudgetKey::from_handle(&iroha_data_model::nexus::AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".to_owned()],
-            subject: iroha_data_model::nexus::HandleSubject {
-                account: fixture_account_literal("alice"),
-                origin_dsid: Some(key.asset_dsid),
-            },
-            budget: iroha_data_model::nexus::HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: key.handle_era,
-            sub_nonce: key.sub_nonce,
-            group_binding: iroha_data_model::nexus::GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: key.target_lane,
-            axt_binding: key.binding,
-            manifest_view_root: [0x5A; 32],
-            expiry_slot: 100,
-            max_clock_skew_ms: Some(0),
-            issuer_context,
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        })
-    }
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("IVM host fixture key generation should succeed")
     }
@@ -13748,115 +12492,51 @@ seiyaku PrivilegedBinding {
         assert_eq!(decoded, expected);
     }
     #[test]
-    fn axt_gas_bills_reused_proof_payload_for_each_decode() {
-        let dsid = DataSpaceId::new(3);
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
+    fn axt_stage_anchored_spend_preserves_exact_signed_wire_in_call_order() {
+        let descriptor_fixture: norito::json::Value =
+            norito::json::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json"
+            )))
+            .expect("current descriptor fixture");
+        let descriptor: axt::AxtDescriptor =
+            norito::json::from_value(descriptor_fixture["descriptor"].clone())
+                .expect("ABI descriptor fixture");
+        let spend_fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+        )))
+        .expect("current signed-spend fixture");
+        let spends: Vec<AxtAnchoredSpendV1> = spend_fixture["spends"]["happy"]
+            .as_array()
+            .expect("signed-spend fixture array")
+            .iter()
+            .cloned()
+            .map(|value| norito::json::from_value(value).expect("signed spend"))
+            .collect();
+        assert_eq!(spends.len(), 2);
         let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
-        let mut state = axt::HostAxtState::new(descriptor, binding);
-        state
-            .record_touch(
-                dsid,
-                TouchManifest {
-                    read: Vec::new(),
-                    write: Vec::new(),
-                },
-            )
-            .expect("record empty touch");
-        let proof = ProofBlob {
-            payload: vec![0xA5; 37],
-            expiry_slot: Some(50),
-        };
-        state
-            .record_proof(dsid, Some(proof.clone()), Some(1))
-            .expect("record fallback proof");
-
-        let input_len = 19_usize;
-        assert_eq!(
-            CoreHost::axt_use_gas(input_len, false, Some(&proof)),
-            CoreHost::axt_gas(input_len.saturating_add(proof.payload.len())),
-            "USE must bill a selected per-dataspace fallback proof"
-        );
-        assert_eq!(
-            CoreHost::axt_use_gas(input_len, true, Some(&proof)),
-            CoreHost::axt_gas(input_len),
-            "an attached proof is already included in the syscall input length"
-        );
-        assert_eq!(
-            CoreHost::axt_use_gas(usize::MAX, false, Some(&proof)),
-            CoreHost::axt_gas(usize::MAX),
-            "fallback proof accounting must saturate"
-        );
-
-        let authority = fixture_account_literal("alice");
-        let destination = fixture_account_literal("bob");
-        let base_handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: authority.clone(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: vec![0x44; 32],
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".to_owned(),
-                from: authority,
-                to: destination,
-                amount: Some(Quantity::from(1_u64)),
-            },
-        };
-        for sub_nonce in [1_u64, 2] {
-            let mut handle = base_handle.clone();
-            handle.sub_nonce = sub_nonce;
-            state
-                .record_handle(axt::HandleUsage {
-                    handle,
-                    intent: intent.clone(),
-                    proof: None,
-                    amount: Quantity::from(1_u64),
-                    amount_commitment: None,
-                })
-                .expect("record handle using the dataspace fallback proof");
+        assert!(spends.iter().all(|spend| {
+            spend.draft.handle.axt_binding == AxtBinding::new(binding)
+                && spend.issuer_payload_v1().is_ok()
+        }));
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let mut vm = IVM::new(1_000_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+        for spend in &spends {
+            let payload = norito_blob(spend);
+            let ptr = store_tlv(&mut vm, PointerType::AxtAnchoredSpendV1, &payload);
+            vm.set_register(10, ptr);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_AXT_STAGE_ANCHORED_SPEND, &mut vm),
+                Ok(CoreHost::axt_gas(payload.len()))
+            );
         }
-
-        let entry_bytes = state
-            .touches()
-            .len()
-            .saturating_add(state.proofs().len())
-            .saturating_add(state.handles().len());
-        let expected_commit_bytes = entry_bytes
-            .saturating_add(proof.payload.len())
-            .saturating_add(proof.payload.len());
-        assert_eq!(
-            CoreHost::axt_commit_gas(&state),
-            CoreHost::axt_gas(expected_commit_bytes),
-            "COMMIT must bill the shared proof payload once for each handle revalidation"
-        );
+        let active = host.axt_state.as_ref().expect("active AXT envelope");
+        assert_eq!(active.spends(), spends);
+        let materialized = CoreHost::materialize_axt_record(active, LaneId::new(0), 1);
+        assert_eq!(materialized.spends, spends);
+        assert!(host.completed_axt.is_empty());
     }
     #[test]
     fn axt_verify_ds_proof_rejects_unanchored_fastpq_without_state_or_cache_mutation() {
@@ -14253,266 +12933,6 @@ seiyaku PrivilegedBinding {
         assert_eq!(ctx.dataspace, Some(dsid));
         assert_eq!(ctx.lane, Some(LaneId::new(1)));
     }
-    #[test]
-    fn axt_use_asset_handle_rejects_zero_handle_era() {
-        let dsid = DataSpaceId::new(12);
-        let manifest_root = [0x44; 32];
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        snapshot.entries[0].policy.active_handle_era = 0;
-        snapshot.entries[0].policy.next_handle_counter = 0;
-        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest = TouchManifest {
-            read: Vec::new(),
-            write: Vec::new(),
-        };
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            ))
-        );
-        let binding = axt::compute_binding(&descriptor).expect("binding");
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 0,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        let err = host
-            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect_err("zero handle era must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context captured");
-        assert_eq!(ctx.reason, AxtRejectReason::HandleEra);
-        assert_eq!(ctx.dataspace, Some(dsid));
-        assert_eq!(ctx.lane, Some(LaneId::new(1)));
-    }
-    #[test]
-    fn axt_use_asset_handle_rejects_invalid_manifest_root_length() {
-        let dsid = DataSpaceId::new(13);
-        let manifest_root = [0x45; 32];
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest = TouchManifest {
-            read: Vec::new(),
-            write: Vec::new(),
-        };
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            ))
-        );
-        let binding = axt::compute_binding(&descriptor).expect("binding");
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: vec![0x11; 31],
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        let err = host
-            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect_err("invalid manifest root length must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context captured");
-        assert_eq!(ctx.reason, AxtRejectReason::Manifest);
-        assert!(ctx.dataspace.is_none());
-        assert_eq!(ctx.lane, Some(LaneId::new(1)));
-    }
-    #[test]
-    fn axt_use_asset_handle_rejects_invalid_binding_length() {
-        let dsid = DataSpaceId::new(14);
-        let manifest_root = [0x46; 32];
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest = TouchManifest {
-            read: Vec::new(),
-            write: Vec::new(),
-        };
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            ))
-        );
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: vec![0xAA; 31],
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        let err = host
-            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect_err("invalid binding length must be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context captured");
-        assert_eq!(ctx.reason, AxtRejectReason::Descriptor);
-        assert!(ctx.dataspace.is_none());
-        assert_eq!(ctx.lane, Some(LaneId::new(1)));
-    }
     #[cfg(feature = "telemetry")]
     #[test]
     fn axt_proof_cache_metrics_refresh_on_manifest_rotation() {
@@ -14583,194 +13003,6 @@ seiyaku PrivilegedBinding {
             metrics_text.contains("iroha_axt_proof_cache_state"),
             "axt cache metric should be exported"
         );
-    }
-    #[cfg(feature = "telemetry")]
-    #[test]
-    fn axt_handle_reject_hints_exposed_via_telemetry() {
-        let dsid = DataSpaceId::new(31);
-        let manifest_root = [0xCC; 32];
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let binding = axt::compute_binding(&descriptor).expect("binding");
-        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        snapshot.entries[0].policy.active_handle_era = 5;
-        snapshot.entries[0].policy.next_handle_counter = 3;
-        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-        let authority: AccountId = fixture_account("alice");
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .and_then(|host| {
-                host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
-            })
-            .expect("canonical policy snapshot");
-        host.set_telemetry(telemetry.clone());
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        let err = host
-            .enforce_axt_policy(&usage)
-            .expect_err("handle with stale era must be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
-        let hints = telemetry.axt_reject_hints_snapshot();
-        assert_eq!(hints.len(), 1);
-        let hint = &hints[0];
-        assert_eq!(hint.dataspace, dsid);
-        assert_eq!(hint.target_lane, LaneId::new(1));
-        assert_eq!(hint.active_handle_era, 5);
-        assert_eq!(hint.next_handle_counter, 3);
-        assert_eq!(hint.reason, AxtRejectReason::HandleEra);
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context captured");
-        assert_eq!(ctx.reason, AxtRejectReason::HandleEra);
-        assert_eq!(ctx.dataspace, Some(dsid));
-        assert_eq!(ctx.lane, Some(LaneId::new(1)));
-        assert_eq!(
-            ctx.snapshot_version,
-            Some(AxtPolicySnapshot::compute_version(&snapshot.entries))
-        );
-        assert_eq!(ctx.active_handle_era, Some(5));
-        assert_eq!(ctx.next_handle_counter, Some(3));
-    }
-    #[test]
-    fn axt_reject_context_refreshes_minima_after_policy_update() {
-        let dsid = DataSpaceId::new(37);
-        let manifest_root = [0xDD; 32];
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let binding = axt::compute_binding(&descriptor).expect("binding");
-        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
-        snapshot.entries[0].policy.active_handle_era = 5;
-        snapshot.entries[0].policy.next_handle_counter = 2;
-        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .and_then(|host| {
-                host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
-            })
-            .expect("canonical policy snapshot");
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let failing_handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0xAA; 32],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(1),
-            axt_binding: binding.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 40,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let usage = axt::HandleUsage {
-            handle: failing_handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        assert_eq!(
-            host.enforce_axt_policy(&usage),
-            Err(VMError::PermissionDenied),
-            "stale handle must be rejected by the installed policy"
-        );
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context captured");
-        assert_eq!(ctx.active_handle_era, Some(5));
-        assert_eq!(ctx.next_handle_counter, Some(2));
-        assert_eq!(ctx.snapshot_version, Some(snapshot.version));
-        let mut refreshed = snapshot.clone();
-        refreshed.entries[0].policy.active_handle_era = 9;
-        refreshed.entries[0].policy.next_handle_counter = 4;
-        refreshed.version = AxtPolicySnapshot::compute_version(&refreshed.entries);
-        host.refresh_axt_policy_snapshot(&refreshed)
-            .expect("canonical refreshed snapshot");
-        assert_eq!(
-            host.enforce_axt_policy(&usage),
-            Err(VMError::PermissionDenied),
-            "stale handle must remain rejected after policy refresh"
-        );
-        let refreshed_ctx = host
-            .take_axt_reject_for_tests()
-            .expect("refreshed reject context captured");
-        assert_eq!(refreshed_ctx.active_handle_era, Some(9));
-        assert_eq!(refreshed_ctx.next_handle_counter, Some(4));
-        assert_eq!(refreshed_ctx.snapshot_version, Some(refreshed.version));
     }
     #[test]
     fn axt_verify_ds_proof_rejects_expired_and_supports_clear() {
@@ -15031,496 +13263,7 @@ seiyaku PrivilegedBinding {
             "cache should expire once the TTL window elapses"
         );
     }
-    include!("host/axt_persistent_budget_tests.rs");
     include!("host/axt_unanchored_admission_tests.rs");
-    #[test]
-    fn axt_replay_ledger_from_state_rejects_reuse() {
-        let dsid = DataSpaceId::new(21);
-        let lane = LaneId::new(2);
-        let manifest_root = [0x99; 32];
-        let binding_bytes = [0xAB; 32];
-        let binding = AxtBinding::new(binding_bytes);
-        let policy = AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 2,
-            next_handle_counter: 5,
-            current_slot: 10,
-        };
-        let replay_key = AxtHandleReplayKey {
-            asset_dsid: dsid,
-            asset_definition_incarnation: AxtHandleIssuerContextV1::default()
-                .asset_definition_incarnation,
-            binding,
-            handle_era: 2,
-            sub_nonce: 5,
-            target_lane: lane,
-        };
-        let replay_entry = AxtReplayRecord {
-            dataspace: dsid,
-            budget_key: fixture_axt_budget_key_for_replay_key(&replay_key),
-            used_slot: 5,
-            retain_until_slot: 50,
-        };
-        let world = World::new();
-        {
-            let mut block = world.block();
-            block.axt_policies.insert(dsid, policy);
-            block.axt_replay_ledger.insert(replay_key, replay_entry);
-            block.commit();
-        }
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        establish_authenticated_axt_ledger_time(&state, 10);
-        let authority: AccountId = fixture_account("alice");
-        let snapshot = test_policy_snapshot(dsid, policy);
-        let host =
-            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
-        let mut host = host
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 2,
-            sub_nonce: 5,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.as_bytes().to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 60,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        let err = host
-            .enforce_axt_policy(&usage)
-            .expect_err("replay guard must reject reused handle");
-        assert_eq!(err, VMError::PermissionDenied);
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context recorded");
-        assert_eq!(ctx.reason, AxtRejectReason::ReplayCache);
-    }
-    #[test]
-    fn axt_replay_ledger_scopes_identical_handle_tuple_by_dataspace() {
-        let ds_a = DataSpaceId::new(31);
-        let ds_b = DataSpaceId::new(32);
-        let lane = LaneId::new(1);
-        let manifest_root = [0x91; 32];
-        let policy = AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 10,
-        };
-        let entries = vec![
-            AxtPolicyBinding { dsid: ds_a, policy },
-            AxtPolicyBinding { dsid: ds_b, policy },
-        ];
-        let snapshot = AxtPolicySnapshot {
-            version: AxtPolicySnapshot::compute_version(&entries),
-            entries,
-        };
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical multi-dataspace policy snapshot");
-        let binding = AxtBinding::new([0xA9; 32]);
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(DataSpaceId::UNIVERSAL),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.as_bytes().to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 20,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let usage_for = |asset_dsid| axt::HandleUsage {
-            handle: handle.clone(),
-            intent: RemoteSpendIntent {
-                asset_dsid,
-                op: SpendOp {
-                    asset_definition_id:
-                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                        ])
-                        .expect("valid AXT fixture asset id"),
-                    kind: "transfer".into(),
-                    from: authority.to_string(),
-                    to: fixture_account_literal("bob"),
-                    amount: Some(Quantity::from(5_u64)),
-                },
-            },
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        let usage_a = usage_for(ds_a);
-        let usage_b = usage_for(ds_b);
-        host.enforce_axt_policy(&usage_a)
-            .expect("first dataspace handle should be accepted");
-        host.enforce_axt_policy(&usage_b)
-            .expect("same tuple from another dataspace should be accepted");
-        let key_a = AxtHandleReplayKey::from_handle(
-            ds_a,
-            &AxtHandleFragment::try_from(&usage_a)
-                .expect("model handle")
-                .handle,
-        );
-        let key_b = AxtHandleReplayKey::from_handle(
-            ds_b,
-            &AxtHandleFragment::try_from(&usage_b)
-                .expect("model handle")
-                .handle,
-        );
-        assert_ne!(key_a, key_b);
-        assert_eq!(host.axt_replay_ledger.len(), 2);
-        let error = host
-            .enforce_axt_policy(&usage_a)
-            .expect_err("same-dataspace replay must remain rejected");
-        assert_eq!(error, VMError::PermissionDenied);
-        assert_eq!(
-            host.take_axt_reject_for_tests()
-                .expect("replay reject context")
-                .reason,
-            AxtRejectReason::ReplayCache
-        );
-    }
-    #[test]
-    fn axt_replay_ledger_records_retention_floor() {
-        let dsid = DataSpaceId::new(23);
-        let lane = LaneId::new(1);
-        let manifest_root = [0x44; 32];
-        let current_slot = 10;
-        let retention_slots = 10;
-        let timing = iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: NonZeroU64::new(1).expect("slot length"),
-            max_clock_skew_ms: 0,
-            proof_cache_ttl_slots: NonZeroU64::new(1).expect("ttl slots"),
-            replay_retention_slots: NonZeroU64::new(retention_slots)
-                .expect("non-zero retention window"),
-        };
-        let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .and_then(|host| host.with_axt_timing(timing))
-            .expect("canonical policy snapshot");
-        let binding = AxtBinding::new([0xAB; 32]);
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.as_bytes().to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: current_slot + 2,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        host.enforce_axt_policy(&usage)
-            .expect("policy should accept handle");
-        let key = AxtHandleReplayKey {
-            asset_dsid: dsid,
-            asset_definition_incarnation: AxtHandleIssuerContextV1::default()
-                .asset_definition_incarnation,
-            binding,
-            handle_era: 1,
-            sub_nonce: 1,
-            target_lane: lane,
-        };
-        let entry = host
-            .axt_replay_ledger
-            .get(&key)
-            .cloned()
-            .expect("replay entry recorded");
-        let retention_cap = current_slot.saturating_add(retention_slots);
-        assert_eq!(entry.retain_until_slot, retention_cap);
-    }
-    #[test]
-    fn axt_replay_ledger_rejects_reuse_with_short_retain_until_slot() {
-        let dsid = DataSpaceId::new(24);
-        let lane = LaneId::new(1);
-        let manifest_root = [0x33; 32];
-        let current_slot = 5;
-        let retention_slots = 10;
-        let timing = iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: NonZeroU64::new(1).expect("slot length"),
-            max_clock_skew_ms: 0,
-            proof_cache_ttl_slots: NonZeroU64::new(1).expect("ttl slots"),
-            replay_retention_slots: NonZeroU64::new(retention_slots)
-                .expect("non-zero retention window"),
-        };
-        let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .and_then(|host| host.with_axt_timing(timing))
-            .expect("canonical policy snapshot");
-        let binding_bytes = [0xCD; 32];
-        let replay_key = AxtHandleReplayKey {
-            asset_dsid: dsid,
-            asset_definition_incarnation: AxtHandleIssuerContextV1::default()
-                .asset_definition_incarnation,
-            binding: AxtBinding::new(binding_bytes),
-            handle_era: 1,
-            sub_nonce: 1,
-            target_lane: lane,
-        };
-        Arc::make_mut(&mut host.axt_replay_ledger).insert(
-            replay_key,
-            AxtReplayRecord {
-                dataspace: dsid,
-                budget_key: fixture_axt_budget_key_for_replay_key(&replay_key),
-                used_slot: 1,
-                retain_until_slot: 2,
-            },
-        );
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding_bytes.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: current_slot + 20,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("bob"),
-                amount: Some(Quantity::from(5_u64)),
-            },
-        };
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(5_u64),
-            amount_commitment: None,
-        };
-        let err = host
-            .enforce_axt_policy(&usage)
-            .expect_err("replay should be rejected within retention window");
-        assert_eq!(err, VMError::PermissionDenied);
-        let ctx = host
-            .take_axt_reject_for_tests()
-            .expect("reject context recorded");
-        assert_eq!(ctx.reason, AxtRejectReason::ReplayCache);
-    }
-    #[test]
-    fn axt_replay_ledger_prunes_stale_entries_on_hydrate() {
-        let dsid = DataSpaceId::new(22);
-        let lane = LaneId::new(3);
-        let manifest_root = [0x77; 32];
-        let binding_bytes = [0xBC; 32];
-        let binding = AxtBinding::new(binding_bytes);
-        let policy = AxtPolicyEntry {
-            manifest_root,
-            target_lane: lane,
-            active_handle_era: 1,
-            next_handle_counter: 1,
-            current_slot: 2,
-        };
-        let stale_key = AxtHandleReplayKey {
-            asset_dsid: dsid,
-            asset_definition_incarnation: fixture_axt_asset_incarnation(0xBC),
-            binding,
-            handle_era: 1,
-            sub_nonce: 1,
-            target_lane: lane,
-        };
-        let stale_entry = AxtReplayRecord {
-            dataspace: dsid,
-            budget_key: fixture_axt_budget_key_for_replay_key(&stale_key),
-            used_slot: 0,
-            retain_until_slot: 0,
-        };
-        let world = World::new();
-        {
-            let mut block = world.block();
-            block.axt_policies.insert(dsid, policy);
-            block.axt_replay_ledger.insert(stale_key, stale_entry);
-            block.commit();
-        }
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(world, kura, query);
-        let retention_slots = {
-            state.nexus.get_mut().axt.replay_retention_slots =
-                NonZeroU64::new(1).expect("non-zero retention window");
-            state.nexus.get_mut().axt.replay_retention_slots.get()
-        };
-        establish_authenticated_axt_ledger_time(&state, 2);
-        state.prune_axt_replay_ledger_for_tests(retention_slots, retention_slots);
-        let authority: AccountId = fixture_account("alice");
-        let snapshot = test_policy_snapshot(dsid, policy);
-        let host =
-            CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
-        let mut host = host
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        let handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(10_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.as_bytes().to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 10,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let intent = RemoteSpendIntent {
-            asset_dsid: dsid,
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
-                kind: "transfer".into(),
-                from: authority.to_string(),
-                to: fixture_account_literal("charlie"),
-                amount: Some(Quantity::from(3_u64)),
-            },
-        };
-        let usage = axt::HandleUsage {
-            handle,
-            intent,
-            proof: None,
-            amount: Quantity::from(3_u64),
-            amount_commitment: None,
-        };
-        assert_eq!(
-            host.enforce_axt_policy(&usage),
-            Ok(()),
-            "stale replay entries should be pruned on hydrate"
-        );
-        assert!(
-            host.take_axt_reject_for_tests().is_none(),
-            "no reject context should be recorded for pruned entries"
-        );
-    }
     #[test]
     fn register_contract_manifest_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
@@ -17494,7 +15237,8 @@ seiyaku StaleRuntimeBinding {
         keypair: &KeyPair,
         invocation: iroha_data_model::transaction::executable::ContractInvocation,
         ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
-    ) -> Result<(), iroha_data_model::ValidationFail> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<iroha_data_model::ValidationFail>>
+    {
         let next_height = u64::try_from(state.view().height() + 1)
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -17918,7 +15662,6 @@ seiyaku AliasPayout {{
             )
             .to_le_bytes(),
         );
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(gas_limit);
         vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
             .expect("load CALL_CONTRACT program");
@@ -17935,9 +15678,9 @@ seiyaku AliasPayout {{
             entrypoint,
             &payload,
         );
-        vm.set_register(10, target_ptr);
-        vm.set_register(11, entrypoint_ptr);
-        vm.set_register(12, payload_ptr);
+        vm.set_register(14, target_ptr);
+        vm.set_register(15, entrypoint_ptr);
+        vm.set_register(16, payload_ptr);
         let result = match cycle_budget {
             Some(budget) => vm.run_with_host_and_cycle_budget(&mut host, budget),
             None => vm.run_with_host(&mut host),
@@ -19117,22 +16860,18 @@ seiyaku OuterCaller {
             nullifier: [0x22; 32],
         });
         let payload = norito::to_bytes(&instruction).expect("encode proof instruction");
-        let code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-                    .expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
+        let code = [ivm::encoding::wide::encode_sys(
+            ivm::instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION).expect("syscall fits"),
+        )
+        .to_le_bytes()]
         .concat();
         let mut vm = IVM::new(10_000);
         vm.load_program(&build_authenticated_test_contract_program(&code, 0, true))
             .expect("load proof instruction program");
         let instruction_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
-        vm.set_register(10, instruction_ptr);
-        vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
+        vm.set_register(14, instruction_ptr);
+        vm.set_register(15, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         let pending_hash = [0x42; 32];
         let mut host = local_contract_host((*ALICE_ID).clone());
         Arc::make_mut(&mut host.zk_last_env_hash_ballot).push_back(pending_hash);
@@ -19277,6 +17016,7 @@ seiyaku OpaqueInstructionSubmission {
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+            callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "CodeLiteralBallotHarness".to_owned(),
             compiler_fingerprint: "iroha-core-host-tests".to_owned(),
             abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -19348,11 +17088,15 @@ seiyaku OpaqueInstructionSubmission {
             )
             .to_le_bytes(),
         );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program.extend_from_slice(&crate::ivm_test_support::unit_return());
         let mut vm = ivm::IVM::new(50_000_000);
         vm.load_program(&program).expect("load program");
+        vm.select_entrypoint("dispatch_ballot")
+            .expect("select the authenticated ballot entrypoint");
         vm.run_with_host(&mut host)
             .expect("code literal ballot instruction should be queued");
+        assert_eq!(vm.call_result_word_count().unwrap(), 1);
+        assert_eq!(vm.public_call_result_word(0).unwrap(), 0);
         assert_eq!(host.queued.len(), 1);
         assert_eq!(host.queued[0].instruction, instruction);
         assert!(host.queued[0].contract_runtime_context.is_some());
@@ -21098,94 +18842,60 @@ seiyaku Callee {
             );
         }
     }
+    fn completed_unit_return_vm() -> IVM {
+        let program = ivm::KotodamaCompiler::new()
+            .compile_source("seiyaku ReturnBoundary { view fn main() { () } }")
+            .expect("compile root result-table fixture");
+        let metadata = ivm::ProgramMetadata::parse(&program).unwrap();
+        let entry = metadata
+            .contract_interface
+            .as_ref()
+            .unwrap()
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .unwrap();
+        let entry_pc = metadata.prefix_len() as u64 + entry.entry_pc;
+        let mut vm = IVM::new(100_000);
+        vm.load_program(&program)
+            .expect("load root result-table fixture");
+        vm.set_program_counter(entry_pc)
+            .expect("select authenticated root entrypoint");
+        vm.run().expect("complete authenticated root call");
+        assert_eq!(vm.call_result_word_count().unwrap(), 1);
+        vm
+    }
     #[test]
-    fn nested_contract_return_rejects_private_scalar_and_pointer_memory() {
-        let mut private_return_program = ivm::ProgramMetadata {
-            mode: ivm::ivm_mode::ZK,
-            max_cycles: 32,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
-        private_return_program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_GET_PRIVATE_INPUT)
-                    .expect("private-input syscall fits compact SCALL"),
-            )
-            .to_le_bytes(),
-        );
-        private_return_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut scalar_vm = IVM::new(10_000);
-        scalar_vm.set_host(
-            ivm::host::DefaultHost::with_private_inputs(vec![
-                ivm::private_input::int_record(42_u64.into()).expect("encode typed private input"),
-            ])
-            .expect("construct bounded private-input host"),
-        );
-        scalar_vm
-            .load_program(&private_return_program)
-            .expect("load malicious private-return program");
-        scalar_vm.set_register(10, 0);
-        // Private-input ABI V1 tag zero selects Kotodama `int`.
-        scalar_vm.set_register(11, 0);
-        scalar_vm
-            .run()
-            .expect("malicious callee obtains its private input");
-        assert!(scalar_vm.registers.tag(10));
-        let int_schema = exact_return_type(
+    fn nested_contract_return_rejects_private_pointer_memory_with_either_descriptor_tag() {
+        let mut vm = completed_unit_return_vm();
+        let table = vm.register(10);
+        vm.set_zk_mode(true);
+        let record = ivm::private_input::int_record(42_u64.into())
+            .expect("encode authenticated private input");
+        let kind = record.kind.tag();
+        let mut host = ivm::host::DefaultHost::with_private_inputs(vec![record]).unwrap();
+        vm.set_register(10, 0);
+        vm.set_register(11, kind);
+        host.syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &mut vm)
+            .unwrap();
+        let pointer = vm.register(10);
+        vm.store_u64(table, pointer)
+            .expect("trusted host writes return fixture");
+        let schema = exact_return_type(
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
-        assert!(matches!(
-            CoreHost::encode_nested_contract_return(
-                &scalar_vm,
-                &int_schema,
-                iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
-            ),
-            Err(ivm::VMError::PrivacyViolation)
-        ));
-        // Place a valid TLV at an intentionally unaligned stack address so its
-        // eight-byte payload begins at an aligned address. A private STORE64
-        // taints the payload while leaving the pointer register public; the
-        // return boundary must reject the memory taint before decoding it.
-        let mut private_store_program = ivm::ProgramMetadata {
-            mode: ivm::ivm_mode::ZK,
-            max_cycles: 32,
-            ..ivm::ProgramMetadata::default()
+        for private_descriptor in [true, false] {
+            vm.registers.set_tag(10, private_descriptor);
+            assert_eq!(
+                CoreHost::encode_nested_contract_return(
+                    &vm,
+                    &schema,
+                    iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+                ),
+                Err(ivm::VMError::PrivacyViolation),
+                "private payload rejection must depend on completed table memory, not register tags"
+            );
         }
-        .encode();
-        private_store_program.extend_from_slice(
-            &ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 1, 2, 0)
-                .to_le_bytes(),
-        );
-        private_store_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut pointer_vm = IVM::new(10_000);
-        pointer_vm
-            .load_program(&private_store_program)
-            .expect("load private stack-spill fixture");
-        let pointer = ivm::Memory::STACK_START + 1;
-        let payload = 7_u64.to_le_bytes();
-        let envelope = make_tlv(PointerType::Blob as u16, &payload);
-        pointer_vm
-            .store_bytes(pointer, &envelope)
-            .expect("store public return envelope");
-        pointer_vm.set_register(1, pointer + 7);
-        pointer_vm.set_register(2, 11);
-        pointer_vm.registers.set_tag(2, true);
-        pointer_vm.run().expect("private stack spill");
-        pointer_vm.set_register(10, pointer);
-        pointer_vm.registers.set_tag(10, false);
-        let blob_schema = exact_return_type(
-            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
-        );
-        assert_eq!(
-            CoreHost::encode_nested_contract_return(
-                &pointer_vm,
-                &blob_schema,
-                iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
-            ),
-            Err(ivm::VMError::PrivacyViolation),
-            "private stack payload is rejected before return-value decoding"
-        );
     }
     #[test]
     fn nested_contract_return_rejects_repeated_pointer_amplification() {
@@ -21195,7 +18905,7 @@ seiyaku Callee {
         };
         let payload = vec![0xA5; MAX_ENTRYPOINT_RETURN_RECORD_BYTES / 2 + 1024];
         let envelope = make_tlv(PointerType::Blob as u16, &payload);
-        let mut vm = IVM::new(10_000);
+        let mut vm = completed_unit_return_vm();
         let pointer = vm
             .alloc_heap(u64::try_from(envelope.len()).expect("TLV length fits u64"))
             .expect("allocate one large public TLV");
@@ -21204,7 +18914,8 @@ seiyaku Callee {
         let list_layout = ivm::list::ListLayoutV1::try_new(2, 1).expect("list layout");
         let list = ivm::list::allocate_words(&mut vm, list_layout, &[vec![pointer], vec![pointer]])
             .expect("repeat one pointer in a list");
-        vm.set_register(10, list);
+        vm.store_u64(vm.register(10), list)
+            .expect("write completed result table");
         let schema = EntrypointValueTypeV1 {
             nodes: vec![
                 EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 2 }),
@@ -21227,13 +18938,14 @@ seiyaku Callee {
         };
         let payload = vec![0xA5; 64 * 1024];
         let envelope = make_tlv(PointerType::Blob as u16, &payload);
-        let mut vm = IVM::new(10_000);
+        let mut vm = completed_unit_return_vm();
         let pointer = vm
             .alloc_heap(u64::try_from(envelope.len()).expect("TLV length fits u64"))
             .expect("allocate child return TLV");
         vm.store_bytes(pointer, &envelope)
             .expect("store child return TLV");
-        vm.set_register(10, pointer);
+        vm.store_u64(vm.register(10), pointer)
+            .expect("write completed result table");
         let schema = EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Blob)],
         };
@@ -21385,6 +19097,7 @@ seiyaku Callee {
         );
     }
     include!("host/nested_contract_state_and_rollback_tests.rs");
+    include!("host/nested_return_funding_tests.rs");
     include!("host/shared_vm_cycle_budget_tests.rs");
     #[test]
     fn dispatched_call_contract_spends_reserved_gas_and_returns_output() {
@@ -21430,7 +19143,7 @@ seiyaku Callee {
         assert!(durable_state_overlay.is_empty());
         let tlv = vm
             .memory
-            .validate_tlv(vm.register(10))
+            .validate_tlv(authenticated_test_probe_result(&vm))
             .expect("returned NoritoBytes tlv");
         let value = decode_nested_return(
             tlv.payload,
@@ -21452,27 +19165,27 @@ seiyaku Callee {
             &state,
             &authority,
             r#"
-seiyaku Caller {
-  view fn main() -> int { return 0; }
-}
-"#,
+    seiyaku Caller {
+      view fn main() -> int { return 0; }
+    }
+    "#,
             0,
         );
         let callee_contract = install_contract(
             &state,
             &authority,
             r#"
-seiyaku Callee {
-  state int counter;
+    seiyaku Callee {
+      state int counter;
 
-  hajimari() { counter = 0; }
+      hajimari() { counter = 0; }
 
-  kotoage fn write() -> int authorize("AssetOps") {
-    counter = 9;
-    return counter;
-  }
-}
-"#,
+      kotoage fn write() -> int authorize("AssetOps") {
+        counter = 9;
+        return counter;
+      }
+    }
+    "#,
             1,
         );
         grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
@@ -21486,8 +19199,10 @@ seiyaku Callee {
                 .saturating_add("write".len()),
             0,
         );
-        // SCALL costs five gas, leaving one gas of nested-execution budget.
-        let gas_limit = request_gas.saturating_add(6);
+        // After authenticated staging, SCALL leaves one gas for nested execution.
+        let gas_limit = authenticated_test_probe_setup_gas()
+            .saturating_add(request_gas)
+            .saturating_add(6);
         let (result, vm, durable_state_overlay, target_ptr) = dispatch_call_contract_syscall(
             &state,
             &authority,
@@ -23543,7 +21258,9 @@ seiyaku Callee {
             assert!(
                 matches!(
                     result,
-                    Err(iroha_data_model::ValidationFail::NotPermitted(_))
+                    Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                        iroha_data_model::ValidationFail::NotPermitted(_)
+                    ))
                 ),
                 "{result_message}"
             );
@@ -24047,9 +21764,11 @@ seiyaku DurableOwner {
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             "halo2/ipa",
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -24068,9 +21787,11 @@ seiyaku DurableOwner {
         let commitment = [0x78; 32];
         let mut rec = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             "halo2/ipa",
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -24096,9 +21817,11 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             vk_bytes,
         );
@@ -24132,7 +21855,9 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
             circuit_id,
             "core",
@@ -24155,14 +21880,16 @@ seiyaku DurableOwner {
     fn prepared_vk_index_shares_records_and_caches_ipa_metadata() {
         let mut host = CoreHost::new(fixture_account("alice"));
         let backend = "halo2/ipa";
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
+        let vk_bytes = canonical_confidential_transfer_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let id = VerifyingKeyId::new(backend, "cached-vk");
         let rec = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             vk_bytes,
         );
@@ -24180,21 +21907,23 @@ seiyaku DurableOwner {
                 .material
                 .as_ref()
                 .and_then(crate::zk::PreparedVerifyingKeyMaterialV1::ipa_k),
-            Some(crate::zk::IVM_REPLAY_BINDING_V1_IPA_K)
+            Some(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
         );
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_rejects_missing_schedule_duplicates_and_updates_atomically() {
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-        let vk_bytes = canonical_ivm_execution_vk_bytes();
+        let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let vk_bytes = canonical_confidential_transfer_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let mut host = CoreHost::new(fixture_account("alice"));
         let id = VerifyingKeyId::new(backend, "original");
         let original = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
             circuit_id,
             "core",
@@ -24205,7 +21934,9 @@ seiyaku DurableOwner {
         let original_record = Arc::clone(host.verifying_keys.get(&id).expect("original record"));
         let mut missing_schedule = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
             circuit_id,
             "core",
@@ -24226,7 +21957,9 @@ seiyaku DurableOwner {
         assert_eq!(host.prepared_verifying_keys.len(), 1);
         let first = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
             circuit_id,
             "core",
@@ -24234,7 +21967,9 @@ seiyaku DurableOwner {
         );
         let second = active_vk_record(
             commitment,
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             backend,
             circuit_id,
             "core",
@@ -25128,27 +22863,40 @@ seiyaku DurableOwner {
         assert!(host.drain_durable_state_overlay().is_empty());
     }
     #[test]
-    fn encode_decode_int_syscalls_roundtrip() {
+    fn full_width_int_pointer_codec_roundtrips_through_ledger_host() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
-        vm.set_register(10, 42);
+        let value = BigInt::from_i128(42);
+        let envelope = ivm::numeric_tlv::encode_int(&value).expect("canonical Int envelope");
+        let source = vm.alloc_input_tlv(&envelope).expect("allocate Int");
+        vm.set_register(10, source);
         let encode_gas = host
-            .syscall(ivm_sys::SYSCALL_ENCODE_INT, &mut vm)
-            .expect("encode int");
-        let ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(ptr).expect("encode tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let encoded_len = tlv.payload.len();
-        assert_eq!(encode_gas, 16 + encoded_len as u64);
-        let encoded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int payload");
-        assert_eq!(encoded, 42);
-        vm.set_register(10, ptr);
+            .syscall(ivm_sys::SYSCALL_POINTER_TO_NORITO, &mut vm)
+            .expect("encode full-width Int");
+        let encoded_ptr = vm.register(10);
+        let encoded = vm.memory.validate_tlv(encoded_ptr).expect("encoded TLV");
+        assert_eq!(encoded.type_id, PointerType::NoritoBytes);
+        assert_eq!(encoded.payload, envelope);
+        assert_eq!(encode_gas, 16 + envelope.len() as u64);
+        vm.set_register(10, encoded_ptr);
+        vm.set_register(11, u64::from(PointerType::Int as u16));
         assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_DECODE_INT, &mut vm),
-            Ok(16 + encoded_len as u64)
+            host.syscall(ivm_sys::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+            Ok(16 + envelope.len() as u64)
         );
-        assert_eq!(vm.register(10), 42);
+        let restored = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("restored Int");
+        assert_eq!(restored.type_id, PointerType::Int);
+        assert_eq!(
+            ivm::numeric_tlv::decode_int_bytes(&make_tlv(
+                PointerType::Int as u16,
+                restored.payload
+            )),
+            Ok(value)
+        );
     }
     #[test]
     fn exact_json_getters_accept_only_canonical_strings_through_ledger_host() {
@@ -25540,14 +23288,11 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
         let path_ptr = store_state_path_tlv(&mut vm, &path);
-        let code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                ivm_sys::SYSCALL_STATE_GET as u8,
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
+        let code = [ivm::encoding::wide::encode_sys(
+            ivm::instruction::wide::system::SCALL,
+            ivm_sys::SYSCALL_STATE_GET as u8,
+        )
+        .to_le_bytes()]
         .concat();
         vm.load_program(&build_authenticated_test_contract_program_with_states(
             &code,
@@ -25559,9 +23304,9 @@ seiyaku DurableOwner {
             }],
         ))
         .expect("load authenticated state query program");
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, 0xfeed);
-        vm.set_gas_limit(20);
+        vm.set_register(14, path_ptr);
+        vm.set_register(15, 0xfeed);
+        vm.set_gas_limit(authenticated_test_probe_setup_gas() + 20);
         let error = vm
             .run_with_host(&mut host)
             .expect_err("world-state response cost exceeds the syscall reserve");
@@ -26333,9 +24078,11 @@ seiyaku DurableOwner {
         election.tally = vec![large_weight, 1, 0];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+        let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let commitment = [0x61; 32];
-        let schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
+        let schema_hash = schema_hash(
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        );
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -26513,9 +24260,11 @@ seiyaku DurableOwner {
 
         let mut prior_vk = active_vk_record(
             [0x71; 32],
-            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
+            schema_hash(
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
             "halo2/ipa",
-            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -26558,6 +24307,7 @@ seiyaku DurableOwner {
         assert_eq!(host.zk_tree_roots_history_len, roots_history_len_before);
 
         let startup_error = State::try_new(
+            mv::allocation::AllocationBudget::new(usize::MAX),
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -26623,6 +24373,7 @@ seiyaku DurableOwner {
                 );
                 assert!(!host.zk_elections.contains_key("candidate"));
                 let startup_error = State::try_new(
+                    mv::allocation::AllocationBudget::new(usize::MAX),
                     world,
                     kura,
                     query,
@@ -26664,6 +24415,7 @@ seiyaku DurableOwner {
         );
         assert!(!host.zk_elections.contains_key("candidate/alias"));
         let startup_error = State::try_new(
+            mv::allocation::AllocationBudget::new(usize::MAX),
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -26708,9 +24460,11 @@ seiyaku DurableOwner {
         election.tally = vec![1, 2];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+        let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let commitment = [0x62; 32];
-        let schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
+        let schema_hash = schema_hash(
+            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        );
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -26977,9 +24731,9 @@ seiyaku DurableOwner {
         norito::to_bytes(&env).expect("serialize mutated envelope")
     }
     #[cfg(feature = "zk-halo2-ipa")]
-    fn canonical_ivm_execution_vk_bytes() -> Vec<u8> {
-        crate::zk::halo2_ipa_ivm_replay_binding_vk_box()
-            .expect("canonical IVM execution verifier key")
+    fn canonical_confidential_transfer_vk_bytes() -> Vec<u8> {
+        crate::zk::confidential_v2::confidential_transfer_v2_vk_box()
+            .expect("canonical confidential-transfer verifier key")
             .bytes
     }
     fn schema_hash(public_inputs: &[u8]) -> [u8; 32] {
@@ -27022,49 +24776,47 @@ seiyaku DurableOwner {
         rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
     }
-    #[cfg(feature = "zk-halo2-ipa")]
-    fn enable_halo2_batch_verifier(host: &mut CoreHost, verifier_max_batch: u32, max_k: u32) {
-        let cfg = ivm::host::ZkHalo2Config {
-            enabled: true,
-            curve: ivm::host::ZkCurve::Pallas,
-            backend: ivm::host::ZkHalo2Backend::Ipa,
-            max_k,
-            verifier_budget_ms: 200,
-            verifier_max_batch,
-            max_proof_bytes: usize::MAX,
-            ..ivm::host::ZkHalo2Config::default()
-        };
-        host.halo2_config = cfg;
-        host.default.set_zk_halo2_config(cfg);
-    }
-    #[cfg(feature = "zk-halo2-ipa")]
-    fn registered_halo2_batch_fixture(
+    #[cfg(feature = "zk-stark")]
+    fn registered_stark_batch_fixture(
         host: &mut CoreHost,
         namespace: &str,
     ) -> iroha_data_model::zk::OpenVerifyEnvelope {
-        let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
-            Hash::new(b"host-batch-code"),
-            Hash::new(b"host-batch-overlay"),
-            Hash::new(b"host-batch-events"),
-            Hash::new(b"host-batch-gas-policy"),
-        );
-        let vk_bytes = fixture.vk_bytes.clone().expect("fixture vk bytes");
+        let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:host-batch-v1";
+        let vk = crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.to_owned(),
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+        };
+        let vk_bytes = norito::encode_canonical(&vk).expect("canonical STARK verifier key");
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
+        let schema = b"host-batch-v1";
+        let proof = crate::zk::prove_stark_fri_open_verify_envelope(
+            backend,
+            circuit_id,
+            &vk_box,
+            schema,
+            vec![vec![[0x11; 32]]],
+        )
+        .expect("complete native STARK proof");
+        let envelope =
+            ivm::host::decode_canonical_zk_envelope(&proof.bytes).expect("decode STARK envelope");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-        let envelope = ivm::host::decode_canonical_zk_envelope(&fixture.proof_bytes)
-            .expect("decode fixture envelope");
         assert_eq!(envelope.vk_hash, commitment);
         let rec = active_vk_record(
             commitment,
-            fixture.schema_hash,
+            schema_hash(schema),
             backend,
             circuit_id,
             namespace,
             vk_bytes,
         );
         let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        map.insert(VerifyingKeyId::new(backend, "vk_stark_batch"), rec);
         host.set_verifying_keys(map).expect("set registry");
         envelope
     }
@@ -27315,14 +25067,16 @@ seiyaku PreparedBoundaryArguments {
         vm.load_program(&program).expect("load compiled contract");
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(entrypoint_pc)
-            .expect("select compiled invoke wrapper");
+            .expect("select compiled invoke table entry");
         prepared
             .precharge_vm(&mut vm)
             .expect("precharge exact-cap prepared arguments");
         vm.run_with_host(&mut host)
-            .expect("compiled wrapper must admit the inclusive record cap");
+            .expect("host table preparation must admit the inclusive record cap");
         assert_eq!(ivm::argument_record_decode_count(), 1);
-        let payload_pointer = vm.register(10);
+        let payload_pointer = vm
+            .public_call_result_word(0)
+            .expect("completed pointer result");
         assert!(
             (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&payload_pointer),
             "the decoded bytes pointer must be owned HEAP"
@@ -27333,11 +25087,13 @@ seiyaku PreparedBoundaryArguments {
         assert_eq!(payload.type_id, PointerType::Blob);
         assert_eq!(payload.payload.len(), large_payload.len());
         assert!(payload.payload.iter().all(|byte| *byte == 0x5a));
-        let exact_heap_bytes = u64::try_from(large_envelope_len)
+        let exact_heap_bytes = (u64::try_from(large_envelope_len)
             .expect("bounded Blob envelope length")
             .checked_add(7)
             .expect("bounded aligned Blob envelope length")
-            & !7;
+            & !7)
+            + 2 * 8
+            + 8;
         let mut constrained_host = CoreHost::with_accounts_and_argument_record(
             authority.clone(),
             Arc::new(vec![authority]),
@@ -27350,7 +25106,7 @@ seiyaku PreparedBoundaryArguments {
         constrained_vm.set_register(1, constrained_vm.memory.code_len());
         constrained_vm
             .set_program_counter(entrypoint_pc)
-            .expect("select constrained invoke wrapper");
+            .expect("select constrained invoke table entry");
         constrained_vm
             .memory
             .set_heap_limit(exact_heap_bytes - 1)
@@ -27363,60 +25119,21 @@ seiyaku PreparedBoundaryArguments {
             Err(VMError::OutOfMemory)
         );
         assert_eq!(ivm::argument_record_decode_count(), 1);
-        let binding_pointer = constrained_vm.register(10);
-        let trigger_event_name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY
-            .parse()
-            .expect("trigger event public-input name");
-        let published_name_envelope_len =
-            make_tlv(PointerType::Name as u16, &norito_blob(&trigger_event_name)).len();
-        let published_name_input_bytes = u64::try_from(published_name_envelope_len)
-            .expect("bounded published Name envelope length")
-            .checked_add(7)
-            .expect("bounded aligned published Name envelope length")
-            & !7;
-        assert_eq!(
-            binding_pointer,
-            ivm::Memory::INPUT_START
-                .checked_add(published_name_input_bytes)
-                .expect("published Name and binding pointer fit INPUT"),
-            "the compiler wrapper publishes the public-input Name before the host binding"
-        );
-        assert_eq!(
-            constrained_vm
-                .memory
-                .validate_tlv(binding_pointer)
-                .expect("host-issued argument binding")
-                .payload,
-            prepared.binding_bytes()
-        );
-        assert!(
-            constrained_vm.register(11) < constrained_vm.memory.code_len(),
-            "the compiled wrapper must supply its schema from validated program data"
-        );
+        assert!(constrained_vm.call_result_word_count().is_err());
         assert_eq!(
             constrained_vm
                 .alloc_heap(1)
-                .expect("failed preflight must leave HEAP untouched"),
+                .expect("failed preflight leaves HEAP untouched"),
             ivm::Memory::HEAP_START
         );
-        let binding_envelope_len =
-            make_tlv(PointerType::NoritoBytes as u16, prepared.binding_bytes()).len();
-        let expected_next_input = binding_pointer
-            .checked_add(
-                u64::try_from(binding_envelope_len).expect("bounded binding envelope length"),
-            )
-            .expect("bounded binding end")
-            .checked_add(7)
-            .expect("bounded aligned binding end")
-            & !7;
         assert_eq!(
             store_tlv(
                 &mut constrained_vm,
                 PointerType::Blob,
-                b"after-materialization-preflight",
+                b"after-materialization-preflight"
             ),
-            expected_next_input,
-            "failed materialization preflight must not consume INPUT for the small bytes value"
+            ivm::Memory::INPUT_START,
+            "failed host table preparation must not consume INPUT"
         );
     }
     #[test]

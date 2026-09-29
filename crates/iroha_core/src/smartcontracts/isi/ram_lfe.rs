@@ -559,26 +559,24 @@ mod tests {
             verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
         }
     }
-    #[cfg(feature = "zk-halo2-ipa")]
+    #[cfg(feature = "zk-stark")]
     #[test]
     fn unavailable_execution_relation_rejects_a_valid_unrelated_native_proof() {
-        let hash = Hash::new(b"ram-lfe-unrelated-replay-binding");
-        let fixture =
-            crate::zk::test_utils::halo2_ivm_replay_binding_envelope(hash, hash, hash, hash);
-        let proof = fixture.proof_box(crate::zk::ZK_BACKEND_HALO2_IPA);
+        let fixture = crate::zk::test_utils::stark_public_binding_fixture_envelope();
+        let proof = fixture.proof_box(crate::zk::ZK_BACKEND_STARK_FRI_V1);
         let key = fixture
-            .vk_box(crate::zk::ZK_BACKEND_HALO2_IPA)
+            .vk_box(crate::zk::ZK_BACKEND_STARK_FRI_V1)
             .expect("key");
         crate::zk::verify_for_relation(
-            crate::zk::ProofRelation::IvmReplayBinding,
+            crate::zk::ProofRelation::PublicInputBinding,
             &proof,
             &key,
             test_guardrails(),
         )
-        .expect("control is a valid native replay-binding proof");
+        .expect("control is a valid native public-input binding proof");
         let verifier = RamLfeProofVerifierMetadata {
             proof_backend: proof.backend.to_string(),
-            circuit_id: crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.to_owned(),
+            circuit_id: format!("{}:public-binding-demo", crate::zk::ZK_BACKEND_STARK_FRI_V1),
             public_inputs_schema_hash: Hash::new(&fixture.public_inputs),
             verifying_key_bytes: key.bytes,
         };

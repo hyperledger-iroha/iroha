@@ -17,6 +17,8 @@
 //! authenticated caller API. Encoding does not admit a proof or remove replay,
 //! and touched-balance roots do not establish finalized source-state authority.
 
+#[cfg(test)]
+use iroha_data_model::nexus::AxtSourceTransferOccurrenceV1;
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 #[cfg(test)]
 use norito::{NoritoSerialize, codec::Encode};
@@ -50,6 +52,7 @@ struct BoundContext {
     binding: AxtFastpqBinding,
     metadata: AxtProofContextMirrors,
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
+    source_transfer_occurrences: Vec<AxtSourceTransferOccurrenceV1>,
 }
 
 /// Encode a bounded, canonical public statement without accepting any proof.
@@ -58,7 +61,7 @@ struct BoundContext {
 /// surrounding caller. Values copied from an untrusted proof do not authorize a
 /// source root or spend. The prepared table must select AXT transfer semantics
 /// and contain exactly one delta; its original public claims and all seven
-/// PublicIO fields are bound by `PublicTransferAir` before this wrapper is built.
+/// `PublicIO` fields are bound by `PublicTransferAir` before this wrapper is built.
 #[cfg(test)]
 pub(super) fn encode_context<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
@@ -81,6 +84,7 @@ pub(super) fn encode_context<V: CompactTransferValue>(
         public_transfer_context: transfer.statement_bytes().to_vec(),
         binding: binding.clone(),
         metadata: outer,
+        source_transfer_occurrences: metadata.source_transfer_occurrences.to_vec(),
         remote_spend_claims: remote_spend_claims.map(<[AxtRemoteSpendClaimV1]>::to_vec),
     };
     check_limit(norito::core::encoded_frame_len(&context)?, max_bytes)?;
@@ -101,14 +105,14 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
     let limits = PublicTransferLimits::default();
     let max_bytes = VerifyLimits::default().max_batch_bytes;
     check_limit(prepared.work().public_bytes, limits.max_public_bytes)?;
-    if let Some(claims) = remote_spend_claims {
-        if claims.len() > limits.max_deltas {
-            return Err(Error::VerifierLimitExceeded {
-                limit: "max_compact_axt_remote_claims",
-                actual: claims.len(),
-                max: limits.max_deltas,
-            });
-        }
+    if let Some(claims) = remote_spend_claims
+        && claims.len() > limits.max_deltas
+    {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_remote_claims",
+            actual: claims.len(),
+            max: limits.max_deltas,
+        });
     }
     // Bound variable-count containers in O(1) before the counting serializer
     // walks their elements. These are conservative raw payload lower bounds;
@@ -124,7 +128,18 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
     // Count borrowed values before canonicalization clones binding strings or
     // commitment validation hashes remote preimages. Only public bytes enter
     // these lengths; no metadata map or witness-bearing transcript is accepted.
+    if metadata.source_transfer_occurrences.len() > limits.max_deltas {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_source_occurrences",
+            actual: metadata.source_transfer_occurrences.len(),
+            max: limits.max_deltas,
+        });
+    }
     let mut public_bytes = norito::core::encoded_frame_len(binding)?;
+    for occurrence in metadata.source_transfer_occurrences {
+        public_bytes = checked_sum(public_bytes, norito::core::encoded_frame_len(occurrence)?)?;
+        check_limit(public_bytes, max_bytes)?;
+    }
     check_limit(public_bytes, max_bytes)?;
     for claim in remote_spend_claims.into_iter().flatten() {
         public_bytes = checked_sum(public_bytes, norito::core::encoded_frame_len(claim)?)?;
@@ -145,11 +160,12 @@ pub(super) fn preflight_context<V: CompactTransferValue>(
 }
 
 fn checked_sum(left: usize, right: usize) -> Result<usize> {
-    left.checked_add(right).ok_or(Error::VerifierLimitExceeded {
-        limit: "max_compact_axt_context_bytes",
-        actual: usize::MAX,
-        max: VerifyLimits::default().max_batch_bytes,
-    })
+    left.checked_add(right)
+        .ok_or_else(|| Error::VerifierLimitExceeded {
+            limit: "max_compact_axt_context_bytes",
+            actual: usize::MAX,
+            max: VerifyLimits::default().max_batch_bytes,
+        })
 }
 
 fn check_limit(actual: usize, max: usize) -> Result<()> {
@@ -201,85 +217,106 @@ pub(super) mod tests {
         da: [u8; 33],
         pub(in crate::backend) outer: AxtProofContextMirrors,
         pub(in crate::backend) remote: Option<Vec<AxtRemoteSpendClaimV1>>,
+        pub(in crate::backend) occurrences: Vec<AxtSourceTransferOccurrenceV1>,
+    }
+
+    /// Single public transfer delta shared by every AXT context fixture.
+    fn fixture_delta() -> PublicTransferDelta {
+        PublicTransferDelta {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            amount: Quantity::from(35_u64),
+            from_balance_before: Quantity::from(100_u64),
+            from_balance_after: Quantity::from(65_u64),
+            to_balance_before: Quantity::from(200_u64),
+            to_balance_after: Quantity::from(235_u64),
+        }
+    }
+
+    /// Public transcript whose digest uses only its original public preimage fields.
+    fn fixture_transcript(
+        delta: &PublicTransferDelta,
+        batch_hash: Hash,
+    ) -> PublicTransferTranscript {
+        let mut hasher = PoseidonByteHasher::new();
+        delta.from_account.encode_to(&mut hasher);
+        delta.to_account.encode_to(&mut hasher);
+        delta.asset_definition.encode_to(&mut hasher);
+        delta.amount.encode_to(&mut hasher);
+        hasher.update(batch_hash.as_ref());
+        PublicTransferTranscript {
+            batch_hash,
+            authority_digest: Hash::new(b"caller-authenticated execution authority"),
+            poseidon_preimage_digest: Some(Hash::prehashed(hasher.finalize())),
+            deltas: vec![delta.clone()],
+        }
+    }
+
+    /// Key-ordered sender and receiver balance transitions for `delta`.
+    fn fixture_rows(delta: &PublicTransferDelta) -> Vec<StateTransition> {
+        let mut rows: Vec<_> = [
+            (&delta.from_account, 100_u64, 65_u64),
+            (&delta.to_account, 200_u64, 235_u64),
+        ]
+        .into_iter()
+        .map(|(account, before, after)| {
+            StateTransition::new(
+                iroha_data_model::fastpq::transfer_balance_key(&delta.asset_definition, account)
+                    .unwrap(),
+                before.to_le_bytes().to_vec(),
+                after.to_le_bytes().to_vec(),
+                OperationKind::Transfer,
+            )
+        })
+        .collect();
+        rows.sort_by(|left, right| left.key.cmp(&right.key));
+        rows
+    }
+
+    /// Canonical outer AXT binding for the fixture transfer.
+    fn fixture_binding(delta: &PublicTransferDelta, batch_hash: &Hash) -> AxtFastpqBinding {
+        AxtFastpqBinding {
+            parameter: DEFAULT_PARAMETER.into(),
+            source_dsid: 7,
+            source_dataspace: "source".into(),
+            source_receipt_id: "receipt-1".into(),
+            source_tx_commitment: hex::encode(batch_hash.as_ref()),
+            claim_type: "tx_predicate".into(),
+            claim_digest: hex::encode([2; 32]),
+            witness_commitment: hex::encode([3; 32]),
+            policy_commitment: hex::encode([4; 32]),
+            verified_effect_type: "transfer".into(),
+            corridor: "corridor".into(),
+            verifier_id: "fastpq".into(),
+            verifier_version: "v1".into(),
+            target_dsids: vec![9],
+            effect_binding: Some(AxtEffectBinding {
+                destination_domain: None,
+                destination_account_id: None,
+                vault_account_id: None,
+                issuance_account_id: None,
+                source_asset_definition_id: Some(delta.asset_definition.to_string()),
+                destination_asset_definition_id: None,
+                source_amount_i64: None,
+                destination_amount_i64: None,
+            }),
+            remote_spend_intent_commitments: vec![],
+        }
     }
 
     impl Fixture {
         pub(in crate::backend) fn new(remote: bool) -> Self {
-            let delta = PublicTransferDelta {
-                from_account: (*ALICE_ID).clone(),
-                to_account: (*BOB_ID).clone(),
-                asset_definition: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                ),
-                amount: Quantity::from(35_u64),
-                from_balance_before: Quantity::from(100_u64),
-                from_balance_after: Quantity::from(65_u64),
-                to_balance_before: Quantity::from(200_u64),
-                to_balance_after: Quantity::from(235_u64),
-            };
+            let delta = fixture_delta();
             let batch_hash = Hash::new(b"compact AXT public entry");
-            // Fixture digest uses only its original public preimage fields.
-            let mut hasher = PoseidonByteHasher::new();
-            delta.from_account.encode_to(&mut hasher);
-            delta.to_account.encode_to(&mut hasher);
-            delta.asset_definition.encode_to(&mut hasher);
-            delta.amount.encode_to(&mut hasher);
-            hasher.update(batch_hash.as_ref());
-            let transcript = PublicTransferTranscript {
-                batch_hash,
-                authority_digest: Hash::new(b"caller-authenticated execution authority"),
-                poseidon_preimage_digest: Some(Hash::prehashed(hasher.finalize())),
-                deltas: vec![delta.clone()],
-            };
-            let mut rows: Vec<_> = [
-                (&delta.from_account, 100_u64, 65_u64),
-                (&delta.to_account, 200_u64, 235_u64),
-            ]
-            .into_iter()
-            .map(|(account, before, after)| {
-                StateTransition::new(
-                    iroha_data_model::fastpq::transfer_balance_key(
-                        &delta.asset_definition,
-                        account,
-                    )
-                    .unwrap(),
-                    before.to_le_bytes().to_vec(),
-                    after.to_le_bytes().to_vec(),
-                    OperationKind::Transfer,
-                )
-            })
-            .collect();
-            rows.sort_by(|left, right| left.key.cmp(&right.key));
+            let transcript = fixture_transcript(&delta, batch_hash);
+            let rows = fixture_rows(&delta);
             let mut dsid = [0; 16];
             dsid[..8].copy_from_slice(&7_u64.to_le_bytes());
-            let binding = AxtFastpqBinding {
-                parameter: DEFAULT_PARAMETER.into(),
-                source_dsid: 7,
-                source_dataspace: "source".into(),
-                source_receipt_id: "receipt-1".into(),
-                source_tx_commitment: hex::encode(batch_hash.as_ref()),
-                claim_type: "tx_predicate".into(),
-                claim_digest: hex::encode([2; 32]),
-                witness_commitment: hex::encode([3; 32]),
-                policy_commitment: hex::encode([4; 32]),
-                verified_effect_type: "transfer".into(),
-                corridor: "corridor".into(),
-                verifier_id: "fastpq".into(),
-                verifier_version: "v1".into(),
-                target_dsids: vec![9],
-                effect_binding: Some(AxtEffectBinding {
-                    destination_domain: None,
-                    destination_account_id: None,
-                    vault_account_id: None,
-                    issuance_account_id: None,
-                    source_asset_definition_id: Some(delta.asset_definition.to_string()),
-                    destination_asset_definition_id: None,
-                    source_amount_i64: None,
-                    destination_amount_i64: None,
-                }),
-                remote_spend_intent_commitments: vec![],
-            };
+            let binding = fixture_binding(&delta, &batch_hash);
             let mut fixture = Self {
                 rows,
                 claims: vec![transcript],
@@ -305,6 +342,7 @@ pub(super) mod tests {
                     expiry_slot: Some(456),
                 },
                 remote: None,
+                occurrences: Vec::new(),
             };
             if remote {
                 fixture.remote = Some(vec![AxtRemoteSpendClaimV1::new(
@@ -323,6 +361,10 @@ pub(super) mod tests {
                     delta.amount,
                 )]);
                 fixture.recommit_remote();
+                fixture.occurrences = crate::axt_binding::source_occurrence::test_occurrences(
+                    &fixture.claims,
+                    fixture.remote.as_deref().unwrap(),
+                );
             }
             fixture
         }
@@ -400,6 +442,10 @@ pub(super) mod tests {
             if remote {
                 fixture.remote = Some(remote_claims);
                 fixture.recommit_remote();
+                fixture.occurrences = crate::axt_binding::source_occurrence::test_occurrences(
+                    &fixture.claims,
+                    fixture.remote.as_deref().unwrap(),
+                );
             }
             fixture
         }
@@ -425,6 +471,7 @@ pub(super) mod tests {
                 expiry_slot: &self.expiry,
                 manifest_root: &self.manifest,
                 da_commitment: &self.da,
+                source_transfer_occurrences: &self.occurrences,
             }
         }
 
@@ -435,7 +482,7 @@ pub(super) mod tests {
             prepare_public_transfers(
                 &self.rows,
                 &self.claims,
-                self.inputs.clone(),
+                self.inputs,
                 semantics,
                 PublicTransferLimits::default(),
             )
@@ -492,6 +539,9 @@ pub(super) mod tests {
                 original_count += norito::core::encoded_frame_len(claim).unwrap();
             }
             let metadata = fixture.metadata();
+            for occurrence in metadata.source_transfer_occurrences {
+                original_count += norito::core::encoded_frame_len(occurrence).unwrap();
+            }
             for bytes in [
                 metadata.parameter.as_bytes(),
                 metadata.entry_hash,
@@ -518,11 +568,25 @@ pub(super) mod tests {
                 public_transfer_context: transfer.statement_bytes().to_vec(),
                 binding: fixture.binding.clone(),
                 metadata: fixture.outer,
+                source_transfer_occurrences: fixture.occurrences.clone(),
                 remote_spend_claims: fixture.remote.clone(),
             }
             .encode();
             assert_eq!(fixture.encode().unwrap(), original);
         }
+    }
+
+    #[test]
+    fn source_receipt_and_occurrence_are_bound_before_compact_challenges() {
+        let fixture = Fixture::new(true);
+        let original = fixture.encode().unwrap();
+        let mut changed = fixture.clone();
+        changed.occurrences[0].source_success_receipt_digest[0] ^= 1;
+        assert_ne!(changed.encode().unwrap(), original);
+        changed.occurrences[0].source_tx_index += 1;
+        assert_ne!(changed.encode().unwrap(), original);
+        changed.occurrences.clear();
+        assert!(changed.encode().is_err());
     }
 
     #[test]

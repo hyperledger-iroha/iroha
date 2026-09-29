@@ -11,7 +11,6 @@ use iroha::data_model::{
     account::Account,
     isi::{Log, Register, SetParameter},
     parameter::{Parameter, system::SumeragiParameters},
-    prelude::*,
     sumeragi_lanes::{
         SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
         SumeragiLaneStatus,

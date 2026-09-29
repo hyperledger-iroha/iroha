@@ -473,7 +473,7 @@ fn original_current_and_rollback_roots_authenticate_framed_records_through_corru
     let mut workspace = MerkleMapUpdateWorkspace::new();
     let root: CommittedMembershipRoot<MembershipLocation> = storage
         .block()
-        .capture_committed_root(&mut store, &mut workspace)
+        .capture_committed_root(100_000, &mut store, &mut workspace)
         .unwrap();
     assert_eq!(root.read(&key(1), &mut store).unwrap(), Some(height(2)));
     assert_eq!(

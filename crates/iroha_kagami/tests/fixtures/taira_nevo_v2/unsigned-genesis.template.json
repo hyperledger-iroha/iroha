@@ -367,9 +367,6 @@
               "max_validators": 31,
               "min_self_bond": "1000",
               "min_nomination_bond": "1",
-              "max_nominator_concentration_pct": 25,
-              "seat_band_pct": 5,
-              "max_entity_correlation_pct": 25,
               "finality_margin_blocks": 8,
               "evidence_horizon_blocks": 7200,
               "activation_lag_blocks": 1,
@@ -1263,5 +1260,5 @@
       "topology": []
     }
   ],
-  "wire_protocol_version": 4
+  "wire_protocol_version": 8
 }

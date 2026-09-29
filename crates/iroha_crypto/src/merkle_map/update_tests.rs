@@ -115,7 +115,7 @@ fn apply(
 
 #[test]
 fn external_edits_match_canonical_rebuilds_and_retain_every_old_version() {
-    let mut map = MerkleMap::new();
+    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     let mut store = Store::default();
     let mut root = LocatedRoot::from_parts(0, None);
     let mut workspace = Workspace::default();
@@ -148,7 +148,7 @@ fn external_edits_match_canonical_rebuilds_and_retain_every_old_version() {
         } else {
             entries.remove(&key);
         }
-        let mut cold = MerkleMap::new();
+        let mut cold = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
         for (&key, &value) in entries.iter().rev() {
             cold.replace(key, None, Some(value)).unwrap();
         }
@@ -168,7 +168,7 @@ fn deleting_all_keys_in_different_orders_collapses_to_the_original_empty_root() 
     let empty = LocatedRoot::from_parts(0, None);
     let mut workspace = Workspace::new();
     for reverse in [false, true] {
-        let mut map = MerkleMap::new();
+        let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
         let mut store = Store::default();
         let mut root = empty;
         for n in 0..80 {
@@ -225,7 +225,7 @@ fn deleting_all_keys_in_different_orders_collapses_to_the_original_empty_root() 
 
 #[test]
 fn every_read_and_write_failure_retains_the_original_root_and_all_bindings() {
-    let mut map = MerkleMap::new();
+    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..128 {
         map.replace(hash(n), None, Some(hash(n + 500))).unwrap();
     }
@@ -309,7 +309,7 @@ fn every_read_and_write_failure_retains_the_original_root_and_all_bindings() {
 
 #[test]
 fn invalid_authority_preimages_counts_and_storage_fail_before_any_write() {
-    let mut map = MerkleMap::new();
+    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..4 {
         map.replace(hash(n), None, Some(hash(n + 20))).unwrap();
     }
@@ -387,7 +387,7 @@ fn invalid_authority_preimages_counts_and_storage_fail_before_any_write() {
 fn inserts_split_leaves_and_compressed_prefixes_at_every_valid_bit() {
     let mut workspace = Workspace::new();
     for reverse in [false, true] {
-        let mut map = MerkleMap::new();
+        let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
         let base = Hash::prehashed([0; 32]);
         map.replace(base, None, Some(hash(999))).unwrap();
         let (mut store, mut root) = export(&map);
@@ -423,7 +423,7 @@ fn inserts_split_leaves_and_compressed_prefixes_at_every_valid_bit() {
 fn deepest_updates_have_fixed_work_and_fit_the_default_thread_stack() {
     std::thread::spawn(|| {
         use zeroize::Zeroize;
-        let mut map = MerkleMap::new();
+        let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
         let base = Hash::prehashed([0; 32]);
         map.replace(base, None, Some(hash(999))).unwrap();
         for bit in 0..255 {
@@ -469,7 +469,7 @@ fn deepest_updates_have_fixed_work_and_fit_the_default_thread_stack() {
 
 #[test]
 fn identical_value_at_another_location_is_an_exact_original_root_noop() {
-    let mut map = MerkleMap::new();
+    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(hash(1), None, Some(hash(2))).unwrap();
     let (mut store, root) = export(&map);
     let old = located_value(hash(2));
@@ -506,7 +506,7 @@ fn divergent_insertion_and_deletion_retain_the_exact_untouched_subtree_location(
     let second = Hash::prehashed(bytes);
     bytes[0] = 0x80;
     let added = Hash::prehashed(bytes);
-    let mut map = MerkleMap::new();
+    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(first, None, Some(hash(1))).unwrap();
     map.replace(second, None, Some(hash(2))).unwrap();
     let (mut store, original) = export(&map);

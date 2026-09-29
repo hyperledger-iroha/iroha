@@ -1,3 +1,5 @@
+// Signed snapshot persistence and strict restored-state controls.
+
 use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
 
 #[tokio::test]
@@ -30,6 +32,7 @@ async fn signed_snapshot_restore_keeps_configured_governance_catalog() {
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
     let restored = try_read_snapshot(
+        &state.ivm_execution_budget(),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -108,6 +111,9 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
     )
     .unwrap();
     let mut state = State::try_new_with_chain_and_network_id(
+        mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
@@ -127,7 +133,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
     manifests
         .validate_active_coverage_for_catalog(&configured_nexus.lane_catalog)
         .expect("governed lane has a frozen matching source");
-    state.install_lane_manifests(&manifests);
+    state.install_lane_manifests_for_testing(&manifests);
     state
         .prepare_configured_primary_geometry_anchor(&configured_nexus.configured_lane_catalog)
         .unwrap();
@@ -145,6 +151,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
         .expect("write a signed snapshot with an active governed lane");
 
     let restored = try_read_snapshot(
+        &state.ivm_execution_budget(),
         &store_dir,
         &kura,
         &manifests,
@@ -175,6 +182,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
     missing_governance.governance.modules.clear();
     assert!(
         try_read_snapshot(
+            &state.ivm_execution_budget(),
             &store_dir,
             &kura,
             &manifests,
@@ -205,6 +213,9 @@ async fn can_read_snapshot_after_writing() {
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let kura = Kura::blank_kura_for_testing();
     let snapshot_state = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -226,76 +237,6 @@ async fn can_read_snapshot_after_writing() {
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
         canonical_state_snapshot_bytes_for_tests(&state),
         "snapshot roundtrip must preserve canonical WSV bytes"
-    );
-}
-#[tokio::test]
-async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
-    let tmp_root = tempdir().expect("snapshot tempdir");
-    let store_dir = tmp_root.path().join("snapshot");
-    let mut state = state_factory();
-    {
-        let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(Parameter::Custom(
-            SumeragiNposParameters {
-                evidence_horizon_blocks: 1,
-                slashing_delay_blocks: 1,
-                ..SumeragiNposParameters::default()
-            }
-            .into_custom_parameter(),
-        ));
-        parameters.commit();
-    }
-    for marker in [0x71, 0x72, 0x73] {
-        state.push_block_hash_for_testing(dummy_block_hash(marker));
-    }
-    seed_snapshot_genesis_resolver_checkpoint(&state);
-    let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
-    let evidence_key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
-    {
-        let mut records = state.world.consensus_evidence.block();
-        records.insert(
-            evidence_key,
-            EvidenceRecord {
-                evidence,
-                recorded_at_height: 2,
-                recorded_at_view: 0,
-                recorded_at_ms: 2_000,
-                penalty_status: EvidencePenaltyStatus::Pending,
-            },
-        );
-        records.commit();
-    }
-    let snapshot_bytes = exact_snapshot_payload_bytes(&state);
-    let key_pair = checked_random_snapshot_keypair();
-    write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
-    let kura = Kura::blank_kura_for_testing();
-    let error = match try_read_snapshot(
-        &store_dir,
-        &kura,
-        &state.lane_manifests.read().clone(),
-        &state.nexus_snapshot(),
-        LiveQueryStore::start_test,
-        BlockCount(state.view().height()),
-        TEST_CHUNK_SIZE,
-        key_pair.public_key(),
-        state.network_id_ref(),
-        &crate::state::default_zk_config(),
-        #[cfg(feature = "telemetry")]
-        StateTelemetry::new(<_>::default(), true),
-        &snapshot_read_budget_for_testing(),
-        &crate::state::kagemusha_operation_indexes::default_budget(),
-    ) {
-        Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
-        Err(error) => error,
-    };
-    let TryReadError::Serialization(error) = error else {
-        panic!("unexpected snapshot restore error: {error:?}");
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("committed evidence remains pending at or after its penalty due height"),
-        "normal restore must surface the persisted evidence lifecycle violation: {error}"
     );
 }
 #[tokio::test]
@@ -478,6 +419,7 @@ async fn signed_snapshot_restore_preserves_ordered_election_corpus_and_rollback(
     let payload = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
         .expect("read generated signed snapshot payload");
     let restored = try_read_snapshot(
+        &state.ivm_execution_budget(),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -675,6 +617,9 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         .expect("read signed snapshot payload");
     let kura = Kura::blank_kura_for_testing();
     let restored = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -781,6 +726,9 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
         let error = match try_read_snapshot(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),
@@ -826,6 +774,9 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let restored = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -871,6 +822,9 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -943,6 +897,9 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     )
     .expect("replace snapshot signature");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -974,6 +931,9 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     std::fs::write(&signature_path, signature_hex.to_ascii_uppercase())
         .expect("replace signature with equivalent noncanonical hex");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1006,6 +966,9 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
     )
     .expect("replace snapshot signature");
     let Err(error) = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1050,6 +1013,9 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
         )
         .expect("replace snapshot signature");
         let Err(error) = try_read_snapshot(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             &store_dir,
             &Kura::blank_kura_for_testing(),
             &state.lane_manifests.read().clone(),
@@ -1104,6 +1070,9 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
         )
         .expect("replace snapshot signature");
         let Err(error) = try_read_snapshot(
+            &mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
             &store_dir,
             &Kura::blank_kura_for_testing(),
             &state.lane_manifests.read().clone(),
@@ -1144,6 +1113,9 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         "new snapshots must carry a Space Directory manifest section"
     );
     let snapshot_state = try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1192,6 +1164,9 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -1227,6 +1202,9 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
@@ -1271,6 +1249,7 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
         "new snapshots must carry the SCCP envelope"
     );
     let restored = try_read_snapshot(
+        &state.ivm_execution_budget(),
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
@@ -1327,6 +1306,7 @@ async fn signed_snapshot_without_the_sccp_envelope_is_rejected() {
     write_snapshot_bundle_from_bytes(&store_dir, mutated.as_bytes(), &key_pair);
     assert!(
         try_read_snapshot(
+            &state.ivm_execution_budget(),
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),

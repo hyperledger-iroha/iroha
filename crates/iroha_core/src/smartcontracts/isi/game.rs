@@ -1809,8 +1809,9 @@ mod tests {
             .expect("canonical signed claim transaction must pass stateless admission")
         };
         let mut cache = IvmCache::new();
-        let (_, result) =
-            block.validate_transaction(accept(vec![claim.clone(), claim.clone()]), &mut cache);
+        let (_, result) = block
+            .validate_transaction(accept(vec![claim.clone(), claim.clone()]), &mut cache)
+            .expect("local execution completes");
         let error = result.expect_err("the second claim must exceed its now-zero entitlement");
         assert_eq!(
             error,
@@ -1852,7 +1853,9 @@ mod tests {
         // The exact same sequence succeeds with only the first claim. This
         // proves the failed transaction neither consumed the award nor merely
         // failed at an unrelated admission gate before reaching the movement.
-        let (_, retry) = block.validate_transaction(accept(vec![claim]), &mut cache);
+        let (_, retry) = block
+            .validate_transaction(accept(vec![claim]), &mut cache)
+            .expect("local execution completes");
         retry.expect("the rolled-back award must remain independently payable");
         let paid = block.world.game_sessions.get(&session.session_id).unwrap();
         assert_eq!(paid.liability, "1.5".parse().unwrap());

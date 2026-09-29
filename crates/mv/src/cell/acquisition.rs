@@ -2,7 +2,7 @@
 
 use super::*;
 use concread::{
-    ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError},
+    ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError, ReservedEbrCell},
     release::{DeferredRelease, DeferredReleaseBatch},
 };
 
@@ -14,9 +14,18 @@ pub struct BlockAcquisitionSlot<'a, V: Value, C: Send + Sync + 'static = Untrack
     phase: AcquisitionPhase<'a, V, C>,
     started: bool,
     complete: bool,
+    next: SuccessorAcquisition,
     // Last: original payload/charge cleanup precedes original notification.
     undo_release: DeferredReleaseBatch,
     current_release: DeferredReleaseBatch,
+}
+
+// The untracked identity policy is explicit at acquisition construction. A
+// supplied original token never falls back to allocation, including on refusal.
+enum SuccessorAcquisition {
+    Untracked,
+    Original(NextPublication),
+    Taken,
 }
 
 // These are mutually exclusive physical phases, not simultaneous owners. Keep
@@ -34,13 +43,76 @@ struct PendingPair<'a, V: Value, C: Send + Sync + 'static> {
     blocks: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>>,
     undo_value: Option<EbrCellOwned<Option<V>, C>>,
     current_value: Option<EbrCellOwned<V, C>>,
-    undo_charge: Option<C>,
-    current_charge: Option<C>,
+    undo_generation: Option<GenerationAdmission<Option<V>, C>>,
+    current_generation: Option<GenerationAdmission<V, C>>,
+}
+
+// Each inert slot owns either an explicit charge awaiting backing or already
+// reserved physical backing. Production scalar acquisition supplies the latter.
+// Poison returns the same generation owner for aggregate release-before-cleanup.
+enum GenerationAdmission<T, C> {
+    Unallocated(C),
+    Reserved(ReservedEbrCell<T, C>),
+}
+
+/// Writer returned together with its successfully cloned generation.
+type ClonedGeneration<'a, T, C> = (EbrCellWriterAcquisition<'a, T, C>, EbrCellOwned<T, C>);
+
+/// Refused clone: the writer and the unconsumed generation owner are handed
+/// back alongside the admission error.
+type RefusedGeneration<'a, T, C> = (
+    EbrCellWriterAcquisition<'a, T, C>,
+    GenerationAdmission<T, C>,
+    EbrCellWriterAdmissionError<std::convert::Infallible>,
+);
+
+impl<T: Value, C: Send + Sync + 'static> GenerationAdmission<T, C> {
+    fn try_clone<'a>(
+        self,
+        writer: EbrCellWriterAcquisition<'a, T, C>,
+    ) -> Result<ClonedGeneration<'a, T, C>, RefusedGeneration<'a, T, C>> {
+        match self {
+            Self::Reserved(backing) => writer
+                .try_clone_reserved(backing)
+                .map_err(|(writer, backing, error)| (writer, Self::Reserved(backing), error)),
+            Self::Unallocated(charge) => {
+                let mut original = Some(charge);
+                match writer.try_clone_charged(|_, _| {
+                    Ok::<_, std::convert::Infallible>(
+                        original.take().expect("original generation charge"),
+                    )
+                }) {
+                    Ok(value) => Ok(value),
+                    Err((writer, error)) => Err((
+                        writer,
+                        Self::Unallocated(
+                            original
+                                .take()
+                                .expect("poison refuses before consuming charge"),
+                        ),
+                        error,
+                    )),
+                }
+            }
+        }
+    }
 }
 
 impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     pub(super) fn new(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
         let CellAllocationCharges { current, undo } = charges;
+        Self::with_generations(
+            target,
+            GenerationAdmission::Unallocated(current),
+            GenerationAdmission::Unallocated(undo),
+        )
+    }
+
+    fn with_generations(
+        target: &'a Cell<V, C>,
+        current: GenerationAdmission<V, C>,
+        undo: GenerationAdmission<Option<V>, C>,
+    ) -> Self {
         Self {
             target,
             phase: AcquisitionPhase::Pending(PendingPair {
@@ -48,14 +120,40 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
                 blocks: None,
                 undo_value: None,
                 current_value: None,
-                undo_charge: Some(undo),
-                current_charge: Some(current),
+                undo_generation: Some(undo),
+                current_generation: Some(current),
             }),
             started: false,
             complete: false,
+            next: SuccessorAcquisition::Untracked,
             undo_release: target.revert_released.deferred_batch(),
             current_release: target.blocks_released.deferred_batch(),
         }
+    }
+
+    pub(super) fn with_successor(
+        target: &'a Cell<V, C>,
+        charges: CellAllocationCharges<C>,
+        next: NextPublication,
+    ) -> Self {
+        let mut slot = Self::new(target, charges);
+        slot.next = SuccessorAcquisition::Original(next);
+        slot
+    }
+
+    pub(super) fn with_backing(
+        target: &'a Cell<V, C>,
+        current: ReservedEbrCell<V, C>,
+        undo: ReservedEbrCell<Option<V>, C>,
+        next: NextPublication,
+    ) -> Self {
+        let mut slot = Self::with_generations(
+            target,
+            GenerationAdmission::Reserved(current),
+            GenerationAdmission::Reserved(undo),
+        );
+        slot.next = SuccessorAcquisition::Original(next);
+        slot
     }
 
     fn take_writers(&mut self) -> CellWriters<'a, V, C> {
@@ -104,20 +202,23 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
         // The original slot owns both guards and both charges before either clone.
         let undo = pending.revert.take().expect("original undo");
         let undo_value = &mut pending.undo_value;
-        let undo_charge = &mut pending.undo_charge;
+        let undo_generation = &mut pending.undo_generation;
         let result = undo
             .try_map_preserving_release_into(
                 &mut self.undo_release,
-                |undo| match undo.try_clone_charged(|_, _| {
-                    Ok::<_, std::convert::Infallible>(
-                        undo_charge.take().expect("original undo charge"),
-                    )
-                }) {
+                |undo| match undo_generation
+                    .take()
+                    .expect("original undo generation")
+                    .try_clone(undo)
+                {
                     Ok((undo, value)) => {
                         *undo_value = Some(value);
                         Ok(undo)
                     }
-                    Err((undo, error)) => Err((undo, error)),
+                    Err((undo, generation, error)) => {
+                        *undo_generation = Some(generation);
+                        Err((undo, error))
+                    }
                 },
                 || target.revert.is_poisoned(),
             )
@@ -136,20 +237,23 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
         }
         let current = pending.blocks.take().expect("original current");
         let current_value = &mut pending.current_value;
-        let current_charge = &mut pending.current_charge;
+        let current_generation = &mut pending.current_generation;
         let result = current
             .try_map_preserving_release_into(
                 &mut self.current_release,
-                |current| match current.try_clone_charged(|_, _| {
-                    Ok::<_, std::convert::Infallible>(
-                        current_charge.take().expect("original current charge"),
-                    )
-                }) {
+                |current| match current_generation
+                    .take()
+                    .expect("original current generation")
+                    .try_clone(current)
+                {
                     Ok((current, value)) => {
                         *current_value = Some(value);
                         Ok(current)
                     }
-                    Err((current, error)) => Err((current, error)),
+                    Err((current, generation, error)) => {
+                        *current_generation = Some(generation);
+                        Err((current, error))
+                    }
                 },
                 || target.blocks.is_poisoned(),
             )
@@ -213,6 +317,13 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
     type Block = Block<'a, V, C>;
 
     fn initialize(&mut self, mode: BlockMode) {
+        assert!(!self.started, "original cell acquisition is one-shot");
+        // The existing outer-EBR-only APIs explicitly leave identity untracked.
+        // Even that policy allocates before any physical writer or payload clone.
+        // A native original token never enters this allocation branch.
+        if matches!(self.next, SuccessorAcquisition::Untracked) {
+            self.next = SuccessorAcquisition::Original(NextPublication::new());
+        }
         self.initialize_writers();
         let predecessor = self.target.publication.capture();
         let writers = self.take_writers();
@@ -222,6 +333,10 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
             &self.target.publication,
             predecessor,
             mode,
+            match std::mem::replace(&mut self.next, SuccessorAcquisition::Taken) {
+                SuccessorAcquisition::Original(next) => next,
+                _ => unreachable!("successor before original Cell writers"),
+            },
         ));
         let AcquisitionPhase::Block(block) = &mut self.phase else {
             unreachable!("original block");
@@ -264,7 +379,15 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
         }
     }
 
+    fn is_initialized(&self) -> bool {
+        self.complete && matches!(self.phase, AcquisitionPhase::Block(_))
+    }
+
     fn into_block(mut self) -> Self::Block {
+        self.take_block()
+    }
+
+    fn take_block(&mut self) -> Self::Block {
         assert!(
             self.complete,
             "original cell initialization did not complete"
@@ -356,11 +479,11 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
         publication: &'a Publication,
         predecessor: &CapturedPublication,
         dirty: bool,
+        next: NextPublication,
     ) {
-        // Check the complete original phase before allocating the one identity
-        // that ordinary Cell::commit already requires. No owner is taken yet.
+        // Both the original pair and its original pre-acquisition successor are
+        // retained before physical publication preparation can refuse or unwind.
         self.as_ref();
-        let next = NextPublication::new();
         let Some(CellWriterState::Attached(OriginalCellWriters { revert, blocks })) =
             self.state.take()
         else {

@@ -596,15 +596,6 @@ fn active_lane_config_entry_at_height(
     lane_id: LaneId,
     block_height: Option<u64>,
 ) -> Result<&LaneConfigEntry, DaProofPolicyError> {
-    let expected_config = LaneConfig::from_catalog(&nexus.lane_catalog);
-    active_lane_config_entry_at_height_with_snapshot(nexus, &expected_config, lane_id, block_height)
-}
-fn active_lane_config_entry_at_height_with_snapshot<'a>(
-    nexus: &'a Nexus,
-    expected_config: &LaneConfig,
-    lane_id: LaneId,
-    block_height: Option<u64>,
-) -> Result<&'a LaneConfigEntry, DaProofPolicyError> {
     let Some(current) = nexus.lane_config.entry(lane_id) else {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     };
@@ -616,38 +607,31 @@ fn active_lane_config_entry_at_height_with_snapshot<'a>(
     if !catalog_lane_is_da_active(catalog_lane, nexus, block_height) {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
-    let Some(expected) = expected_config.entry(lane_id) else {
-        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
-    };
     if nexus
         .dataspace_catalog
-        .by_id(expected.dataspace_id)
+        .by_id(catalog_lane.dataspace_id)
         .is_none()
     {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
-    if !lane_config_entries_match_for_da(current, expected) {
+    if !current.matches_metadata(catalog_lane) {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
     Ok(current)
 }
 /// Reusable active-lane policy view over one immutable Nexus snapshot.
 ///
-/// Constructing the view derives catalog geometry once. Query paths that classify many historical
-/// records should reuse it instead of rebuilding the full lane configuration for every record.
+/// Construction borrows the original snapshot. Each lookup checks all runtime
+/// fields against their catalog metadata without cloning policy graphs or strings.
 #[derive(Debug)]
 pub struct ActiveLaneProofPolicyContext<'a> {
     nexus: &'a Nexus,
-    expected_config: LaneConfig,
 }
 impl<'a> ActiveLaneProofPolicyContext<'a> {
-    /// Derive a reusable policy view for `nexus`.
+    /// Borrow a reusable policy view for `nexus` without allocating.
     #[must_use]
     pub fn new(nexus: &'a Nexus) -> Self {
-        Self {
-            nexus,
-            expected_config: LaneConfig::from_catalog(&nexus.lane_catalog),
-        }
+        Self { nexus }
     }
     /// Return the active DA proof policy for a lane at a block height.
     ///
@@ -724,60 +708,8 @@ impl<'a> ActiveLaneProofPolicyContext<'a> {
         lane_id: LaneId,
         block_height: Option<u64>,
     ) -> Result<&LaneConfigEntry, DaProofPolicyError> {
-        active_lane_config_entry_at_height_with_snapshot(
-            self.nexus,
-            &self.expected_config,
-            lane_id,
-            block_height,
-        )
+        active_lane_config_entry_at_height(self.nexus, lane_id, block_height)
     }
-}
-fn catalog_lane_is_da_active(
-    lane: &iroha_data_model::nexus::LaneConfig,
-    nexus: &Nexus,
-    block_height: Option<u64>,
-) -> bool {
-    let inside_elastic_range = lane_id_inside_enabled_autoscale_range(lane.id, nexus);
-    if lane_uses_reserved_autoscale_metadata(lane) {
-        return inside_elastic_range
-            && lane.is_autoscale_managed_elastic()
-            && lane.dataspace_id == nexus.routing_policy.default_dataspace
-            && block_height.is_none_or(|height| {
-                lane.autoscale_created_height()
-                    .is_some_and(|created| created <= height)
-            })
-            && crate::state::autoscale_lane_accepts_proposal_height(
-                lane,
-                block_height.unwrap_or(u64::MAX),
-            );
-    }
-    !inside_elastic_range
-}
-fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
-    if !nexus.autoscale.enabled {
-        return false;
-    }
-    let min = nexus.autoscale.min_lane_id.get();
-    let max = nexus.autoscale.max_lane_id_exclusive.get();
-    let lane_id = lane_id.as_u32();
-    min < max && lane_id >= min && lane_id < max
-}
-fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry) -> bool {
-    lhs.lane_id == rhs.lane_id
-        && lhs.shard_id == rhs.shard_id
-        && lhs.dataspace_id == rhs.dataspace_id
-        && lhs.visibility == rhs.visibility
-        && lhs.storage_profile == rhs.storage_profile
-        && lhs.proof_scheme == rhs.proof_scheme
-        && lhs.alias == rhs.alias
-        && lhs.slug == rhs.slug
-        && lhs.kura_segment == rhs.kura_segment
-        && lhs.merge_segment == rhs.merge_segment
-        && lhs.key_prefix == rhs.key_prefix
-        && lhs.manifest_policy == rhs.manifest_policy
-        && lhs.confidential_compute == rhs.confidential_compute
-        && lhs.scheduler == rhs.scheduler
-        && lhs.settlement_buffer == rhs.settlement_buffer
 }
 #[cfg(test)]
 /// Return the active DA proof policy for a catalog-backed lane.
@@ -2375,45 +2307,6 @@ mod tests {
             ..Default::default()
         }
     }
-    fn attach_valid_autoscale_drain_state(lane: &mut ModelLaneConfig, close_global_height: u64) {
-        let keypair =
-            KeyPair::try_from_seed(b"da-policy-drain-validator".to_vec(), Algorithm::BlsNormal)
-                .expect("derive DA policy drain validator");
-        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
-        let state = LaneDrainStateV1 {
-            version: 1,
-            intent: LaneDrainIntentV1 {
-                version: 1,
-                network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    Hash::new(b"da-policy-drain-genesis"),
-                )),
-                lane_id: lane.id,
-                dataspace_id: lane.dataspace_id,
-                lane_incarnation: Hash::new(b"da-policy-drain-incarnation"),
-                close_global_height,
-                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    lane.id,
-                    lane.dataspace_id,
-                    Hash::new(b"da-policy-drain-incarnation"),
-                    0,
-                    None,
-                ),
-                validator_set_hash_version:
-                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set,
-                validator_count: 1,
-                min_quorum: 1,
-            },
-            commitment: None,
-        };
-        lane.metadata.insert(
-            AUTOSCALE_META_DRAIN_STATE.to_owned(),
-            hex::encode(norito::to_bytes(&state).expect("encode DA policy drain state")),
-        );
-    }
     fn merkle_record(lane: u32) -> DaCommitmentRecord {
         DaCommitmentRecord::new(
             LaneId::new(lane),
@@ -2596,277 +2489,38 @@ mod tests {
         ));
     }
     #[test]
-    fn active_proof_policy_rejects_manual_lane_inside_autoscale_elastic_range() {
+    fn borrowed_active_policy_keeps_the_original_snapshot_and_rejects_namespace_drift() {
         let lane = LaneId::new(1);
-        let lane_catalog = lane_catalog_with(vec![
+        let catalog = lane_catalog_with(vec![
             ModelLaneConfig::default(),
             ModelLaneConfig {
                 id: lane,
-                alias: "manual-elastic-slot".to_owned(),
+                alias: "Original Lane".into(),
                 ..ModelLaneConfig::default()
             },
         ]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        let bundle = active_proof_policy_bundle(&nexus);
-        assert!(
-            bundle.policies.iter().all(|policy| policy.lane_id != lane),
-            "manual occupants of the autoscale elastic range must not advertise DA policy"
-        );
+        let nexus = nexus_with_catalog(catalog);
+        let context = ActiveLaneProofPolicyContext::new(&nexus);
+        assert!(std::ptr::eq(context.nexus, &nexus));
+        assert!(std::ptr::eq(
+            context.entry(lane, Some(1)).unwrap(),
+            nexus.lane_config.entry(lane).unwrap()
+        ));
+        context
+            .enforce_commitment_at_height(&merkle_record(1), 1)
+            .unwrap();
+        // This separate mutable runtime copy cannot replace the context's source.
+        let mut changed = nexus.clone();
+        let mut drifted_catalog = changed.lane_catalog.lanes().to_vec();
+        drifted_catalog[1].alias = "Replacement Lane".into();
+        changed.lane_config = LaneConfig::from_catalog(&lane_catalog_with(drifted_catalog));
         assert!(matches!(
-            active_lane_proof_policy(&nexus, lane),
+            ActiveLaneProofPolicyContext::new(&changed).enforce_commitment_at_height(&merkle_record(1), 1),
             Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
         ));
-        let commitment_bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
-        let err = validate_commitment_bundle_against_nexus(&commitment_bundle, &nexus)
-            .expect_err("manual elastic-range lane must not validate DA commitments");
-        assert!(matches!(
-            err,
-            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane {
-                lane: rejected
-            }) if rejected == lane
-        ));
-    }
-    #[test]
-    fn active_proof_policy_accepts_valid_autoscale_elastic_lane() {
-        let lane = LaneId::new(1);
-        let mut autoscale_lane = ModelLaneConfig {
-            id: lane,
-            alias: "elastic-lane-1".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
-        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        let policy = active_lane_proof_policy(&nexus, lane)
-            .expect("valid autoscale elastic lanes must advertise DA policy");
-        assert_eq!(policy.lane_id, lane);
-        validate_commitment_bundle_against_nexus(
-            &DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]),
-            &nexus,
-        )
-        .expect("valid autoscale elastic lane should validate DA commitments");
-    }
-    #[test]
-    fn active_proof_policy_rejects_missing_or_malformed_autoscale_committee_pin() {
-        for pin in [None, Some("not-canonical-hex")] {
-            let lane = LaneId::new(1);
-            let mut autoscale_lane = ModelLaneConfig {
-                id: lane,
-                alias: "elastic-lane-1".to_owned(),
-                ..ModelLaneConfig::default()
-            };
-            autoscale_lane
-                .metadata
-                .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-            autoscale_lane
-                .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
-            if let Some(pin) = pin {
-                autoscale_lane
-                    .metadata
-                    .insert(AUTOSCALE_META_COMMITTEE.to_owned(), pin.to_owned());
-            }
-            let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
-            let mut nexus = nexus_with_catalog(lane_catalog);
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-            nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-            assert!(matches!(
-                active_lane_proof_policy_at_height(&nexus, lane, 1),
-                Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-            ));
-        }
-    }
-    #[test]
-    fn active_proof_policy_stops_autoscale_da_after_exact_drain_close_height() {
-        let lane = LaneId::new(1);
-        let mut autoscale_lane = ModelLaneConfig {
-            id: lane,
-            alias: "elastic-lane-1".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
-        attach_valid_autoscale_drain_state(&mut autoscale_lane, 10);
-        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        active_lane_proof_policy_at_height(&nexus, lane, 10)
-            .expect("DA work at the exact close height remains admissible");
-        assert!(matches!(
-            active_lane_proof_policy_at_height(&nexus, lane, 11),
-            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-        ));
-        assert!(matches!(
-            active_lane_proof_policy(&nexus, lane),
-            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-        ));
-    }
-    #[test]
-    fn active_proof_policy_at_height_rejects_future_created_autoscale_lane() {
-        let lane = LaneId::new(1);
-        let mut autoscale_lane = ModelLaneConfig {
-            id: lane,
-            alias: "elastic-lane-1".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
-        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        let bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
-        assert!(
-            active_lane_proof_policy(&nexus, lane).is_ok(),
-            "heightless policy snapshots keep well-formed autoscale lanes visible"
-        );
-        assert!(matches!(
-            active_lane_proof_policy_at_height(&nexus, lane, 6),
-            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-        ));
-        let early_bundle = active_proof_policy_bundle_at_height(&nexus, 6);
-        assert!(
-            early_bundle
-                .policies
-                .iter()
-                .all(|policy| policy.lane_id != lane),
-            "future-created autoscale lanes must not appear in height-aware policy bundles"
-        );
-        let err = validate_commitment_bundle_against_nexus_at_height(&bundle, &nexus, 6)
-            .expect_err("future-created autoscale lane must not validate DA commitments");
-        assert!(matches!(
-            err,
-            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane {
-                lane: rejected
-            }) if rejected == lane
-        ));
-        active_lane_proof_policy_at_height(&nexus, lane, 7)
-            .expect("autoscale DA policy should activate at the declared creation height");
-        let active_bundle = active_proof_policy_bundle_at_height(&nexus, 7);
-        assert!(
-            active_bundle
-                .policies
-                .iter()
-                .any(|policy| policy.lane_id == lane),
-            "autoscale DA policy should appear at the declared creation height"
-        );
-        validate_commitment_bundle_against_nexus_at_height(&bundle, &nexus, 7)
-            .expect("autoscale DA commitments should validate at the declared creation height");
-    }
-    #[test]
-    fn pin_intent_policy_at_height_rejects_future_created_autoscale_lane() {
-        let lane = LaneId::new(1);
-        let mut autoscale_lane = ModelLaneConfig {
-            id: lane,
-            alias: "elastic-lane-1".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        autoscale_lane
-            .metadata
-            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
-        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        let bundle =
-            iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![test_pin_intent(
-                lane,
-                1,
-                1,
-                StorageTicketId::new([0x61; 32]),
-                iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x63; 32]),
-            )]);
-        validate_pin_intent_bundle_against_nexus(&bundle, &nexus, |_| true)
-            .expect("heightless policy snapshots keep well-formed autoscale lanes visible");
-        let err = validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 6, |_| true)
-            .expect_err("future-created autoscale lane must not validate DA pin intents");
-        assert!(matches!(
-            err,
-            DaPinIntentValidationError::UnknownLane { lane: rejected } if rejected == lane
-        ));
-        validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 7, |_| true)
-            .expect("autoscale DA pin intents should validate at the declared creation height");
-    }
-    #[test]
-    fn active_proof_policy_rejects_malformed_autoscale_reserved_lane() {
-        let lane = LaneId::new(1);
-        let mut malformed = ModelLaneConfig {
-            id: lane,
-            alias: "not-elastic".to_owned(),
-            ..ModelLaneConfig::default()
-        };
-        malformed
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        malformed
-            .metadata
-            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
-        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), malformed]);
-        let mut nexus = nexus_with_catalog(lane_catalog);
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-        assert!(matches!(
-            active_lane_proof_policy(&nexus, lane),
-            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-        ));
-    }
-    #[test]
-    fn active_proof_policy_rejects_incomplete_consensus_autoscale_markers() {
-        for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
-            let lane = LaneId::new(1);
-            let mut malformed = ModelLaneConfig {
-                id: lane,
-                alias: "manual-lane-in-elastic-range".to_owned(),
-                ..ModelLaneConfig::default()
-            };
-            malformed
-                .metadata
-                .insert(marker.to_owned(), "malformed-but-reserved".to_owned());
-            let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), malformed]);
-            let mut nexus = nexus_with_catalog(lane_catalog);
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
-            nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
-            assert!(
-                matches!(
-                    active_lane_proof_policy(&nexus, lane),
-                    Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
-                ),
-                "reserved marker {marker} must not make a manual lane DA-active"
-            );
-        }
+        context
+            .enforce_commitment_at_height(&merkle_record(1), 1)
+            .unwrap();
     }
     #[test]
     fn active_proof_policy_rejects_catalog_geometry_drift() {

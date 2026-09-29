@@ -142,6 +142,82 @@ fn finite_limit_overflow_and_zero_never_change_credit_on_refusal() {
 }
 
 #[test]
+fn reconfigured_limit_keeps_original_borrower_charges_through_shrink() {
+    let budget = AllocationBudget::new(10);
+    let borrower = budget.clone();
+    let held = borrower.try_reserve_bytes(8).unwrap();
+    budget.set_limit_bytes(4);
+    assert_eq!(borrower.limit_bytes(), 4);
+    assert!(held.belongs_to(&budget));
+    assert_eq!(budget.reserved_bytes(), 8);
+    assert!(matches!(
+        borrower.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity {
+            requested_bytes: 1,
+            reserved_bytes: 8,
+            limit_bytes: 4,
+            ..
+        })
+    ));
+    assert!(matches!(
+        borrower.try_reserve_bytes(5),
+        Err(AllocationRefusal::ExceedsLimit {
+            requested_bytes: 5,
+            limit_bytes: 4,
+        })
+    ));
+    drop(held);
+    let within_new_limit = borrower.try_reserve_bytes(4).unwrap();
+    assert!(within_new_limit.belongs_to(&budget));
+}
+
+#[test]
+fn peak_tracks_original_admissions_across_borrowers_and_limit_reload() {
+    let budget = AllocationBudget::new(16);
+    let borrower = budget.clone();
+    assert_eq!(budget.peak_reserved_bytes(), 0);
+    let first = budget.try_reserve_bytes(8).unwrap();
+    let second = borrower.try_reserve_bytes(4).unwrap();
+    assert_eq!(budget.peak_reserved_bytes(), 12);
+    drop(first);
+    assert_eq!(budget.reserved_bytes(), 4);
+    budget.set_limit_bytes(4);
+    assert_eq!(borrower.peak_reserved_bytes(), 12);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    assert_eq!(budget.peak_reserved_bytes(), 12);
+    drop(second);
+    let third = borrower.try_reserve_bytes(4).unwrap();
+    assert_eq!(budget.peak_reserved_bytes(), 12);
+    drop(third);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(budget.peak_reserved_bytes(), 12);
+}
+
+#[test]
+fn growing_original_limit_wakes_waiters_after_reload_scope() {
+    let budget = AllocationBudget::new(8);
+    let held = budget.try_reserve_bytes(8).unwrap();
+    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    budget.with_deferred_refund_notifications(|_| {
+        budget.set_limit_bytes(9);
+        assert_eq!(budget.limit_bytes(), 9);
+        assert_eq!(wakes.0.load(SeqCst), 0);
+    });
+    assert_eq!(wakes.0.load(SeqCst), 1);
+    assert!(poll(&mut wait, &wakes).is_ready());
+    let extra = budget.try_reserve_bytes(1).unwrap();
+    assert!(extra.belongs_to(&budget));
+    drop(held);
+    drop(extra);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges() {
     let budget = AllocationBudget::new(24);
     let mut prepaid = budget.try_reserve_layouts([layout(8); 3]).unwrap();
@@ -945,3 +1021,6 @@ fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     // The TLS chain must contain no pointer into any freed owned/lexical record.
     without_allocations(|| budget.with_deferred_refund_notifications(|_| {}));
 }
+
+#[path = "allocation/refund_batch_tests.rs"]
+mod refund_batch_tests;

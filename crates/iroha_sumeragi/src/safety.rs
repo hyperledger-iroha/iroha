@@ -13,7 +13,7 @@ use crate::{
     api::{HaltReason, LocalFault},
     crypto::{AttestationVerifier, Crypto, verify_qc},
     message::{self, Qc, TimeoutCert, VoteKind},
-    types::{Committee, Hash32, PublicKey, ValidatorIndex},
+    types::{Committee, EpochConfig, EpochId, Hash32, PublicKey, ValidatorIndex},
 };
 
 /// Largest accepted record encoding (a record at `n = 1024` stays far below this).
@@ -66,6 +66,8 @@ impl RecordedTimeout {
 pub struct SafetyRecord {
     /// Instance id.
     pub instance: Hash32,
+    /// Exact scheduling context under which every retained signature was produced.
+    pub epoch: EpochId,
     /// The consensus key this record belongs to.
     pub key: PublicKey,
     /// Round height the record describes.
@@ -89,12 +91,14 @@ impl SafetyRecord {
     /// `SafetyRecord::fresh(key, h, parent_commit_qc)` (§6.8): nothing signed yet at `height`.
     pub fn fresh(
         instance: Hash32,
+        epoch: EpochId,
         key: PublicKey,
         height: u64,
         parent_commit_qc: Option<Qc>,
     ) -> Self {
         Self {
             instance,
+            epoch,
             key,
             height,
             parent_commit_qc,
@@ -163,9 +167,14 @@ impl SafetyRecord {
             return Err(fail);
         }
         let prepare_qc_here = |qc: &Qc| {
-            qc.kind == VoteKind::Prepare && qc.height == self.height && qc.instance == self.instance
+            qc.kind == VoteKind::Prepare
+                && qc.height == self.height
+                && qc.instance == self.instance
+                && qc.epoch == self.epoch
         };
-        let tc_here = |tc: &TimeoutCert| tc.height == self.height && tc.instance == self.instance;
+        let tc_here = |tc: &TimeoutCert| {
+            tc.height == self.height && tc.instance == self.instance && tc.epoch == self.epoch
+        };
         if let Some(qc) = &self.parent_commit_qc
             && (qc.kind != VoteKind::Commit
                 || qc.instance != self.instance
@@ -376,6 +385,7 @@ pub fn check_recommit<'a>(
     crypto: &dyn Crypto,
     verifier: &dyn AttestationVerifier,
     committee_next: &Committee,
+    epoch_next: &EpochConfig,
     tip_height: u64,
     record: &'a SafetyRecord,
 ) -> Result<&'a Qc, HaltReason> {
@@ -385,8 +395,18 @@ pub fn check_recommit<'a>(
         .ok_or(HaltReason::SafetyRecordInconsistent)?;
     let valid = qc.kind == VoteKind::Commit
         && Some(qc.height) == tip_height.checked_add(1)
+        && epoch_next.contains(qc.height)
+        && (qc.height != epoch_next.last_height || qc.attest)
         && (cfg!(sumeragi_mutation = "MS32a")
-            || verify_qc(crypto, verifier, &record.instance, committee_next, qc).is_ok());
+            || verify_qc(
+                crypto,
+                verifier,
+                &record.instance,
+                &epoch_next.id,
+                committee_next,
+                qc,
+            )
+            .is_ok());
     if valid {
         Ok(qc)
     } else {
@@ -496,6 +516,7 @@ mod tests {
             &[(0, Some(older.clone())), (1, None), (3, None)],
         );
         SafetyRecord {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: I,
             key: v.key(1),
             height,
@@ -506,7 +527,7 @@ mod tests {
                 0,
                 &h(6),
                 &h(7),
-                &[0, 1, 2, 3],
+                &[0, 1, 2],
             )),
             proposal: Some(RecordedProposal {
                 view: 3,
@@ -533,8 +554,8 @@ mod tests {
         let v = FakeValidators::new(4, 1, None);
         for record in [
             full_record(&v, 10),
-            SafetyRecord::fresh(I, v.key(0), 1, None),
-            SafetyRecord::fresh(I, v.key(0), 7, None),
+            SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, v.key(0), 1, None),
+            SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, v.key(0), 7, None),
         ] {
             let bytes = record.encode(&v.crypto).unwrap();
             assert_eq!(SafetyRecord::decode(&v.crypto, &bytes), Ok(record.clone()));
@@ -730,6 +751,7 @@ mod tests {
         let tc = v.tc(&I, 10, 3, &entries);
         let justify = v.tc(&I, 10, 3, &entries);
         let record = SafetyRecord {
+            epoch: crate::testing::TEST_EPOCH.id,
             instance: I,
             key: v.key(0),
             height: 10,
@@ -766,7 +788,7 @@ mod tests {
         assert_eq!(record.resume_view(), 4);
         assert_eq!(record.timeout_view(), Some(4));
         assert_eq!(record.timeout.as_ref().unwrap().hq(), Some(3));
-        let fresh = SafetyRecord::fresh(I, v.key(0), 10, None);
+        let fresh = SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, v.key(0), 10, None);
         assert_eq!(fresh.resume_view(), 0);
         assert_eq!(fresh.timeout_view(), None);
         let tc_only = SafetyRecord {
@@ -810,12 +832,19 @@ mod tests {
             read(&RecordState::Present(bytes)),
             Err(RecordError::Checksum)
         );
-        let foreign = SafetyRecord::fresh(h(0x12), key.clone(), t + 1, None);
+        let foreign = SafetyRecord::fresh(
+            h(0x12),
+            crate::testing::TEST_EPOCH.id,
+            key.clone(),
+            t + 1,
+            None,
+        );
         assert_eq!(
             read(&present(&v, &foreign)),
             Err(RecordError::WrongInstance)
         );
-        let other_key = SafetyRecord::fresh(I, v.key(2), t + 1, None);
+        let other_key =
+            SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, v.key(2), t + 1, None);
         assert_eq!(read(&present(&v, &other_key)), Err(RecordError::WrongKey));
 
         // R2: absent → unanchored (the probe decides when it may sign again).
@@ -828,7 +857,8 @@ mod tests {
 
         // R3: record at or below the tip (the initial record at `g` included).
         for height in [0, 1, t - 1, t] {
-            let record = SafetyRecord::fresh(I, key.clone(), height, None);
+            let record =
+                SafetyRecord::fresh(I, crate::testing::TEST_EPOCH.id, key.clone(), height, None);
             let plan = classify(&present(&v, &record));
             assert_eq!(plan, RestartPlan::Past, "height {height}");
             assert!(!plan.unanchored());
@@ -863,7 +893,15 @@ mod tests {
     fn r5_candidate_is_the_first_record_at_t_plus_2() {
         let v = FakeValidators::new(4, 1, None);
         let t = 20u64;
-        let at = |height: u64, key: u32| Some(SafetyRecord::fresh(I, v.key(key), height, None));
+        let at = |height: u64, key: u32| {
+            Some(SafetyRecord::fresh(
+                I,
+                crate::testing::TEST_EPOCH.id,
+                v.key(key),
+                height,
+                None,
+            ))
+        };
         let records = vec![None, at(t + 1, 1), at(t + 2, 2), at(t + 2, 3)];
         let candidate = recommit_candidate(&records, t).unwrap();
         assert_eq!((candidate.height, candidate.key.clone()), (t + 2, v.key(2)));
@@ -944,11 +982,38 @@ mod tests {
             &v.crypto,
             &crate::testing::FakeVerifier,
             &v.committee,
+            &crate::testing::TEST_EPOCH,
             t,
             &record,
         )
         .unwrap();
         assert_eq!(qc.height, t + 1);
+        assert_eq!(qc.signers.count_ones(), v.committee.q());
+        // A genuinely signed parent with every member is not an exact-quorum certificate.
+        let superseded = record.parent_commit_qc.as_ref().unwrap();
+        let over = SafetyRecord {
+            parent_commit_qc: Some(v.qc(
+                superseded.kind,
+                &superseded.instance,
+                superseded.height,
+                superseded.view,
+                &superseded.block_hash,
+                &superseded.result,
+                &[0, 1, 2, 3],
+            )),
+            ..record.clone()
+        };
+        assert_eq!(
+            check_recommit(
+                &v.crypto,
+                &crate::testing::FakeVerifier,
+                &v.committee,
+                &crate::testing::TEST_EPOCH,
+                t,
+                &over
+            ),
+            Err(HaltReason::SafetyRecordInconsistent)
+        );
         // Missing parent QC.
         let missing = SafetyRecord {
             parent_commit_qc: None,
@@ -959,6 +1024,7 @@ mod tests {
                 &v.crypto,
                 &crate::testing::FakeVerifier,
                 &v.committee,
+                &crate::testing::TEST_EPOCH,
                 t,
                 &missing
             ),
@@ -977,6 +1043,7 @@ mod tests {
                 &v.crypto,
                 &crate::testing::FakeVerifier,
                 &v.committee,
+                &crate::testing::TEST_EPOCH,
                 t,
                 &forged
             ),
@@ -989,6 +1056,7 @@ mod tests {
                 &other.crypto,
                 &crate::testing::FakeVerifier,
                 &other.committee,
+                &crate::testing::TEST_EPOCH,
                 t,
                 &record
             ),
@@ -1000,6 +1068,7 @@ mod tests {
                 &v.crypto,
                 &crate::testing::FakeVerifier,
                 &v.committee,
+                &crate::testing::TEST_EPOCH,
                 t + 1,
                 &record
             ),
@@ -1052,7 +1121,13 @@ mod tests {
     #[test]
     fn fake_crypto_is_used_for_checksums() {
         let crypto = FakeCrypto::new();
-        let record = SafetyRecord::fresh(I, FakeValidators::new(1, 1, None).key(0), 3, None);
+        let record = SafetyRecord::fresh(
+            I,
+            crate::testing::TEST_EPOCH.id,
+            FakeValidators::new(1, 1, None).key(0),
+            3,
+            None,
+        );
         let bytes = record.encode(&crypto).unwrap();
         let (frame, checksum) = bytes.split_at(bytes.len() - 32);
         assert_eq!(crypto.hash(frame).as_bytes(), checksum);

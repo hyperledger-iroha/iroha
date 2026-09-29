@@ -237,7 +237,7 @@ fn block_parameter_variants_roundtrip_and_reject_mixed_or_unknown_tags() {
         assert!(BlockParameter::decode_all(&mut unknown_variant.as_slice()).is_err());
     }
     for invalid in [
-        r#"{}"#,
+        r"{}",
         r#"{"MaxTimeTriggerInvocations":0}"#,
         r#"{"MaxTimeTriggerInvocations":4294967296}"#,
         r#"{"MaxTimeTriggerInvocations":1,"MaxTransactions":1}"#,

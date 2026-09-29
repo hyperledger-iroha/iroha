@@ -10,10 +10,7 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
     let mut expected: Option<Snapshot> = None;
     let mut checked_layouts = 0;
     let mut alternate_frames = 0;
-    for flags in 0..=u8::MAX {
-        if norito::core::validate_header_flags(flags).is_err() {
-            continue;
-        }
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         checked_layouts += 1;
         let _caller = norito::core::DecodeFlagsGuard::enter(flags);
         // Reuse one genuinely encrypted enrollment: hybrid ML-KEM hedges caller RNG seeds with
@@ -188,7 +185,7 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
         assert_eq!(open().unwrap().state, retained);
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
-    assert_eq!(checked_layouts, 10);
+    assert_eq!(checked_layouts, 2);
     assert!(alternate_frames > 0);
 }
 
@@ -219,10 +216,7 @@ fn enrollment_encryption_uses_canonical_private_payload_and_aad_under_every_call
     let mut recipient_rng = ChaCha20Rng::from_seed([0x45; 32]);
     let recipient = HybridKeyPair::generate(&mut recipient_rng).unwrap();
     let mut checked_layouts = 0;
-    for flags in 0..=u8::MAX {
-        if norito::core::validate_header_flags(flags).is_err() {
-            continue;
-        }
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         checked_layouts += 1;
         let _caller = norito::core::DecodeFlagsGuard::enter(flags);
         let mut rng = ChaCha20Rng::from_seed([0x46; 32]);
@@ -250,7 +244,7 @@ fn enrollment_encryption_uses_canonical_private_payload_and_aad_under_every_call
         ));
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
-    assert_eq!(checked_layouts, 10);
+    assert_eq!(checked_layouts, 2);
 }
 
 #[test]

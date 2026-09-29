@@ -2,6 +2,9 @@
 use super::*;
 use std::cell::Cell;
 
+/// One in-place substitution applied to an otherwise valid prepared call.
+type PlanMutation = Box<dyn Fn(&mut PreparedContractCall)>;
+
 fn fixture() -> Result<(Config, PreparedContractCall, TransactionRecord)> {
     let (config, _) = crate::service_tests::fixture()?;
     let artifact = kotodama_lang::compiler::Compiler::new()
@@ -119,7 +122,7 @@ fn call_resume_never_resubmits_after_ambiguous_dispatch() -> Result<()> {
 fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
     let (config, prepared, step) = fixture()?;
     validate_plan(&prepared, &config)?;
-    let mutations: Vec<Box<dyn Fn(&mut PreparedContractCall)>> = vec![
+    let mutations: Vec<PlanMutation> = vec![
         Box::new(|p| p.plan.intent.invocation.entrypoint = "other".into()),
         Box::new(|p| p.plan.alias = "other::universal".parse().unwrap()),
         Box::new(|p| p.plan.created_at_ns += 1),
@@ -434,14 +437,39 @@ fn call_failure_cannot_overwrite_applied_or_change_the_exact_hash() -> Result<()
     Ok(())
 }
 
+/// Read one bounded HTTP/1.1 request head and its `Content-Length` body from a fixture socket.
+fn read_fixture_request(stream: &mut std::net::TcpStream) -> Result<(String, Vec<u8>)> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    while !bytes.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte)?;
+        bytes.push(byte[0]);
+        if bytes.len() > 64 * 1024 {
+            return Err(eyre!("resolution fixture headers exceed bound"));
+        }
+    }
+    let headers = String::from_utf8(bytes)?;
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>())
+        })
+        .transpose()?
+        .unwrap_or(0);
+    if length > 64 * 1024 {
+        return Err(eyre!("resolution fixture body exceeds bound"));
+    }
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body)?;
+    Ok((headers, body))
+}
+
 #[test]
 fn call_standalone_resolution_uses_configured_discriminant_and_restores_caller() -> Result<()> {
-    use std::{
-        io::{Read as _, Write as _},
-        net::TcpListener,
-        thread,
-        time::Instant,
-    };
+    use std::{io::Write as _, net::TcpListener, thread, time::Instant};
     let (mut config, prepared, _) = fixture()?;
     config.account_chain_discriminant = 42;
     let expected_authority = config.account.to_i105_for_discriminant(42)?;
@@ -480,30 +508,7 @@ fn call_standalone_resolution_uses_configured_discriminant_and_restores_caller()
             stream.set_nonblocking(false)?;
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
             stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-            let mut bytes = Vec::new();
-            while !bytes.ends_with(b"\r\n\r\n") {
-                let mut byte = [0];
-                stream.read_exact(&mut byte)?;
-                bytes.push(byte[0]);
-                if bytes.len() > 64 * 1024 {
-                    return Err(eyre!("resolution fixture headers exceed bound"));
-                }
-            }
-            let headers = String::from_utf8(bytes)?;
-            let length = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>())
-                })
-                .transpose()?
-                .unwrap_or(0);
-            if length > 64 * 1024 {
-                return Err(eyre!("resolution fixture body exceeds bound"));
-            }
-            let mut body = vec![0; length];
-            stream.read_exact(&mut body)?;
+            let (headers, body) = read_fixture_request(&mut stream)?;
             if index == 0 {
                 assert!(headers.starts_with("GET /v1/node/capabilities "));
             } else {

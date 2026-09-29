@@ -7,7 +7,11 @@ import IrohaSwift
 struct NoritoDemoXcodeApp: App {
   init() {
 #if canImport(IrohaSwift)
-    DemoAccelerationConfig.load().apply()
+    do {
+      try DemoAccelerationConfig.load().apply()
+    } catch {
+      fatalError("Invalid bundled acceleration configuration: \(error)")
+    }
 #endif
   }
 

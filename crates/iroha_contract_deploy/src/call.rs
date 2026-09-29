@@ -98,7 +98,7 @@ pub enum ContractCallDisposition {
     /// The complete operation was cancelled before any transaction attempt.
     Cancelled,
     /// The exact operation reached Applied and was rechecked against the configured network.
-    Applied(ContractCallReceipt),
+    Applied(Box<ContractCallReceipt>),
     /// The exact attempted transaction is authoritatively rejected or expired.
     Failed(TransactionFinalityFailure),
 }
@@ -194,7 +194,7 @@ impl ContractCallService {
                 ))])?;
                 let (signed, quote) =
                     quote_and_resign_transaction(&self.client, &draft, &request.fee_payment)?;
-                self.client.check_funding(&Default::default(), &[quote])?;
+                self.client.check_funding(&BTreeMap::default(), &[quote])?;
                 grant = Some(transaction_record("entrypoint-grant", &signed));
             }
         }
@@ -394,7 +394,7 @@ impl ContractCallService {
                                 ));
                             }
                         }
-                        return Ok(ContractCallDisposition::Applied(receipt));
+                        return Ok(ContractCallDisposition::Applied(Box::new(receipt)));
                     }
                 }
                 Err(error) => {

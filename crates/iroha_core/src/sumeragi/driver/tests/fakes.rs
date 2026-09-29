@@ -24,7 +24,10 @@ use parking_lot::Mutex;
 
 use super::super::{
     DriverHandle, FrameLimitExceeded, Worker,
-    traits::{BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, Observer, RecordStore},
+    traits::{
+        BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, Observer, PublicationError,
+        RecordStore,
+    },
 };
 
 /// A transport that records every frame.
@@ -413,11 +416,31 @@ impl FakeExecutor {
 
     fn run(state: &mut ExecState, parent: &Hash32, block: &Block, bh: &Hash32) -> ExecOutcome {
         *state.executions.entry(*bh).or_default() += 1;
-        block_exec(parent, block)
+        block_exec(parent, block, &state.config.epoch)
     }
 }
 
 impl Executor for FakeExecutor {
+    fn build_control_witness(
+        &mut self,
+        _: &iroha_sumeragi::api::ControlWitnessContext,
+    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError> {
+        Ok((iroha_sumeragi::types::ControlWitness::empty(), false))
+    }
+    fn drive_control(
+        &mut self,
+        _: &iroha_sumeragi::api::ApplicationControlContext,
+    ) -> Result<Option<iroha_sumeragi::message::ApplicationControl>, PublicationError> {
+        Ok(None)
+    }
+    fn receive_application_control(
+        &mut self,
+        _: &PublicKey,
+        _: &iroha_sumeragi::message::ApplicationControl,
+    ) -> Result<(), PublicationError> {
+        Ok(())
+    }
+
     fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
         self.wait_open();
         let mut state = self.state.lock();
@@ -442,17 +465,17 @@ impl Executor for FakeExecutor {
             .retain(|bh, (h, _)| *h != height || keep.contains(bh));
     }
 
-    fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String> {
+    fn prepare(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<Option<Hash32>, PublicationError> {
         let mut state = self.state.lock();
         if state.fail_apply > 0 {
             state.fail_apply -= 1;
-            return Err("injected".to_owned());
+            return Err(PublicationError::Retryable("injected".to_owned()));
         }
-        let cached = state
-            .cache
-            .get(&commit_qc.block_hash)
-            .map(|(_, r)| *r)
-            .filter(|r| *r == commit_qc.result);
+        let cached = state.cache.get(&commit_qc.block_hash).map(|(_, r)| *r);
         if cached.is_some() {
             return Ok(cached);
         }
@@ -468,11 +491,15 @@ impl Executor for FakeExecutor {
         }
     }
 
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String> {
+    fn commit(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<iroha_sumeragi::types::AppliedConfig, PublicationError> {
         let mut state = self.state.lock();
         if state.fail_apply > 0 {
             state.fail_apply -= 1;
-            return Err("injected".to_owned());
+            return Err(PublicationError::Retryable("injected".to_owned()));
         }
         let height = block.header.height;
         state.applied = (height, commit_qc.block_hash, commit_qc.result);
@@ -486,7 +513,9 @@ impl Executor for FakeExecutor {
                 .first()
                 .is_none_or(|(id, _)| !committed.contains(id))
         });
-        Ok(state.config.clone())
+        Ok(iroha_sumeragi::types::AppliedConfig::Continuation {
+            after_next: iroha_sumeragi::types::ConfigSlot::Ready(state.config.clone()),
+        })
     }
 
     fn build(

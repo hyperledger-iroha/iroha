@@ -67,7 +67,7 @@ import {
   isKotodamaV1StateMapKeyTypeName,
   kotodamaV1StateMapKeyTypeName,
 } from "./kotodamaIdentifiers.js";
-import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
 import {
   createValidationError,
   ValidationErrorCode,
@@ -202,11 +202,6 @@ const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
 const CONTRACT_MANIFEST_JSON_MAX_BYTES =
   IVM_ARTIFACT_MAX_BASE64_LENGTH + 256 * 1024;
 const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES = 8 * 1024 * 1024;
-const IVM_DERIVE_JSON_MAX_BYTES = 32 * 1024 * 1024;
-const IVM_PROOF_REQUEST_MAX_BYTES = 8 * 1024 * 1024;
-const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
-const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
-const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
 const VERIFYING_KEY_CLIENT_URL = new URL(
   "./verifyingKeyClient.js",
@@ -421,12 +416,6 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
 const GET_TX_STATUS_OPTION_KEYS = new Set(["signal", "scope"]);
-const IVM_PROVE_WAIT_OPTION_KEYS = new Set([
-  "signal",
-  "intervalMs",
-  "timeoutMs",
-  CANONICAL_AUTH_FIELD,
-]);
 const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set([CANONICAL_AUTH_FIELD]);
 const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
   "dataspace",
@@ -9267,312 +9256,6 @@ export class ToriiClient {
   }
 
   /**
-   * Derive the node-authoritative `IvmProved` payload for one ZK-mode IVM
-   * execution (`POST /v1/zk/ivm/derive`).
-   * @param {object} request
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<{proved: object}>}
-  */
-  async deriveIvmProved(request = {}, options) {
-    const payload = await normalizeZkIvmExecutionRequest(request, {
-      context: "deriveIvmProved",
-      includeProved: false,
-    });
-    const requestBody = stringifyBoundedJsonRequest(
-      payload,
-      IVM_PROOF_REQUEST_MAX_BYTES,
-      "IVM derive request",
-    );
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "deriveIvmProved");
-    if (canonicalAuth.accountId !== payload.authority) rejectType("deriveIvmProved canonicalAuth.accountId must equal the exact payload authority");
-    const response = await this._request("POST", "/v1/zk/ivm/derive", {
-      headers: JSON_REQUEST_HEADERS,
-      body: requestBody,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200], { signal });
-    const body = await this._maybeBoundedJson(
-      response,
-      IVM_DERIVE_JSON_MAX_BYTES,
-      "IVM derive response",
-      { signal },
-    );
-    if (!body) {
-      rejectError("IVM derive endpoint returned no payload");
-    }
-    return normalizeZkIvmDeriveResponse(body);
-  }
-  /**
-   * Start an asynchronous proof job for a ZK-mode IVM execution
-   * (`POST /v1/zk/ivm/prove`). When `proved` is supplied, the node rejects the
-   * job unless its independently derived payload is identical.
-   * @param {object} request
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<{job_id: string}>}
-   */
-  async startIvmProve(request = {}, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "startIvmProve",
-    );
-    const payload = await normalizeZkIvmExecutionRequest(request, {
-      context: "startIvmProve",
-      includeProved: true,
-    });
-    const requestBody = stringifyBoundedJsonRequest(
-      payload,
-      IVM_PROOF_REQUEST_MAX_BYTES,
-      "IVM prove request",
-    );
-    if (canonicalAuth.accountId !== payload.authority) {
-      rejectType("startIvmProve canonicalAuth.accountId must equal the exact payload authority");
-    }
-    const response = await this._request("POST", "/v1/zk/ivm/prove", {
-      headers: JSON_REQUEST_HEADERS,
-      body: requestBody,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200, 202], { signal });
-    const body = await this._maybeBoundedJson(
-      response,
-      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
-      "IVM prove job creation response",
-      { signal },
-    );
-    if (!body) {
-      rejectError("IVM prove endpoint returned no payload");
-    }
-    return normalizeZkIvmProveJobCreatedResponse(body);
-  }
-
-  /**
-   * Read an asynchronous IVM proof job (`GET /v1/zk/ivm/prove/{job_id}`).
-   * @param {string} jobId
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<object>}
-   */
-  async getIvmProveJob(jobId, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "getIvmProveJob",
-    );
-    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
-    const response = await this._request(
-      "GET",
-      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-        canonicalAuth,
-      },
-    );
-    await this._expectStatus(response, [200], { signal });
-    const body = await this._maybeBoundedJson(
-      response,
-      IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES,
-      "IVM prove job status response",
-      { signal },
-    );
-    if (!body) {
-      rejectError("IVM prove job endpoint returned no payload");
-    }
-    const job = normalizeZkIvmProveJobResponse(body);
-    if (job.job_id !== normalizedJobId) {
-      rejectError("IVM prove job status returned a different job id");
-    }
-    return job;
-  }
-
-  /**
-   * Delete and cancel an asynchronous IVM proof job
-   * (`DELETE /v1/zk/ivm/prove/{job_id}`).
-   * @param {string} jobId
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<{job_id: string}>}
-   */
-  async cancelIvmProveJob(jobId, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "cancelIvmProveJob",
-    );
-    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
-    const response = await this._request(
-      "DELETE",
-      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
-      { headers: JSON_ACCEPT_HEADERS, signal, canonicalAuth },
-    );
-    await this._expectStatus(response, [200], { signal });
-    const body = await this._maybeBoundedJson(
-      response,
-      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
-      "IVM prove job cancellation response",
-      { signal },
-    );
-    if (!body) {
-      rejectError("IVM prove job cancellation endpoint returned no payload");
-    }
-    const cancelled = normalizeZkIvmProveJobCreatedResponse(body);
-    if (cancelled.job_id !== normalizedJobId) {
-      rejectError("IVM prove job cancellation returned a different job id");
-    }
-    return cancelled;
-  }
-
-  /**
-   * Poll an IVM proof job until it returns the proved payload and attachment.
-   * @param {string} jobId
-   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<object>}
-   */
-  async waitForIvmProveJob(jobId, options) {
-    const record = ensureRecord(options, "waitForIvmProveJob options");
-    assertSupportedOptionKeys(
-      record,
-      IVM_PROVE_WAIT_OPTION_KEYS,
-      "waitForIvmProveJob options",
-    );
-    const { signal } = normalizeSignalOption(record, "waitForIvmProveJob");
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
-      record.canonicalAuth,
-      "waitForIvmProveJob.canonicalAuth",
-    );
-    if (!canonicalAuth) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "waitForIvmProveJob options.canonicalAuth is required",
-        "waitForIvmProveJob.canonicalAuth",
-      );
-    }
-    const intervalMs =
-      record.intervalMs === undefined
-        ? 1_000
-        : ToriiClient._normalizeUnsignedInteger(
-            record.intervalMs,
-            "waitForIvmProveJob.intervalMs",
-            { allowZero: true },
-          );
-    const timeoutMs =
-      record.timeoutMs === undefined
-        ? 60_000
-        : record.timeoutMs === null
-          ? null
-          : ToriiClient._normalizeUnsignedInteger(
-              record.timeoutMs,
-              "waitForIvmProveJob.timeoutMs",
-              { allowZero: true },
-            );
-    const deadline = timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
-    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
-
-    for (;;) {
-      throwIfAborted(signal);
-      const job = await this.getIvmProveJob(normalizedJobId, {
-        signal,
-        canonicalAuth,
-      });
-      if (job.status === "done") {
-        if (!job.proved || !job.attachment) {
-          rejectError(`IVM prove job ${normalizedJobId} completed without proved payload and attachment`);
-        }
-        return job;
-      }
-      if (job.status === "error") {
-        rejectError(`IVM prove job ${normalizedJobId} failed: ${job.error ?? "unknown prover error"}`);
-      }
-      if (Date.now() >= deadline) {
-        rejectError(`timed out waiting for IVM prove job ${normalizedJobId}`);
-      }
-      if (intervalMs > 0) {
-        await delay(intervalMs, signal);
-      }
-    }
-  }
-
-  /**
-   * Start and await one IVM proof job.
-   * @param {object} request
-   * @param {{signal?: AbortSignal, intervalMs?: number, timeoutMs?: number|null, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<object>}
-   */
-  async proveIvmAndWait(request = {}, options) {
-    const record = ensureRecord(options, "proveIvmAndWait options");
-    assertSupportedOptionKeys(
-      record,
-      IVM_PROVE_WAIT_OPTION_KEYS,
-      "proveIvmAndWait options",
-    );
-    const { signal } = normalizeSignalOption(record, "proveIvmAndWait");
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
-      record.canonicalAuth,
-      "proveIvmAndWait.canonicalAuth",
-    );
-    if (!canonicalAuth) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "proveIvmAndWait options.canonicalAuth is required",
-        "proveIvmAndWait.canonicalAuth",
-      );
-    }
-    const intervalMs =
-      record.intervalMs === undefined
-        ? undefined
-        : ToriiClient._normalizeUnsignedInteger(
-            record.intervalMs,
-            "proveIvmAndWait options.intervalMs",
-            { allowZero: true },
-          );
-    const timeoutMs =
-      record.timeoutMs === undefined
-        ? undefined
-        : record.timeoutMs === null
-          ? null
-          : ToriiClient._normalizeUnsignedInteger(
-              record.timeoutMs,
-              "proveIvmAndWait options.timeoutMs",
-              { allowZero: true },
-            );
-    const normalizedRequest = await normalizeZkIvmExecutionRequest(request, {
-      context: "proveIvmAndWait",
-      includeProved: true,
-    });
-    const expectedProved = normalizedRequest.proved ?? null;
-    if (canonicalAuth.accountId !== normalizedRequest.authority) {
-      rejectType("proveIvmAndWait canonicalAuth.accountId must equal the exact payload authority");
-    }
-    const { proved: _omittedProved, ...requestWithoutProved } = normalizedRequest;
-    const created = await this.startIvmProve(requestWithoutProved, {
-      signal,
-      canonicalAuth,
-    });
-    try {
-      const completed = await this.waitForIvmProveJob(created.job_id, {
-        signal,
-        canonicalAuth,
-        ...(intervalMs === undefined ? {} : { intervalMs }),
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-      });
-      if (
-        expectedProved !== null &&
-        JSON.stringify(completed.proved) !== JSON.stringify(expectedProved)
-      ) {
-        rejectError("IVM proof job returned a proved payload that differs from the locally derived payload");
-      }
-      return completed;
-    } catch (error) {
-      try {
-        // Do not reuse an aborted caller signal: cancellation is best-effort
-        // cleanup and must never mask the original wait failure.
-        await this.cancelIvmProveJob(created.job_id, { canonicalAuth });
-      } catch {
-        // Preserve the original timeout, abort, or proof error.
-      }
-      throw error;
-    }
-  }
-
-  /**
    * Propose a generic multisig instruction batch (`POST /v1/multisig/propose`).
    * Sends the whole request DTO as native Norito (`application/x-norito`).
    * @param {object} request
@@ -15068,6 +14751,12 @@ async function parseGovernanceProposalRecord(payload) {
     proposalOperator = kind.validation_fee_policy.proposal_operator;
   } else if (kind.variant === "ValidationFeePayoutLifecycle") {
     proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
+  } else if (kind.variant === "KagemushaVerifierPolicyInstall") {
+    proposalOperator = kind.kagemusha_verifier_policy_install.proposal_operator;
+  } else if (kind.variant === "KagemushaVerifierReleaseInstall") {
+    proposalOperator = kind.kagemusha_verifier_release_install.proposal_operator;
+  } else if (kind.variant === "KagemushaVerifierReleaseActivate") {
+    proposalOperator = kind.kagemusha_verifier_release_activate.proposal_operator;
   }
   if (proposalOperator !== null && proposalOperator !== proposer) {
     rejectType("governance proposal operator must match the retained proposer");
@@ -15167,6 +14856,36 @@ async function parseGovernanceProposalKind(payload, context) {
       return {
         variant,
         global_data_trigger_permission_governance: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "KagemushaVerifierPolicyInstall": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        kagemusha_verifier_policy_install: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "KagemushaVerifierReleaseInstall": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        kagemusha_verifier_release_install: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
+    }
+    case "KagemushaVerifierReleaseActivate": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
+      return {
+        variant,
+        kagemusha_verifier_release_activate: normalizeGovernanceProposalWireV1(
           record,
           context,
         ).payload,
@@ -20452,8 +20171,8 @@ function normalizeManifestEntrypointPayload(value, context) {
     if (analysis.canonicalName !== returnType) {
       rejectType(`${context}.return_schema does not match return_type`);
     }
-    if (analysis.wordCount > 13) {
-      rejectType(`${context}.return_schema exceeds the V1 13-word return window`);
+    if (analysis.wordCount > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
+      rejectType(`${context}.return_schema exceeds the V1 8192-word result table`);
     }
   }
   return {
@@ -20491,8 +20210,8 @@ function normalizeManifestEntrypointParams(value, context) {
   if (!Array.isArray(value)) {
     rejectType(`${context} must be an array`);
   }
-  if (value.length > 13) {
-    rejectType(`${context} exceeds the V1 13-parameter limit`);
+  if (value.length > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
+    rejectType(`${context} exceeds the V1 8192-parameter limit`);
   }
   const names = new Set();
   return value.map((param, index) => {
@@ -20528,8 +20247,8 @@ function normalizeManifestArgumentSchema(value, context) {
   if (!Array.isArray(record.fields)) {
     rejectType(`${context}.fields must be an array`);
   }
-  if (record.fields.length === 0 || record.fields.length > 13) {
-    rejectType(`${context}.fields must contain 1..13 entries`);
+  if (record.fields.length === 0 || record.fields.length > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
+    rejectType(`${context}.fields must contain 1..8192 entries`);
   }
   const names = new Set();
   let wordCount = 0;
@@ -20550,8 +20269,8 @@ function normalizeManifestArgumentSchema(value, context) {
       wordCount += analyzeManifestValueType(ty, `${context}.fields[${index}].ty`).wordCount;
       return { name, ty };
     });
-  if (wordCount > 13) {
-    rejectType(`${context} exceeds the V1 13-word argument window`);
+  if (wordCount > MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1) {
+    rejectType(`${context} exceeds the V1 8192-word argument table`);
   }
   return { fields };
 }
@@ -22036,96 +21755,6 @@ function normalizeContractCallSimulateResponse(payload) {
   return normalized;
 }
 
-async function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
-  const record = ensureRecord(input, `${context} request`);
-  const vkRef = record.vk_ref ?? record.vkRef;
-  const metadata = record.metadata ?? {};
-  const bytecode = normalizeIvmArtifactBytecodeInput(
-    record.bytecode,
-    `${context}.bytecode`,
-  );
-  const normalized = {
-    vk_ref: (await loadVerifyingKeyClient()).id(
-      vkRef,
-      `${context}.vk_ref`,
-    ),
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      `${context}.authority`,
-    ),
-    metadata: cloneJsonValue(
-      ensureRecord(metadata, `${context}.metadata`),
-      `${context}.metadata`,
-    ),
-    bytecode,
-  };
-  if (includeProved) {
-    const proved = record.proved;
-    if (proved !== undefined && proved !== null) {
-      normalized.proved = normalizeZkIvmProvedPayload(
-        proved,
-        `${context}.proved`,
-      );
-      if (normalized.proved.bytecode !== bytecode) {
-        rejectType(`${context}.proved.bytecode must exactly match ${context}.bytecode`);
-      }
-    }
-  }
-  return normalized;
-}
-
-function stringifyBoundedJsonRequest(payload, maxBytes, context) {
-  const body = JSON.stringify(payload);
-  if (Buffer.byteLength(body, "utf8") > maxBytes) {
-    rejectRange(`${context} exceeds the ${maxBytes}-byte request limit`);
-  }
-  return body;
-}
-
-function normalizeZkIvmDeriveResponse(payload) {
-  const record = exactEnumerableDataRecord(
-    payload,
-    ["proved"],
-    "IVM derive response",
-  );
-  return {
-    proved: normalizeZkIvmProvedPayload(
-      record.proved,
-      "IVM derive response.proved",
-    ),
-  };
-}
-
-function normalizeZkIvmProvedPayload(value, context) {
-  const record = exactEnumerableDataRecord(
-    value,
-    ["bytecode", "overlay", "events_commitment", "gas_policy_commitment"],
-    context,
-  );
-  const bytecode = normalizeIvmArtifactBase64String(
-    record.bytecode,
-    `${context}.bytecode`,
-  );
-  if (!Array.isArray(record.overlay)) {
-    rejectType(`${context}.overlay must be an array`);
-  }
-  const overlay = cloneJsonValue(record.overlay, `${context}.overlay`, {
-    nullPrototype: true,
-  });
-  return {
-    bytecode,
-    overlay,
-    events_commitment: normalizeHex32String(
-      record.events_commitment,
-      `${context}.events_commitment`,
-    ),
-    gas_policy_commitment: normalizeHex32String(
-      record.gas_policy_commitment,
-      `${context}.gas_policy_commitment`,
-    ),
-  };
-}
-
 function exactEnumerableDataRecord(value, expectedKeys, context) {
   const record = ensureRecord(value, context);
   const expected = new Set(expectedKeys);
@@ -22145,149 +21774,6 @@ function exactEnumerableDataRecord(value, expectedKeys, context) {
     snapshot[key] = descriptor.value;
   }
   return snapshot;
-}
-
-function normalizePortableVerifyingKeyIdField(value, context) {
-  const field = requireExactNonEmptyString(value, context);
-  if (
-    Buffer.byteLength(field, "utf8") > 256 ||
-    !/^[a-z0-9](?:[a-z0-9._/:\-]*[a-z0-9])?$/u.test(field) ||
-    ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"].some(
-      (separator) => field.includes(separator),
-    )
-  ) {
-    rejectType(`${context} must use portable registry syntax`);
-  }
-  return field;
-}
-
-function normalizeZkIvmProofAttachment(value, context) {
-  const candidate = ensureRecord(value, context);
-  const requiredKeys = ["backend", "proof", "vk_ref"];
-  const optionalKeys = ["vk_commitment", "envelope_hash", "lane_privacy"];
-  const allowed = new Set([...requiredKeys, ...optionalKeys]);
-  const ownKeys = Reflect.ownKeys(candidate);
-  if (
-    requiredKeys.some((key) => !ownKeys.includes(key)) ||
-    ownKeys.some((key) => typeof key !== JS_TYPE_STRING || !allowed.has(key))
-  ) {
-    rejectType(`${context} must contain backend, proof, vk_ref, and only supported optional fields`);
-  }
-  const presentOptionalKeys = optionalKeys.filter((key) => ownKeys.includes(key));
-  const record = exactEnumerableDataRecord(
-    candidate,
-    [...requiredKeys, ...presentOptionalKeys],
-    context,
-  );
-  const backend = assertProductionVerifyBackendLabel(
-    record.backend,
-    `${context}.backend`,
-  );
-  const proofCandidate = ensureRecord(record.proof, `${context}.proof`);
-  const proofKeys = Reflect.ownKeys(proofCandidate);
-  const hasCompactBytes = proofKeys.includes("bytes_b64");
-  const hasLegacyBytes = proofKeys.includes("bytes");
-  if (
-    proofKeys.length !== 2 ||
-    !proofKeys.includes("backend") ||
-    hasCompactBytes === hasLegacyBytes ||
-    proofKeys.some(
-      (key) =>
-        typeof key !== JS_TYPE_STRING ||
-        !new Set(["backend", "bytes_b64", "bytes"]).has(key),
-    )
-  ) {
-    rejectType(`${context}.proof must contain exactly backend and one of bytes_b64 or bytes`);
-  }
-  const proof = exactEnumerableDataRecord(
-    proofCandidate,
-    ["backend", hasCompactBytes ? "bytes_b64" : "bytes"],
-    `${context}.proof`,
-  );
-  const proofBackend = assertProductionVerifyBackendLabel(
-    proof.backend,
-    `${context}.proof.backend`,
-  );
-  if (proofBackend !== backend) {
-    rejectType(`${context}.proof.backend must match ${context}.backend`);
-  }
-  const vkRefRecord = exactEnumerableDataRecord(
-    record.vk_ref,
-    ["backend", "name"],
-    `${context}.vk_ref`,
-  );
-  const vkBackend = assertProductionVerifyBackendLabel(
-    vkRefRecord.backend,
-    `${context}.vk_ref.backend`,
-  );
-  if (vkBackend !== backend) {
-    rejectType(`${context}.vk_ref.backend must match ${context}.backend`);
-  }
-  const vkName = normalizePortableVerifyingKeyIdField(
-    vkRefRecord.name,
-    `${context}.vk_ref.name`,
-  );
-  const normalized = {
-    backend,
-    proof: {
-      backend: proofBackend,
-      bytes_b64: hasCompactBytes
-        ? normalizeBoundedCanonicalBase64String(
-            proof.bytes_b64,
-            `${context}.proof.bytes_b64`,
-            IVM_PROOF_MAX_BYTES,
-            "proof",
-          )
-        : Buffer.from(
-            normalizeExactJsonByteArray(
-              proof.bytes,
-              `${context}.proof.bytes`,
-              { maxLength: IVM_PROOF_MAX_BYTES },
-            ),
-          ).toString("base64"),
-    },
-    vk_ref: { backend: vkBackend, name: vkName },
-  };
-  for (const key of ["vk_commitment", "envelope_hash"]) {
-    if (!presentOptionalKeys.includes(key)) continue;
-    if (hasLegacyBytes && record[key] === null) continue;
-    const bytes = normalizeExactJsonByteArray(
-      record[key],
-      `${context}.${key}`,
-      { exactLength: 32 },
-    );
-    let nonZero = false;
-    for (let index = 0; index < 32; index += 1) {
-      if (bytes[index] !== 0) nonZero = true;
-    }
-    if (!nonZero) {
-      rejectType(`${context}.${key} must be non-zero`);
-    }
-    normalized[key] = Array.from(bytes);
-  }
-  if (presentOptionalKeys.includes("lane_privacy")) {
-    if (hasLegacyBytes && record.lane_privacy === null) {
-      return validateNormalizedProofAttachmentEnvelope(normalized, context);
-    }
-    normalized.lane_privacy = cloneJsonValue(
-      ensureRecord(record.lane_privacy, `${context}.lane_privacy`),
-      `${context}.lane_privacy`,
-    );
-  }
-  return validateNormalizedProofAttachmentEnvelope(normalized, context);
-}
-
-function validateNormalizedProofAttachmentEnvelope(attachment, context) {
-  if (attachment.envelope_hash === undefined) return attachment;
-  const proofBytes = Buffer.from(attachment.proof.bytes_b64, "base64");
-  const expected = new Uint8ArrayIntrinsic(blake2b256(proofBytes));
-  expected[typedArrayByteLengthGetter.call(expected) - 1] |= 1;
-  for (let index = 0; index < 32; index += 1) {
-    if (attachment.envelope_hash[index] !== expected[index]) {
-      rejectType(`${context}.envelope_hash must match proof bytes`);
-    }
-  }
-  return attachment;
 }
 
 function normalizeExactJsonByteArray(
@@ -22342,95 +21828,6 @@ function normalizeExactJsonByteArray(
     rejectType(`${context} must be a dense exact byte array`);
   }
   return bytes;
-}
-
-function normalizeIvmProveJobId(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
-    rejectType(`${context} must be a 16-byte hexadecimal IVM prove job id`);
-  }
-  return normalized.toLowerCase();
-}
-
-function normalizeIvmProveResponseJobId(value, context) {
-  const normalized = requireExactNonEmptyString(value, context);
-  if (!/^[0-9a-f]{32}$/u.test(normalized)) {
-    rejectType(`${context} must be an exact lowercase 16-byte hexadecimal IVM prove job id`);
-  }
-  return normalized;
-}
-
-function normalizeZkIvmProveJobCreatedResponse(payload) {
-  const record = exactEnumerableDataRecord(
-    payload,
-    ["job_id"],
-    "IVM prove job response",
-  );
-  return {
-    job_id: normalizeIvmProveResponseJobId(
-      record.job_id,
-      "IVM prove job response.job_id",
-    ),
-  };
-}
-
-function normalizeZkIvmProveJobResponse(payload) {
-  const candidate = ensureRecord(payload, "IVM prove job status response");
-  const statusDescriptor = Object.getOwnPropertyDescriptor(candidate, "status");
-  if (
-    !statusDescriptor ||
-    !("value" in statusDescriptor) ||
-    !statusDescriptor.enumerable
-  ) {
-    rejectType("IVM prove job status response.status must be an enumerable data property");
-  }
-  const status = requireExactNonEmptyString(
-    statusDescriptor.value,
-    "IVM prove job status response.status",
-  );
-  if (!new Set(["pending", "running", "done", "error"]).has(status)) {
-    rejectType("IVM prove job status response.status must be pending, running, done, or error");
-  }
-  const expectedKeys =
-    status === "done"
-      ? ["job_id", "status", "proved", "attachment"]
-      : status === "error"
-        ? ["job_id", "status", "error"]
-        : ["job_id", "status"];
-  const record = exactEnumerableDataRecord(
-    candidate,
-    expectedKeys,
-    "IVM prove job status response",
-  );
-  const normalized = {
-    job_id: normalizeIvmProveResponseJobId(
-      record.job_id,
-      "IVM prove job status response.job_id",
-    ),
-    status,
-    error:
-      status !== "error"
-        ? null
-        : requireNonEmptyString(
-            record.error,
-            "IVM prove job status response.error",
-          ),
-    proved:
-      status !== "done"
-        ? null
-        : normalizeZkIvmProvedPayload(
-            record.proved,
-            "IVM prove job status response.proved",
-          ),
-    attachment:
-      status !== "done"
-        ? null
-        : normalizeZkIvmProofAttachment(
-            record.attachment,
-            "IVM prove job status response.attachment",
-          ),
-  };
-  return normalized;
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -31304,7 +30701,6 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/ipa",
   "halo2/pasta/kaigi-authorization-v1",
   "halo2/pasta/kaigi-usage-v1",
-  "halo2/pasta/ivm-replay-binding-v1",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

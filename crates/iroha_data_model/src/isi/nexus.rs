@@ -2,66 +2,10 @@ use super::*;
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    nexus::{
-        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneRelayEnvelope,
-        ProofBlob,
-    },
+    nexus::{FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, ProofBlob},
 };
-use iroha_model_base::metadata::Metadata;
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
-use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
-isi! {
-    /// Set or clear emergency validator peers used for lane relay quorum recovery.
-    ///
-    /// This instruction is disabled by default and requires
-    /// `nexus.lane_relay_emergency.enabled = true`. When enabled, the transaction authority
-    /// must be a multisig account meeting the configured threshold/member minimums
-    /// (defaults to 3-of-5).
-    #[norito_schema(name = "iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators")]
-    pub struct SetLaneRelayEmergencyValidators {
-        /// Lane whose emergency committee fillers are being overridden.
-        pub lane_id: LaneId,
-        /// Live consensus peers allowed to fill missing committee slots.
-        pub peers: Vec<PeerId>,
-        /// Optional block height (inclusive) after which the override expires.
-        #[norito(skip_serializing_if = "Option::is_none")]
-        #[norito(default)]
-        pub expires_at_height: Option<u64>,
-        /// Optional metadata describing the override decision.
-        #[norito(default)]
-        pub metadata: Metadata,
-    }
-}
-iroha_data_model_derive::model_single! {
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[derive(getset::Getters)]
-    #[derive(Decode, Encode)]
-    #[derive(iroha_schema::IntoSchema)]
-    #[getset(get = "pub")]
-    /// Persist a finalized, verified private-source lane relay for contract consumption.
-    ///
-    /// Any account may transport the instruction, but execution requires the envelope's commit QC
-    /// to satisfy the canonical on-chain lane committee and verifies its aggregate BLS signature.
-    /// A pending envelope without a QC can never create contract-visible relay state.
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay")]
-    pub struct RegisterVerifiedLaneRelay {
-        /// Canonical finalized lane relay envelope being registered.
-        pub envelope: LaneRelayEnvelope,
-        /// FASTPQ/AXT proof blob used to verify the relay payload.
-        pub proof_blob: ProofBlob,
-        /// Reserved business-effect proof slot.
-        ///
-        /// The first-release runtime deterministically rejects `Some` until an
-        /// effect-specific statement is derived from a finalized, QC-anchored
-        /// settlement ledger entry. Callers must submit `None`.
-        #[norito(skip_serializing_if = "Option::is_none")]
-        #[norito(default)]
-        pub effect_proof_blob: Option<ProofBlob>,
-    }
-}
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[derive(getset::Getters)]
@@ -271,16 +215,6 @@ iroha_data_model_derive::model_single! {
         pub amount: Quantity,
     }
 }
-impl PartialOrd for RegisterVerifiedLaneRelay {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for RegisterVerifiedLaneRelay {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.encode().cmp(&other.encode())
-    }
-}
 impl PartialOrd for RegisterVerifiedFeeSponsorVaultAllocation {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -319,8 +253,6 @@ impl_instruction_ord!(
     FundFeeSponsorProgram,
     WithdrawFeeSponsorProgram,
 );
-impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
-impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
 impl crate::seal::Instruction for RegisterVerifiedFeeSponsorVaultAllocation {}
 impl crate::seal::Instruction for CreateFeeSponsorProgram {}
 impl crate::seal::Instruction for StageFeeSponsorProgramRevision {}
@@ -335,89 +267,11 @@ impl crate::seal::Instruction for WithdrawFeeSponsorProgram {}
 fn nexus_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-impl<'a> norito::core::DecodeFromSlice<'a> for SetLaneRelayEmergencyValidators {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-        let mut offset = 0usize;
-        let lane_id = super::decode_aos_canonical_field::<LaneId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let peers = super::decode_aos_canonical_field::<Vec<PeerId>>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let expires_at_height = super::decode_aos_canonical_field::<Option<u64>>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let metadata = super::decode_aos_canonical_field::<Metadata>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                lane_id,
-                peers,
-                expires_at_height,
-                metadata,
-            },
-            offset,
-        ))
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-        let mut offset = 0usize;
-        let envelope = super::decode_aos_canonical_field::<LaneRelayEnvelope>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let proof_blob = super::decode_aos_canonical_field::<ProofBlob>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let effect_proof_blob = if offset == bytes.len() {
-            None
-        } else {
-            super::decode_aos_canonical_field::<Option<ProofBlob>>(
-                super::read_aos_field(bytes, &mut offset, flags)?,
-                flags,
-            )?
-        };
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                envelope,
-                proof_blob,
-                effect_proof_blob,
-            },
-            offset,
-        ))
-    }
-}
 macro_rules! impl_decode_fields {
     ($ty:ident { $($field:ident: $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = nexus_decode_flags();
-                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                    return super::decode_packed_instruction_payload::<Self>(bytes);
-                }
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -492,15 +346,11 @@ mod tests {
 
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use crate::{
-        block::{BlockHeader, consensus::LaneBlockCommitment},
-        nexus::{
-            FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
-            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
-        },
+    use crate::nexus::{
+        FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::{Decode, Encode};
     use std::num::NonZeroU64;
@@ -518,51 +368,6 @@ mod tests {
         manifest_root: [u8; 32],
         proof_blob: ProofBlob,
     }
-    fn sample_commitment(height: u64) -> LaneBlockCommitment {
-        LaneBlockCommitment {
-            block_height: height,
-            lane_id: LaneId::new(3),
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-            dataspace_id: DataSpaceId::new(2),
-            tx_count: 1,
-            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        }
-    }
-    fn sample_header(height: u64) -> BlockHeader {
-        let mut header = BlockHeader::new(
-            NonZeroU64::new(height).expect("nonzero height"),
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        // This fixed codec specimen is independent of changing network policy defaults.
-        header.set_confidential_features(Some(
-            crate::confidential::ConfidentialFeatureDigest::new(
-                None,
-                None,
-                None,
-                Some(1),
-                Some([
-                    0x93, 0x76, 0x91, 0x34, 0xd0, 0xa3, 0x4d, 0x4c, 0x93, 0x7a, 0x95, 0xbb, 0xc3,
-                    0x40, 0x05, 0x77, 0x1b, 0x9d, 0x82, 0xef, 0x0f, 0xcf, 0xdf, 0xf0, 0x69, 0x57,
-                    0xf2, 0x07, 0xe2, 0x16, 0x89, 0x6f,
-                ]),
-            ),
-        ));
-        header
-    }
-    fn sample_envelope(height: u64) -> LaneRelayEnvelope {
-        LaneRelayEnvelope::new(sample_header(height), None, sample_commitment(height), 0)
-            .expect("valid lane relay envelope")
-    }
     fn sample_proof_blob(seed: u8) -> ProofBlob {
         ProofBlob {
             payload: vec![seed, seed.wrapping_add(1)],
@@ -573,31 +378,6 @@ mod tests {
         let sponsor_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
             .expect("derive checked Nexus sponsor fixture keypair");
         AccountId::new(sponsor_keypair.public_key().clone())
-    }
-    fn sample_peer_id(seed: u8) -> PeerId {
-        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive checked Nexus peer fixture keypair");
-        PeerId::new(keypair.public_key().clone())
-    }
-    fn sample_metadata() -> Metadata {
-        let mut metadata = Metadata::default();
-        metadata.insert("reason".parse().expect("metadata key"), true);
-        metadata
-    }
-    fn sample_emergency_validators_instruction() -> SetLaneRelayEmergencyValidators {
-        SetLaneRelayEmergencyValidators {
-            lane_id: LaneId::new(9),
-            peers: vec![sample_peer_id(0xC1), sample_peer_id(0xC2)],
-            expires_at_height: Some(500),
-            metadata: sample_metadata(),
-        }
-    }
-    fn sample_lane_relay_instruction() -> RegisterVerifiedLaneRelay {
-        RegisterVerifiedLaneRelay {
-            envelope: sample_envelope(5),
-            proof_blob: sample_proof_blob(0x01),
-            effect_proof_blob: None,
-        }
     }
     fn sample_fee_budget_instruction() -> RegisterVerifiedFeeSponsorVaultAllocation {
         RegisterVerifiedFeeSponsorVaultAllocation {
@@ -647,20 +427,6 @@ mod tests {
         }
     }
     #[test]
-    fn register_verified_lane_relay_order_uses_canonical_encoding() {
-        let left = sample_lane_relay_instruction();
-        let right = RegisterVerifiedLaneRelay {
-            envelope: sample_envelope(5),
-            proof_blob: sample_proof_blob(0x02),
-            effect_proof_blob: None,
-        };
-        assert_eq!(
-            left.partial_cmp(&right),
-            Some(left.encode().cmp(&right.encode()))
-        );
-        assert_eq!(left.cmp(&right), left.encode().cmp(&right.encode()));
-    }
-    #[test]
     fn register_verified_fee_sponsor_allocation_order_uses_canonical_encoding() {
         let left = sample_fee_budget_instruction();
         let right = RegisterVerifiedFeeSponsorVaultAllocation {
@@ -675,8 +441,6 @@ mod tests {
     }
     #[test]
     fn nexus_verified_payload_decode_from_slice_roundtrips() {
-        assert_slice_roundtrip(sample_emergency_validators_instruction());
-        assert_slice_roundtrip(sample_lane_relay_instruction());
         assert_slice_roundtrip(sample_fee_budget_instruction());
         let program = sample_fee_sponsor_program();
         let id = program.id.clone();
@@ -768,10 +532,6 @@ mod tests {
     )]
     fn nexus_verified_payload_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_with_id_slice::<SetLaneRelayEmergencyValidators>(
-                "nexus::SetLaneRelayEmergencyValidators",
-            )
-            .register_with_id_slice::<RegisterVerifiedLaneRelay>("nexus::RegisterVerifiedLaneRelay")
             .register_with_id_slice::<RegisterVerifiedFeeSponsorVaultAllocation>(
                 "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
             )
@@ -797,16 +557,6 @@ mod tests {
             .register_with_id_slice::<WithdrawFeeSponsorProgram>(
                 "nexus::WithdrawFeeSponsorProgram",
             );
-        assert_registry_decodes(
-            &registry,
-            "nexus::SetLaneRelayEmergencyValidators",
-            sample_emergency_validators_instruction(),
-        );
-        assert_registry_decodes(
-            &registry,
-            "nexus::RegisterVerifiedLaneRelay",
-            sample_lane_relay_instruction(),
-        );
         assert_registry_decodes(
             &registry,
             "nexus::RegisterVerifiedFeeSponsorVaultAllocation",

@@ -192,7 +192,6 @@ mod tests {
             PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
             PublicLaneMonetarySlashV1,
         },
-        parameter::system::SumeragiNposParameters,
     };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
@@ -227,7 +226,6 @@ mod tests {
     }
 
     fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
-        let xor = SumeragiNposParameters::default().xor_asset_definition_id;
         peers
             .iter()
             .zip(130..134)

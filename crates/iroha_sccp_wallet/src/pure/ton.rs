@@ -131,7 +131,7 @@ pub fn attestation_cell(attestation: &AttestationFieldsV1) -> Result<Cell, TonEr
 ///
 /// Returns [`TonError::FieldTooLarge`] for a set without signatures or with a partial one.
 pub fn signatures_cell(set: &SignatureSetV1) -> Result<Cell, TonError> {
-    if set.signatures.is_empty() || set.signatures.len() % 65 != 0 {
+    if set.signatures.is_empty() || !set.signatures.len().is_multiple_of(65) {
         return Err(TonError::FieldTooLarge);
     }
     let mut next: Option<Cell> = None;
@@ -595,7 +595,7 @@ pub struct TvmIntV1(pub [u8; 33]);
 impl TvmIntV1 {
     /// The value as a `u64`, when it is one.
     #[must_use]
-    pub fn to_u64(&self) -> Option<u64> {
+    pub fn to_u64(self) -> Option<u64> {
         if self.0[..25].iter().any(|byte| *byte != 0) {
             return None;
         }
@@ -604,7 +604,7 @@ impl TvmIntV1 {
 
     /// The value as an unsigned 256-bit word, when it is one.
     #[must_use]
-    pub fn to_u256(&self) -> Option<[u8; 32]> {
+    pub fn to_u256(self) -> Option<[u8; 32]> {
         (self.0[0] == 0)
             .then(|| self.0[1..].try_into().ok())
             .flatten()

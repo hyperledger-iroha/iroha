@@ -17,7 +17,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_sumeragi::types::Hash32;
 
 use super::{
-    commitment::{execution_result, result_of_preimage},
+    commitment::{encode_result_preimage, execution_result, result_of_preimage},
     network_topology::Topology,
     schedule,
 };
@@ -25,6 +25,9 @@ use crate::{block::ValidBlock, state::State};
 
 /// The genesis height: iroha's genesis block is height 1.
 pub const GENESIS_HEIGHT: u64 = 1;
+const _: () = assert!(
+    iroha_sumeragi::message::PROTOCOL_VERSION == iroha_data_model::sumeragi::PROTOCOL_VERSION
+);
 
 /// Why startup failed.
 #[derive(Debug, thiserror::Error)]
@@ -75,10 +78,11 @@ pub fn apply_genesis(
     consensus_mode: ConsensusMode,
     stored: Option<&CommitCertificate>,
 ) -> Result<GenesisTip, StartupError> {
+    let signed_epoch = super::epoch::genesis_epoch(&genesis).map_err(StartupError::Schedule)?;
     let committee = genesis_committee_peers(&genesis)?;
     let topology = Topology::new(committee.clone());
     let block_hash = core_hash_of(&genesis);
-    let (valid, mut overlay) = ValidBlock::validate_sumeragi_genesis(
+    let (valid, mut overlay) = ValidBlock::validate_signed_genesis(
         genesis,
         &topology,
         genesis_account,
@@ -88,19 +92,50 @@ pub fn apply_genesis(
     )
     .unpack(|_| {})
     .map_err(|(_, error)| StartupError::InvalidGenesis(error.to_string()))?;
-    let next = overlay
-        .take_sumeragi_schedule()
-        .and_then(|next| next.height_config())
+    let inputs = overlay
+        .take_sumeragi_execution_inputs()
         .map_err(|error| StartupError::Schedule(error.to_string()))?;
+    if inputs.get().schedule.current != signed_epoch
+        || inputs.get().beacon.is_some()
+        || inputs.get().schedule.boundary.is_some()
+    {
+        return Err(StartupError::Schedule(
+            "executed genesis differs from its independently signed epoch authority".into(),
+        ));
+    }
     overlay
         .take_sumeragi_lanes()
         .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
     let witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;
-    let (_, preimage, result) = execution_result(&witness, valid.as_ref(), &next)
+    let budget = state.ivm_execution_budget();
+    let native_lanes =
+        iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(&witness, &budget)
+            .map_err(|error| StartupError::Local(error.to_string()))?;
+    let retained_result = execution_result(&witness, valid.as_ref(), inputs, native_lanes)
         .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
-    let certificate = CommitCertificate::new(Vec::new(), Vec::new(), preimage);
+    let preimage = encode_result_preimage(&retained_result, &budget)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
+    let result = result_of_preimage(preimage.as_slice());
+    let empty_header = mv::allocation::ChargedBuffer::new(0, &budget)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
+    let empty_qc = mv::allocation::ChargedBuffer::new(0, &budget)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
+    let certificate =
+        CommitCertificate::from_charged_parts(empty_header, empty_qc, preimage, &budget)
+            .map_err(|(_original_parts, error)| StartupError::Local(error.to_string()))?;
+    // Freeze H1 complete context values from the same original overlay and R used by
+    // every successor. A separately reconstructed current-head projection is not a source.
+    let archive = crate::query::native_context_archive::NativeContextArchive::open(
+        state.kura(),
+        budget.clone(),
+        state.kura().native_context_archive_max_bytes(),
+    )
+    .map_err(|error| StartupError::Local(error.to_string()))?;
+    let native_contexts = archive
+        .prepare(&overlay, valid.as_ref(), &retained_result)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
     let committed = valid.commit_unchecked().unpack(|_| {});
     match stored {
         Some(stored) => {
@@ -119,6 +154,12 @@ pub fn apply_genesis(
                 .map_err(|error| StartupError::Local(error.to_string()))?;
         }
     }
+    // The canonical executed frame is durable (or matched exactly on replay) before
+    // the original projection is published. Refusal occurs before State visibility;
+    // restart re-executes the same signed genesis and must reproduce both exact values.
+    archive
+        .publish(&native_contexts)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
     overlay
         .authorize_sumeragi_output_publication(&committed, &witness, &certificate)
         .map_err(StartupError::Local)?;
@@ -128,6 +169,9 @@ pub fn apply_genesis(
     overlay
         .commit()
         .map_err(|error| StartupError::Local(error.to_string()))?;
+    // Keep the original canonical graph and its same-pool ledger alive until publication
+    // completes; the certificate separately owns the exact original encoded allocation.
+    drop(retained_result);
     Ok(GenesisTip { block_hash, result })
 }
 
@@ -140,7 +184,7 @@ pub fn stored_genesis(state: &State) -> Option<(SignedBlock, CommitCertificate, 
     let certificate = block.commit_certificate()?.clone();
     let tip = GenesisTip {
         block_hash: core_hash_of(&block),
-        result: result_of_preimage(&certificate.result_preimage),
+        result: result_of_preimage(certificate.result_preimage()),
     };
     Some((block.canonical_resultless_proposal(), certificate, tip))
 }

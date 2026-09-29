@@ -2933,3 +2933,8 @@ gauge counts as zero. The exact 1 MiB NPoS carrier and four-peer happy-path
 tests pass in 35.87s and 80.58s respectively on the patched optimized daemon
 `402b6329cac68002ecec2023d6ba2531c0807aea2499653d6d4e39fe3d1b3a32`.
 That daemon predates the later per-peer mixed-batch filter.
+
+
+## Independent native control progress
+
+The protocol7 core requests application control separately for every fresh proposal, including forced EMPTY. Every current signing member drives beacon partial production from the exact applied parent and retransmits at bounded cadence. Build-control retries stop on view supersession; share production is view independent and stops on source supersession or halt. The serialized driver bounds ingress to one partial per sender and alternates control work with ordinary work, preserving exclusive prepared publication. Completion still requires connected native-network evidence under silent authors, authenticated share loss, saturation, all-seat restart and final-transaction progress; pure core no-demand fixtures do not satisfy those gates.

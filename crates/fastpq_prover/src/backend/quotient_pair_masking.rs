@@ -30,6 +30,11 @@ pub(super) struct PairMaskingShape {
 
 /// Explicit bounded arithmetic policy with no production defaults.
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "every field is an inclusive cap and `max_` separates it from the measured \
+              `PairMaskingPlan` payload bytes and work units that it bounds"
+)]
 pub(super) struct PairMaskingLimits {
     /// Maximum exclusive degree of either resulting chunk.
     pub(super) max_chunk_degree_bound: usize,

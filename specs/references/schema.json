@@ -1753,6 +1753,70 @@
       }
     ]
   },
+  "AxtAnchoredSpendDraftV1": {
+    "Struct": [
+      {
+        "name": "handle",
+        "type": "AssetHandle"
+      },
+      {
+        "name": "intent",
+        "type": "RemoteSpendIntent"
+      },
+      {
+        "name": "proof",
+        "type": "Option<ProofBlob>"
+      },
+      {
+        "name": "amount",
+        "type": "Option<Quantity>"
+      },
+      {
+        "name": "amount_commitment",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "source_receipt",
+        "type": "AxtSourceSuccessReceiptV1"
+      },
+      {
+        "name": "source_occurrence",
+        "type": "AxtSourceTransferOccurrenceV1"
+      }
+    ]
+  },
+  "AxtAnchoredSpendIssuerAuthorizationV1": {
+    "Struct": [
+      {
+        "name": "anchor",
+        "type": "AxtFinalizedSpendAnchorV1"
+      },
+      {
+        "name": "expiry_slot",
+        "type": "u64"
+      },
+      {
+        "name": "nonce",
+        "type": "AxtSpendNonceV1"
+      },
+      {
+        "name": "issuer_signature",
+        "type": "Signature"
+      }
+    ]
+  },
+  "AxtAnchoredSpendV1": {
+    "Struct": [
+      {
+        "name": "draft",
+        "type": "AxtAnchoredSpendDraftV1"
+      },
+      {
+        "name": "authorization",
+        "type": "AxtAnchoredSpendIssuerAuthorizationV1"
+      }
+    ]
+  },
   "AxtBinding": "Array<u8, 32>",
   "AxtDescriptor": {
     "Struct": [
@@ -1825,8 +1889,8 @@
         "type": "Vec<AxtProofFragment>"
       },
       {
-        "name": "handles",
-        "type": "Vec<AxtHandleFragment>"
+        "name": "spends",
+        "type": "Vec<AxtAnchoredSpendV1>"
       },
       {
         "name": "commit_height",
@@ -1902,27 +1966,59 @@
       }
     ]
   },
-  "AxtHandleFragment": {
+  "AxtFinalizedSpendAnchorV1": {
     "Struct": [
       {
-        "name": "handle",
-        "type": "AssetHandle"
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
       },
       {
-        "name": "intent",
-        "type": "RemoteSpendIntent"
+        "name": "genesis_hash",
+        "type": "Array<u8, 32>"
       },
       {
-        "name": "proof",
-        "type": "Option<ProofBlob>"
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
       },
       {
-        "name": "amount",
-        "type": "Option<Quantity>"
+        "name": "lane_id",
+        "type": "LaneId"
       },
       {
-        "name": "amount_commitment",
-        "type": "Option<Array<u8, 32>>"
+        "name": "lane_incarnation",
+        "type": "Hash"
+      },
+      {
+        "name": "finalized_height",
+        "type": "u64"
+      },
+      {
+        "name": "block_header_hash",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "quorum_certificate_digest",
+        "type": "Hash"
+      },
+      {
+        "name": "committee_digest",
+        "type": "Hash"
+      },
+      {
+        "name": "pre_state_root",
+        "type": "Hash"
+      },
+      {
+        "name": "post_state_root",
+        "type": "Hash"
+      },
+      {
+        "name": "transaction_set_digest",
+        "type": "Hash"
+      },
+      {
+        "name": "da_manifest_digest",
+        "type": "Hash"
       }
     ]
   },
@@ -2162,6 +2258,67 @@
       }
     ]
   },
+  "AxtSourceSuccessReceiptV1": {
+    "Struct": [
+      {
+        "name": "finalized_anchor_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_tx_commitment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_tx_index",
+        "type": "u32"
+      },
+      {
+        "name": "post_transaction_state_root",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "effect_set_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "AxtSourceTransferOccurrenceV1": {
+    "Struct": [
+      {
+        "name": "source_tx_commitment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_success_receipt_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_tx_index",
+        "type": "u32"
+      },
+      {
+        "name": "transcript_index",
+        "type": "u32"
+      },
+      {
+        "name": "delta_index",
+        "type": "u32"
+      },
+      {
+        "name": "pair_ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "transfer_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "remote_spend_claim_commitment",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "AxtSpendNonceV1": "Array<u8, 32>",
   "AxtTouchFragment": {
     "Struct": [
       {
@@ -2272,6 +2429,10 @@
       {
         "name": "native_lane_decisions",
         "type": "Option<LaneDecisionBatchV1>"
+      },
+      {
+        "name": "lane_merge",
+        "type": "Option<SumeragiLaneMergeSection>"
       }
     ]
   },
@@ -3260,6 +3421,34 @@
     ]
   },
   "ChainId": "String",
+  "ChainParamsRecord": {
+    "Struct": [
+      {
+        "name": "block_time_ms",
+        "type": "u64"
+      },
+      {
+        "name": "payload_retry_interval_ms",
+        "type": "u64"
+      },
+      {
+        "name": "exec_budget_ms",
+        "type": "u64"
+      },
+      {
+        "name": "apply_budget_ms",
+        "type": "u64"
+      },
+      {
+        "name": "max_block_bytes",
+        "type": "u32"
+      },
+      {
+        "name": "epoch_length_blocks",
+        "type": "u64"
+      }
+    ]
+  },
   "CheckpointDecision": {
     "Struct": [
       {
@@ -3283,8 +3472,12 @@
         "type": "Array<u8, 32>"
       },
       {
-        "name": "next_committee_digest",
-        "type": "Array<u8, 32>"
+        "name": "schedule",
+        "type": "ScheduleOutcome"
+      },
+      {
+        "name": "beacon",
+        "type": "Option<FinalizedGlobalThresholdBeaconPulseV1>"
       },
       {
         "name": "executed_hash",
@@ -6407,6 +6600,10 @@
       {
         "name": "da_commitment",
         "type": "Array<u8, 33>"
+      },
+      {
+        "name": "source_transfer_occurrences",
+        "type": "Vec<AxtSourceTransferOccurrenceV1>"
       }
     ]
   },
@@ -18505,6 +18702,9 @@
   "Option<SumeragiHaltReason>": {
     "Option": "SumeragiHaltReason"
   },
+  "Option<SumeragiLaneMergeSection>": {
+    "Option": "SumeragiLaneMergeSection"
+  },
   "Option<TicketEnvelopeV1>": {
     "Option": "TicketEnvelopeV1"
   },
@@ -18528,6 +18728,9 @@
   },
   "Option<ValidatorCommitteePreparationV1>": {
     "Option": "ValidatorCommitteePreparationV1"
+  },
+  "Option<ValidatorEpochBoundaryV1>": {
+    "Option": "ValidatorEpochBoundaryV1"
   },
   "Option<Vec<Array<u8, 32>>>": {
     "Option": "Vec<Array<u8, 32>>"
@@ -26471,6 +26674,60 @@
       }
     ]
   },
+  "ScheduleOutcome": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "current",
+        "type": "ValidatorEpochContextV1"
+      },
+      {
+        "name": "boundary",
+        "type": "Option<ValidatorEpochBoundaryV1>"
+      },
+      {
+        "name": "next",
+        "type": "ScheduledSlot"
+      },
+      {
+        "name": "after_next",
+        "type": "ScheduledSlot"
+      }
+    ]
+  },
+  "ScheduledConfig": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "epoch",
+        "type": "ValidatorEpochContextV1"
+      },
+      {
+        "name": "params",
+        "type": "ChainParamsRecord"
+      }
+    ]
+  },
+  "ScheduledSlot": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "ready",
+        "type": "ScheduledConfig"
+      },
+      {
+        "discriminant": 1,
+        "tag": "pending_boundary",
+        "type": "SumeragiPendingBoundary"
+      }
+    ]
+  },
   "SchedulerLayerWidthBuckets": {
     "Struct": [
       {
@@ -30650,7 +30907,56 @@
       },
       {
         "discriminant": 4,
+        "tag": "publication_recovery_required",
+        "type": "u64"
+      },
+      {
+        "discriminant": 5,
         "tag": "driver_anomaly"
+      }
+    ]
+  },
+  "SumeragiLaneMerge": {
+    "Struct": [
+      {
+        "name": "lane",
+        "type": "LaneId"
+      },
+      {
+        "name": "incarnation",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "from",
+        "type": "u64"
+      },
+      {
+        "name": "to",
+        "type": "u64"
+      },
+      {
+        "name": "tip_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "tip_result",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SumeragiLaneMergeSection": {
+    "Struct": [
+      {
+        "name": "merges",
+        "type": "Vec<SumeragiLaneMerge>"
+      },
+      {
+        "name": "time_floor_ms",
+        "type": "u64"
+      },
+      {
+        "name": "merged_count",
+        "type": "u32"
       }
     ]
   },
@@ -30822,6 +31128,26 @@
       {
         "name": "demotion_window",
         "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "SumeragiPendingBoundary": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "boundary_height",
+        "type": "u64"
+      },
+      {
+        "name": "predecessor_context_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "params",
+        "type": "ChainParamsRecord"
       }
     ]
   },
@@ -32600,6 +32926,18 @@
       }
     ]
   },
+  "ValidatorCommitteeMemberV1": {
+    "Struct": [
+      {
+        "name": "validator",
+        "type": "PeerId"
+      },
+      {
+        "name": "proof_of_possession",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "ValidatorCommitteePreparationV1": {
     "Struct": [
       {
@@ -32647,12 +32985,104 @@
         "type": "Array<u8, 32>"
       },
       {
-        "name": "roster",
-        "type": "Vec<ValidatorPower>"
+        "name": "eligibility",
+        "type": "ValidatorElectionPolicyV1"
       },
       {
-        "name": "validator_set_pops",
-        "type": "Vec<Vec<u8>>"
+        "name": "committee",
+        "type": "Vec<ValidatorCommitteeMemberV1>"
+      }
+    ]
+  },
+  "ValidatorElectionPolicyV1": {
+    "Struct": [
+      {
+        "name": "xor_asset_definition_id",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "asset_scope",
+        "type": "AssetBalanceScope"
+      },
+      {
+        "name": "asset_scale",
+        "type": "u32"
+      },
+      {
+        "name": "min_self_bond",
+        "type": "Quantity"
+      },
+      {
+        "name": "min_nomination_bond",
+        "type": "Quantity"
+      },
+      {
+        "name": "max_validators",
+        "type": "u32"
+      },
+      {
+        "name": "epoch_length_blocks",
+        "type": "u64"
+      }
+    ]
+  },
+  "ValidatorEpochBoundaryV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "predecessor_context_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "selection_anchor",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "next",
+        "type": "ValidatorEpochContextV1"
+      },
+      {
+        "name": "preparation",
+        "type": "Option<ValidatorCommitteePreparationV1>"
+      }
+    ]
+  },
+  "ValidatorEpochContextV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "mode",
+        "type": "ConsensusMode"
+      },
+      {
+        "name": "authority",
+        "type": "KagemushaMintFinalityAuthorityGenerationV1"
+      },
+      {
+        "name": "authorization",
+        "type": "KagemushaMintFinalityEpochAuthorizationV1"
+      },
+      {
+        "name": "committee",
+        "type": "Vec<ValidatorCommitteeMemberV1>"
+      },
+      {
+        "name": "leader_seed",
+        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -32710,11 +33140,11 @@
   "Vec<AutonomousLanePayloadEnvelopeV1>": {
     "Vec": "AutonomousLanePayloadEnvelopeV1"
   },
+  "Vec<AxtAnchoredSpendV1>": {
+    "Vec": "AxtAnchoredSpendV1"
+  },
   "Vec<AxtEnvelopeRecord>": {
     "Vec": "AxtEnvelopeRecord"
-  },
-  "Vec<AxtHandleFragment>": {
-    "Vec": "AxtHandleFragment"
   },
   "Vec<AxtPolicyBinding>": {
     "Vec": "AxtPolicyBinding"
@@ -32724,6 +33154,9 @@
   },
   "Vec<AxtRemoteSpendClaimV1>": {
     "Vec": "AxtRemoteSpendClaimV1"
+  },
+  "Vec<AxtSourceTransferOccurrenceV1>": {
+    "Vec": "AxtSourceTransferOccurrenceV1"
   },
   "Vec<AxtTouchFragment>": {
     "Vec": "AxtTouchFragment"
@@ -33292,6 +33725,9 @@
   "Vec<String>": {
     "Vec": "String"
   },
+  "Vec<SumeragiLaneMerge>": {
+    "Vec": "SumeragiLaneMerge"
+  },
   "Vec<SumeragiLanePayloadOwnership>": {
     "Vec": "SumeragiLanePayloadOwnership"
   },
@@ -33339,6 +33775,9 @@
   },
   "Vec<TxGossipStatus>": {
     "Vec": "TxGossipStatus"
+  },
+  "Vec<ValidatorCommitteeMemberV1>": {
+    "Vec": "ValidatorCommitteeMemberV1"
   },
   "Vec<ValidatorPower>": {
     "Vec": "ValidatorPower"

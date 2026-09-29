@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef int32_t fe[10];
 
@@ -1089,9 +1090,12 @@ extern "C" __global__ void signature_kernel(
     if (idx >= count) {
         return;
     }
-    const uint8_t* sig = signatures + idx * 64;
-    const uint8_t* pk = public_keys + idx * 32;
-    const uint8_t* hram = hram_scalars + idx * 32;
+    // Widen the row index before multiplication; the public count is u32 but
+    // valid buffers can exceed the u32 byte-offset range.
+    const size_t row = static_cast<size_t>(idx);
+    const uint8_t* sig = signatures + row * 64;
+    const uint8_t* pk = public_keys + row * 32;
+    const uint8_t* hram = hram_scalars + row * 32;
     const uint8_t* R = sig;
     const uint8_t* S = sig + 32;
     bool ok = ed25519_verify_device(R, S, pk, hram);

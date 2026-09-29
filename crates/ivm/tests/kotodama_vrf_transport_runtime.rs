@@ -5,7 +5,7 @@ use iroha_crypto::Hash;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{
-    IVM, ProgramMetadata,
+    IVM, IVMHost, ProgramMetadata, VMError,
     host::DefaultHost,
     pointer_abi::PointerType,
     vrf::{VrfVerifyBatchRequest, VrfVerifyRequest},
@@ -34,7 +34,29 @@ fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: 
         ivm::encode_argument_record_from_json(schema, payload).expect("encode argument record");
     tlv(PointerType::NoritoBytes, &record)
 }
-fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
+struct ObservedVrfHost {
+    inner: DefaultHost,
+    status: Option<[u64; 3]>,
+}
+impl IVMHost for ObservedVrfHost {
+    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        self.inner.prepare_syscall(number, vm)
+    }
+    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        let result = self.inner.syscall(number, vm);
+        if matches!(
+            number,
+            ivm::syscalls::SYSCALL_VRF_VERIFY | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
+        ) {
+            self.status = Some([vm.register(10), vm.register(11), vm.register(12)]);
+        }
+        result
+    }
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+fn compile_and_run(source: &str, arguments: Option<&Json>) -> (IVM, Result<(), VMError>, [u64; 3]) {
     let code = ivm::kotodama::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile VRF transport contract");
@@ -60,9 +82,12 @@ fn compile_and_run(source: &str, arguments: Option<&Json>) -> IVM {
     vm.load_program(&code).expect("load VRF transport contract");
     vm.set_program_counter(entry_pc)
         .expect("select run entrypoint");
-    vm.set_host(host);
-    vm.run().expect("execute VRF transport contract");
-    vm
+    let mut host = ObservedVrfHost {
+        inner: host,
+        status: None,
+    };
+    let outcome = vm.run_with_host(&mut host);
+    (vm, outcome, host.status.expect("VRF syscall must execute"))
 }
 fn valid_vrf_request() -> (Vec<u8>, [u8; 32]) {
     const DST: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
@@ -115,9 +140,10 @@ seiyaku VrfEntrypointBytes {
     let arguments = Json::from(norito::json!({
         "request": request_hex,
     }));
-    let vm = compile_and_run(source, Some(&arguments));
+    let (vm, outcome, _) = compile_and_run(source, Some(&arguments));
+    outcome.expect("valid VRF result");
     let output = vm
-        .validate_tlv(vm.register(10))
+        .validate_tlv(vm.public_call_result_word(0).expect("completed VRF result"))
         .expect("VRF output pointer");
     assert_eq!(output.type_id, PointerType::Blob);
     assert_eq!(output.payload, expected);
@@ -137,10 +163,10 @@ seiyaku VrfBatchEntrypointBytes {
     let arguments = Json::from(norito::json!({
         "batch": request_hex,
     }));
-    let vm = compile_and_run(source, Some(&arguments));
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), 9, "empty batch bound status");
-    assert_eq!(vm.register(12), u64::MAX);
+    let (vm, outcome, status) = compile_and_run(source, Some(&arguments));
+    assert_eq!(outcome, Err(VMError::NoritoInvalid));
+    assert!(vm.call_result_word_count().is_err());
+    assert_eq!(status, [0, 9, u64::MAX], "empty batch bound status");
 }
 #[test]
 fn malformed_vrf_bytes_literal_reaches_decode_error() {
@@ -151,12 +177,10 @@ seiyaku MalformedVrfLiteral {
   }
 }
 "#;
-    let vm = compile_and_run(source, None);
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), 2, "malformed Norito request status");
-    assert_ne!(
-        vm.register(11),
-        1,
-        "request must not fail as a Blob type error"
-    );
+    let (vm, outcome, status) = compile_and_run(source, None);
+    assert_eq!(outcome, Err(VMError::NoritoInvalid));
+    assert!(vm.call_result_word_count().is_err());
+    assert_eq!(status[0], 0);
+    assert_eq!(status[1], 2, "malformed Norito request status");
+    assert_ne!(status[1], 1, "request must not fail as a Blob type error");
 }

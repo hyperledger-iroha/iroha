@@ -399,12 +399,10 @@ impl SmtWitness<u64> {
         });
         let mut row_index = 0;
         let mut starting_root = statement.old_root;
-        for update in 0..UPDATE_COUNT {
-            let public = statement.updates[update];
+        for (&public, update_siblings) in statement.updates.iter().zip(siblings) {
             let mut old = public.old_leaf;
             let mut new = public.new_leaf;
-            for level in 0..PATH_LEVELS {
-                let sibling = siblings[update][level];
+            for (level, &sibling) in update_siblings.iter().enumerate() {
                 for is_new in [false, true] {
                     let child = if is_new { new } else { old };
                     let (left, right) = if (public.path >> level) & 1 == 0 {
@@ -472,6 +470,8 @@ impl SmtWitness<u64> {
                 [destination + compact_blake2b_air::ROW_COUNT..destination + PHYSICAL_HASH_ROWS]
                 .fill(padding);
         }
+        // Erase the guarded logical trace before returning its physical copy.
+        drop(logical);
         physical
     }
 }
@@ -534,9 +534,9 @@ pub fn local_residues<F: IntegerAirField>(
     let local = hash_index.get();
     let mut out = compact_blake2b_air::local_residues(active, hash_index, &row.hash);
     out.push(
-        row.hash
-            .byte_len
-            .sub(F::from_u32(NODE_BYTES as u32).mul(active)),
+        row.hash.byte_len.sub(
+            F::from_u32(u32::try_from(NODE_BYTES).expect("fixed SMT node payload")).mul(active),
+        ),
     );
     if local < 6 {
         let first_byte = 24 * local;
@@ -570,7 +570,7 @@ pub fn local_residues<F: IntegerAirField>(
             }
         }
     }
-    if index.0 % ROWS_PER_UPDATE == 0 {
+    if index.0.is_multiple_of(ROWS_PER_UPDATE) {
         let public = statement.updates[index.update()];
         for limb in 0..8 {
             out.push(row.old_child[limb].sub(F::from_u32(public.old_leaf[limb]).mul(active)));
@@ -1532,7 +1532,7 @@ mod tests {
         assert_eq!(PHYSICAL_HASH_ROWS - compact_blake2b_air::ROW_COUNT, 104);
         assert_eq!(PHYSICAL_ROW_COUNT, 65_536);
         assert_eq!(PHYSICAL_ROW_COUNT - ROW_COUNT, 13_312);
-        assert!(COLUMN_COUNT + 1 <= 512);
+        const { assert!(COLUMN_COUNT < 512) };
         let mut max_degree = 0;
         // Every distinct hash phase is exercised in each update; level changes
         // alter only public constant choices, not polynomial degree.

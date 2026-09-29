@@ -1,6 +1,37 @@
 // Tests for allocation-free canonical frame streaming.
 use super::*;
 use std::{cell::Cell, io::Write};
+
+#[test]
+fn streamed_borrowed_bytes_match_owned_canonical_record() {
+    #[derive(crate::SerializePayload, crate::NoritoSchema)]
+    #[norito_schema(
+        name = "norito.test.core.write_canonical_tests.BorrowedByteRecord",
+        frame = "norito.test.core.write_canonical_tests.ByteRecord"
+    )]
+    struct BorrowedRecord<'a> {
+        bytes: &'a [u8],
+    }
+    #[derive(crate::SerializePayload, crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.write_canonical_tests.ByteRecord")]
+    struct OwnedRecord {
+        bytes: Vec<u8>,
+    }
+    for flags in [0, default_encode_flags()] {
+        let _ambient = DecodeFlagsGuard::enter(flags);
+        for bytes in [b"".as_slice(), b"public test preimage", &[0, 0xff, 0x80]] {
+            let owned = OwnedRecord {
+                bytes: bytes.to_vec(),
+            };
+            let mut expected = Vec::new();
+            write_canonical_to_writer(&owned, &mut expected).unwrap();
+            let mut actual = Vec::new();
+            write_canonical_to_writer(&BorrowedRecord { bytes }, &mut actual).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
 #[test]
 fn streamed_canonical_frame_matches_buffered_encoding() {
     let value = vec![1_u64, 2, 3, 5, 8, 13];

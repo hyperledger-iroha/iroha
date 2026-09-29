@@ -86,7 +86,11 @@ fn arg_metrics(input: &Punctuated<FnArg, Comma>) -> Result<syn::Ident, &Punctuat
         })
         .ok_or(input)
 }
-struct MetricSpecs(#[allow(dead_code)] Vec<MetricSpec>); // `HashSet` — idiomatic; slow
+// `HashSet` — idiomatic; slow. The specs are validated in every build but only
+// consumed when instrumentation is compiled in.
+struct MetricSpecs(
+    #[cfg_attr(not(feature = "metric-instrumentation"), allow(dead_code))] Vec<MetricSpec>,
+);
 impl Parse for MetricSpecs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let vars = Punctuated::<MetricSpec, Comma>::parse_terminated(input)?;

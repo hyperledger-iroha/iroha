@@ -6,10 +6,11 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-    let vk_bytes = canonical_ivm_execution_vk_bytes();
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+    let public_inputs =
+        crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -49,10 +50,11 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     host.halo2_config.max_envelope_bytes = usize::MAX;
     host.halo2_config.max_proof_bytes = usize::MAX;
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-    let vk_bytes = canonical_ivm_execution_vk_bytes();
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+    let public_inputs =
+        crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -159,10 +161,11 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-    let vk_bytes = canonical_ivm_execution_vk_bytes();
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+    let public_inputs =
+        crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -210,10 +213,11 @@ fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-    let vk_bytes = canonical_ivm_execution_vk_bytes();
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+    let public_inputs =
+        crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -491,7 +495,7 @@ fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
 #[test]
 fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
     let public_inputs = vec![1_u8, 2, 3, 4];
     let mut vk_bytes = b"ZK1\0H2VK".to_vec();
     vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
@@ -519,7 +523,7 @@ fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
             record,
             backend_label: Arc::from(backend),
             material: Some(crate::zk::PreparedVerifyingKeyMaterialV1::Halo2IpaPasta {
-                ipa_k: crate::zk::IVM_REPLAY_BINDING_V1_IPA_K,
+                ipa_k: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K,
             }),
         },
     );
@@ -595,22 +599,25 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     assert_eq!(vm.register(11), 0);
     assert_eq!(vm.register(12), u64::MAX);
 }
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_returns_statuses_with_registry_binding() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    enable_halo2_batch_verifier(&mut host, 8, 18);
-    let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
+    let mut stark_cfg = iroha_config::parameters::actual::Stark::default();
+    stark_cfg.enabled = true;
+    host.set_stark_config(&stark_cfg);
+    let env_ok = registered_stark_batch_fixture(&mut host, "transfer");
     assert!(
         !env_ok.public_inputs.is_empty(),
         "fixture circuit must expose public inputs for schema mismatch coverage"
     );
     let mut env_bad = env_ok.clone();
     env_bad.public_inputs[0] ^= 0x01;
+    env_bad.proof_bytes = vec![0x01];
     let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(50_000_000);
     let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, ptr);
     host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
@@ -623,22 +630,23 @@ fn zk_verify_batch_returns_statuses_with_registry_binding() {
     assert_eq!(vm.register(11), ivm::host::ERR_VK_MISMATCH);
     assert_eq!(vm.register(12), 1);
 }
-#[cfg(feature = "zk-halo2-ipa")]
+#[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
     let mut host = CoreHost::new(fixture_account("alice"));
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
-    enable_halo2_batch_verifier(&mut host, 8, 18);
-    let env_ok = registered_halo2_batch_fixture(&mut host, "transfer");
+    let mut stark_cfg = iroha_config::parameters::actual::Stark::default();
+    stark_cfg.enabled = true;
+    host.set_stark_config(&stark_cfg);
+    let env_ok = registered_stark_batch_fixture(&mut host, "transfer");
     let mut env_bad = env_ok.clone();
-    let last = env_bad
-        .proof_bytes
-        .last_mut()
-        .expect("fixture proof bytes must not be empty");
-    *last ^= 0x01;
+    let mut malformed: iroha_data_model::zk::StarkFriOpenProofV1 =
+        norito::decode_canonical(&env_ok.proof_bytes).expect("decode native STARK wrapper");
+    malformed.envelope_bytes = vec![0x01];
+    env_bad.proof_bytes = norito::encode_canonical(&malformed).expect("encode malformed wrapper");
     let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(50_000_000);
     let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, ptr);
     host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
@@ -658,10 +666,11 @@ fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
-    let vk_bytes = canonical_ivm_execution_vk_bytes();
+    let circuit_id = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+    let vk_bytes = canonical_confidential_transfer_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
+    let public_inputs =
+        crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,

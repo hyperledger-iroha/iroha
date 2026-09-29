@@ -23,7 +23,8 @@ pub struct Kagemusha {
     /// This map is runtime state, not operator configuration and not an
     /// enablement catalog. Every asset can use the KAGEMUSHA instructions.
     pub reserve_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Optional threshold-authenticated proof release loaded before replay.
+    /// Optional threshold-authenticated proof release loaded against the active finalized head.
+    /// An inactive replay head defers loading until Kura replay completes.
     pub proof_release: Option<KagemushaV1ProofReleaseFiles>,
     /// Explicit node permission to install a signed TestnetExperiment release.
     pub allow_testnet_experimental_release: bool,

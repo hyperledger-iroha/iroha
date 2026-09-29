@@ -35,9 +35,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status as TelemetryStatus;
-use iroha_torii_shared::{
-    ErrorEnvelope, mcp as torii_mcp, route_catalog as torii_routes, uri as torii_uri,
-};
+use iroha_torii_shared::{ErrorEnvelope, mcp as torii_mcp, route_catalog as torii_routes};
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -2260,19 +2258,19 @@ impl ToriiClient {
     }
     /// URL of the canonical `/v1/pipeline/transactions` endpoint.
     pub fn transaction_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_uri::TRANSACTION)
+        self.http_endpoint(torii_routes::pipeline::TRANSACTION.path())
     }
     /// URL of the canonical `/v1/query` endpoint.
     pub fn query_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_uri::QUERY)
+        self.http_endpoint(torii_routes::pipeline::QUERY.path())
     }
     /// URL of the canonical `/v1/blocks/stream` WebSocket endpoint.
     pub fn block_stream_endpoint(&self) -> ToriiResult<Url> {
-        self.ws_endpoint(torii_uri::BLOCKS_STREAM)
+        self.ws_endpoint(torii_routes::streaming::BLOCKS_WS.path())
     }
     /// URL of the canonical `/v1/events/ws` WebSocket endpoint.
     pub fn events_stream_endpoint(&self) -> ToriiResult<Url> {
-        self.ws_endpoint(torii_uri::SUBSCRIPTION)
+        self.ws_endpoint(torii_routes::streaming::SUBSCRIPTION_WS.path())
     }
     /// URL of the `/status` endpoint.
     pub fn status_endpoint(&self) -> ToriiResult<Url> {
@@ -2445,7 +2443,7 @@ impl ToriiClient {
     }
     /// URL of the canonical `/v1/configuration` endpoint.
     pub fn configuration_endpoint(&self) -> ToriiResult<Url> {
-        self.http_endpoint(torii_uri::CONFIGURATION)
+        self.http_endpoint(torii_routes::core::CONFIGURATION_GET.path())
     }
     /// URL of the read-only `/v1/nexus/lifecycle` status endpoint.
     pub fn nexus_lifecycle_endpoint(&self) -> ToriiResult<Url> {

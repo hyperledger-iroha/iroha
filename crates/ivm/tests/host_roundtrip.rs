@@ -1,8 +1,8 @@
 //! CoreHost roundtrip harness for IVM syscalls.
+use ivm::host::IVMHost;
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-    EmbeddedStateType, IVM, Memory, PointerType, ProgramMetadata, encoding, instruction,
-    state_value, syscalls,
+    EmbeddedStateType, IVM, Memory, PointerType, ProgramMetadata, state_value, syscalls,
 };
 mod common;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -37,7 +37,7 @@ fn bytes_state_value(value: &[u8]) -> Vec<u8> {
     };
     norito::to_bytes(&record).expect("encode bytes state value")
 }
-fn state_program(number: u32, write: bool) -> Vec<u8> {
+fn state_program(write: bool) -> Vec<u8> {
     let access_key = "state:roundtrip_key".to_owned();
     let entrypoint = EmbeddedEntrypointDescriptor {
         name: if write { "update" } else { "inspect" }.to_owned(),
@@ -61,6 +61,7 @@ fn state_program(number: u32, write: bool) -> Vec<u8> {
         entry_pc: 0,
     };
     let interface = EmbeddedContractInterfaceV1 {
+        callables: vec![common::unit_callable(0)],
         seiyaku_name: "HostRoundtripFixture".to_owned(),
         compiler_fingerprint: "ivm-integration-tests".to_owned(),
         abi_hash: syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -76,34 +77,31 @@ fn state_program(number: u32, write: bool) -> Vec<u8> {
     };
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&interface.encode_section());
-    program.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(number).expect("state syscall fits compact encoding"),
-        )
-        .to_le_bytes(),
-    );
-    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    for word in common::unit_return_words() {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
     program
 }
 #[test]
 fn host_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
+    let mut host = CoreHost::new();
     let path_tlv = state_path_tlv("roundtrip_key");
     let value = bytes_state_value(&[0xA5, 0x5A, 0x01]);
     let value_tlv = make_tlv(PointerType::NoritoBytes, &value);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&value_tlv).expect("alloc value");
-    let set_prog = state_program(syscalls::SYSCALL_STATE_SET, true);
+    let set_prog = state_program(true);
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
-    vm.run().expect("state set");
-    let get_prog = state_program(syscalls::SYSCALL_STATE_GET, false);
+    host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm)
+        .expect("state set");
+    let get_prog = state_program(false);
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
+    host.syscall(syscalls::SYSCALL_STATE_GET, &mut vm)
+        .expect("state get");
     let p_out = vm.register(10);
     assert!((Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&p_out));
     let tlv = vm.memory.validate_tlv(p_out).expect("validate output");

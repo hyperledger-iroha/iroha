@@ -440,7 +440,7 @@ mod tests {
         digest
     }
 
-    fn assert_changed_pair(residues: Vec<u64>, pair: usize) {
+    fn assert_changed_pair(residues: &[u64], pair: usize) {
         assert_eq!(residues.len(), PAIRED_LINK_CONSTRAINT_COUNT);
         assert_eq!(residues[0], 0);
         for (index, residue) in residues[1..].iter().enumerate() {
@@ -668,27 +668,27 @@ mod tests {
         // one evaluation. The per-bit kernel checks below additionally exercise
         // isolated mutations without quadratic whole-gadget recomputation.
         assert_changed_pair(
-            initial_leaf_residues(1, &first, &complement(first.old_child), &first.new_child),
+            &initial_leaf_residues(1, &first, &complement(first.old_child), &first.new_child),
             0,
         );
         assert_changed_pair(
-            initial_leaf_residues(1, &first, &first.old_child, &complement(first.new_child)),
+            &initial_leaf_residues(1, &first, &first.old_child, &complement(first.new_child)),
             1,
         );
         let mut changed = next;
         changed.old_child = complement(changed.old_child);
-        assert_changed_pair(level_transition_residues(1, &first, &changed), 0);
+        assert_changed_pair(&level_transition_residues(1, &first, &changed), 0);
         changed = next;
         changed.new_child = complement(changed.new_child);
-        assert_changed_pair(level_transition_residues(1, &first, &changed), 1);
+        assert_changed_pair(&level_transition_residues(1, &first, &changed), 1);
         let mut changed_roots = roots;
         changed_roots.before = complement(changed_roots.before);
-        assert_changed_pair(final_root_residues(1, &first, &changed_roots), 0);
+        assert_changed_pair(&final_root_residues(1, &first, &changed_roots), 0);
         changed_roots = roots;
         changed_roots.after = complement(changed_roots.after);
-        assert_changed_pair(final_root_residues(1, &first, &changed_roots), 1);
+        assert_changed_pair(&final_root_residues(1, &first, &changed_roots), 1);
         assert_changed_pair(
-            public_root_residues(
+            &public_root_residues(
                 1,
                 &roots,
                 &following,
@@ -698,7 +698,7 @@ mod tests {
             0,
         );
         assert_changed_pair(
-            public_root_residues(
+            &public_root_residues(
                 1,
                 &roots,
                 &following,
@@ -721,7 +721,7 @@ mod tests {
     }
 
     fn map_output<F: Copy>(
-        output: IrohaHashOutput,
+        output: &IrohaHashOutput,
         map: &mut impl FnMut(u64) -> F,
     ) -> IrohaHashOutput<F> {
         IrohaHashOutput {
@@ -732,24 +732,24 @@ mod tests {
     }
 
     fn map_level<F: Copy>(
-        level: SmtPathLevelWitness,
+        level: &SmtPathLevelWitness,
         map: &mut impl FnMut(u64) -> F,
     ) -> SmtPathLevelWitness<F> {
         SmtPathLevelWitness {
             direction: map(level.direction),
-            old_child: map_output(level.old_child, map),
-            new_child: map_output(level.new_child, map),
-            sibling: map_output(level.sibling, map),
-            old_parent: map_output(level.old_parent, map),
-            new_parent: map_output(level.new_parent, map),
+            old_child: map_output(&level.old_child, map),
+            new_child: map_output(&level.new_child, map),
+            sibling: map_output(&level.sibling, map),
+            old_parent: map_output(&level.old_parent, map),
+            new_parent: map_output(&level.new_parent, map),
         }
     }
 
-    fn map_hash<F: Copy>(hash: SmtNodeHashIo, map: &mut impl FnMut(u64) -> F) -> SmtNodeHashIo<F> {
+    fn map_hash<F: Copy>(hash: &SmtNodeHashIo, map: &mut impl FnMut(u64) -> F) -> SmtNodeHashIo<F> {
         SmtNodeHashIo {
-            left: map_output(hash.left, map),
-            right: map_output(hash.right, map),
-            output: map_output(hash.output, map),
+            left: map_output(&hash.left, map),
+            right: map_output(&hash.right, map),
+            output: map_output(&hash.output, map),
         }
     }
 
@@ -763,9 +763,9 @@ mod tests {
         let extension = level_residues(
             GoldilocksFp4V1::ONE,
             GoldilocksFp4V1::ONE,
-            &map_level(level, &mut lift),
-            &map_hash(old, &mut lift),
-            &map_hash(new, &mut lift),
+            &map_level(&level, &mut lift),
+            &map_hash(&old, &mut lift),
+            &map_hash(&new, &mut lift),
         );
         assert_eq!(extension, base.into_iter().map(lift).collect::<Vec<_>>());
     }
@@ -794,9 +794,9 @@ mod tests {
     fn every_relation_has_quadratic_degree_and_fixed_resource_bounds() {
         let (level, old, new) = fixture(false);
         let mut variable = |_| Degree(1);
-        let level = map_level(level, &mut variable);
-        let old = map_hash(old, &mut variable);
-        let new = map_hash(new, &mut variable);
+        let level = map_level(&level, &mut variable);
+        let old = map_hash(&old, &mut variable);
+        let new = map_hash(&new, &mut variable);
         let roots = SmtUpdateRoots {
             before: level.old_child,
             after: level.new_child,

@@ -442,11 +442,14 @@ impl<V: SccpLcStateView + ?Sized> Ctx<'_, V> {
     ) -> Result<TonEpochV1, SccpLcError> {
         let epoch = match pending.filter(|epoch| epoch.key_block_seqno == seqno) {
             Some(epoch) => epoch.clone(),
-            None => decode_epoch(&self.view.consensus_set(NETWORK, u64::from(seqno)).ok_or(
-                SccpLcError::UnknownSigningSet {
-                    set_id: u64::from(seqno),
-                },
-            )?)?,
+            None => decode_epoch(
+                &self
+                    .view
+                    .consensus_set(NETWORK, u64::from(seqno))
+                    .ok_or_else(|| SccpLcError::UnknownSigningSet {
+                        set_id: u64::from(seqno),
+                    })?,
+            )?,
         };
         let stale_from = stale_from_ms(self.profile, &epoch);
         if self.now >= stale_from {

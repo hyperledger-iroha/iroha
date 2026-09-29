@@ -2,6 +2,9 @@
 //!
 //! This root-only owner changes exactly the dispatcher and five guard files. It
 //! does not acquire a new deployment lease, reset state, or interpret old inventories.
+// The root transaction runs on Linux only; other platforms compile these items solely for their
+// unit tests, which do not reach every Linux entry point.
+#![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 #[cfg(any(target_os = "linux", test))]
 use super::super::{Value, validate_absolute_normal_path, validate_lower_hex};
 use super::*;

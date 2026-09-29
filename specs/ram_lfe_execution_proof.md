@@ -61,7 +61,7 @@ secret and associated data. Exactly 1,024 bytes become 32 consecutive big-endian
 sampler or rejection loop defines protocol semantics. The published profile's
 mandatory `initializer_descriptor_hash` commits the framing, contexts, dimensions
 and bounds. Superseded profiles are rejected rather than assigned another mapping.
-The source change and its pending native qualification are recorded in the
+The source change and its focused native qualification are recorded in the
 [bounded-initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
 
 Secret commitment and private tape hashing now use separate BLAKE3 contexts and

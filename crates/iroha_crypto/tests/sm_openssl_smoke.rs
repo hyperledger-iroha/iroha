@@ -1,15 +1,10 @@
 //! Smoke tests for the OpenSSL-backed SM crypto provider.
 #![cfg(all(feature = "sm", feature = "sm-ffi-openssl"))]
-use hex::decode;
 use iroha_crypto::sm::{
     OpenSslProvider, OpenSslSmBackend, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key,
     openssl_sm::OpenSslSmError,
 };
 use std::sync::{Mutex, MutexGuard};
-const ANNEX_PUBLIC_KEY_HEX: &str = "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857";
-const ANNEX_SIGNATURE_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
-const ANNEX_DISTID: &str = "ALICE123@YAHOO.COM";
-const ANNEX_MESSAGE: &[u8] = b"message digest";
 struct PreviewGuard {
     previous: bool,
     _lock: MutexGuard<'static, ()>,
@@ -56,42 +51,56 @@ fn openssl_sm3_digest_matches_pure_rust() {
     );
 }
 #[test]
-fn openssl_sm2_verify_smoke() {
-    if !OpenSslProvider::is_available() {
-        eprintln!("skipping OpenSSL SM2 smoke: OpenSSL runtime symbols unavailable");
-        return;
-    }
+fn canonical_sm2_verifies_with_openssl_preview_enabled() {
     let _preview = PreviewGuard::enable();
-    let public_key_bytes =
-        decode(ANNEX_PUBLIC_KEY_HEX).expect("Annex Example public key hex must decode");
-    let signature =
-        Sm2Signature::from_hex(ANNEX_SIGNATURE_HEX).expect("Annex Example signature must decode");
-    let public_key = match Sm2PublicKey::from_sec1_bytes(ANNEX_DISTID, &public_key_bytes) {
-        Ok(key) => key,
-        Err(err) => {
-            eprintln!(
-                "skipping OpenSSL SM2 smoke: unable to parse Annex Example public key ({err})"
-            );
-            return;
-        }
-    };
-    public_key
-        .verify(ANNEX_MESSAGE, &signature)
-        .expect("pure-Rust SM2 verification path must accept Annex Example 1");
-    let result =
-        OpenSslSmBackend::sm2_verify(&public_key_bytes, ANNEX_DISTID, ANNEX_MESSAGE, &signature)
-            .expect("OpenSSL SM2 verification must succeed");
-    assert!(
-        result,
-        "OpenSSL SM2 verification must accept Annex Example 1 when available"
-    );
-    let repeat =
-        OpenSslSmBackend::sm2_verify(&public_key_bytes, ANNEX_DISTID, ANNEX_MESSAGE, &signature)
-            .expect("repeated OpenSSL SM2 verification must succeed");
+    let vectors: norito::json::Value =
+        norito::json::from_slice(include_bytes!("../../../fixtures/sm/sm2_fixture.json"))
+            .expect("shared canonical SM2 fixtures");
+    let rows = vectors.get("vectors").unwrap().as_array().unwrap();
+    let identities: Vec<_> = rows
+        .iter()
+        .map(|row| row.get("case_id").unwrap().as_str().unwrap())
+        .collect();
     assert_eq!(
-        result, repeat,
-        "OpenSSL SM2 verification must be deterministic across runs"
+        identities,
+        [
+            "sm2-fixture-default-v1",
+            "sm2-rust-sdk-fixture-v1",
+            "gm-t-0003-annex-d-example1",
+        ],
+        "every shared fixture row must have an explicit curve-domain control"
     );
+    let mut verified = 0;
+    let mut rejected = 0;
+    for row in rows {
+        let text = |field| row.get(field).unwrap().as_str().unwrap();
+        let key_bytes = hex::decode(text("public_key_sec1_hex")).unwrap();
+        match text("curve") {
+            "sm2p256v1" => {
+                let message = hex::decode(text("message_hex")).unwrap();
+                let key = Sm2PublicKey::from_sec1_bytes(text("distid"), &key_bytes).unwrap();
+                let signature = Sm2Signature::from_hex(text("signature")).unwrap();
+                let first = key.verify(&message, &signature);
+                let second = key.verify(&message, &signature);
+                assert!(
+                    first.is_ok(),
+                    "canonical SM2 fixture must verify with preview enabled"
+                );
+                assert_eq!(first, second, "SM2 decisions must be deterministic");
+                verified += 1;
+            }
+            "gm-t-0003-annex-d-fp256" => {
+                assert_eq!(text("case_id"), "gm-t-0003-annex-d-example1");
+                assert!(
+                    Sm2PublicKey::from_sec1_bytes(text("distid"), &key_bytes).is_err(),
+                    "the alternate Annex D curve must remain outside production SM2"
+                );
+                rejected += 1;
+            }
+            curve => panic!("unrecognized SM2 fixture curve: {curve}"),
+        }
+    }
+    assert_eq!((verified, rejected), (2, 1));
 }
 #[test]
 fn openssl_sm4_gcm_roundtrip() {

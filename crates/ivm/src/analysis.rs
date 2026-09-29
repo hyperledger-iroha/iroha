@@ -1153,7 +1153,9 @@ seiyaku IndirectStateAnalysis {
                 code_hash: prepared.code_hash(),
                 contract_interface: prepared.shared_contract_interface(),
                 literal_table: prepared.literal_table().clone(),
-                decoded: std::sync::Arc::from(decoded),
+                decoded: crate::cache_memory::SharedAllocation::from_boxed(
+                    decoded.into_boxed_slice(),
+                ),
                 prepared_program: prepared.prepared_program().clone(),
                 control_flow,
             })

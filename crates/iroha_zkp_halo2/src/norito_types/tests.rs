@@ -81,7 +81,7 @@ fn outer_envelope_preserves_captured_identity_frames_and_valid_proof() {
     assert_eq!(envelope.public.encode_bytes(), bytes("public_bare_hex"));
     assert_eq!(envelope.proof.encode_bytes(), bytes("proof_bare_hex"));
     assert!(
-        crate::batch::verify_open_batch(&[envelope.clone()])[0]
+        crate::batch::verify_open_batch(std::slice::from_ref(&envelope))[0]
             .as_ref()
             .unwrap()
     );

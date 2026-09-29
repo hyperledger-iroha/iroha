@@ -192,8 +192,6 @@ impl_direct_instruction_box!(crate::isi::kaigi::SetKaigiRelayManifest);
 impl_direct_instruction_box!(crate::isi::kaigi::RegisterKaigiRelay);
 impl_direct_instruction_box!(crate::isi::kaigi::UnregisterKaigiRelay);
 impl_direct_instruction_box!(crate::isi::kaigi::ReportKaigiRelayHealth);
-impl_direct_instruction_box!(crate::isi::nexus::SetLaneRelayEmergencyValidators);
-impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedLaneRelay);
 impl_direct_instruction_box!(crate::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation);
 macro_rules! impl_nexus_program_instruction_box {
     ($($ty:ident),+ $(,)?) => {
@@ -455,6 +453,7 @@ macro_rules! impl_musubi_instruction_box {
 impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
+    AdvanceMusubiPinOutboxV1,
     RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,
@@ -518,6 +517,12 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGov
 impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierPolicyInstallV1);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseInstallV1);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeKagemushaVerifierReleaseActivateV1);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
@@ -1352,9 +1357,8 @@ impl IntoSchema for InstructionBox {
 }
 /// Function signature used to construct an [`crate::isi::Instruction`] from header-framed bytes.
 ///
-/// The `header_flags` argument propagates Norito metadata alongside the encoded payload. Existing
-/// constructors ignore the value, but keeping it in the signature allows future instructions to
-/// react to packed-layout flags without widening the registry interface again.
+/// The `header_flags` argument carries the frame's declared v1 layout (0 or `COMPACT_LEN`) to the
+/// constructor's decode guard.
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
 /// Registry mapping concrete Rust type names for encoding and stable wire identifiers for decoding.
 #[derive(Default, Clone)]
@@ -1615,21 +1619,6 @@ where
         return Err(norito::core::Error::LengthMismatch);
     }
     Ok(value)
-}
-pub(crate) fn decode_packed_instruction_payload<T>(
-    bytes: &[u8],
-) -> Result<(T, usize), norito::core::Error>
-where
-    T: norito::codec::Decode,
-{
-    // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
-    // instruction payloads must instead retain the flags advertised by their enclosing frame.
-    let (decoded, used) = norito::core::decode_field_canonical::<T>(bytes)?;
-    if used != bytes.len() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    norito::core::note_payload_access(bytes, used);
-    Ok((decoded, used))
 }
 /// Build an [`InstructionRegistry`] registering each type with its annotated stable
 /// wire identifier by reading its `WIRE_ID` associated constant.
@@ -2709,7 +2698,6 @@ pub mod prelude {
         },
         ministry::SubmitAgendaProposal,
         mint_burn::{Burn, BurnBox, Mint, MintBox},
-        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         oracle::{
             AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
             RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, RollbackOracleChange,

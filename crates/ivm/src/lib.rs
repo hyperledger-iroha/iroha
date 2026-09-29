@@ -29,20 +29,35 @@ mod argument_record;
 pub mod axt;
 pub mod bn254_vec;
 mod byte_merkle_tree;
+pub mod cache_memory;
+mod call_frame;
+mod call_gas;
 pub mod contract_artifact;
+mod contract_return_stack;
 mod core_host;
 mod cuda;
+#[cfg(feature = "cuda")]
+mod cuda_dispatch;
+#[cfg(test)]
+#[path = "cuda_provenance.rs"]
+mod cuda_provenance_tests;
 mod decoder;
 mod dev_env;
 pub mod encoding;
-mod error;
+pub mod error;
+/// Parent-funded local diagnostic backing for step and memory recorders.
+pub mod execution_diagnostics;
+pub mod execution_memory;
+/// Bounded local memory-transfer diagnostics, separate from proof admission.
+pub mod execution_memory_recorder;
+/// Local, prepaid interpreter snapshots for diagnostic AIR development only.
+pub mod execution_step_recorder;
 mod execution_summary;
 pub mod field;
 pub mod field_dispatch;
 #[cfg(test)]
 mod frame_identity_tests;
 pub mod gas;
-mod gpu_manager;
 pub mod host;
 pub mod instruction;
 pub mod iso20022;
@@ -72,6 +87,7 @@ pub mod pointer_abi;
 mod poseidon;
 mod prepared;
 pub mod private_input;
+mod private_memory_ranges;
 mod registers;
 pub mod runtime;
 pub mod schema_registry;
@@ -93,7 +109,7 @@ mod zk_poseidon;
 pub mod zk_verify;
 use iroha_telemetry::metrics::{StackSettingsSnapshot, record_stack_limits};
 use std::sync::{Mutex, OnceLock};
-// Deterministic parallel execution utilities.
+// Host concurrency policy and declared state access.
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
 pub mod prebuilt_fixtures;
@@ -113,10 +129,6 @@ pub use crate::argument_record::{
     reset_argument_record_decode_count, validate_argument_record,
 };
 pub use crate::gas::{cost_of, cost_of_with_vector_len};
-#[cfg(feature = "cuda")]
-pub use crate::gpu_manager::GpuManager;
-#[cfg(not(feature = "cuda"))]
-pub use crate::gpu_manager::GpuManager;
 // Re-export stable mode bits so tests/users can import `ivm::ivm_mode::*`.
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
@@ -132,23 +144,27 @@ pub use crate::metadata::{
     VECTOR_LENGTH_MAX, contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
-pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
+pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items_into};
 pub use crate::{
-    aes::{aesdec, aesdec_impl, aesenc, aesenc_impl, sbox},
+    aes::{
+        aes128_decrypt_many_into, aes128_encrypt_many_into, aes128_expand_key, aesdec, aesdec_impl,
+        aesdec_n_rounds_many_into, aesenc, aesenc_impl, aesenc_n_rounds_many_into, sbox,
+    },
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_batch_cuda, aesdec_cuda, aesenc_batch_cuda, aesenc_cuda, bitonic_sort_pairs,
-        bn254_add_batch_cuda, bn254_add_cuda, bn254_mul_batch_cuda, bn254_mul_cuda,
-        bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available, cuda_disabled,
-        cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda, keccak_f1600_cuda,
-        poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda, poseidon6_cuda_many,
-        reset_cuda_backend_for_tests, sha256_compress_cuda, sha256_leaves_cuda,
-        sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda, vector_add_f32, vor_cuda,
-        vxor_cuda,
+        aesdec_batch_cuda_into, aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into,
+        aesenc_cuda, aesenc_rounds_batch_cuda_into, bitonic_sort_pairs, bn254_add_batch_cuda_into,
+        bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda, bn254_sub_batch_cuda_into,
+        bn254_sub_cuda, cuda_available, cuda_completed_dispatches, cuda_disabled,
+        cuda_last_error_message, ed25519_verify_batch_cuda_into, ed25519_verify_cuda,
+        keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda,
+        poseidon6_cuda_many_into, reset_cuda_backend_for_tests, sha256_compress_cuda,
+        sha256_leaves_cuda_into, sha256_pairs_reduce_cuda, vadd32_cuda_into, vadd64_cuda_into,
+        vand_cuda_into, vor_cuda_into, vxor_cuda_into,
     },
     decoder::decode,
     error::{
-        HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
+        ExecutionDeferral, HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
         VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
     },
     execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
@@ -163,14 +179,15 @@ pub use crate::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get, global_stats,
     },
     kotodama::compiler::Compiler as KotodamaCompiler,
-    memory::{AccessRange, Memory, WriteLogEntry},
+    memory::{AccessRange, Memory, WriteLogEntry, WriteLogSnapshot},
     pedersen::pedersen_commit,
     pointer_abi::{
         PointerType, Tlv, is_type_allowed_for_policy, render_pointer_types_markdown_table,
         validate_tlv_bytes,
     },
     poseidon::{
-        poseidon2, poseidon2_many, poseidon2_simd, poseidon6, poseidon6_many, poseidon6_simd,
+        poseidon2, poseidon2_many_into, poseidon2_simd, poseidon6, poseidon6_many_into,
+        poseidon6_simd,
     },
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
@@ -181,12 +198,12 @@ pub use crate::{
     signature::{SignatureScheme, verify_signature},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     vector::{
-        SimdChoice, bit_pipe_compile_count, clear_forced_simd, clear_thread_forced_simd,
-        forced_simd_test_lock, metal_available, metal_disabled, release_metal_state,
-        reset_metal_backend_for_tests, set_forced_simd, set_thread_forced_simd, sha256_compress,
-        simd_backend, simd_bits, simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto,
-        vand, vand_auto, vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto,
-        zero_vector,
+        MetalKernel, SimdChoice, clear_forced_simd, clear_thread_forced_simd,
+        forced_simd_test_lock, metal_available, metal_completed_dispatches, metal_disabled,
+        release_metal_state, reset_metal_backend_for_tests, set_forced_simd,
+        set_thread_forced_simd, sha256_compress, simd_backend, simd_bits, simd_choice, simd_lanes,
+        vadd32, vadd32_auto_into, vadd64, vadd64_auto_into, vand, vand_auto_into, vector_supported,
+        vor, vor_auto_into, vrot32, vrot32_auto_into, vxor, vxor_auto_into, zero_vector,
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
@@ -195,6 +212,8 @@ pub use iroha_crypto::{MerkleProof, MerkleTree};
 pub use ivm_abi::SyscallPolicy;
 /// Canonical Kotodama V1 dynamic state-access hint validation.
 pub use ivm_abi::access_hints;
+/// Canonical V1 function call-table descriptors and limits.
+pub use ivm_abi::call;
 /// Canonical Norito framing helpers shared by ABI producers and consumers.
 pub use ivm_abi::codec;
 /// Stable V1 typed core-query tags, projections, and bounded page records.
@@ -236,10 +255,13 @@ pub struct AccelerationConfig {
     /// Prefer CPU SHA2 for trees up to this many leaves (per-arch). If None, use defaults.
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
+    /// Shared physical-owner ceilings; no omitted field means unlimited.
+    pub resource_limits: iroha_accel::RegistryLimits,
 }
 impl Default for AccelerationConfig {
     fn default() -> Self {
         Self {
+            resource_limits: iroha_accel::RegistryLimits::STANDARD,
             enable_simd: true,
             enable_metal: true,
             enable_cuda: true,
@@ -272,6 +294,7 @@ fn write_acceleration_config(cfg: AccelerationConfig) {
 /// automatically uses all available hardware, subject to golden self-tests.
 pub fn set_acceleration_config(cfg: AccelerationConfig) {
     write_acceleration_config(cfg);
+    iroha_accel::ProcessResources::install(cfg.resource_limits);
     // SIMD policy: force scalar when disabled, otherwise let runtime detection decide.
     crate::vector::set_simd_policy_enabled(cfg.enable_simd);
     // Metal policy
@@ -285,8 +308,9 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
     // CUDA policy
     #[cfg(feature = "cuda")]
     {
+        let installed = iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
+        crate::cuda_dispatch::configure(cfg.enable_cuda && installed, cfg.max_gpus);
         crate::cuda::set_cuda_enabled(cfg.enable_cuda);
-        crate::gpu_manager::GpuManager::set_max_gpus(cfg.max_gpus);
     }
     if let Some(min) = cfg.merkle_min_leaves_gpu {
         crate::byte_merkle_tree::set_merkle_gpu_min_leaves(min);
@@ -312,6 +336,23 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
 pub fn acceleration_config() -> AccelerationConfig {
     read_acceleration_config()
 }
+/// Native result owner funded by the original process acceleration envelope.
+/// This owner is separate from a State execution lease and has no Vec conversion.
+pub use iroha_accel::HostOutput as AccelerationOutput;
+/// Typed local refusal while constructing a native result destination.
+pub use iroha_accel::HostOutputError as AccelerationOutputError;
+
+/// Allocate initialized native result storage before ordinary CPU/GPU execution.
+/// The same process host charge survives through copying into a foreign runtime.
+/// No driver is required and existing operator policy is never replaced by defaults.
+/// State execution paths must use their original `ExecutionMemoryLease` instead.
+pub fn try_acceleration_output<T: Copy + Default>(
+    len: usize,
+) -> Result<AccelerationOutput<T>, AccelerationOutputError> {
+    iroha_accel::ProcessResources::get_or_initialize(acceleration_config().resource_limits)
+        .try_host_output(len)
+}
+
 /// Runtime status for a single acceleration backend.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BackendRuntimeStatus {
@@ -540,6 +581,11 @@ pub fn set_scheduler_stack_size(bytes: usize) {
 pub fn set_prover_stack_size(bytes: usize) {
     crate::zk::set_prover_stack_size(bytes);
 }
+
+pub use crate::cuda::cuda_device_slots;
+#[cfg(feature = "cuda-hardware-tests")]
+pub use crate::cuda::{cuda_qualification_device, with_cuda_device_for_qualification};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,9 +694,5 @@ mod tests {
         reset_metal_backend_for_tests();
         assert_eq!(metal_available(), crate::vector::metal_available());
         assert_eq!(metal_disabled(), crate::vector::metal_disabled());
-        assert_eq!(
-            bit_pipe_compile_count(),
-            crate::vector::bit_pipe_compile_count()
-        );
     }
 }

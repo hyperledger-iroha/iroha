@@ -43,9 +43,9 @@ const METADATA_COMMITMENT_ROLE_V1: &[u8] = b"fastpq:v1:trace-metadata";
 /// Typed phase for the canonical metadata-map commitment.
 const METADATA_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
 /// Number of canonical Goldilocks limbs carrying the six-lane metadata commitment.
-pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
+pub const METADATA_COMMITMENT_LIMBS: usize = 6;
 /// Default maximum canonical trace columns admitted before prover allocation.
-pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize =
+pub const DEFAULT_MAX_TRACE_COLUMNS: usize =
     fastpq_isi::resource_limits::FASTPQ_MAX_TRACE_COLUMNS_V1;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
@@ -64,8 +64,7 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
 #[cfg(test)]
-pub(crate) static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> =
-    std::sync::Mutex::new(());
+pub static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 type TraceMerkleModeObserver = dyn Fn(ExecutionMode) + Send + Sync + 'static;
 #[cfg(test)]
@@ -230,7 +229,7 @@ pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
 }
 
 #[cfg(test)]
-pub(crate) fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
+pub fn notify_trace_merkle_mode_observer(mode: ExecutionMode) {
     let observer = clone_observer(trace_merkle_mode_observer_slot(), "trace_merkle_mode");
     if let Some(callback) = observer {
         callback(mode);
@@ -309,7 +308,7 @@ pub fn clear_poseidon_pipeline_observer() {
     replace_observer(poseidon_observer_slot(), None, "poseidon_pipeline");
 }
 #[cfg(test)]
-pub(crate) fn set_trace_merkle_mode_observer<F>(observer: F)
+pub fn set_trace_merkle_mode_observer<F>(observer: F)
 where
     F: Fn(ExecutionMode) + Send + Sync + 'static,
 {
@@ -321,7 +320,7 @@ where
     );
 }
 #[cfg(test)]
-pub(crate) fn clear_trace_merkle_mode_observer() {
+pub fn clear_trace_merkle_mode_observer() {
     replace_observer(trace_merkle_mode_observer_slot(), None, "trace_merkle_mode");
 }
 /// Remove the previously registered FASTPQ GPU accelerator event observer, if any.
@@ -434,6 +433,10 @@ impl RowData {
     }
 }
 /// Row usage counts for the V1 selectors.
+#[allow(
+    clippy::struct_field_names,
+    reason = "public API: each field counts rows of one selector class, as its _rows suffix says"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RowUsage {
     /// Total number of real (non-padding) rows in the trace.
@@ -939,7 +942,7 @@ fn trace_schema_limb_widths(batch: &TransitionBatch) -> Result<TraceSchemaLimbWi
     Ok(widths)
 }
 /// Return the number of columns in the canonical FASTPQ layout without allocating column names.
-pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
+pub fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     const SELECTOR_COLUMNS: usize = 8;
     const DELTA_COLUMNS: usize = 2;
     const TRAILING_COLUMNS: usize = 8;
@@ -958,10 +961,7 @@ pub(crate) fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
 }
 /// Enforce a caller-selected trace schema width before materialising columns.
-pub(crate) fn ensure_trace_schema_limit(
-    batch: &TransitionBatch,
-    max_air_row_values: usize,
-) -> Result<()> {
+pub fn ensure_trace_schema_limit(batch: &TransitionBatch, max_air_row_values: usize) -> Result<()> {
     let actual = column_count_for_batch(batch)?;
     if actual > max_air_row_values {
         return Err(Error::VerifierLimitExceeded {
@@ -1101,11 +1101,7 @@ fn extract_transfer_witnesses(
 ///
 /// Returns [`Error::ValueWidth`] if the typed hash domain cannot be represented
 /// by the canonical field-packing format.
-pub(crate) fn permission_hash(
-    role_id: &[u8; 32],
-    permission_id: &[u8; 32],
-    epoch: u64,
-) -> Result<u64> {
+pub fn permission_hash(role_id: &[u8; 32], permission_id: &[u8; 32], epoch: u64) -> Result<u64> {
     let mut payload = Vec::with_capacity(32 + 32 + 8);
     payload.extend_from_slice(role_id);
     payload.extend_from_slice(permission_id);
@@ -1114,7 +1110,7 @@ pub(crate) fn permission_hash(
 }
 /// Build the exact binary permission-tree key for one role/permission tuple.
 #[must_use]
-pub(crate) fn permission_transition_key(role_id: &[u8; 32], permission_id: &[u8; 32]) -> Vec<u8> {
+pub fn permission_transition_key(role_id: &[u8; 32], permission_id: &[u8; 32]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PERMISSION_KEY_PREFIX.len() + 32 + 1 + 32);
     key.extend_from_slice(PERMISSION_KEY_PREFIX);
     key.extend_from_slice(role_id);
@@ -1188,8 +1184,8 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
     sponge.absorb_slice(values);
     sponge.squeeze()
 }
-#[cfg(feature = "fastpq-gpu")]
-/// Flattened Poseidon column payloads used by GPU hashing backends.
+#[cfg(all(test, feature = "fastpq-gpu"))]
+/// Flattened Poseidon column payloads used by GPU hashing parity tests.
 #[derive(Debug)]
 pub(crate) struct PoseidonColumnBatch {
     payloads: Vec<u64>,
@@ -1197,7 +1193,7 @@ pub(crate) struct PoseidonColumnBatch {
     block_count: usize,
     padded_len: usize,
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Offset metadata describing where a column resides inside the flattened payload buffer.
@@ -1205,7 +1201,7 @@ pub(crate) struct PoseidonColumnSlice {
     offset: u32,
     len: u32,
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 impl PoseidonColumnSlice {
     fn new(offset: usize, len: usize) -> Option<Self> {
         let offset = u32::try_from(offset).ok()?;
@@ -1234,7 +1230,7 @@ pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
         payload.checked_add(RATE - remainder)
     }
 }
-#[cfg(feature = "fastpq-gpu")]
+#[cfg(all(test, feature = "fastpq-gpu"))]
 impl PoseidonColumnBatch {
     #[cfg(test)]
     fn empty() -> Self {
@@ -2887,9 +2883,12 @@ mod tests {
     fn repeated_transfer_rows_consume_witnesses_in_transcript_order() {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
-        let witnesses =
-            transfer::transcripts_to_witnesses(&[transcript.clone()], &old_root, &new_root)
-                .expect("witness extraction");
+        let witnesses = transfer::transcripts_to_witnesses(
+            std::slice::from_ref(&transcript),
+            &old_root,
+            &new_root,
+        )
+        .expect("witness extraction");
         let first = witnesses[0].deltas[0].clone();
         let mut later = first.clone();
         later.smt_proof.from.siblings[0][0] ^= 0xA5;
@@ -3026,10 +3025,9 @@ mod tests {
                         .strip_prefix("value_old_limb_")
                         .or_else(|| column.name.strip_prefix("value_new_limb_"))
                         .and_then(|index| index.parse::<usize>().ok())
+                        && index >= 2
                     {
-                        if index >= 2 {
-                            assert_eq!(column.values[row], 0, "{} must be zero", column.name);
-                        }
+                        assert_eq!(column.values[row], 0, "{} must be zero", column.name);
                     }
                 }
             }

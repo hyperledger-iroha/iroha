@@ -68,9 +68,6 @@ pub mod alias_setup;
 pub mod beacon;
 /// Block types and helpers.
 pub mod block;
-/// Block synchronization protocol and messages.
-/// Bridge finality proof helpers.
-pub mod bridge;
 /// Lane compliance policy evaluation.
 pub mod compliance;
 /// Consensus-neutral key predicates shared by validation paths.
@@ -79,6 +76,8 @@ pub(crate) mod crypto_util;
 pub mod da;
 /// Guard-owned execution witness recorder, its sparse Merkle tree and state-root projections.
 pub mod exec_witness;
+/// Local execution attempts and non-consensus retry outcomes.
+pub mod execution_attempt;
 /// Native transparent execution proofs and bounded deterministic race relations.
 pub mod execution_proofs;
 /// Runtime executor integration and helpers.
@@ -106,17 +105,8 @@ pub mod kagemusha_v1_crypto;
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
 pub mod kura;
-/// Lane-local block vote validation and QC aggregation helpers.
-pub mod lane_consensus;
-mod lane_drain;
-/// Merge-ledger reduction helpers.
-pub mod merge;
-/// Authenticated bounded transfer of certified merge-ledger sidecars.
-pub mod merge_sidecar;
 /// Rebuildable, non-consensus Musubi description and keyword search projection.
 pub mod musubi_search;
-/// Native AMX participant attestation control plane.
-pub mod native_amx;
 #[cfg(any(test, feature = "test-network-native-amx-fault-injection"))]
 pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
@@ -223,74 +213,12 @@ use std::sync::Arc;
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-use crate::{
-    merge_sidecar::CertifiedMergeSidecarMessage,
-    peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, BlockMessageWire},
-};
-use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
+use crate::peers_gossiper::{PeerTrustGossip, PeersGossip};
 use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
-/// Maximum encoded P2P frame size accepted for one lane-drain vote.
-///
-/// The cap covers the largest valid embedded lane committee and is enforced by
-/// `irohad` before the vote reaches the Sumeragi actor queue.
-pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN_VOTE_BYTES;
-/// Maximum complete P2P frame admitted for one authenticated Kura replica advert.
-///
-/// The signed advert itself is capped at 16 KiB. The additional deterministic
-/// headroom covers the nested `BlockMessageWire` and `NetworkMessage` Norito
-/// frames without exposing the general network decoder to an attacker-sized
-/// signature allocation.
-pub const MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES: usize = 32 * 1024;
-// Every live v2 message is nested inside `BlockMessageWire`, `NetworkMessage`,
-// and the authenticated P2P relay/data envelopes. Keep one explicit allowance
-// for those schema-bound layers while deriving attacker-controlled collection
-// sizes from the consensus protocol constants below.
-const SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES: usize = 64 * 1024;
-const SUMERAGI_V2_HASH_SEQUENCE_MAX_WIRE_BYTES: usize = core::mem::size_of::<u64>()
-    + (iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize + 1)
-        * core::mem::size_of::<u64>()
-    + iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize
-        * iroha_crypto::Hash::LENGTH;
-const MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES: usize =
-    iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_SIZE_BYTES as usize
-        + iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES
-        + 2 * core::mem::size_of::<u64>()
-        + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES;
-const MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES: usize =
-    iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get();
-const MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES: usize =
-    iroha_config::parameters::defaults::network::MAX_PLAINTEXT_FRAME_BYTES.get();
-const MAX_SUMERAGI_V2_DECODE_DEPTH: usize = 64;
-const MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS: usize =
-    iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1;
-const _: () = assert!(
-    MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES < MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES
-);
-const _: () = assert!(
-    iroha_data_model::block::consensus_v2::MAX_DA_PAYLOAD_SIZE_BYTES as usize
-        + SUMERAGI_V2_HASH_SEQUENCE_MAX_WIRE_BYTES
-        + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES
-        <= MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES
-);
-const NETWORK_MESSAGE_LANE_RELAY_TAG: u32 = 1;
-const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 3;
-const NETWORK_MESSAGE_NATIVE_AMX_TAG: u32 = 5;
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
-const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 16;
-const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 17;
 const NETWORK_MESSAGE_SUMERAGI_TAG: u32 = 18;
-/// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
-pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
-    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
-const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
-// A canonical 128-member BLS committee needs just over 256 KiB under Norito's
-// conservative nested alignment-copy accounting. Keep deterministic headroom
-// while the 16 KiB frame and exact 128-element sequence caps remain primary.
-const MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES: usize = 512 * 1024;
-const MAX_LANE_DRAIN_VOTE_DECODE_DEPTH: usize = 64;
 fn inbound_enum_parts(payload: &[u8]) -> Result<(u32, &[u8]), norito::core::Error> {
     let tag: [u8; core::mem::size_of::<u32>()] = payload
         .get(..core::mem::size_of::<u32>())
@@ -320,25 +248,6 @@ fn inbound_owned_enum_field(remaining: &[u8], flags: u8) -> Result<&[u8], norito
     // inspect the value after both canonical boundaries.
     let owned = inbound_enum_field(remaining, flags)?;
     inbound_enum_field(owned, flags)
-}
-fn inbound_two_field_struct(
-    payload: &[u8],
-    flags: u8,
-    first_field_width: usize,
-) -> Result<(&[u8], &[u8]), norito::core::Error> {
-    use norito::core::Error;
-    let (first_len, first_prefix) = norito::core::read_len_from_slice_with_flags(payload, flags)?;
-    let first_end = first_prefix
-        .checked_add(first_len)
-        .ok_or(Error::LengthMismatch)?;
-    let first = payload
-        .get(first_prefix..first_end)
-        .ok_or(Error::LengthMismatch)?;
-    let remaining = payload.get(first_end..).ok_or(Error::LengthMismatch)?;
-    let second = inbound_enum_field(remaining, flags)?;
-    (first.len() == first_field_width)
-        .then_some((first, second))
-        .ok_or(Error::LengthMismatch)
 }
 fn inbound_sequence_count(bytes: &[u8]) -> Result<(u64, usize), norito::core::Error> {
     let prefix = bytes
@@ -392,290 +301,6 @@ fn inbound_struct_field(
     }
     selected.ok_or(Error::LengthMismatch)
 }
-fn enforce_inbound_sequence_limit(field: &[u8], limit: usize) -> Result<(), norito::core::Error> {
-    let (length, _) = inbound_sequence_count(field)?;
-    let limit = u64::try_from(limit).unwrap_or(u64::MAX);
-    if length > limit {
-        return Err(norito::core::Error::SequenceLengthExceeded { length, limit });
-    }
-    Ok(())
-}
-fn enforce_inbound_byte_sequence_limit(
-    field: &[u8],
-    limit: usize,
-) -> Result<(), norito::core::Error> {
-    enforce_inbound_sequence_limit(field, limit)?;
-    let exact_len = inbound_byte_sequence_wire_len(field)?;
-    if exact_len != field.len() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    Ok(())
-}
-fn enforce_inbound_manifest_limits(manifest: &[u8], flags: u8) -> Result<(), norito::core::Error> {
-    const FIELDS: usize = 6;
-    let hashes = inbound_struct_field(manifest, flags, FIELDS, 4)?;
-    enforce_inbound_sequence_limit(
-        hashes,
-        iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize,
-    )
-}
-fn enforce_inbound_peer_id_limits(peer_id: &[u8], flags: u8) -> Result<(), norito::core::Error> {
-    // `PeerId` is a one-field struct around `PublicKey`; the latter delegates
-    // directly to `PublicKeyCompact`'s `ConstVec<u8>` wire. Its sequence
-    // includes the algorithm byte in addition to the bounded key payload.
-    const FIELDS: usize = 1;
-    let public_key = inbound_struct_field(peer_id, flags, FIELDS, 0)?;
-    enforce_inbound_sequence_limit(public_key, MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS)
-}
-fn enforce_inbound_consensus_v2_payload_limits(
-    tag: u32,
-    payload: &[u8],
-    flags: u8,
-) -> Result<(), norito::core::Error> {
-    use iroha_data_model::block::consensus_v2 as wire;
-    const PROPOSAL_FIELDS: usize = 6;
-    const CHUNK_FIELDS: usize = 5;
-    const CERTIFIED_RESPONSE_FIELDS: usize = 5;
-    match tag {
-        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG => {
-            enforce_inbound_manifest_limits(
-                inbound_struct_field(payload, flags, PROPOSAL_FIELDS, 3)?,
-                flags,
-            )?;
-            enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, PROPOSAL_FIELDS, 5)?,
-                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
-            )
-        }
-        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => {
-            enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, CHUNK_FIELDS, 2)?,
-                wire::MAX_DA_CHUNK_SIZE_BYTES as usize,
-            )?;
-            enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, CHUNK_FIELDS, 4)?,
-                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
-            )
-        }
-        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => {
-            enforce_inbound_manifest_limits(
-                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 1)?,
-                flags,
-            )?;
-            enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 2)?,
-                wire::MAX_DA_PAYLOAD_SIZE_BYTES as usize,
-            )?;
-            enforce_inbound_peer_id_limits(
-                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 3)?,
-                flags,
-            )?;
-            enforce_inbound_byte_sequence_limit(
-                inbound_struct_field(payload, flags, CERTIFIED_RESPONSE_FIELDS, 4)?,
-                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
-            )
-        }
-        _ => Ok(()),
-    }
-}
-fn inbound_versioned_consensus_parts(
-    payload: &[u8],
-    flags: u8,
-) -> Result<(u16, u32, &[u8]), norito::core::Error> {
-    let (version, message) = inbound_two_field_struct(payload, flags, core::mem::size_of::<u16>())?;
-    let version: [u8; core::mem::size_of::<u16>()] = version
-        .try_into()
-        .map_err(|_| norito::core::Error::LengthMismatch)?;
-    let (tag, remaining) = inbound_enum_parts(message)?;
-    let field = inbound_enum_field(remaining, flags)?;
-    Ok((u16::from_le_bytes(version), tag, field))
-}
-fn inbound_native_lane_topic(
-    payload: &[u8],
-    flags: u8,
-) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1;
-    use iroha_p2p::network::message::Topic;
-    let (version, tag, _) = inbound_versioned_consensus_parts(payload, flags)?;
-    if version != LANE_MESSAGE_VERSION_V1 {
-        return Ok(Topic::Other);
-    }
-    // All five Native variants are bounded control evidence. Their exact
-    // frozen committee, signatures and current instance are checked after
-    // transport admission by the original Native ingress owner.
-    match tag {
-        0..=4 => Ok(Topic::Consensus),
-        _ => Err(norito::core::Error::Message(
-            "unknown Native lane payload discriminant".to_owned(),
-        )),
-    }
-}
-fn inbound_native_lane_decode_limits(
-    framed_len: usize,
-) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
-    // Native controls carry no executable payload. The complete nested TC
-    // geometry fits the existing control frame, and every dynamic sequence
-    // is either at most 2f+1 shares/votes or one 96-byte BLS signature.
-    let frame_limit = MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES;
-    if framed_len > frame_limit {
-        return Err(norito::core::Error::ArchiveLengthExceeded {
-            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-            limit: u64::try_from(frame_limit).unwrap_or(u64::MAX),
-        });
-    }
-    let canonical = norito::canonical_decode_limits(frame_limit);
-    Ok(Some(norito::DecodeLimits::new(
-        lane_consensus::LANE_BLS_PROOF_BYTES,
-        frame_limit,
-        canonical.max_total_elements(),
-        canonical.max_total_allocated_bytes(),
-        MAX_SUMERAGI_V2_DECODE_DEPTH,
-    )))
-}
-fn inbound_consensus_v2_topic(
-    payload: &[u8],
-    flags: u8,
-) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_data_model::block::consensus_v2 as wire;
-    use iroha_p2p::network::message::Topic;
-    let (version, tag, _) = inbound_versioned_consensus_parts(payload, flags)?;
-    if version != wire::PROTOCOL_VERSION {
-        return Ok(Topic::Other);
-    }
-    match tag {
-        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG
-        | wire::CONSENSUS_MESSAGE_V2_VOTE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG => {
-            Ok(Topic::ConsensusSafety)
-        }
-        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => Ok(Topic::ConsensusPayload),
-        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => Ok(Topic::ConsensusChunk),
-        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG
-        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG => Ok(Topic::Consensus),
-        _ => Err(norito::core::Error::Message(
-            "unknown Sumeragi v2 payload discriminant".to_owned(),
-        )),
-    }
-}
-fn inbound_consensus_v2_decode_limits(
-    payload: &[u8],
-    framed_len: usize,
-    flags: u8,
-) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
-    use iroha_data_model::block::consensus_v2 as wire;
-    let (version, tag, payload_field) = inbound_versioned_consensus_parts(payload, flags)?;
-    if version != wire::PROTOCOL_VERSION {
-        // The raw topic classifier routes another protocol revision through
-        // the much smaller `Other` cap before this hook is reached.
-        return Ok(None);
-    }
-    let default_sequence_limit = usize::try_from(wire::MAX_DA_CHUNK_COUNT)
-        .unwrap_or(usize::MAX)
-        .max(wire::MAX_CONSENSUS_SIGNATURE_BYTES)
-        .max(MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS);
-    let (frame_limit, sequence_limit) = match tag {
-        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => (
-            MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES,
-            usize::try_from(wire::MAX_DA_CHUNK_SIZE_BYTES).unwrap_or(usize::MAX),
-        ),
-        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => (
-            MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES,
-            usize::try_from(wire::MAX_DA_PAYLOAD_SIZE_BYTES).unwrap_or(usize::MAX),
-        ),
-        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG
-        | wire::CONSENSUS_MESSAGE_V2_VOTE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG
-        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG
-        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG
-        | wire::CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG => (
-            MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES,
-            default_sequence_limit,
-        ),
-        _ => {
-            return Err(norito::core::Error::Message(
-                "unknown Sumeragi v2 payload discriminant".to_owned(),
-            ));
-        }
-    };
-    if framed_len > frame_limit {
-        return Err(norito::core::Error::ArchiveLengthExceeded {
-            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-            limit: u64::try_from(frame_limit).unwrap_or(u64::MAX),
-        });
-    }
-    enforce_inbound_consensus_v2_payload_limits(tag, payload_field, flags)?;
-    let canonical = norito::canonical_decode_limits(frame_limit);
-    Ok(Some(norito::DecodeLimits::new(
-        sequence_limit,
-        frame_limit,
-        canonical.max_total_elements(),
-        canonical.max_total_allocated_bytes(),
-        MAX_SUMERAGI_V2_DECODE_DEPTH,
-    )))
-}
-fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
-    let view = norito::core::from_bytes_view(framed)?;
-    if view.schema() != norito::schema::identity::frame_hash::<BlockMessage>() {
-        return Err(norito::core::Error::SchemaMismatch);
-    }
-    let align = norito::core::archived_payload_align::<BlockMessage>();
-    let padding = if align <= 1 {
-        0
-    } else {
-        let remainder = norito::core::Header::SIZE % align;
-        if remainder == 0 { 0 } else { align - remainder }
-    };
-    let exact_len = norito::core::Header::SIZE
-        .checked_add(padding)
-        .and_then(|prefix| prefix.checked_add(view.as_bytes().len()))
-        .ok_or(norito::core::Error::LengthMismatch)?;
-    if exact_len != framed.len() {
-        return Err(norito::core::Error::LengthMismatch);
-    }
-    let (tag, remaining) = inbound_enum_parts(view.as_bytes())?;
-    let field = inbound_enum_field(remaining, view.flags())?;
-    Ok((tag, field, view.flags()))
-}
-fn inbound_sumeragi_topic(
-    framed: &[u8],
-) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_p2p::network::message::Topic;
-    let (tag, field, flags) = inbound_sumeragi_enum_field(framed)?;
-    match tag {
-        // Keep these discriminants synchronized with `BlockMessage`. They are
-        // inspected before allocating or decoding the nested consensus value.
-        0 | 1 | 3..=8 => Ok(Topic::Consensus),
-        2 | 9 => Ok(Topic::ConsensusPayload),
-        10 => inbound_consensus_v2_topic(field, flags),
-        11 => inbound_native_lane_topic(field, flags),
-        12 => Ok(Topic::Consensus),
-        _ => Err(norito::core::Error::Message(
-            "unknown Sumeragi block discriminant".to_owned(),
-        )),
-    }
-}
-fn inbound_certified_merge_sidecar_topic(
-    payload: &[u8],
-    flags: u8,
-) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_p2p::network::message::Topic;
-    let (tag, remaining) = inbound_enum_parts(payload)?;
-    inbound_enum_field(remaining, flags)?;
-    match tag {
-        0..=3 => Ok(Topic::Consensus),
-        4 => Ok(Topic::ConsensusChunk),
-        _ => Err(norito::core::Error::Message(
-            "unknown certified merge-sidecar discriminant".to_owned(),
-        )),
-    }
-}
 fn inbound_transaction_gossip_topic(
     payload: &[u8],
     flags: u8,
@@ -725,24 +350,6 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 #[norito_schema(name = "iroha_core::NetworkMessage")]
 #[norito(decode_from_slice)]
 pub enum NetworkMessage {
-    /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
-    #[codec(index = 0)]
-    SumeragiBlock(Arc<BlockMessageWire>),
-    /// Lane settlement relay envelope (NX-4).
-    #[codec(index = 1)]
-    LaneRelay(Box<LaneRelayEnvelope>),
-    /// Merge committee signature share for merge-ledger quorum certificates.
-    #[codec(index = 2)]
-    MergeCommitteeSignature(Arc<MergeCommitteeSignature>),
-    /// Lane-committee signature share for an automatic drain certificate.
-    #[codec(index = 3)]
-    LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
-    /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
-    #[codec(index = 4)]
-    CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),
-    /// Native AMX participant attestation control-plane message.
-    #[codec(index = 5)]
-    NativeAmx(Arc<native_amx::NativeAmxMessage>),
     /// Transaction gossiper message.
     #[codec(index = 6)]
     TransactionGossiper(Arc<TransactionGossip>),
@@ -773,12 +380,6 @@ pub enum NetworkMessage {
     /// Norito Streaming control-plane frame.
     #[codec(index = 15)]
     StreamingControl(Box<ControlFrame>),
-    /// Certified QueuePlan admission disseminated to every live authoritative validator.
-    #[codec(index = 16)]
-    QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
-    /// Exact Kura-durable QueuePlan admission certificate handed to the global leader.
-    #[codec(index = 17)]
-    QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
     /// One Sumeragi consensus frame: the exact `iroha_sumeragi` `WireMessage` encoding and its
     /// instance id. Only the consensus driver decodes it (`sumeragi::net`).
     #[codec(index = 18)]
@@ -791,9 +392,7 @@ impl NetworkMessage {
     pub const fn is_torii_proxy_control_message(&self) -> bool {
         matches!(
             self,
-            Self::ToriiProxyRequest(_)
-                | Self::ToriiProxyResponse(_)
-                | Self::QueuePlanAdmissionPublication(_)
+            Self::ToriiProxyRequest(_) | Self::ToriiProxyResponse(_)
         )
     }
 }
@@ -804,71 +403,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         use iroha_p2p::network::message::Topic as T;
         match self {
-            NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
-                BlockMessage::V2(message) => {
-                    use iroha_data_model::block::consensus_v2::{
-                        ConsensusMessageV2Payload, PROTOCOL_VERSION,
-                    };
-                    if message.protocol_version != PROTOCOL_VERSION {
-                        T::Other
-                    } else {
-                        match &message.payload {
-                            ConsensusMessageV2Payload::PayloadChunk(_) => T::ConsensusChunk,
-                            ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
-                                T::ConsensusPayload
-                            }
-                            ConsensusMessageV2Payload::Proposal(_)
-                            | ConsensusMessageV2Payload::Vote(_)
-                            | ConsensusMessageV2Payload::QuorumCertificate(_)
-                            | ConsensusMessageV2Payload::TimeoutVote(_)
-                            | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                            | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
-                                T::ConsensusSafety
-                            }
-                            ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-                            | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
-                                T::Consensus
-                            }
-                        }
-                    }
-                }
-                BlockMessage::NativeLane(envelope) => {
-                    if envelope.version
-                        == iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1
-                    {
-                        T::Consensus
-                    } else {
-                        T::Other
-                    }
-                }
-                BlockMessage::NativeLaneDecision(_) => T::Consensus,
-                BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneHistoricalRecoveryResponse(_) => T::ConsensusPayload,
-                BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::LaneBlockCertificate(_)
-                | BlockMessage::LaneHistoricalRecoveryRequest(_) => T::Consensus,
-                BlockMessage::KuraReplicaAdvert(_) => T::Consensus,
-            },
-            NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                CertifiedMergeSidecarMessage::Request(_)
-                | CertifiedMergeSidecarMessage::Close(_)
-                | CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_) => T::Consensus,
-                CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
-            },
-            NetworkMessage::LaneRelay(_)
-            | NetworkMessage::MergeCommitteeSignature(_)
-            | NetworkMessage::LaneDrainVote(_)
-            | NetworkMessage::NativeAmx(_)
-            | NetworkMessage::QueuePlanAdmissionCertificate(_) => T::Consensus,
             NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
-            | NetworkMessage::QueuePlanAdmissionPublication(_)
             | NetworkMessage::StreamingControl(_) => T::Control,
             NetworkMessage::TransactionGossiper(gossip) => match gossip.plane {
                 gossiper::GossipPlane::Public => T::TxGossip,
@@ -886,9 +422,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn subscriber_route(&self) -> iroha_p2p::network::message::SubscriberRoute {
         use iroha_p2p::network::message::SubscriberRoute;
         match self {
-            Self::ToriiProxyRequest(_)
-            | Self::ToriiProxyResponse(_)
-            | Self::QueuePlanAdmissionPublication(_) => SubscriberRoute::ToriiProxy,
+            Self::ToriiProxyRequest(_) | Self::ToriiProxyResponse(_) => SubscriberRoute::ToriiProxy,
             Self::Connect(_) => SubscriberRoute::Connect,
             Self::Sumeragi(_) => SubscriberRoute::Sumeragi,
             _ => SubscriberRoute::General,
@@ -897,23 +431,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn progress_reconstruction(&self) -> iroha_p2p::network::message::ProgressReconstruction {
         use iroha_p2p::network::message::ProgressReconstruction;
         match self {
-            // Sumeragi and certified-sidecar workers retain exact pending work
-            // and retry it through their bounded schedulers.
-            Self::SumeragiBlock(_) | Self::CertifiedMergeSidecar(_) => {
-                ProgressReconstruction::Retransmit
-            }
             // The Sumeragi core retransmits its state ("state, not custody", spec §6.11).
             Self::Sumeragi(_) => ProgressReconstruction::Retransmit,
-            // Lane/merge producers rebuild their bounded handoff after
-            // temporary actor pressure. Transport must keep the accepted
-            // exact occurrence until writer flush; none of these payloads may
-            // be retired merely because state synchronization might later
-            // subsume it.
-            Self::LaneRelay(_)
-            | Self::MergeCommitteeSignature(_)
-            | Self::LaneDrainVote(_)
-            | Self::NativeAmx(_)
-            | Self::QueuePlanAdmissionCertificate(_) => ProgressReconstruction::Retransmit,
             _ => ProgressReconstruction::Exact,
         }
     }
@@ -929,25 +448,18 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 0 | 4 | 6 | 16 | NETWORK_MESSAGE_SUMERAGI_TAG) {
+        let field = if matches!(tag, 6 | NETWORK_MESSAGE_SUMERAGI_TAG) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
         };
         let topic = match tag {
-            0 => inbound_sumeragi_topic(field)?,
-            NETWORK_MESSAGE_LANE_RELAY_TAG
-            | 2
-            | NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG
-            | NETWORK_MESSAGE_NATIVE_AMX_TAG
-            | NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => Topic::Consensus,
-            4 => inbound_certified_merge_sidecar_topic(field, flags)?,
             6 => inbound_transaction_gossip_topic(field, flags)?,
             7 => Topic::PeerGossip,
             8 => Topic::TrustGossip,
             10..=11 => Topic::Health,
             12 => Topic::Connect,
-            13..=16 => Topic::Control,
+            13..=15 => Topic::Control,
             NETWORK_MESSAGE_SUMERAGI_TAG => sumeragi::net::inbound_frame_topic(field, flags)?,
             _ => {
                 return Err(norito::core::Error::Message(
@@ -968,60 +480,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
         discriminant_bytes.copy_from_slice(discriminant);
         match u32::from_le_bytes(discriminant_bytes) {
-            0 => {
-                let (_, remaining) = inbound_enum_parts(payload)?;
-                let framed = inbound_owned_enum_field(remaining, flags)?;
-                let (block_tag, block, block_flags) = inbound_sumeragi_enum_field(framed)?;
-                if block_tag == 10 {
-                    return inbound_consensus_v2_decode_limits(block, framed_len, block_flags);
-                }
-                if matches!(block_tag, 11 | 12) {
-                    if block_tag == 11
-                        && inbound_native_lane_topic(block, block_flags)?
-                            == iroha_p2p::network::message::Topic::Other
-                    {
-                        return Ok(None);
-                    }
-                    return inbound_native_lane_decode_limits(framed_len);
-                }
-                if block_tag == 0 {
-                    if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
-                        return Err(norito::core::Error::ArchiveLengthExceeded {
-                            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                            limit: u64::try_from(MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
-                                .unwrap_or(u64::MAX),
-                        });
-                    }
-                    return Ok(Some(norito::DecodeLimits::new(
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        4 * MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        64,
-                    )));
-                }
-                Ok(None)
-            }
-            NETWORK_MESSAGE_LANE_RELAY_TAG | NETWORK_MESSAGE_NATIVE_AMX_TAG => {
-                // These recursive consensus carriers intentionally rely on
-                // Norito's unconditional payload-derived global budget.
-                Ok(None)
-            }
-            NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG => {
-                if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_LANE_DRAIN_VOTE_WIRE_BYTES).unwrap_or(u64::MAX),
-                    });
-                }
-                Ok(Some(norito::DecodeLimits::new(
-                    lane_consensus::MAX_LANE_BLOCK_VALIDATORS,
-                    MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-                    MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS,
-                    MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
-                    MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
-                )))
-            }
             NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG => {
                 use torii_proxy::{
                     TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
@@ -1062,54 +520,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     64,
                 )))
             }
-            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG => {
-                const WIRE_OVERHEAD_BYTES: usize = 64 * 1024;
-                const MAX_CERTIFICATE_BYTES: usize =
-                    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-                const MAX_WIRE_BYTES: usize = MAX_CERTIFICATE_BYTES + WIRE_OVERHEAD_BYTES;
-                // Relay, NetworkMessage, Arc, publication, and the owned
-                // complete-input field share one cumulative decode budget.
-                // Their nested copies need twelve bounded wire sizes; the
-                // independent frame and field caps still reject oversized input.
-                const MAX_DECODE_ALLOCATED_BYTES: usize = 12 * MAX_WIRE_BYTES;
-                if framed_len > MAX_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_WIRE_BYTES).unwrap_or(u64::MAX),
-                    });
-                }
-                let (_, remaining) = inbound_enum_parts(payload)?;
-                let publication = inbound_owned_enum_field(remaining, flags)?;
-                let (_, encoded_complete_input) =
-                    inbound_two_field_struct(publication, flags, core::mem::size_of::<u16>())?;
-                // `certificate` is a raw-byte sequence, not another sized
-                // struct field. Its fixed-width count precedes the bytes.
-                enforce_inbound_byte_sequence_limit(encoded_complete_input, MAX_CERTIFICATE_BYTES)?;
-                Ok(Some(norito::DecodeLimits::new(
-                    MAX_WIRE_BYTES,
-                    MAX_WIRE_BYTES,
-                    MAX_WIRE_BYTES,
-                    MAX_DECODE_ALLOCATED_BYTES,
-                    16,
-                )))
-            }
-            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => {
-                let max_body = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-                if framed_len > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES)
-                            .unwrap_or(u64::MAX),
-                    });
-                }
-                Ok(Some(norito::DecodeLimits::new(
-                    max_body,
-                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    8 * MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    64,
-                )))
-            }
             NETWORK_MESSAGE_SUMERAGI_TAG => {
                 let (_, remaining) = inbound_enum_parts(payload)?;
                 let field = inbound_owned_enum_field(remaining, flags)?;
@@ -1120,9 +530,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     }
     fn is_outbound_allowed(&self) -> bool {
         match self {
-            Self::SumeragiBlock(message) => {
-                message.as_ref().as_message().ensure_live_outbound().is_ok()
-            }
             // Never send a frame the receivers could not classify.
             Self::Sumeragi(frame) => frame.class().is_some(),
             _ => true,
@@ -1254,6 +661,8 @@ mod execute_trigger_events_tests;
 pub(crate) mod execution_output_test_support;
 #[cfg(test)]
 mod frame_identity_tests;
+#[cfg(test)]
+pub(crate) mod ivm_test_support;
 #[cfg(test)]
 pub(crate) mod unit_test_support;
 // Governance height/custody fixtures use explicit synthetic publication,
@@ -1407,28 +816,6 @@ mod tests {
         super::inbound_enum_parts(view.as_bytes())
             .expect("extract core network-message discriminant")
             .0
-    }
-    fn raw_sumeragi_topic_for_synthetic_tag(tag: u32) -> Result<NetworkTopic, ncore::Error> {
-        use iroha_data_model::block::consensus_v2 as wire;
-        let (mut payload, flags) = norito::codec::encode_with_header_flags(&BlockMessage::V2(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                wire::PayloadChunk {
-                    manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"synthetic-topic-manifest",
-                    )),
-                    index: 0,
-                    bytes: vec![0xA5],
-                    sender: 0,
-                    signature: vec![0x5A],
-                },
-            )),
-        ));
-        payload
-            .get_mut(..core::mem::size_of::<u32>())
-            .ok_or(ncore::Error::LengthMismatch)?
-            .copy_from_slice(&tag.to_le_bytes());
-        let framed = ncore::frame_bare_with_header_flags::<BlockMessage>(&payload, flags)?;
-        super::inbound_sumeragi_topic(&framed)
     }
     #[test]
     fn network_topic_fixture_uses_checked_ed25519_keypair() {
@@ -1628,639 +1015,7 @@ mod tests {
             "the unit health tag must not hide a trailing dynamic payload"
         );
     }
-    #[test]
-    fn raw_block_message_tags_keep_exact_capacity_classes() {
-        for tag in [0, 1, 3, 4, 5, 6, 7, 8] {
-            assert_eq!(
-                raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane control tag"),
-                NetworkTopic::Consensus,
-                "block-message control discriminant {tag} must stay on reliable consensus transport"
-            );
-        }
-        for tag in [2, 9] {
-            assert_eq!(
-                raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane payload tag"),
-                NetworkTopic::ConsensusPayload,
-                "lane payload discriminant {tag} must use the bounded payload corridor"
-            );
-        }
-        assert_eq!(
-            raw_sumeragi_topic_for_synthetic_tag(10)
-                .expect("classify canonical global-v2 chunk message"),
-            NetworkTopic::ConsensusChunk,
-            "global-v2 discriminant must preserve its inner protocol topic"
-        );
-        assert!(
-            raw_sumeragi_topic_for_synthetic_tag(13).is_err(),
-            "the first tag after the compact block-message range must fail closed"
-        );
-    }
-    #[test]
-    fn raw_consensus_struct_parser_accepts_each_v1_layout() {
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_v1_layout::TwoFieldFixture"
-        )]
-        #[derive(Encode)]
-        struct TwoFieldFixture {
-            version: u16,
-            payload: PayloadFixture,
-        }
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_v1_layout::PayloadFixture"
-        )]
-        #[derive(Encode)]
-        enum PayloadFixture {
-            Safety(u8),
-        }
-        let fixture = TwoFieldFixture {
-            version: 3,
-            payload: PayloadFixture::Safety(7),
-        };
-        for requested in [0, ncore::header_flags::COMPACT_LEN] {
-            let (bare, flags) = {
-                let _guard = ncore::DecodeFlagsGuard::enter(requested);
-                norito::codec::encode_with_header_flags(&fixture)
-            };
-            assert_eq!(
-                flags & ncore::header_flags::COMPACT_LEN,
-                requested,
-                "fixture must advertise the layout under test"
-            );
-            let (version, payload) =
-                super::inbound_two_field_struct(&bare, flags, core::mem::size_of::<u16>())
-                    .expect("extract two-field consensus layout");
-            assert_eq!(version, 3_u16.to_le_bytes());
-            let (tag, remaining) = super::inbound_enum_parts(payload).expect("payload enum tag");
-            assert_eq!(tag, 0);
-            let field =
-                super::inbound_enum_field(remaining, flags).expect("length-prefixed enum field");
-            assert_eq!(field, [7]);
-        }
-    }
-    #[test]
-    fn lane_drain_vote_network_message_roundtrips_on_control_topic() {
-        use iroha_crypto::{Algorithm, HashOf};
-        use iroha_data_model::{
-            consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
-        };
-        let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate lane-drain BLS fixture keypair");
-        let signer = PeerId::new(keypair.public_key().clone());
-        let validator_set = vec![signer.clone()];
-        let body = LaneDrainCertificateBodyV1 {
-            version: 1,
-            intent: LaneDrainIntentV1 {
-                version: 1,
-                network_id: test_network_id(b"lane-drain-network-genesis"),
-                lane_id: LaneId::new(3),
-                dataspace_id: DataSpaceId::new(7),
-                lane_incarnation: Hash::new(b"lane-drain-network-incarnation"),
-                close_global_height: 12,
-                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    LaneId::new(3),
-                    DataSpaceId::new(7),
-                    Hash::new(b"lane-drain-network-incarnation"),
-                    4,
-                    Some(Hash::new(b"lane-drain-network-initial")),
-                ),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set,
-                validator_count: 1,
-                min_quorum: 1,
-            },
-            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                LaneId::new(3),
-                DataSpaceId::new(7),
-                Hash::new(b"lane-drain-network-incarnation"),
-                5,
-                Some(Hash::new(b"lane-drain-network-final")),
-            ),
-        };
-        let vote =
-            crate::lane_consensus::LaneDrainVoteV1::new_signed(body, signer, keypair.private_key())
-                .expect("sign valid lane-drain vote");
-        let message = NetworkMessage::LaneDrainVote(Box::new(vote.clone()));
-        assert_eq!(
-            message.topic(),
-            NetworkTopic::Consensus,
-            "lane-drain traffic must not share the authoritative v2 safety topic"
-        );
-        assert_eq!(raw_network_tag(&message), 3);
-        let encoded = norito::to_bytes(&message).expect("encode lane-drain vote message");
-        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
-            .expect("decode lane-drain vote message");
-        let NetworkMessage::LaneDrainVote(decoded_vote) = decoded else {
-            panic!("decoded the wrong network-message variant");
-        };
-        assert_eq!(*decoded_vote, vote);
-        decoded_vote
-            .validate_ingress()
-            .expect("round-tripped vote retains its signature and proof of possession");
-    }
-    #[test]
-    fn maximum_committee_lane_drain_vote_fits_the_ingress_wire_cap() {
-        use iroha_crypto::{Algorithm, HashOf};
-        use iroha_data_model::{
-            consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
-        };
-        let keypairs = (0..crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS)
-            .map(|index| {
-                let seed = u8::try_from(index + 1).expect("fixture index fits in u8");
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("derive maximum-committee BLS fixture keypair")
-            })
-            .collect::<Vec<_>>();
-        let signer = PeerId::new(keypairs[0].public_key().clone());
-        let origin = signer.clone();
-        let mut validator_set = keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        validator_set.sort();
-        let validator_count =
-            u32::try_from(validator_set.len()).expect("maximum committee count fits u32");
-        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
-            .expect("maximum committee quorum fits u32");
-        let body = LaneDrainCertificateBodyV1 {
-            version: 1,
-            intent: LaneDrainIntentV1 {
-                version: 1,
-                network_id: test_network_id(b"maximum-lane-drain-network-genesis"),
-                lane_id: LaneId::new(3),
-                dataspace_id: DataSpaceId::new(7),
-                lane_incarnation: Hash::new(b"maximum-lane-drain-network-incarnation"),
-                close_global_height: 12,
-                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    LaneId::new(3),
-                    DataSpaceId::new(7),
-                    Hash::new(b"maximum-lane-drain-network-incarnation"),
-                    4,
-                    Some(Hash::new(b"maximum-lane-drain-network-initial")),
-                ),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set,
-                validator_count,
-                min_quorum,
-            },
-            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                LaneId::new(3),
-                DataSpaceId::new(7),
-                Hash::new(b"maximum-lane-drain-network-incarnation"),
-                5,
-                Some(Hash::new(b"maximum-lane-drain-network-final")),
-            ),
-        };
-        let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
-            body,
-            signer,
-            keypairs[0].private_key(),
-        )
-        .expect("sign maximum-committee drain vote");
-        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
-        let encoded = norito::to_bytes(&message).expect("encode maximum-committee lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
-        assert!(
-            p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-            "largest valid lane-drain vote P2P frame encoded to {p2p_wire_len} bytes, above the {}-byte ingress cap",
-            MAX_LANE_DRAIN_VOTE_WIRE_BYTES
-        );
-        let view = ncore::from_bytes_view(&encoded).expect("inspect encoded network message");
-        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-            view.as_bytes(),
-            p2p_wire_len,
-            view.flags(),
-        )
-        .expect("select lane-drain decode policy")
-        .expect("lane-drain variant must install decode limits");
-        let decoded = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
-            .expect("maximum valid lane-drain vote must pass the inbound resource limits");
-        assert!(matches!(decoded, NetworkMessage::LaneDrainVote(_)));
-    }
-    #[test]
-    fn lane_drain_vote_with_excess_committee_hits_predecode_sequence_limit() {
-        use iroha_crypto::{Algorithm, HashOf};
-        use iroha_data_model::{
-            consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
-        };
-        let keypair = KeyPair::try_from_seed(vec![211; 32], Algorithm::BlsNormal)
-            .expect("derive adversarial lane-drain BLS fixture keypair");
-        let signer = PeerId::new(keypair.public_key().clone());
-        let origin = signer.clone();
-        let validator_set =
-            vec![signer.clone(); crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS + 1];
-        let validator_count =
-            u32::try_from(validator_set.len()).expect("adversarial committee count fits u32");
-        let vote = crate::lane_consensus::LaneDrainVoteV1 {
-            body: LaneDrainCertificateBodyV1 {
-                version: 1,
-                intent: LaneDrainIntentV1 {
-                    version: 1,
-                    network_id: test_network_id(b"excess-lane-drain-network-genesis"),
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(7),
-                    lane_incarnation: Hash::new(b"excess-lane-drain-network-incarnation"),
-                    close_global_height: 12,
-                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                        LaneId::new(3),
-                        DataSpaceId::new(7),
-                        Hash::new(b"excess-lane-drain-network-incarnation"),
-                        4,
-                        Some(Hash::new(b"excess-lane-drain-network-initial")),
-                    ),
-                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                    validator_set_hash: HashOf::new(&validator_set),
-                    validator_set,
-                    validator_count,
-                    min_quorum: 1,
-                },
-                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    LaneId::new(3),
-                    DataSpaceId::new(7),
-                    Hash::new(b"excess-lane-drain-network-incarnation"),
-                    5,
-                    Some(Hash::new(b"excess-lane-drain-network-final")),
-                ),
-            },
-            signer,
-            proof_of_possession: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
-            bls_signature: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
-        };
-        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
-        let encoded = norito::to_bytes(&message).expect("encode adversarial lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
-        assert!(
-            p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-            "fixture must exercise the nested limit instead of the frame cap"
-        );
-        assert!(
-            matches!(
-                norito::decode_from_bytes::<NetworkMessage>(&encoded),
-                Ok(NetworkMessage::LaneDrainVote(_))
-            ),
-            "the adversarial archive must be syntactically decodable without limits"
-        );
-        let view = ncore::from_bytes_view(&encoded).expect("inspect adversarial network message");
-        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-            view.as_bytes(),
-            p2p_wire_len,
-            view.flags(),
-        )
-        .expect("select lane-drain decode policy")
-        .expect("lane-drain variant must install decode limits");
-        let error = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
-            .expect_err("committee above the protocol cap must fail before allocation");
-        assert!(
-            matches!(
-                &error,
-                ncore::Error::SequenceLengthExceeded {
-                    length,
-                    limit
-                } if *length == u64::from(validator_count)
-                    && *limit == crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS as u64
-            ),
-            "unexpected bounded-decode rejection: {error:?}"
-        );
-    }
 
-    #[test]
-    fn native_amx_and_lane_relay_fall_back_to_canonical_global_decode_limits() {
-        for (tag, label) in [
-            (super::NETWORK_MESSAGE_LANE_RELAY_TAG, "LaneRelay"),
-            (super::NETWORK_MESSAGE_NATIVE_AMX_TAG, "NativeAmx"),
-        ] {
-            let payload = tag.to_le_bytes();
-            assert!(
-                <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-                    &payload,
-                    payload.len(),
-                    ncore::default_encode_flags(),
-                )
-                .unwrap_or_else(|error| panic!("derive {label} decode policy: {error}"))
-                .is_none(),
-                "{label} intentionally uses Norito's canonical payload-derived global limits"
-            );
-        }
-        let canonical = norito::canonical_decode_limits(4 * 1024);
-        assert_eq!(
-            canonical.max_nesting_depth(),
-            norito::core::MAX_VALUE_NESTING_DEPTH
-        );
-        assert!(canonical.max_total_allocated_bytes() > 4 * 1024);
-    }
-    #[test]
-    fn oversized_lane_drain_vote_frame_is_rejected_by_raw_policy() {
-        use iroha_crypto::{Algorithm, HashOf};
-        use iroha_data_model::{
-            consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
-        };
-        let keypair = KeyPair::try_from_seed(vec![212; 32], Algorithm::BlsNormal)
-            .expect("derive oversized lane-drain BLS fixture keypair");
-        let signer = PeerId::new(keypair.public_key().clone());
-        let origin = signer.clone();
-        let validator_set = vec![signer.clone()];
-        let vote = crate::lane_consensus::LaneDrainVoteV1 {
-            body: LaneDrainCertificateBodyV1 {
-                version: 1,
-                intent: LaneDrainIntentV1 {
-                    version: 1,
-                    network_id: test_network_id(b"oversized-lane-drain-network-genesis"),
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(7),
-                    lane_incarnation: Hash::new(b"oversized-lane-drain-network-incarnation"),
-                    close_global_height: 12,
-                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                        LaneId::new(3),
-                        DataSpaceId::new(7),
-                        Hash::new(b"oversized-lane-drain-network-incarnation"),
-                        4,
-                        Some(Hash::new(b"oversized-lane-drain-network-initial")),
-                    ),
-                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                    validator_set_hash: HashOf::new(&validator_set),
-                    validator_set,
-                    validator_count: 1,
-                    min_quorum: 1,
-                },
-                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    LaneId::new(3),
-                    DataSpaceId::new(7),
-                    Hash::new(b"oversized-lane-drain-network-incarnation"),
-                    5,
-                    Some(Hash::new(b"oversized-lane-drain-network-final")),
-                ),
-            },
-            signer,
-            proof_of_possession: vec![0; MAX_LANE_DRAIN_VOTE_WIRE_BYTES],
-            bls_signature: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
-        };
-        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
-        let encoded = norito::to_bytes(&message).expect("encode oversized lane-drain vote");
-        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &message);
-        assert!(p2p_wire_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
-        let view = ncore::from_bytes_view(&encoded).expect("inspect oversized network message");
-        let error = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-            view.as_bytes(),
-            p2p_wire_len,
-            view.flags(),
-        )
-        .expect_err("oversized lane-drain frame must fail before typed decode");
-        assert!(matches!(
-            error,
-            ncore::Error::ArchiveLengthExceeded { length, limit }
-                if length == p2p_wire_len as u64
-                    && limit == MAX_LANE_DRAIN_VOTE_WIRE_BYTES as u64
-        ));
-    }
-    #[test]
-    fn certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics() {
-        use crate::merge_sidecar::{
-            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-            CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
-            CertifiedMergeSidecarGenerationHintV1, CertifiedMergeSidecarMessage,
-            CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
-            CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
-        };
-        use iroha_data_model::merge::MergeLedgerEntry;
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::LegacySidecarCarrier"
-        )]
-        #[derive(Encode)]
-        enum LegacySidecarCarrier {
-            Payload(Box<CertifiedMergeSidecarMessage>),
-        }
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::SharedSidecarCarrier"
-        )]
-        #[derive(Encode)]
-        enum SharedSidecarCarrier {
-            Payload(Arc<CertifiedMergeSidecarMessage>),
-        }
-        let assert_shared_carrier_wire_compatible = |message: &CertifiedMergeSidecarMessage| {
-            let legacy = LegacySidecarCarrier::Payload(Box::new(message.clone()));
-            let shared = SharedSidecarCarrier::Payload(Arc::new(message.clone()));
-            assert_eq!(
-                legacy.encode(),
-                shared.encode(),
-                "Box-to-Arc carrier conversion must not alter canonical Norito bytes"
-            );
-        };
-        let requester = PeerId::new(checked_topic_keypair().public_key().clone());
-        let responder = PeerId::new(checked_topic_keypair().public_key().clone());
-        let entry_hash = iroha_crypto::HashOf::<MergeLedgerEntry>::from_untyped_unchecked(
-            Hash::new(b"merge-sidecar-entry"),
-        );
-        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
-            NonZeroU64::new(1).expect("sidecar fixture stream epoch is non-zero"),
-        );
-        let service_generation = CertifiedMergeSidecarServiceGenerationV1::INITIAL;
-        let mut request = CertifiedMergeSidecarRequestV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation,
-            stream_epoch,
-            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
-                NonZeroU64::new(1).expect("sidecar semantic sequence is non-zero"),
-            ),
-            closed_through: 0,
-            request_id: Hash::prehashed([0; Hash::LENGTH]),
-            entry_hash,
-            encoded_len: 3,
-            epoch_id: 4,
-            reference_digest: Hash::new(b"merge-sidecar-reference"),
-            requester: requester.clone(),
-            responder: responder.clone(),
-        };
-        request.request_id = request.canonical_request_id();
-        let request_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::Request(request.clone()),
-        ));
-        let NetworkMessage::CertifiedMergeSidecar(request_payload) = &request_message else {
-            unreachable!("request fixture uses the sidecar variant")
-        };
-        assert_shared_carrier_wire_compatible(request_payload.as_ref());
-        assert_eq!(request_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(&request_message, iroha_p2p::TransportAdmissionClass::Lane);
-        assert_eq!(raw_network_tag(&request_message), 4);
-        assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
-        let request_hash = HashOf::new(&request_message);
-        let encoded = norito::to_bytes(&request_message).expect("encode sidecar request");
-        let decoded =
-            norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar request");
-        assert_eq!(HashOf::new(&decoded), request_hash);
-        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
-            panic!("decoded sidecar request uses the sidecar variant");
-        };
-        let CertifiedMergeSidecarMessage::Request(decoded_request) = message.as_ref() else {
-            panic!("decoded sidecar request preserves the request variant");
-        };
-        assert_eq!(decoded_request.service_generation, service_generation);
-        assert_eq!(decoded_request.stream_epoch, stream_epoch);
-        assert_eq!(decoded_request, &request);
-        let mut close = CertifiedMergeSidecarCloseV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation,
-            stream_epoch,
-            closed_through: request.semantic_sequence.get(),
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: requester.clone(),
-            responder: responder.clone(),
-        };
-        close.close_id = close.canonical_close_id();
-        let close_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::Close(close.clone()),
-        ));
-        assert_eq!(close_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(&close_message, iroha_p2p::TransportAdmissionClass::Lane);
-        assert_eq!(raw_network_topic(&close_message), NetworkTopic::Consensus);
-        let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
-        let decoded =
-            norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar close");
-        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
-            panic!("decoded sidecar close uses the sidecar variant");
-        };
-        let CertifiedMergeSidecarMessage::Close(decoded_close) = message.as_ref() else {
-            panic!("decoded sidecar close preserves the close variant");
-        };
-        assert_eq!(decoded_close.service_generation, service_generation);
-        assert_eq!(decoded_close.stream_epoch, stream_epoch);
-        assert_eq!(decoded_close, &close);
-        let close_ack = CertifiedMergeSidecarCloseAckV1 {
-            version: close.version,
-            service_generation: close.service_generation,
-            stream_epoch: close.stream_epoch,
-            closed_through: close.closed_through,
-            close_id: close.close_id,
-            requester: requester.clone(),
-            responder: responder.clone(),
-        };
-        let close_ack_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
-        ));
-        assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(&close_ack_message, iroha_p2p::TransportAdmissionClass::Lane);
-        assert_eq!(
-            raw_network_topic(&close_ack_message),
-            NetworkTopic::Consensus
-        );
-        let encoded = norito::to_bytes(&close_ack_message).expect("encode sidecar close ACK");
-        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
-            .expect("decode sidecar close ACK");
-        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
-            panic!("decoded sidecar close ACK uses the sidecar variant");
-        };
-        let CertifiedMergeSidecarMessage::CloseAck(decoded_close_ack) = message.as_ref() else {
-            panic!("decoded sidecar close ACK preserves the close ACK variant");
-        };
-        assert_eq!(decoded_close_ack.service_generation, service_generation);
-        assert_eq!(decoded_close_ack.stream_epoch, stream_epoch);
-        assert_eq!(decoded_close_ack, &close_ack);
-        let current_generation = CertifiedMergeSidecarServiceGenerationV1(
-            NonZeroU64::new(2).expect("sidecar fixture successor generation is non-zero"),
-        );
-        let mut generation_hint = CertifiedMergeSidecarGenerationHintV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            observed_generation: service_generation,
-            current_generation,
-            observed_message_hash: HashOf::new(&request).into(),
-            hint_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: requester.clone(),
-            responder: responder.clone(),
-        };
-        generation_hint.hint_id = generation_hint.canonical_hint_id();
-        let generation_hint_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::GenerationHint(generation_hint.clone()),
-        ));
-        let NetworkMessage::CertifiedMergeSidecar(generation_hint_payload) =
-            &generation_hint_message
-        else {
-            unreachable!("generation Hint fixture uses the sidecar variant")
-        };
-        assert_shared_carrier_wire_compatible(generation_hint_payload.as_ref());
-        assert_eq!(generation_hint_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &generation_hint_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
-        assert_eq!(
-            raw_network_topic(&generation_hint_message),
-            NetworkTopic::Consensus
-        );
-        let generation_hint_hash = HashOf::new(&generation_hint_message);
-        let encoded =
-            norito::to_bytes(&generation_hint_message).expect("encode sidecar generation Hint");
-        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
-            .expect("decode sidecar generation Hint");
-        assert_eq!(HashOf::new(&decoded), generation_hint_hash);
-        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
-            panic!("decoded sidecar generation Hint uses the sidecar variant");
-        };
-        let CertifiedMergeSidecarMessage::GenerationHint(decoded_generation_hint) =
-            message.as_ref()
-        else {
-            panic!("decoded sidecar generation Hint preserves the Hint variant");
-        };
-        assert_eq!(
-            decoded_generation_hint.observed_generation,
-            service_generation
-        );
-        assert_eq!(
-            decoded_generation_hint.current_generation,
-            current_generation
-        );
-        assert_eq!(decoded_generation_hint, &generation_hint);
-        let chunk = CertifiedMergeSidecarChunkV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: request.service_generation,
-            stream_epoch: request.stream_epoch,
-            semantic_sequence: request.semantic_sequence,
-            request_id: request.request_id,
-            entry_hash,
-            encoded_len: 3,
-            epoch_id: 4,
-            reference_digest: request.reference_digest,
-            requester,
-            responder,
-            chunk_index: 0,
-            chunk_count: 1,
-            bytes: vec![1, 2, 3],
-        };
-        let chunk_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
-        ));
-        let NetworkMessage::CertifiedMergeSidecar(chunk_payload) = &chunk_message else {
-            unreachable!("chunk fixture uses the sidecar variant")
-        };
-        assert_shared_carrier_wire_compatible(chunk_payload.as_ref());
-        assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
-        assert_network_admission(&chunk_message, iroha_p2p::TransportAdmissionClass::Payload);
-        assert_eq!(
-            raw_network_topic(&chunk_message),
-            NetworkTopic::ConsensusChunk
-        );
-        let encoded = norito::to_bytes(&chunk_message).expect("encode sidecar chunk");
-        let chunk_hash = HashOf::new(&chunk_message);
-        let decoded =
-            norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar chunk");
-        assert_eq!(HashOf::new(&decoded), chunk_hash);
-        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
-            panic!("decoded sidecar chunk uses the sidecar variant");
-        };
-        let CertifiedMergeSidecarMessage::Chunk(decoded_chunk) = message.as_ref() else {
-            panic!("decoded sidecar chunk preserves the chunk variant");
-        };
-        assert_eq!(decoded_chunk.service_generation, service_generation);
-        assert_eq!(decoded_chunk.stream_epoch, stream_epoch);
-        assert_eq!(decoded_chunk, &chunk);
-    }
     #[test]
     fn torii_proxy_control_message_classification_covers_current_variants() {
         let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV1 {
@@ -2363,9 +1118,6 @@ mod tests {
             }
         }
     }
-    include!("tests/queue_plan_admission_handoff.rs");
-    include!("tests/sumeragi_v2_decode_limits.rs");
-    include!("tests/native_lane_network_ingress.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
         #[derive(norito::NoritoSchema)]
@@ -2551,224 +1303,6 @@ mod tests {
         assert_eq!(log.level, Level::INFO);
         assert_eq!(log.msg.len(), TRANSACTION_BODY_BYTES);
         assert!(log.msg.as_bytes().iter().all(|byte| *byte == b'P'));
-    }
-    #[test]
-    fn certified_body_and_request_admission_stay_ordinary() {
-        use iroha_data_model::block::consensus_v2 as wire;
-        use iroha_p2p::TransportAdmissionClass as A;
-        // Canonical codec fixtures, not a consensus-valid certificate or a
-        // network execution: admission classification must not claim either.
-        let round = wire::ConsensusRound {
-            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"admission fixture context",
-            ))),
-            height: 7,
-            view: 0,
-        };
-        let body = vec![1, 2, 3, 4];
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"admission fixture block")),
-            payload_hash: Hash::new(&body),
-        };
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 2,
-        };
-        let chunks = wire::encode_payload_chunks(layout, &body).expect("canonical RS16 chunks");
-        let chunk_hashes = chunks.iter().map(Hash::new).collect::<Vec<_>>();
-        let manifest = wire::PayloadManifest {
-            round,
-            subject,
-            payload_size_bytes: body.len() as u64,
-            layout,
-            chunk_root: Hash::new(b"codec-only manifest root"),
-            chunk_hashes,
-        };
-        let node_key =
-            iroha_crypto::KeyPair::try_from_seed(vec![83; 32], iroha_crypto::Algorithm::BlsNormal)
-                .expect("BLS-normal relay identity");
-        let peer = PeerId::new(node_key.public_key().clone());
-        let response = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                    wire::CertifiedBodyResponse {
-                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                            b"admission request",
-                        )),
-                        manifest,
-                        body,
-                        responder: peer.clone(),
-                        signature: vec![1],
-                    },
-                ),
-            )),
-        )));
-        assert_eq!(response.topic(), NetworkTopic::ConsensusPayload);
-        assert_network_admission(&response, A::Payload);
-        let request = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
-                    wire::CommitCertificateRequest {
-                        protocol_version: wire::PROTOCOL_VERSION,
-                        network_id: test_network_id(b"admission request network"),
-                        context_id: round.context_id,
-                        height: round.height,
-                        requester: peer,
-                        signature: vec![2],
-                    },
-                ),
-            )),
-        )));
-        assert_eq!(request.topic(), NetworkTopic::Consensus);
-        assert_network_admission(&request, A::Lane);
-        assert_network_admission(&NetworkMessage::Health, A::Low);
-    }
-    #[test]
-    fn authoritative_v2_safety_uses_dedicated_topic() {
-        use iroha_data_model::block::consensus_v2 as wire;
-        let context_id = wire::HeightContextId(
-            iroha_crypto::HashOf::<wire::HeightContext>::from_untyped_unchecked(Hash::new(
-                b"v2-safety-topic-context",
-            )),
-        );
-        let round = wire::ConsensusRound {
-            context_id,
-            height: 7,
-            view: 2,
-        };
-        let vote = wire::Vote {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: wire::BlockSubject {
-                parent_block_hash: None,
-                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
-                    b"v2-safety-topic-block",
-                )),
-                payload_hash: Hash::new(b"v2-safety-topic-payload"),
-            },
-            execution_commitment:
-                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"v2-safety-topic-parent-state"),
-                    Hash::new(b"v2-safety-topic-post-state"),
-                    Hash::new(b"v2-safety-topic-ordinary-writes"),
-                    1,
-                    Hash::new(b"v2-safety-topic-executed-block-wire"),
-                ),
-            signer: 0,
-            signature: vec![1],
-        };
-        let message =
-            NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(BlockMessage::V2(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
-            ))));
-        assert_eq!(message.topic(), NetworkTopic::ConsensusSafety);
-        let encoded = ncore::to_bytes(&message).expect("encode owned Sumeragi field");
-        let view = ncore::from_bytes_view(&encoded).expect("inspect owned Sumeragi field");
-        let (tag, remaining) = super::inbound_enum_parts(view.as_bytes())
-            .expect("extract network-message discriminant");
-        assert_eq!(tag, 0);
-        assert!(
-            super::inbound_owned_enum_field(remaining, view.flags())
-                .expect("unwrap enum and Box length prefixes")
-                .starts_with(&ncore::MAGIC),
-            "the nested raw classifier must receive the full BlockMessage frame"
-        );
-        assert_eq!(raw_network_topic(&message), NetworkTopic::ConsensusSafety);
-        assert_network_admission(&message, iroha_p2p::TransportAdmissionClass::Safety);
-    }
-    fn signed_kura_replica_advert_message() -> NetworkMessage {
-        let key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-            .expect("generate BLS-normal Kura replica keeper key");
-        let mut advert = KuraReplicaAdvertV1 {
-            version: KURA_REPLICA_ADVERT_VERSION_V1,
-            network_id: test_network_id(b"network-kura-replica-advert-test"),
-            height: 9,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
-            executed_block_wire_len: 2048,
-            executed_block_wire_hash: Hash::new(b"replica-executed-wire"),
-            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-finality")),
-            keeper_index: 0,
-            keeper: PeerId::new(key.public_key().clone()),
-            signature: Vec::new(),
-        };
-        advert.signature = Signature::new(key.private_key(), &advert.signature_preimage())
-            .payload()
-            .to_vec();
-        NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::KuraReplicaAdvert(advert),
-        )))
-    }
-    #[test]
-    fn kura_replica_advert_uses_bounded_consensus_auxiliary_topic() {
-        let message = signed_kura_replica_advert_message();
-        assert_eq!(message.topic(), NetworkTopic::Consensus);
-        assert_eq!(raw_network_topic(&message), NetworkTopic::Consensus);
-        assert_network_admission(&message, iroha_p2p::TransportAdmissionClass::Lane);
-        assert!(message.is_outbound_allowed());
-        let encoded = ncore::to_bytes(&message).expect("encode Kura replica advert network frame");
-        let view = ncore::from_bytes_view(&encoded).expect("inspect Kura replica advert frame");
-        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-            view.as_bytes(),
-            encoded.len(),
-            view.flags(),
-        )
-        .expect("derive Kura replica advert decode limits");
-        assert!(
-            limits.is_some(),
-            "the auxiliary advert must decode under an explicit bound"
-        );
-        assert!(matches!(
-            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
-                view.as_bytes(),
-                MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES + 1,
-                view.flags(),
-            ),
-            Err(ncore::Error::ArchiveLengthExceeded { .. })
-        ));
-    }
-    #[test]
-    fn sumeragi_block_classifies_only_v2_as_global_consensus() {
-        use iroha_data_model::block::consensus_v2::{
-            ConsensusMessageV2, ConsensusMessageV2Payload, PayloadChunk, PayloadManifest,
-        };
-        let canonical_chunk =
-            ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: iroha_crypto::HashOf::<PayloadManifest>::from_untyped_unchecked(
-                    Hash::new(b"v2-topic-manifest"),
-                ),
-                index: 0,
-                bytes: vec![1, 2, 3],
-                sender: 0,
-                signature: vec![4],
-            }));
-        let v2_chunk = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::V2(canonical_chunk.clone()),
-        )));
-        assert_eq!(v2_chunk.topic(), NetworkTopic::ConsensusChunk);
-        assert_eq!(raw_network_topic(&v2_chunk), NetworkTopic::ConsensusChunk);
-        assert_network_admission(&v2_chunk, iroha_p2p::TransportAdmissionClass::Payload);
-        assert!(v2_chunk.is_outbound_allowed());
-        assert!(
-            ncore::to_bytes(&v2_chunk).is_ok(),
-            "canonical v2 traffic must remain live-encodable"
-        );
-        let mut wrong_version_chunk = canonical_chunk;
-        wrong_version_chunk.protocol_version = 1;
-        let wrong_version_chunk = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
-            BlockMessage::V2(wrong_version_chunk),
-        )));
-        assert_eq!(wrong_version_chunk.topic(), NetworkTopic::Other);
-        assert!(!wrong_version_chunk.is_outbound_allowed());
-        assert!(
-            ncore::to_bytes(&wrong_version_chunk).is_err(),
-            "a non-canonical protocol version must fail the wire boundary"
-        );
     }
     #[test]
     fn network_message_roundtrip_cached_transaction_gossip() {

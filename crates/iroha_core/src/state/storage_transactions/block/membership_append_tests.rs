@@ -145,7 +145,7 @@ fn cold(
 ) -> CommittedMembershipRoot<MembershipLocation> {
     storage
         .block()
-        .capture_committed_root(store, &mut Workspace::new())
+        .capture_committed_root(100_000, store, &mut Workspace::new())
         .unwrap()
 }
 fn attempt(

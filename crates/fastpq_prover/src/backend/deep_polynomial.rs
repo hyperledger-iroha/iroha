@@ -9,7 +9,7 @@
 //!
 //! The source borrows explicit masked base trace columns, two randomized quotient
 //! chunks, and a complete independent composition mask R, all of degree <2N.
-//! It constructs R + lambda H_lambda, reserving the constant batching coefficient
+//! It constructs R + lambda `H_lambda`, reserving the constant batching coefficient
 //! for R. It neither computes nor authenticates the AIR quotient or entropy.
 //! OOD answers are constructed before lambda; the caller must commit the source
 //! and R before the transcript derives that challenge.
@@ -48,10 +48,20 @@ enum TraceCoefficients<'a> {
     VanishingReplay(&'a MaskedTraceReplay),
 }
 impl TraceCoefficients<'_> {
-    fn extent(self, _column: usize) -> usize {
+    fn extent(
+        self,
+        #[cfg_attr(
+            not(test),
+            allow(
+                unused_variables,
+                reason = "only the test-only dense source has per-column extents"
+            )
+        )]
+        column: usize,
+    ) -> usize {
         match self {
             #[cfg(test)]
-            Self::Dense(columns) => columns[_column].len(),
+            Self::Dense(columns) => columns[column].len(),
             Self::VanishingReplay(replay) => replay.coefficient_extent(),
         }
     }
@@ -192,7 +202,7 @@ impl PreparedDeepPolynomial<'_> {
         )
     }
 
-    /// Build R + lambda H_lambda after every exact division remainder is zero.
+    /// Build R + lambda `H_lambda` after every exact division remainder is zero.
     ///
     /// The workspace cap covers simultaneous owned coefficient allocations, not
     /// borrowed source storage or the separately bounded OOD answer arrays. The

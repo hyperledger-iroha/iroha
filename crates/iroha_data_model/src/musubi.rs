@@ -17,8 +17,8 @@ use std::{
 };
 mod archive_validation;
 mod publication_validation;
+pub mod source_work;
 mod streaming;
-
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -39,6 +39,8 @@ use streaming::canonical_frame_len;
 use streaming::musubi_json_len_bounded;
 /// Musubi registry schema version shipped by the first release.
 pub const MUSUBI_REGISTRY_VERSION_V1: u8 = 1;
+/// Signed pin-outbox high-water schema version shipped by the first release.
+pub const MUSUBI_PIN_OUTBOX_HIGH_WATER_VERSION_V1: u8 = 1;
 /// Typed artifact-descriptor schema version shipped by the first release.
 pub const MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1: u16 = 1;
 /// Kotodama/IVM ABI version supported by Musubi V1.
@@ -434,6 +436,7 @@ fn parse_u64_identifier(raw: &str) -> Result<u64, ParseError> {
 fn digest_is_zero(bytes: &[u8; 32]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
+#[cfg(test)]
 fn domain_hash(domain: &[u8], encoded: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -1286,12 +1289,14 @@ impl MusubiVersionReqV1 {
                 for comparator in comparators {
                     comparator.version.validate()?;
                 }
-                let exacts = comparators
+                let mut exacts = comparators
                     .iter()
                     .filter(|item| item.op == MusubiComparatorOpV1::Equal)
-                    .map(|item| &item.version)
-                    .collect::<BTreeSet<_>>();
-                if exacts.len() > 1 {
+                    .map(|item| &item.version);
+                if exacts
+                    .next()
+                    .is_some_and(|first| exacts.any(|version| version != first))
+                {
                     return Err(ParseError::new(
                         "Musubi comparator list contains contradictory exact versions",
                     ));
@@ -1698,6 +1703,67 @@ pub struct MusubiArchiveRecordV1 {
     pub location_revision: u64,
     /// Sorted identities of current non-retired locations for exact bounded lookup.
     pub location_ids: Vec<MusubiArchiveLocationIdV1>,
+}
+/// Finalized high-water for one publisher's immutable signed pin-intent inventory.
+///
+/// The inventory digest commits to every retained signed wire and its source binding. The
+/// publication coordinator must finalize this record before submitting any pin transaction
+/// represented by that inventory. A locally restored outbox is usable only when its complete
+/// inventory matches the current finalized record and its exact transaction occurrence.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::musubi::MusubiPinOutboxHighWaterV1")]
+pub struct MusubiPinOutboxHighWaterV1 {
+    /// Closed record version.
+    pub version: u8,
+    /// Exact genesis-derived deployment identity.
+    pub network_id: NetworkId,
+    /// Transaction authority and sole owner of this high-water lineage.
+    pub pin_authority: AccountId,
+    /// Immutable signing-session lineage. Rotation requires an explicit future transition.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub session_id: [u8; 32],
+    /// Contiguous revision, beginning at one.
+    pub revision: u64,
+    /// Domain-separated digest of the complete retained signed-intent inventory.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub inventory_digest: [u8; 32],
+    /// Height of the successful native advance transaction.
+    pub recorded_at_height: u64,
+    /// Exact signed transaction whose successful finalized output advanced this record.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub transaction_hash: [u8; 32],
+}
+impl MusubiPinOutboxHighWaterV1 {
+    /// Validate the canonical high-water fields independently of State ownership.
+    ///
+    /// # Errors
+    /// Rejects zero identities, counters, digests, or malformed authority identity.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.version != MUSUBI_PIN_OUTBOX_HIGH_WATER_VERSION_V1
+            || self.network_id.as_bytes()[31] & 1 != 1
+            || self.session_id == [0; 32]
+            || self.revision == 0
+            || self.inventory_digest == [0; 32]
+            || self.recorded_at_height == 0
+            || self.transaction_hash == [0; 32]
+        {
+            return Err(ParseError::new("Musubi pin-outbox high-water is invalid"));
+        }
+        validate_musubi_account_id_v1(&self.pin_authority)?;
+        Ok(())
+    }
 }
 /// Lifecycle of one renewable `SoraFS` archive location.
 #[derive(
@@ -2768,12 +2834,13 @@ pub struct MusubiProviderBundleAttestationRefV1 {
     /// Digest of the complete canonical provider attestation.
     pub digest: MusubiProviderBundleAttestationDigestV1,
 }
-#[derive(Encode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationSetPreimageV1")]
-struct MusubiProviderBundleAttestationSetPreimageV1 {
+// The digest borrows the already validated set; its canonical payload never
+// retains another reference vector or an encoded preimage buffer.
+#[derive(Clone, Copy)]
+struct MusubiProviderBundleAttestationSetPreimageV1<'a> {
     archive_id: ArchiveId,
     replication_order: ReplicationOrderId,
-    references: Vec<MusubiProviderBundleAttestationRefV1>,
+    references: &'a [MusubiProviderBundleAttestationRefV1],
 }
 /// Derive the aggregate digest of an archive/order-bound, provider-sorted attestation set.
 ///
@@ -2804,12 +2871,14 @@ pub fn musubi_provider_bundle_attestation_set_digest_v1(
     let preimage = MusubiProviderBundleAttestationSetPreimageV1 {
         archive_id,
         replication_order,
-        references: references.to_vec(),
+        references,
     };
-    Ok(MusubiProviderBundleAttestationSetDigestV1(domain_hash(
-        MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SET_DIGEST_DOMAIN_V1,
-        &preimage.encode(),
-    )))
+    Ok(MusubiProviderBundleAttestationSetDigestV1(
+        domain_hash_value(
+            MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SET_DIGEST_DOMAIN_V1,
+            &preimage,
+        ),
+    ))
 }
 /// Immutable full provider-attestation registry record addressed by its exact binding.
 #[derive(
@@ -4661,3 +4730,6 @@ mod tests {
 
 #[cfg(test)]
 mod captured_musubi_schema_tests;
+
+#[cfg(test)]
+mod bounded_validation_tests;

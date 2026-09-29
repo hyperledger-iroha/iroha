@@ -4,6 +4,7 @@
 //! These tests do not replace the separate two-child ordering/root-chain tests.
 
 use super::*;
+use fastpq_prover::offline_compact::VerifiedArtifact;
 
 #[test]
 fn independent_capture_counts_preserve_full_quantity_facts() {
@@ -38,15 +39,207 @@ fn independent_capture_counts_preserve_full_quantity_facts() {
     );
 }
 
-fn deep_context_rejected(error: VerificationError) {
+fn deep_context_rejected(error: &VerificationError) {
     assert!(
-        matches!(&error,
+        matches!(error,
             VerificationError::Verify(Error::InvalidTraceShape { details })
             if details == "DEEP out-of-domain AIR quotient identity does not hold"
                 || details == "DEEP opening positions differ from the exact derived query set"
         ),
         "coherent public context mutation must reach its DEEP binding check: {error:?}"
     );
+}
+
+/// Complete verification outcome of one artifact.
+type Verified = Result<VerifiedArtifact, VerificationError>;
+/// One exact verifier route, fixed by the caller to ordinary or AXT semantics.
+type VerifyRoute<'r> = dyn Fn(&[u8], ExpectedStatement, VerificationLimits) -> Verified + 'r;
+
+/// Tight inclusive limits accept the same bytes; each one-unit deficit
+/// independently rejects, without spending entropy on another proof.
+fn assert_inclusive_limits(
+    verify: &VerifyRoute<'_>,
+    bytes: &[u8],
+    expected: ExpectedStatement,
+    limits: &VerificationLimits,
+    accepted: &VerifiedArtifact,
+    frame_len: usize,
+    maximum_child_bytes: usize,
+) {
+    let count = accepted.segments();
+    let mut exact = *limits;
+    exact.transport.max_wire_bytes = bytes.len();
+    exact.transport.max_bundle_frame_bytes = frame_len;
+    exact.bundle.max_wire_bytes = frame_len;
+    exact.bundle.max_segments = count;
+    exact.bundle.max_total_queries = 64 * count;
+    exact.bundle.max_total_statement_bytes = accepted.statement_bytes();
+    exact.bundle.max_total_segment_bytes = accepted.work().proof_bytes;
+    exact.bundle.segment.max_proof_bytes = maximum_child_bytes;
+    assert_eq!(verify(bytes, expected, exact).unwrap(), *accepted);
+    for boundary in 0..9 {
+        let mut low = *limits;
+        match boundary {
+            0 => low.transport.max_wire_bytes = bytes.len() - 1,
+            1 => low.transport.max_bundle_frame_bytes = frame_len - 1,
+            2 => low.bundle.max_wire_bytes = frame_len - 1,
+            3 => low.bundle.max_segments = count - 1,
+            4 => low.bundle.max_total_queries = 64 * count - 1,
+            5 => low.bundle.max_total_statement_bytes = accepted.statement_bytes() - 1,
+            6 => low.bundle.max_total_segment_bytes = accepted.work().proof_bytes - 1,
+            7 => low.bundle.segment.max_proof_bytes = maximum_child_bytes - 1,
+            8 => low.max_segment_decode_allocation_charges = 0,
+            _ => unreachable!(),
+        }
+        assert!(
+            verify(bytes, expected, low).is_err(),
+            "inclusive boundary {boundary}"
+        );
+    }
+    let strict = DecodeLimits::new(20 << 20, 20 << 20, 30 << 20, 0, 32);
+    assert!(
+        norito::core::with_decode_limits_scope(strict, || verify(bytes, expected, *limits))
+            .is_err()
+    );
+}
+
+/// Every changed independent expectation and every damaged byte string rejects.
+fn assert_changed_expectations_rejected(
+    verify: &VerifyRoute<'_>,
+    bytes: &[u8],
+    expected: ExpectedStatement,
+    limits: &VerificationLimits,
+) {
+    for field in 0..8 {
+        let mut wrong = expected;
+        match field {
+            0 => wrong.inputs.dsid[0] ^= 1,
+            1 => wrong.inputs.slot ^= 1,
+            2 => wrong.inputs.old_root[0] ^= 1,
+            3 => wrong.inputs.new_root[0] ^= 1,
+            4 => wrong.inputs.perm_root[0] ^= 1,
+            5 => wrong.inputs.tx_set_hash[0] ^= 1,
+            6 => wrong.ordering_hash[0] ^= 1,
+            _ => wrong.public_statement_digest[0] ^= 1,
+        }
+        assert!(matches!(
+            verify(bytes, wrong, *limits),
+            Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+        ));
+    }
+    assert!(verify(&[], expected, *limits).is_err());
+    assert!(verify(&bytes[..bytes.len() - 1], expected, *limits).is_err());
+    let mut malformed = bytes.to_vec();
+    *malformed.last_mut().unwrap() ^= 1;
+    assert!(verify(&malformed, expected, *limits).is_err());
+}
+
+/// Keep the same child and a valid canonical transport while changing both
+/// the independently known statement and its advertised copy. This must fail
+/// the mathematical transcript binding, not an outer checksum/equality check.
+fn assert_changed_statement_rejected(
+    verify: &VerifyRoute<'_>,
+    bytes: &[u8],
+    is_axt: bool,
+    fixture: &capture::CaptureFixture,
+    limits: &VerificationLimits,
+) {
+    let mut changed_statement = fixture.statement.clone();
+    changed_statement.public_inputs.perm_root[0] ^= 1;
+    let changed_expected = ExpectedStatement::from_statement(&changed_statement).unwrap();
+    let changed_bytes = if is_axt {
+        let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
+            bytes,
+            quantity_profile_id(),
+            limits.transport,
+        )
+        .unwrap();
+        artifact.statement = changed_statement;
+        norito::encode_canonical(&artifact).unwrap()
+    } else {
+        let mut artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+            bytes,
+            quantity_profile_id(),
+            limits.transport,
+        )
+        .unwrap();
+        artifact.statement = changed_statement;
+        norito::encode_canonical(&artifact).unwrap()
+    };
+    deep_context_rejected(&verify(&changed_bytes, changed_expected, *limits).unwrap_err());
+}
+
+/// Changed AXT expectations reject, and the ordinary route cannot bypass them.
+fn assert_axt_context_changes_rejected(
+    bytes: &[u8],
+    expected: ExpectedStatement,
+    context: ExpectedAxtContext<'_>,
+    limits: &VerificationLimits,
+) {
+    let limits = *limits;
+    let mut wrong = context;
+    wrong.mirrors.expiry_slot = Some(457);
+    assert!(matches!(
+        verify_quantity_axt_artifact(bytes, expected, wrong, limits),
+        Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+    ));
+    let mut wrong = context;
+    wrong.remote_spend_claims = None;
+    assert!(matches!(
+        verify_quantity_axt_artifact(bytes, expected, wrong, limits),
+        Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+    ));
+
+    let mut binding = context.binding.clone();
+    binding.corridor = "changed-corridor".into();
+    let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
+        bytes,
+        quantity_profile_id(),
+        limits.transport,
+    )
+    .unwrap();
+    artifact.binding = binding.clone();
+    let changed = norito::encode_canonical(&artifact).unwrap();
+    deep_context_rejected(
+        &verify_quantity_axt_artifact(
+            &changed,
+            expected,
+            ExpectedAxtContext {
+                binding: &binding,
+                ..context
+            },
+            limits,
+        )
+        .unwrap_err(),
+    );
+
+    let mut metadata = context.metadata.clone();
+    metadata.expiry_slot = 457_u64.to_le_bytes();
+    let mut mirrors = context.mirrors;
+    mirrors.expiry_slot = Some(457);
+    let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
+        bytes,
+        quantity_profile_id(),
+        limits.transport,
+    )
+    .unwrap();
+    artifact.metadata = metadata.clone();
+    artifact.mirrors = mirrors;
+    let changed = norito::encode_canonical(&artifact).unwrap();
+    deep_context_rejected(
+        &verify_quantity_axt_artifact(
+            &changed,
+            expected,
+            ExpectedAxtContext {
+                metadata: &metadata,
+                mirrors,
+                ..context
+            },
+            limits,
+        )
+        .unwrap_err(),
+    );
+    assert!(verify_quantity_ordinary_artifact(bytes, expected, limits).is_err());
 }
 
 pub(super) fn verify_count(
@@ -115,156 +308,19 @@ pub(super) fn verify_count(
         <[u8; 32]>::from(Hash::new(&frame))
     );
 
-    // Tight inclusive limits accept the same bytes; each one-unit deficit
-    // independently rejects, without spending entropy on another proof.
-    let mut exact = limits;
-    exact.transport.max_wire_bytes = bytes.len();
-    exact.transport.max_bundle_frame_bytes = frame.len();
-    exact.bundle.max_wire_bytes = frame.len();
-    exact.bundle.max_segments = count;
-    exact.bundle.max_total_queries = 64 * count;
-    exact.bundle.max_total_statement_bytes = accepted.statement_bytes();
-    exact.bundle.max_total_segment_bytes = accepted.work().proof_bytes;
-    exact.bundle.segment.max_proof_bytes = maximum_child_bytes;
-    assert_eq!(verify(bytes, expected, exact).unwrap(), accepted);
-    for boundary in 0..9 {
-        let mut low = limits;
-        match boundary {
-            0 => low.transport.max_wire_bytes = bytes.len() - 1,
-            1 => low.transport.max_bundle_frame_bytes = frame.len() - 1,
-            2 => low.bundle.max_wire_bytes = frame.len() - 1,
-            3 => low.bundle.max_segments = count - 1,
-            4 => low.bundle.max_total_queries = 64 * count - 1,
-            5 => low.bundle.max_total_statement_bytes = accepted.statement_bytes() - 1,
-            6 => low.bundle.max_total_segment_bytes = accepted.work().proof_bytes - 1,
-            7 => low.bundle.segment.max_proof_bytes = maximum_child_bytes - 1,
-            8 => low.max_segment_decode_allocation_charges = 0,
-            _ => unreachable!(),
-        }
-        assert!(
-            verify(bytes, expected, low).is_err(),
-            "inclusive boundary {boundary}"
-        );
-    }
-    let strict = DecodeLimits::new(20 << 20, 20 << 20, 30 << 20, 0, 32);
-    assert!(
-        norito::core::with_decode_limits_scope(strict, || verify(bytes, expected, limits)).is_err()
+    assert_inclusive_limits(
+        &verify,
+        bytes,
+        expected,
+        &limits,
+        &accepted,
+        frame.len(),
+        maximum_child_bytes,
     );
-
-    for field in 0..8 {
-        let mut wrong = expected;
-        match field {
-            0 => wrong.inputs.dsid[0] ^= 1,
-            1 => wrong.inputs.slot ^= 1,
-            2 => wrong.inputs.old_root[0] ^= 1,
-            3 => wrong.inputs.new_root[0] ^= 1,
-            4 => wrong.inputs.perm_root[0] ^= 1,
-            5 => wrong.inputs.tx_set_hash[0] ^= 1,
-            6 => wrong.ordering_hash[0] ^= 1,
-            _ => wrong.public_statement_digest[0] ^= 1,
-        }
-        assert!(matches!(
-            verify(bytes, wrong, limits),
-            Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
-        ));
-    }
-    assert!(verify(&[], expected, limits).is_err());
-    assert!(verify(&bytes[..bytes.len() - 1], expected, limits).is_err());
-    let mut malformed = bytes.to_vec();
-    *malformed.last_mut().unwrap() ^= 1;
-    assert!(verify(&malformed, expected, limits).is_err());
-
-    // Keep the same child and a valid canonical transport while changing both
-    // the independently known statement and its advertised copy. This must fail
-    // the mathematical transcript binding, not an outer checksum/equality check.
-    let mut changed_statement = fixture.statement.clone();
-    changed_statement.public_inputs.perm_root[0] ^= 1;
-    let changed_expected = ExpectedStatement::from_statement(&changed_statement).unwrap();
-    let changed_bytes = if is_axt {
-        let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
-            bytes,
-            quantity_profile_id(),
-            limits.transport,
-        )
-        .unwrap();
-        artifact.statement = changed_statement;
-        norito::encode_canonical(&artifact).unwrap()
-    } else {
-        let mut artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
-            bytes,
-            quantity_profile_id(),
-            limits.transport,
-        )
-        .unwrap();
-        artifact.statement = changed_statement;
-        norito::encode_canonical(&artifact).unwrap()
-    };
-    deep_context_rejected(verify(&changed_bytes, changed_expected, limits).unwrap_err());
-
+    assert_changed_expectations_rejected(&verify, bytes, expected, &limits);
+    assert_changed_statement_rejected(&verify, bytes, is_axt, fixture, &limits);
     if is_axt {
-        let mut wrong = context;
-        wrong.mirrors.expiry_slot = Some(457);
-        assert!(matches!(
-            verify_quantity_axt_artifact(bytes, expected, wrong, limits),
-            Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
-        ));
-        let mut wrong = context;
-        wrong.remote_spend_claims = None;
-        assert!(matches!(
-            verify_quantity_axt_artifact(bytes, expected, wrong, limits),
-            Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
-        ));
-
-        let mut binding = context.binding.clone();
-        binding.corridor = "changed-corridor".into();
-        let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
-            bytes,
-            quantity_profile_id(),
-            limits.transport,
-        )
-        .unwrap();
-        artifact.binding = binding.clone();
-        let changed = norito::encode_canonical(&artifact).unwrap();
-        deep_context_rejected(
-            verify_quantity_axt_artifact(
-                &changed,
-                expected,
-                ExpectedAxtContext {
-                    binding: &binding,
-                    ..context
-                },
-                limits,
-            )
-            .unwrap_err(),
-        );
-
-        let mut metadata = context.metadata.clone();
-        metadata.expiry_slot = 457_u64.to_le_bytes();
-        let mut mirrors = context.mirrors;
-        mirrors.expiry_slot = Some(457);
-        let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
-            bytes,
-            quantity_profile_id(),
-            limits.transport,
-        )
-        .unwrap();
-        artifact.metadata = metadata.clone();
-        artifact.mirrors = mirrors;
-        let changed = norito::encode_canonical(&artifact).unwrap();
-        deep_context_rejected(
-            verify_quantity_axt_artifact(
-                &changed,
-                expected,
-                ExpectedAxtContext {
-                    metadata: &metadata,
-                    mirrors,
-                    ..context
-                },
-                limits,
-            )
-            .unwrap_err(),
-        );
-        assert!(verify_quantity_ordinary_artifact(bytes, expected, limits).is_err());
+        assert_axt_context_changes_rejected(bytes, expected, context, &limits);
     } else {
         assert!(verify_quantity_axt_artifact(bytes, expected, context, limits).is_err());
     }

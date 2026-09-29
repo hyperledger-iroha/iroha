@@ -31,5 +31,7 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
     let (_m_mode, d_mode) = cache
         .get_or_predecode_artifact(&a_mode)
         .expect("decode mode");
-    assert!(std::sync::Arc::ptr_eq(&d_base, &d_mode));
+    assert!(ivm::cache_memory::SharedAllocation::ptr_eq(
+        &d_base, &d_mode
+    ));
 }

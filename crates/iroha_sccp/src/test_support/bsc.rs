@@ -171,7 +171,7 @@ impl SyntheticParliaChainV1 {
 
     /// Time of `height` (ms).
     #[must_use]
-    pub const fn time_ms(&self, height: u64) -> u64 {
+    pub const fn time_ms(height: u64) -> u64 {
         SYNTHETIC_PARLIA_BASE_TIME_MS + height * SYNTHETIC_PARLIA_INTERVAL_MS
     }
 
@@ -227,7 +227,7 @@ impl SyntheticParliaChainV1 {
         let mut extra = vec![0_u8; 32];
         let roster = self.roster_at(height);
         let members = self.members(roster);
-        if height % self.profile.epoch_length == 0 {
+        if height.is_multiple_of(self.profile.epoch_length) {
             extra.push(u8::try_from(members.len()).expect("at most 64 validators"));
             for member in members.iter() {
                 extra.extend_from_slice(&member.address);
@@ -236,7 +236,7 @@ impl SyntheticParliaChainV1 {
             extra.push(roster.turn_length);
         }
         extra.extend_from_slice(&[0_u8; 65]);
-        let time_ms = self.time_ms(height);
+        let time_ms = Self::time_ms(height);
         let mut mix = [0_u8; 32];
         mix[24..].copy_from_slice(&(time_ms % 1_000).to_be_bytes());
         let receipts_root = self

@@ -9,7 +9,7 @@ use crate::{
     pacemaker::{effective_t_max, t_req_nominal},
     safety::{SafetyRecord, SignerChoice, select_signer},
     topology::{Topology, initial_stage},
-    types::{Hash32, HeightConfig},
+    types::{AppliedConfig, ConfigSlot, Hash32},
 };
 
 impl Core {
@@ -78,12 +78,14 @@ impl Core {
         // The round of the committed height is over: none of its timers may fire again.
         self.retx = [None, None];
         self.build = Build::Idle;
+        self.fresh_build = None;
+        self.control_received.clear();
         if self.halted.is_some() {
             return;
         }
         // Step 5.
         let next = self.height.saturating_add(1);
-        if self.configs.contains_key(&next) {
+        if self.config(next).is_some() {
             self.enter_height(next, late);
         } else {
             self.awaiting = true;
@@ -174,10 +176,17 @@ impl Core {
     /// `enter_height` (§6.8 step 5): enter round `(new_h, 0)`. `late`: the entry came from
     /// awaiting, sync, a `Status` or a restart (§6.8 step 5, §6.11 proposal request).
     pub(super) fn enter_height(&mut self, new_h: u64, late: bool) {
-        let Some(cfg) = self.configs.get(&new_h).cloned() else {
+        let Some(cfg) = self.config(new_h).cloned() else {
             self.awaiting = true;
             return;
         };
+        if !cfg.epoch.contains(new_h)
+            || (cfg.epoch.first_height > self.genesis
+                && self.applied < cfg.epoch.first_height.saturating_sub(1))
+        {
+            self.awaiting = true;
+            return;
+        }
         // §10.2: `C_{new_h}` is known iff `applied ≥ new_h − 2` (checked `Init.configs`, E37).
         debug_assert!(
             new_h <= self.applied.saturating_add(2),
@@ -208,6 +217,8 @@ impl Core {
         self.mine = Mine::default();
         self.retx = [None, None];
         self.build = Build::Idle;
+        self.fresh_build = None;
+        self.control_received.clear();
         self.repropose = false;
         self.resend_recorded = None;
         self.proposal_sent_at = None;
@@ -253,8 +264,12 @@ impl Core {
             self.probe.clear();
             return;
         }
-        if let Some(next) = self.configs.get(&self.tip.height.saturating_add(2)) {
+        if let Some(next) = self.config(self.tip.height.saturating_add(2)) {
             let committee = next.committee.clone();
+            let epoch = next.epoch.id;
+            if self.probe_epoch != Some(epoch) {
+                self.probe.clear();
+            }
             self.probe.retain(|key, _| committee.contains(key));
             self.check_anchoring();
         }
@@ -266,11 +281,12 @@ impl Core {
 
     /// Topology of `height` from its configuration and the recent committed headers.
     pub(super) fn topology_of(&self, height: u64) -> Option<Topology> {
-        let config = self.configs.get(&height)?;
+        let config = self.config(height)?;
         let headers: Vec<BlockHeader> = self.recent_headers.iter().cloned().collect();
         Some(Topology::compute(
             &*self.crypto,
             &self.instance,
+            &config.epoch,
             &config.committee,
             height,
             self.genesis,
@@ -341,7 +357,13 @@ impl Core {
             .and_then(|me| self.keys.get(me.slot))
             .map(|key| key.pk.clone());
         self.safety = key.map(|key| {
-            SafetyRecord::fresh(self.instance, key, self.height, self.tip.commit_qc.clone())
+            SafetyRecord::fresh(
+                self.instance,
+                self.cfg.epoch.id,
+                key,
+                self.height,
+                self.tip.commit_qc.clone(),
+            )
         });
     }
 
@@ -377,7 +399,7 @@ impl Core {
         a: u64,
         bh: Hash32,
         header: BlockHeader,
-        config: HeightConfig,
+        config: AppliedConfig,
     ) {
         let committed = if a == self.tip.height {
             bh == self.tip.block_hash
@@ -395,8 +417,14 @@ impl Core {
         if !valid {
             return self.halt(HaltReason::DriverAnomaly);
         }
+        let Some(updates) = self.applied_config_updates(a, &header, config) else {
+            return self.halt(HaltReason::DriverAnomaly);
+        };
+        // Validate every slot before publication; no partial next-epoch install is observable.
         self.applied = a;
-        self.configs.insert(a.saturating_add(2), config);
+        for (height, slot) in updates {
+            self.configs.insert(height, slot);
+        }
         self.recent_headers.push_back(header);
         self.trim_headers();
         let floor = self.tip.height.saturating_sub(1);
@@ -413,12 +441,90 @@ impl Core {
         }
         if self.awaiting {
             let next = self.tip.height.saturating_add(1);
-            if self.configs.contains_key(&next) {
+            if self.config(next).is_some() {
                 self.enter_height(next, true);
             }
         } else if a.saturating_add(1) == self.height {
             self.maybe_execute();
         }
+    }
+
+    /// Validate the complete atomic application/configuration result before changing the window.
+    fn applied_config_updates(
+        &self,
+        height: u64,
+        header: &BlockHeader,
+        outcome: AppliedConfig,
+    ) -> Option<Vec<(u64, ConfigSlot)>> {
+        let current = self.config(height)?;
+        if header.epoch != current.epoch.id || !current.epoch.contains(height) {
+            return None;
+        }
+        let next_height = height.checked_add(1)?;
+        let later_height = height.checked_add(2)?;
+        let updates = match outcome {
+            AppliedConfig::Continuation { after_next } => {
+                if height == current.epoch.last_height {
+                    return None;
+                }
+                let valid = match &after_next {
+                    ConfigSlot::Ready(next) => {
+                        current.epoch.contains(later_height) && next.same_authority(current)
+                    }
+                    ConfigSlot::PendingBoundary {
+                        boundary_height,
+                        predecessor,
+                    } => {
+                        current.epoch.last_height.checked_add(1) == Some(later_height)
+                            && *boundary_height == current.epoch.last_height
+                            && *predecessor == current.epoch.id
+                    }
+                };
+                // MS44: a later epoch is accepted through ordinary lag-2 scheduling.
+                if !valid && !cfg!(sumeragi_mutation = "MS44") {
+                    return None;
+                }
+                vec![(later_height, after_next)]
+            }
+            AppliedConfig::Boundary { next, after_next } => {
+                if height != current.epoch.last_height
+                    || !header.attest
+                    || !next.follows(current)
+                    || !next.epoch.contains(next_height)
+                    || !after_next.same_authority(&next)
+                    || !after_next.epoch.contains(later_height)
+                    || !matches!(self.configs.get(&next_height),
+                        Some(ConfigSlot::PendingBoundary { boundary_height, predecessor })
+                        if *boundary_height == height && *predecessor == current.epoch.id)
+                {
+                    return None;
+                }
+                vec![
+                    (next_height, ConfigSlot::Ready(next)),
+                    (later_height, ConfigSlot::Ready(after_next)),
+                ]
+            }
+        };
+        for (height, slot) in &updates {
+            if let ConfigSlot::Ready(config) = slot
+                && crate::pacemaker::validate_chain(&config.params, u64::MAX).is_err()
+            {
+                return None;
+            }
+            if let Some(existing) = self.configs.get(height) {
+                match (existing, slot) {
+                    (
+                        ConfigSlot::PendingBoundary {
+                            boundary_height, ..
+                        },
+                        ConfigSlot::Ready(_),
+                    ) if *boundary_height == header.height => {}
+                    _ if existing == slot => {}
+                    _ => return None,
+                }
+            }
+        }
+        Some(updates)
     }
 
     /// Safety monitor (§7.6, SR37): a valid `CommitQC` for `tip.height − 1` (whose
@@ -448,11 +554,19 @@ impl Core {
         let config_height = c.height;
         #[cfg(sumeragi_mutation = "MS15")]
         let config_height = self.tip.height;
-        let Some(config) = self.configs.get(&config_height) else {
+        let Some(config) = self.config(config_height) else {
             return;
         };
         // The Commit signatures alone prove the violation; attestations are not checked (§7.6).
-        if verify_qc_signatures(&*self.crypto, &self.instance, &config.committee, c).is_err() {
+        if verify_qc_signatures(
+            &*self.crypto,
+            &self.instance,
+            &config.epoch.id,
+            &config.committee,
+            c,
+        )
+        .is_err()
+        {
             return;
         }
         if let Some(qc) = our_qc {

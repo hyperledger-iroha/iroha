@@ -61,8 +61,6 @@ static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-#[cfg(test)]
 fn canonical_test_lock(_: &'static OnceLock<TestLock>) -> &'static TestLock {
     STATUS_TEST_GLOBAL_LOCK.get_or_init(TestLock::default)
 }
@@ -149,19 +147,6 @@ pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
 #[cfg(test)]
 pub(crate) fn local_removed_test_guard() -> TestLockGuard {
     reentrant_test_guard(&LOCAL_REMOVED_TEST_LOCK)
-}
-#[cfg(test)]
-pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    LANE_RELAY_TEST_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("lane relay test lock poisoned")
-}
-/// Hold relay status publication at its actual cache lock for concurrency tests.
-#[cfg(test)]
-pub(crate) fn lane_relay_publication_guard_for_tests() -> MutexGuard<'static, Vec<LaneRelayEnvelope>>
-{
-    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
 }
 #[cfg(test)]
 /// Reset settlement telemetry counters for isolated tests.

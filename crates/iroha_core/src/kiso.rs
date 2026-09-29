@@ -1122,21 +1122,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
                 zk_prover_allowed_circuits:
                     iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits(),
-                zk_ivm_prove_max_inflight:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
-                zk_ivm_prove_max_queue: iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
-                zk_ivm_tooling_timeout_ms:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS,
-                zk_ivm_prove_job_ttl_secs:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
-                zk_ivm_prove_job_max_entries:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
-                zk_ivm_prove_job_max_retained_bytes:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
-                zk_ivm_prove_job_max_entries_per_owner:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
-                zk_ivm_prove_job_max_retained_bytes_per_owner:
-                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
+                ivm_tooling_max_inflight:
+                    iroha_config::parameters::defaults::torii::IVM_TOOLING_MAX_INFLIGHT,
+                ivm_tooling_timeout_ms:
+                    iroha_config::parameters::defaults::torii::IVM_TOOLING_TIMEOUT_MS,
                 transaction_ingress:
                     iroha_config::parameters::actual::TransactionIngress::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
@@ -1324,6 +1313,7 @@ mod tests {
                 },
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
+            musubi_publication: iroha_config::parameters::actual::MusubiPublication::default(),
             kura: Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -1335,6 +1325,7 @@ mod tests {
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                native_context_archive_max_bytes: iroha_config::parameters::defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
                 block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
                 membership_storage:
@@ -1416,6 +1407,8 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
                 ivm_cache_max_bytes:
                     iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+                ivm_execution_max_bytes:
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ivm_prover_threads:
                     iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
                 overlay_max_instructions:
@@ -1841,6 +1834,7 @@ mod tests {
                 enforcement_mode: iroha_config::parameters::actual::NtsEnforcementMode::Warn,
             },
             accel: Acceleration {
+                resource_limits: iroha_config::parameters::defaults::accel::RESOURCE_LIMITS,
                 enable_simd: iroha_config::parameters::defaults::accel::ENABLE_SIMD,
                 enable_cuda: false,
                 enable_metal: false,

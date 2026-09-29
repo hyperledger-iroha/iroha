@@ -1,6 +1,6 @@
 //! Ed25519 batch verification helper tests.
 use ed25519_dalek::{Signer, SigningKey};
-use ivm::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
+use ivm::signature::{Ed25519BatchItem, verify_ed25519_batch_items_into};
 const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
@@ -33,7 +33,12 @@ fn ed25519_batch_mixed_validity() {
             public_key: key2.verifying_key().to_bytes(),
         },
     ];
-    let results = verify_ed25519_batch_items(&items);
+    let results = {
+        let items = &items;
+        let mut output = vec![false; items.len()];
+        assert!(verify_ed25519_batch_items_into(items, &mut output));
+        output
+    };
     assert_eq!(results, vec![true, false]);
 }
 #[test]
@@ -44,10 +49,18 @@ fn ed25519_batch_rejects_all_zero_signature_material() {
         signature: [0u8; 64],
         public_key: key.verifying_key().to_bytes(),
     };
-    assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+    assert_eq!(
+        {
+            let items = &[item];
+            let mut output = vec![false; items.len()];
+            assert!(verify_ed25519_batch_items_into(items, &mut output));
+            output
+        },
+        vec![false]
+    );
 }
 #[test]
-fn ed25519_batch_rejects_noncanonical_or_small_order_signature_r_before_accelerator_dispatch() {
+fn ed25519_batch_rejects_noncanonical_or_small_order_signature_r_on_publication() {
     let key = SigningKey::from_bytes(&[0x28; 32]);
     let message = b"batch-invalid-r";
     let public_key = key.verifying_key().to_bytes();
@@ -59,11 +72,19 @@ fn ed25519_batch_rejects_noncanonical_or_small_order_signature_r_before_accelera
             signature,
             public_key,
         };
-        assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+        assert_eq!(
+            {
+                let items = &[item];
+                let mut output = vec![false; items.len()];
+                assert!(verify_ed25519_batch_items_into(items, &mut output));
+                output
+            },
+            vec![false]
+        );
     }
 }
 #[test]
-fn ed25519_batch_rejects_noncanonical_or_small_order_public_key_before_accelerator_dispatch() {
+fn ed25519_batch_rejects_noncanonical_or_small_order_public_key_on_publication() {
     let key = SigningKey::from_bytes(&[0x29; 32]);
     let message = b"batch-invalid-public-key";
     let signature = key.sign(message).to_bytes();
@@ -77,7 +98,15 @@ fn ed25519_batch_rejects_noncanonical_or_small_order_public_key_before_accelerat
             signature,
             public_key: invalid_public_key,
         };
-        assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+        assert_eq!(
+            {
+                let items = &[item];
+                let mut output = vec![false; items.len()];
+                assert!(verify_ed25519_batch_items_into(items, &mut output));
+                output
+            },
+            vec![false]
+        );
     }
 }
 #[cfg(feature = "cuda")]
@@ -124,7 +153,29 @@ fn ed25519_batch_helper_matches_direct_cuda_batch_when_available() {
             public_key: pks[1],
         },
     ];
-    let direct = ivm::ed25519_verify_batch_cuda(&sigs, &pks, &hrams)
-        .expect("direct CUDA batch helper should be available on a CUDA host");
-    assert_eq!(verify_ed25519_batch_items(&items), direct);
+    let direct = {
+        let signatures = &sigs;
+        let public_keys = &pks;
+        let hrams = &hrams;
+        let mut output = vec![true; signatures.len()];
+        if ivm::ed25519_verify_batch_cuda_into(signatures, public_keys, hrams, &mut output) {
+            Some(output)
+        } else {
+            assert!(
+                output.iter().all(|value| *value),
+                "refusal must preserve destination"
+            );
+            None
+        }
+    }
+    .expect("direct CUDA batch helper should be available on a CUDA host");
+    assert_eq!(
+        {
+            let items = &items;
+            let mut output = vec![false; items.len()];
+            assert!(verify_ed25519_batch_items_into(items, &mut output));
+            output
+        },
+        direct
+    );
 }

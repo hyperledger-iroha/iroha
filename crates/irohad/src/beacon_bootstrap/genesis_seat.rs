@@ -43,7 +43,6 @@ struct GenesisProof {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
-    first_finality: SumeragiFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -52,7 +51,7 @@ struct GenesisPublicBundle {
     schema: String,
     request: GenesisRequest,
     genesis: GenesisProof,
-    phase_proofs: Vec<SumeragiFinalityProof>,
+    phase_proofs: Vec<NativeFinalityJournal>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
@@ -63,7 +62,6 @@ fn read_genesis_proof(
     manifest_path: &Path,
     wire_path: &Path,
     key_path: &Path,
-    first_finality_path: &Path,
 ) -> Result<GenesisProof> {
     iroha_genesis::init_instruction_registry();
     let text = read_public_bytes_bounded(key_path, 512)?;
@@ -77,15 +75,10 @@ fn read_genesis_proof(
     if public_key.to_string() != literal {
         return Err(Error::InvalidInput);
     }
-    let bytes = read_public_bytes_bounded(first_finality_path, MAX_ROTATION_PHASE_PROOF_BYTES)?;
-    let first_finality =
-        norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
-            .map_err(|_| Error::Crypto)?;
     Ok(GenesisProof {
         manifest: read_json(manifest_path)?,
         signed_wire: read_public_bytes(wire_path)?,
         public_key,
-        first_finality,
     })
 }
 
@@ -103,11 +96,15 @@ fn first_required_pulse_height(genesis: &GenesisProof) -> Result<u64> {
 }
 
 fn verify_signed_genesis_attempt(
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
     network: NetworkId,
     chain_discriminant: u16,
     request: &GenesisRequest,
     genesis: &GenesisProof,
-) -> Result<(Vec<PeerId>, SumeragiFinalityVerifier, u64)> {
+) -> Result<(Vec<PeerId>, NativeJournalCursor, u64)> {
+    iroha_genesis::init_instruction_registry();
+    let session = request.dkg_session;
     iroha_genesis::init_instruction_registry();
     let session = request.dkg_session;
     let validated = iroha_genesis::validate_prepared_genesis_bundle(
@@ -120,14 +117,21 @@ fn verify_signed_genesis_attempt(
     if genesis.manifest.consensus_mode()
         != iroha_data_model::parameter::system::SumeragiConsensusMode::Npos
         || genesis.manifest.chain_discriminant() != chain_discriminant
-        || genesis.first_finality.block_header.height().get() != 1
-        || genesis.first_finality.block_header.hash() != validated.block().hash()
+        || genesis.manifest.chain_id() != chain_id
     {
         return Err(Error::InvalidInput);
     }
-    let signed_genesis = iroha_genesis::GenesisBlock(validated.block().clone());
-    let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&signed_genesis.0)
-        .map_err(|_| Error::Crypto)?;
+    let (signed_genesis, epoch) =
+        authenticate_signed_genesis(&genesis.signed_wire, network, limits)
+            .map_err(|_| Error::Crypto)?;
+    if signed_genesis.hash() != validated.block().hash() {
+        return Err(Error::Crypto);
+    }
+    let roster = epoch
+        .committee
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
     if roster.len() != 4
         || request.schema != REQUEST_SCHEMA
         || request.target_roster != roster
@@ -160,23 +164,10 @@ fn verify_signed_genesis_attempt(
     if session.acceptances_end_height >= cutoff {
         return Err(Error::Height);
     }
-    let validators = validated
-        .validator_pops()
-        .iter()
-        .map(|(public_key, proof_of_possession)| FinalityValidator {
-            public_key: public_key.clone(),
-            proof_of_possession: proof_of_possession.clone(),
-        })
-        .collect();
-    let mut verifier = SumeragiFinalityVerifier::new(
-        validated.block(),
-        &genesis.manifest.chain_id().to_string(),
-        validators,
-    )
-    .map_err(|_| Error::Crypto)?;
-    verifier
-        .verify(&genesis.first_finality)
-        .map_err(|_| Error::Crypto)?;
+    // This cursor has no finalized tip until a genuine H2 journal authenticates
+    // the signed genesis result through its native parent-result commitment.
+    let verifier =
+        NativeJournalCursor::new(chain_id.clone(), network, limits).map_err(|_| Error::Crypto)?;
     Ok((roster, verifier, cutoff))
 }
 
@@ -186,13 +177,14 @@ fn verify_signed_genesis_attempt(
 )]
 /// Provision exactly one genesis voting seat under a signed-genesis trust root.
 pub(super) fn provision_genesis_seat_command(
+    chain_id: &ChainId,
+    finality_limits: FinalityLimitsArgs,
     network: NetworkId,
     chain_discriminant: u16,
     request_path: &Path,
     manifest_path: &Path,
     wire_path: &Path,
     key_path: &Path,
-    first_finality_path: &Path,
     signer_index: u16,
     key_fd: Option<i32>,
     config_fd: Option<i32>,
@@ -201,6 +193,7 @@ pub(super) fn provision_genesis_seat_command(
     attempt_root: &Path,
     timeout_ms: u64,
 ) -> Result<()> {
+    let limits = finality_limits.checked()?;
     let _profile =
         iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     let (key_descriptor, from_config) = match (key_fd, config_fd) {
@@ -230,9 +223,15 @@ pub(super) fn provision_genesis_seat_command(
         }
     }
     let request: GenesisRequest = read_json(request_path)?;
-    let genesis = read_genesis_proof(manifest_path, wire_path, key_path, first_finality_path)?;
-    let (roster, verifier, cutoff) =
-        verify_signed_genesis_attempt(network, chain_discriminant, &request, &genesis)?;
+    let genesis = read_genesis_proof(manifest_path, wire_path, key_path)?;
+    let (roster, verifier, cutoff) = verify_signed_genesis_attempt(
+        chain_id,
+        limits,
+        network,
+        chain_discriminant,
+        &request,
+        &genesis,
+    )?;
     if signer_index == 0 || usize::from(signer_index) > roster.len() {
         return Err(Error::InvalidInput);
     }
@@ -246,7 +245,6 @@ pub(super) fn provision_genesis_seat_command(
     if signer.public_key() != roster[usize::from(signer_index - 1)].public_key() {
         return Err(Error::InvalidCustody);
     }
-    let trusted_instance_id = Hash::prehashed(verifier.instance().0);
     let session = request.dkg_session;
     let handle = &request.provider_handles[usize::from(signer_index - 1)];
     let output = rotation_seat::claim_attempt_directory(attempt_root, &session, signer_index)?;
@@ -259,8 +257,6 @@ pub(super) fn provision_genesis_seat_command(
         finality_input,
         verifier,
         cutoff,
-        trusted_instance_id,
-        1,
         handle,
         request.provider_revision,
         output,
@@ -269,23 +265,28 @@ pub(super) fn provision_genesis_seat_command(
 }
 
 fn validate_genesis_phase_chain(
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
     network: NetworkId,
     chain_discriminant: u16,
     request: &GenesisRequest,
     genesis: &GenesisProof,
-    phases: &[SumeragiFinalityProof],
+    phases: &[NativeFinalityJournal],
 ) -> Result<Vec<PeerId>> {
-    let (roster, mut verifier, cutoff) =
-        verify_signed_genesis_attempt(network, chain_discriminant, request, genesis)?;
+    let (roster, mut verifier, cutoff) = verify_signed_genesis_attempt(
+        chain_id,
+        limits,
+        network,
+        chain_discriminant,
+        request,
+        genesis,
+    )?;
     if phases.len() != 3 {
         return Err(Error::Height);
     }
     let mut last = 1;
     for phase in phases {
-        let height = phase.height();
-        check_rotation_phase_height(last, height, phase.block_header.height().get(), cutoff)?;
-        verifier.verify(phase).map_err(|_| Error::Crypto)?;
-        last = height;
+        advance_phase_journal(&mut verifier, phase, &mut last, cutoff)?;
     }
     if last != request.dkg_session.acceptances_end_height {
         return Err(Error::Height);
@@ -319,10 +320,14 @@ fn draft_genesis_certificate(
 
 fn validate_genesis_bundle(
     bundle: &GenesisPublicBundle,
+    chain_id: &ChainId,
+    limits: NativeFinalityLimits,
     network: NetworkId,
     chain_discriminant: u16,
 ) -> Result<Vec<PeerId>> {
     let roster = validate_genesis_phase_chain(
+        chain_id,
+        limits,
         network,
         chain_discriminant,
         &bundle.request,
@@ -368,37 +373,38 @@ fn validate_genesis_bundle(
     Ok(roster)
 }
 
-/// Assemble the complete public genesis transcript after signed h1–h4 finality.
+/// Assemble the complete public genesis transcript after native H2–H4 finality.
+/// Signed H1 supplies body authority only; H2 authenticates its result.
 pub(super) fn assemble_genesis_dkg_command(
+    chain_id: &ChainId,
+    finality_limits: FinalityLimitsArgs,
     network: NetworkId,
     chain_discriminant: u16,
     request_path: &Path,
     manifest_path: &Path,
     wire_path: &Path,
     key_path: &Path,
-    first_finality_path: &Path,
     phase_paths: &[PathBuf],
     public_session_path: &Path,
     provider_paths: &[PathBuf],
     certificate_height: u64,
     output: &Path,
 ) -> Result<()> {
+    let limits = finality_limits.checked()?;
     let _profile =
         iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     let request: GenesisRequest = read_json(request_path)?;
-    let genesis = read_genesis_proof(manifest_path, wire_path, key_path, first_finality_path)?;
+    let genesis = read_genesis_proof(manifest_path, wire_path, key_path)?;
     let phase_proofs = phase_paths
         .iter()
         .map(|path| {
-            let bytes = read_public_bytes_bounded(path, MAX_ROTATION_PHASE_PROOF_BYTES)?;
-            norito::decode_canonical_with_limits(
-                &bytes,
-                norito::canonical_decode_limits(bytes.len()),
-            )
-            .map_err(|_| Error::Crypto)
+            let bytes = read_public_bytes_bounded(path, limits.journal_bytes)?;
+            NativeFinalityJournal::decode(&bytes, limits).map_err(|_| Error::Crypto)
         })
-        .collect::<Result<Vec<SumeragiFinalityProof>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let roster = validate_genesis_phase_chain(
+        chain_id,
+        limits,
         network,
         chain_discriminant,
         &request,
@@ -427,12 +433,14 @@ pub(super) fn assemble_genesis_dkg_command(
         finalization_draft: draft,
         providers,
     };
-    validate_genesis_bundle(&bundle, network, chain_discriminant)?;
+    validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
     write_new(output, &json_bytes(&bundle)?, false)
 }
 
 /// Sign the exact genesis-roster installation draft with one native identity.
 pub(super) fn sign_genesis_install_command(
+    chain_id: &ChainId,
+    finality_limits: FinalityLimitsArgs,
     network: NetworkId,
     chain_discriminant: u16,
     bundle_path: &Path,
@@ -441,6 +449,7 @@ pub(super) fn sign_genesis_install_command(
     config_fd: Option<i32>,
     output: &Path,
 ) -> Result<()> {
+    let limits = finality_limits.checked()?;
     let _profile =
         iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     iroha_genesis::init_instruction_registry();
@@ -450,7 +459,7 @@ pub(super) fn sign_genesis_install_command(
         _ => return Err(Error::InvalidInput),
     };
     let bundle: GenesisPublicBundle = read_json(bundle_path)?;
-    let roster = validate_genesis_bundle(&bundle, network, chain_discriminant)?;
+    let roster = validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
     let file = crate::taira_runtime_signer::take_inherited_private_file(fd)
         .map_err(|_| Error::InvalidCustody)?;
     let key = if config {
@@ -464,17 +473,20 @@ pub(super) fn sign_genesis_install_command(
 
 /// Emit an install instruction only after the exact genesis quorum signs.
 pub(super) fn assemble_genesis_install_command(
+    chain_id: &ChainId,
+    finality_limits: FinalityLimitsArgs,
     network: NetworkId,
     chain_discriminant: u16,
     bundle_path: &Path,
     signature_paths: &[PathBuf],
     output: &Path,
 ) -> Result<()> {
+    let limits = finality_limits.checked()?;
     let _profile =
         iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     iroha_genesis::init_instruction_registry();
     let bundle: GenesisPublicBundle = read_json(bundle_path)?;
-    let roster = validate_genesis_bundle(&bundle, network, chain_discriminant)?;
+    let roster = validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
     let signatures = signature_paths
         .iter()
         .map(|path| read_json(path))

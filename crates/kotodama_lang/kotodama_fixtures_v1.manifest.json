@@ -60,7 +60,7 @@
       "include_path": "compiler/fixtures/v1/c005.ko",
       "newline_count": 8,
       "ordinal": 5,
-      "owner_function": "parameterized_entrypoint_emits_one_argument_record_decode",
+      "owner_function": "parameterized_entrypoint_uses_the_host_prepared_argument_table",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -723,7 +723,7 @@
       "include_path": "compiler/fixtures/v1/c055.ko",
       "newline_count": 10,
       "ordinal": 56,
-      "owner_function": "debug_info_emits_the_single_v1_debug_syscall_and_complete_access",
+      "owner_function": "debug_info_emits_full_width_pointer_codec_and_complete_access",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -2413,7 +2413,7 @@
       "include_path": "compiler/fixtures/v1/c186.ko",
       "newline_count": 10,
       "ordinal": 186,
-      "owner_function": "leaf_identity_emits_no_frame_or_stack_traffic",
+      "owner_function": "leaf_identity_uses_the_same_bounded_table_frame_as_all_functions",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/compiler.rs",
       "starts_with_lf": true
@@ -3271,7 +3271,7 @@
       "include_path": "ir/fixtures/v1/i005.ko",
       "newline_count": 4,
       "ordinal": 5,
-      "owner_function": "entrypoint_wrapper_uses_only_the_host_argument_record",
+      "owner_function": "entrypoint_reads_only_the_prepared_host_argument_table",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3284,7 +3284,7 @@
       "include_path": "ir/fixtures/v1/i006.ko",
       "newline_count": 4,
       "ordinal": 6,
-      "owner_function": "single_json_entrypoint_uses_the_same_one_shot_argument_record",
+      "owner_function": "single_json_entrypoint_uses_the_same_prepared_argument_table",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3531,7 +3531,7 @@
       "include_path": "ir/fixtures/v1/i025.ko",
       "newline_count": 9,
       "ordinal": 25,
-      "owner_function": "aggregate_argument_words_over_register_window_fail_during_lowering",
+      "owner_function": "aggregate_argument_words_beyond_thirteen_lower_to_one_table_signature",
       "owner_is_test": true,
       "owner_source": "crates/kotodama_lang/src/ir.rs",
       "starts_with_lf": true
@@ -3914,7 +3914,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "f0b075621b9823297583316995e3d63bc14888b9ea9d24ef3fa0a83e1a1afa69",
+  "fixtures_sha256": "3a087825d7af3a57639b06a8841f24d23f7cd5d3ccb70d0e882de01daa94b95e",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [
@@ -3929,7 +3929,6 @@
       ],
       "path": "crates/kotodama_lang/src/compiler.rs",
       "test_includes": [
-        "compiler/tests/axt_remote_spend_access_tests.rs",
         "compiler/tests/staged_mint_access_hints.rs"
       ],
       "test_names": [
@@ -3938,13 +3937,11 @@
         "dynamic_state_fallback_preserves_registry_read_write_class",
         "pointer_types_cover_all_data_ref_kinds",
         "axt_descriptor_literal_encoding_enforces_host_invariants",
-        "capability_pointer_encoding_rejects_context_free_faults",
+        "proof_pointer_encoding_rejects_empty_payload",
         "instruction_access_hints_reject_alternate_layout_independent_of_ambient_flags",
         "instruction_access_hints_do_not_unwrap_prewrapped_norito_tlvs",
         "instruction_access_hints_reject_direct_concrete_instruction_frames",
         "codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests",
-        "codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents",
-        "asset_handle_access_hints_read_the_issuer_signed_asset_definition",
         "shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints",
         "default_max_cycles_matches_pipeline_bound",
         "expression_and_named_call_sugar_emit_identical_executable_bytecode",
@@ -3971,9 +3968,10 @@
         "deferred_far_call_links_once_and_trampolines_without_relinking",
         "indexed_literal_count_accepts_full_u16_domain",
         "literal_and_call_heavy_minimal_program_has_no_stub_padding",
-        "parameterized_entrypoint_emits_one_argument_record_decode",
+        "parameterized_entrypoint_uses_the_host_prepared_argument_table",
         "sum_type_join_fallbacks_do_not_become_false_constant_facts",
         "mint_trigger_takes_amount_from_one_typed_argument_record",
+        "bool_state_map_keys_do_not_emit_public_int_codec_syscalls",
         "access_hints_propagate_transitively_through_helper_calls",
         "access_hint_fixed_point_handles_recursive_ir_cycles",
         "unresolved_and_indirect_calls_are_conservative",
@@ -4024,7 +4022,8 @@
         "role_permission_peer_trigger_builtins_reject_invalid_arguments",
         "public_input_builtin_emits_public_input_syscall_and_complete_access",
         "public_input_builtin_rejects_invalid_arguments",
-        "debug_info_emits_the_single_v1_debug_syscall_and_complete_access",
+        "debug_info_emits_full_width_pointer_codec_and_complete_access",
+        "debug_info_preserves_wide_int_without_retired_syscalls",
         "debug_surface_rejects_raw_variants_and_invalid_info_arguments",
         "assertion_logging_builtins_emit_abort_and_log_syscalls",
         "assertion_logging_builtins_reject_invalid_arguments",
@@ -4037,7 +4036,8 @@
         "fastpq_batch_boundary_builtins_reject_invalid_arguments",
         "transfer_batch_builtin_lowers_entries_between_boundaries",
         "transfer_batch_builtin_rejects_invalid_arguments",
-        "axt_capabilities_and_host_calls_are_not_source_apis",
+        "raw_axt_capabilities_and_unanchored_proof_are_not_source_apis",
+        "signed_axt_spend_source_emits_the_typed_v1_staging_syscall",
         "opaque_pointer_abi_types_are_not_source_types",
         "verify_proof_builtin_emits_verify_proof_syscall_and_complete_access",
         "verify_proof_builtin_rejects_invalid_arguments",
@@ -4167,7 +4167,7 @@
         "state_codegen_rejects_legacy_name_literal_carrier",
         "entry_spills_use_stack_frame",
         "production_mode_rejects_test_functions_instead_of_stripping_them",
-        "test_and_production_public_wrappers_use_the_same_argument_boundary",
+        "test_and_production_entrypoints_use_the_same_argument_boundary",
         "production_rejects_tests_before_resolving_test_only_helpers",
         "test_mode_helpers_emit_private_scallx_syscalls",
         "implicit_first_release_prelude_helpers_fail_closed",
@@ -4181,7 +4181,7 @@
         "lowering_time_abi_schemas_ignore_ambient_norito_flags",
         "contract_identity_is_preserved_in_artifact_and_manifest",
         "user_facing_type_first_counter_example_compiles_as_a_complete_contract",
-        "leaf_identity_emits_no_frame_or_stack_traffic",
+        "leaf_identity_uses_the_same_bounded_table_frame_as_all_functions",
         "call_local_values_avoid_callee_save_and_spill_stack_traffic",
         "whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers",
         "whole_program_dce_preserves_lifecycle_trigger_helpers_and_cntr_targets",
@@ -4193,7 +4193,7 @@
         "compile_report_sidecars_are_hash_bound_and_preserve_locations",
         "legacy_source_facade_cannot_bypass_canonical_resolution_audits"
       ],
-      "test_names_sha256": "0f3e22044881713186bede6da31f6503512b02d4a4029cbedb412f77d0e7e08b"
+      "test_names_sha256": "ef78863d0147dd57c354fbfba8b91142791e06df64496a21249bb60af4433d34"
     },
     {
       "external_fixtures": [],
@@ -4214,9 +4214,8 @@
         "semantic_type_and_expression_traits_are_iterative_at_the_depth_boundary",
         "public_semantic_apis_handoff_from_a_small_caller",
         "large_shared_struct_references_and_expression_checks_reuse_one_canonical_dag",
-        "runtime_word_count_stops_at_the_fixed_register_window_for_shared_dags",
+        "runtime_word_count_stops_at_the_call_table_limit_for_shared_dags",
         "modest_shared_struct_references_preserve_ordinary_semantics",
-        "compiler_owned_test_return_selector_is_reserved_for_functions",
         "exact_amount_is_globally_retired_while_other_numeric_names_are_contextual",
         "retired_numeric_spellings_are_rejected_as_source_unit_identities",
         "production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls",
@@ -4224,7 +4223,7 @@
         "pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure",
         "list_literals_infer_exact_or_contextual_capacity",
         "empty_and_oversized_list_literals_fail_closed",
-        "zero_sized_list_elements_are_rejected_at_every_semantic_boundary",
+        "empty_product_list_elements_have_one_unit_word_at_every_semantic_boundary",
         "contextual_empty_lists_and_one_word_sum_handles_remain_valid",
         "native_json_rejects_decoded_duplicate_keys_and_oversized_nodes",
         "json_parse_literals_fail_during_semantic_analysis",
@@ -4316,7 +4315,7 @@
         "c_style_for_is_rejected_before_semantic_analysis",
         "manually_constructed_while_ast_cannot_bypass_v1_frontend_rules",
         "manually_constructed_dynamic_for_ast_cannot_bypass_v1_frontend_rules",
-        "equality_rejects_tuple_types",
+        "equality_accepts_tuple_types",
         "pointer_constructor_accepts_string_binding",
         "flat_pointer_constructor_spellings_are_rejected",
         "flat_builtin_spellings_are_rejected_in_favour_of_namespaces",
@@ -4440,7 +4439,7 @@
         "result_obligations_follow_named_argument_source_order_on_propagation",
         "interspersed_unit_parameters_match_public_and_internal_word_layouts"
       ],
-      "test_names_sha256": "6ac1f3b20c7bb302c30bab83a393a426b931a28271bf733c7e07df4480afeb58"
+      "test_names_sha256": "fa22fdaa22f88ef9f2834a4fe3a65dfc23003ae4882d328a5b5e89c913dabe9c"
     },
     {
       "external_fixtures": [],
@@ -4458,6 +4457,7 @@
         "malformed_typed_member_access_fails_closed_during_lowering",
         "source_int_and_internal_scalar_have_an_explicit_ir_boundary",
         "contextually_typed_integer_quantity_literal_lowers_as_quantity_data",
+        "bool_state_keys_use_their_own_canonical_codec",
         "wide_numeric_state_keys_use_canonical_pointer_norito",
         "direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed",
         "lower_simple_function",
@@ -4465,9 +4465,9 @@
         "named_list_intrinsic_evaluates_source_order_before_abi_slots",
         "named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order",
         "require_lowers_declared_error_code_into_abort_ir",
-        "entrypoint_wrapper_uses_only_the_host_argument_record",
-        "single_json_entrypoint_uses_the_same_one_shot_argument_record",
-        "public_wrapper_decodes_one_complete_norito_argument_record",
+        "entrypoint_reads_only_the_prepared_host_argument_table",
+        "single_json_entrypoint_uses_the_same_prepared_argument_table",
+        "public_entrypoint_loads_one_prepared_table_word_per_parameter",
         "public_aggregate_arguments_cross_internal_calls_as_flat_words",
         "nested_aggregate_returns_use_every_flattened_abi_word",
         "inactive_sum_has_no_payload_construction_or_store",
@@ -4493,7 +4493,7 @@
         "multiword_failed_list_mutation_branches_have_no_stores_or_allocations",
         "entrypoint_list_schema_is_recursive_and_capacity_bound",
         "query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views",
-        "aggregate_argument_words_over_register_window_fail_during_lowering",
+        "aggregate_argument_words_beyond_thirteen_lower_to_one_table_signature",
         "invoke_entrypoint_lowers_to_current_caller_host_intrinsic",
         "invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic",
         "invoke_entrypoint_as_lowers_to_test_host_intrinsics",
@@ -4532,7 +4532,7 @@
         "lower_bytes_literal_to_blob_dataref",
         "lower_canonical_trigger_operations",
         "lower_struct_fields_for_transfer_domain",
-        "lower_info_int_encodes_to_norito",
+        "lower_info_int_preserves_full_width_pointer",
         "source_cannot_lower_internal_encode_i64_builtin",
         "lower_bytes_equality_uses_pointer_eq",
         "lower_get_or_on_state_map_reads_without_writing",
@@ -4556,8 +4556,8 @@
         "rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction",
         "wrapping_builtins_have_distinct_ir"
       ],
-      "test_names_sha256": "ca9fa8ed2d65e5e043f52fea4d1dc4dd024a7ec76737a8fc69024cd2021d03e2"
+      "test_names_sha256": "1b35e9ea05f0d5134738d066f94d499d980beab890dc37fc66364142eae07ccd"
     }
   ],
-  "test_inventory_sha256": "08b30c32361b1eb7c28f54a168a2f19d05b37f97c271449aa1557ed75cadb925"
+  "test_inventory_sha256": "4e8cd25648eedc72452efb2b2fb4413bbe743ef01475a1a3b7610935494094fc"
 }

@@ -103,7 +103,7 @@ fn maximum_arguments() -> EntrypointArgumentSchemaV1 {
 #[test]
 fn original_compiler_schema_frames_are_exact() {
     let groups = fixture_groups("entrypoint_argument_schema");
-    assert_eq!(groups.len(), 3);
+    assert_eq!(groups.len(), 2);
     for group in groups {
         let value = match group["case"].as_str().unwrap() {
             "scalar" => EntrypointArgumentSchemaV1 {
@@ -123,7 +123,6 @@ fn original_compiler_schema_frames_are_exact() {
                     },
                 }],
             },
-            "maximum" => maximum_arguments(),
             case => panic!("unexpected captured schema case: {case}"),
         };
         assert!(value.validate());
@@ -134,8 +133,8 @@ fn original_compiler_schema_frames_are_exact() {
 #[test]
 fn maximum_schema_ownership_and_bounds_survive_framing() {
     let maximum = maximum_arguments();
-    assert_eq!(maximum.fields.len(), 13);
-    assert_eq!(maximum.word_count(), Some(13));
+    assert_eq!(maximum.fields.len(), MAX_ENTRYPOINT_ARGUMENTS);
+    assert_eq!(maximum.word_count(), Some(MAX_ENTRYPOINT_ARGUMENTS));
     let schema = EntrypointArgumentSchemaV1::schema();
     assert!(schema.contains_key::<EntrypointArgumentSchemaV1>());
     assert!(schema.contains_key::<EntrypointArgumentFieldV1>());

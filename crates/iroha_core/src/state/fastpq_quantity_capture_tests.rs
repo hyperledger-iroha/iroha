@@ -58,7 +58,9 @@ fn fixture() -> (State, AssetId, AssetId) {
             )
         })
         .collect();
-    state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
+        statuses,
+    )));
     let fees = &mut state.nexus.get_mut().fees;
     fees.base_fee = Quantity::zero();
     fees.per_byte_fee = Quantity::zero();
@@ -492,9 +494,7 @@ fn body_and_real_pipeline_fee_replace_one_complete_entry_counter() {
     use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit};
     use iroha_primitives::numeric::Numeric;
     on_stack(|| {
-        let _fee_guard = crate::status::nexus_fee_test_lock()
-            .lock()
-            .unwrap();
+        let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
         let (mut state, alice, bob) = fixture();
         {
             let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
@@ -741,9 +741,7 @@ fn actual_signed_sponsor_debit_captures_exact_custody_balance_and_supply() {
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     on_stack(|| {
-        let _fee_guard = crate::status::nexus_fee_test_lock()
-            .lock()
-            .unwrap();
+        let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
         let (state, custody, program_id, instruction) = sponsored_burn_fixture();
         let (source, call) = source_with_fee(
             &state,

@@ -43,10 +43,10 @@ fn policy(count: usize) -> BundleLimits {
     }
 }
 
-fn prove(relation: &impl FixedAir, columns: Columns, limits: VerifyLimits) -> Vec<u8> {
+fn prove(relation: &impl FixedAir, columns: &[Vec<u64>], limits: VerifyLimits) -> Vec<u8> {
     let proof = prove_shared(
         relation,
-        &columns,
+        columns,
         VerifyLimits {
             max_proof_bytes: 16 * 1024 * 1024,
             ..limits
@@ -98,6 +98,7 @@ fn columns(
             columns
         })
         .collect();
+    drop(private);
     (roots, columns)
 }
 
@@ -155,6 +156,27 @@ fn reject_retag(
     );
 }
 
+/// Matching equations and statement bytes cannot substitute a narrow identity.
+fn reject_single_retag(fixture: &QuantityFixture, axt: bool, bytes: &[u8], limits: VerifyLimits) {
+    if axt {
+        let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
+        let relation = AxtTransferAir::new(
+            &prepared,
+            &fixture.expected(),
+            &fixture.axt.binding,
+            fixture.axt.metadata(),
+            fixture.axt.outer,
+            fixture.axt.remote.as_deref(),
+        )
+        .unwrap();
+        reject_retag(&relation, u64::AXT_IDENTITY, bytes, limits);
+    } else {
+        let prepared = fixture.prepare(ProofSemantics::StateTransition);
+        let relation = PublicTransferAir::new(&prepared, &fixture.expected()).unwrap();
+        reject_retag(&relation, u64::TRANSFER_IDENTITY, bytes, limits);
+    }
+}
+
 fn single(axt: bool) {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let (mut fixture, private) = QuantityFixture::new(
@@ -182,12 +204,12 @@ fn single(axt: bool) {
                 fixture.axt.remote.as_deref(),
             )
             .unwrap();
-            prove(&relation, private_columns.pop().unwrap(), limits)
+            prove(&relation, &private_columns.pop().unwrap(), limits)
         } else {
             let prepared = fixture.prepare(ProofSemantics::StateTransition);
             prove(
                 &PublicTransferAir::new(&prepared, &expected).unwrap(),
-                private_columns.pop().unwrap(),
+                &private_columns.pop().unwrap(),
                 limits,
             )
         }
@@ -232,24 +254,7 @@ fn single(axt: bool) {
         usage.total_allocated_bytes(),
         verified.work()
     );
-    // Matching equations and statement bytes cannot substitute a narrow identity.
-    if axt {
-        let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-        let relation = AxtTransferAir::new(
-            &prepared,
-            &fixture.expected(),
-            &fixture.axt.binding,
-            fixture.axt.metadata(),
-            fixture.axt.outer,
-            fixture.axt.remote.as_deref(),
-        )
-        .unwrap();
-        reject_retag(&relation, u64::AXT_IDENTITY, &bytes, limits);
-    } else {
-        let prepared = fixture.prepare(ProofSemantics::StateTransition);
-        let relation = PublicTransferAir::new(&prepared, &fixture.expected()).unwrap();
-        reject_retag(&relation, u64::TRANSFER_IDENTITY, &bytes, limits);
-    }
+    reject_single_retag(&fixture, axt, &bytes, limits);
     // Coherent alternate full-domain statements, including changed high limbs
     // and decimal scales, must not reuse this proof even with recomputed roots.
     for case in [QuantityCase::U128, QuantityCase::Tiny] {
@@ -371,7 +376,7 @@ fn retained_ordinary_single_preserves_full_wire_root_and_quantity_context() {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let bytes = read_retained_quantity_wire(
         "ordinary-single",
-        3994619,
+        3_994_619,
         "8ed0b0db090e7342ae7b7dc1fb9a4e5f2ad265c5f5f4cfe2808cb066385f9091",
         "626ab2f2e794c043f1d57dec4d05650a",
     );
@@ -395,7 +400,7 @@ fn retained_axt_single_preserves_full_wire_root_and_quantity_context() {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let bytes = read_retained_quantity_wire(
         "axt-single",
-        4015551,
+        4_015_551,
         "bba32fd6bdf97bd5b349a789a60cc24645f4594c2bde79ea1b42138b21cc0189",
         "626ab2f2e794c043f1d57dec4d05650a",
     );

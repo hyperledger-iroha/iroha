@@ -1156,45 +1156,6 @@ fn builder_preserves_consensus_metadata() {
     );
 }
 #[test]
-fn raw_v2_genesis_requires_signed_context_parameters() {
-    let manifest = RawGenesisTransaction {
-        chain: ChainId::from("iroha:test:missing-v2-context"),
-        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
-        executor: None,
-        ivm_dir: IvmPath::default(),
-        transactions: vec![RawGenesisTx::default()],
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-        wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
-        consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
-        crypto: ManifestCrypto::default(),
-    };
-    let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
-    value
-        .as_object_mut()
-        .expect("manifest object")
-        .remove("sumeragi_v2");
-    let error = RawGenesisTransaction::from_json_value(value)
-        .expect_err("v2 context parameters are required");
-    assert!(
-        error.to_string().contains("sumeragi_v2"),
-        "unexpected error: {error}"
-    );
-
-    let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
-    value
-        .as_object_mut()
-        .expect("manifest object")
-        .remove("kagemusha_mint_finality");
-    let error = RawGenesisTransaction::from_json_value(value)
-        .expect_err("KAGEMUSHA mint-finality genesis parameters are required");
-    assert!(
-        error.to_string().contains("kagemusha_mint_finality"),
-        "unexpected error: {error}"
-    );
-}
-#[test]
 fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:strict-consensus-manifest"),
@@ -1307,9 +1268,6 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
                 max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond().clone(),
                 min_nomination_bond: npos.min_nomination_bond().clone(),
-                max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                seat_band_pct: npos.seat_band_pct(),
-                max_entity_correlation_pct: npos.max_entity_correlation_pct(),
                 finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),

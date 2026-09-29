@@ -624,10 +624,6 @@ impl ZeroizingTerminalRelaxedWitnessV1 {
     fn take(&mut self) -> Result<RelaxedWitness, ZkAmsMkheErrorV1> {
         self.0.take().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
-    #[allow(
-        dead_code,
-        reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
-    )]
     fn as_ref(&self) -> &RelaxedWitness {
         self.0.as_ref().expect("guarded witness is present")
     }
@@ -753,10 +749,6 @@ impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
         Ok(())
     }
     /// Borrow the exact checked openings without transferring any owner.
-    #[allow(
-        dead_code,
-        reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
-    )]
     pub(super) fn openings_for_cross_basis_v1(
         &self,
         context: ZkAmsPhase3TerminalContextV1,

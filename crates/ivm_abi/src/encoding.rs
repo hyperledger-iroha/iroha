@@ -36,7 +36,7 @@ pub mod wide {
         assert!(rs_base <= instruction::wide::crypto::POSEIDON6_MAX_INPUT_BASE);
         encode_rr(instruction::wide::crypto::POSEIDON6, rd, rs_base, 0)
     }
-    /// Decode and validate the canonical `POSEIDON6` register-window form.
+    /// Decode and validate the canonical `POSEIDON6` six-operand form.
     #[inline]
     pub fn decode_poseidon6(word: u32) -> Option<(u8, u8)> {
         let (op, rd, rs_base, reserved) = decode_rr(word);
@@ -239,7 +239,7 @@ mod tests {
     }
     #[test]
     #[should_panic]
-    fn poseidon6_encoder_rejects_register_window_overflow() {
+    fn poseidon6_encoder_rejects_six_operand_overflow() {
         let _ = wide::encode_poseidon6(9, 251);
     }
     #[test]

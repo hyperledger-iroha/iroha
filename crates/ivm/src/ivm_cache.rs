@@ -8,7 +8,7 @@
 //! tracks LRU order. Accessing an entry moves its digest to the back; capacity
 //! or byte budget overflow evicts from the front. Per-entry decoded-op limits
 //! affect cache retention only and never change whether valid code decodes.
-use crate::{decoder, metadata::ProgramMetadata};
+use crate::{cache_memory::SharedAllocation, decoder, metadata::ProgramMetadata};
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use sha2::{Digest, Sha256};
 use std::{
@@ -21,13 +21,15 @@ use std::{
     time::Instant,
 };
 /// A decoded fixed-width instruction with its byte offset.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DecodedOp {
     /// Byte offset from the beginning of the code buffer.
     pub pc: u64,
     /// Canonical 32-bit instruction word returned by the decoder.
     pub inst: u32,
 }
+/// A shared decoded stream whose memory charge follows its last borrower.
+pub type DecodedStream = SharedAllocation<DecodedOp>;
 type CacheKey = [u8; 32];
 /// Snapshot of global cache metrics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +47,7 @@ pub struct CacheStats {
 pub struct CacheLimits {
     /// Total number of cached entries (0 disables caching).
     pub capacity: usize,
-    /// Approximate byte budget for cached entries (0 = unlimited).
+    /// Aggregate allocation retention budget shared with Core preparation/runtime caches (0 disables retention).
     pub max_bytes: usize,
     /// Maximum decoded ops per cached entry (0 = unlimited).
     pub max_decoded_ops: usize,
@@ -61,12 +63,15 @@ pub struct IvmCache {
     /// Current accounted bytes across all cached entries.
     cur_bytes: usize,
     /// Cached decoded streams by key.
-    map: HashMap<CacheKey, Arc<[DecodedOp]>>,
+    map: HashMap<CacheKey, DecodedStream>,
     /// LRU order (front = oldest).
     order: VecDeque<CacheKey>,
     hits: u64,
     misses: u64,
     evictions: u64,
+    // Release aggregate charges after every owned allocation above is destroyed.
+    _control_memory: crate::cache_memory::MemoryReservation,
+    index_memory: crate::cache_memory::MemoryReservation,
 }
 impl IvmCache {
     /// Create a new cache with the given capacity (number of entries).
@@ -75,6 +80,11 @@ impl IvmCache {
     }
     fn new_with_max_bytes(capacity: usize, max_bytes: usize) -> Self {
         Self {
+            _control_memory: crate::cache_memory::MemoryReservation::active(
+                norito::core::owned_arc_allocation_bytes::<Mutex<Self>>()
+                    .expect("decoded cache owner fits"),
+            ),
+            index_memory: crate::cache_memory::MemoryReservation::active(0),
             cap: capacity,
             max_bytes,
             cur_bytes: 0,
@@ -100,50 +110,74 @@ impl IvmCache {
         }
         self.order.push_back(*key);
         self.enforce_limits();
+        self.retain_index_or_clear();
     }
-    fn entry_size(decoded: &Arc<[DecodedOp]>) -> usize {
-        core::mem::size_of::<DecodedOp>() * decoded.len()
+    fn clear_storage(&mut self) {
+        self.evictions = self.evictions.saturating_add(self.map.len() as u64);
+        self.map = HashMap::new();
+        self.order = VecDeque::new();
+        self.cur_bytes = 0;
+        self.index_memory.set_known_bytes(0);
+    }
+    fn retain_index_or_clear(&mut self) {
+        if self.map.is_empty() {
+            self.clear_storage();
+            return;
+        }
+        let bytes = norito::core::owned_hash_table_allocation_bytes::<(CacheKey, DecodedStream)>(
+            self.map.capacity(),
+        )
+        .ok()
+        .and_then(|bytes| {
+            bytes.checked_add(self.order.capacity() * std::mem::size_of::<CacheKey>())
+        });
+        let Some(bytes) = bytes else {
+            self.clear_storage();
+            return;
+        };
+        // Hash-map tombstones can reduce the reported capacity without releasing
+        // buckets. Keep the high-water charge until the complete index is freed.
+        self.index_memory
+            .set_known_bytes(bytes.max(self.index_memory.bytes()));
+        if !self.index_memory.try_retain() {
+            self.clear_storage();
+        }
+    }
+    fn entry_size(decoded: &DecodedStream) -> usize {
+        decoded.allocation_bytes()
+    }
+    fn evict_oldest(&mut self) -> bool {
+        let Some(old) = self.order.pop_front() else {
+            return false;
+        };
+        if let Some(decoded) = self.map.remove(&old) {
+            // This is an index-local total, not the allocation-owned reservation.
+            self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&decoded));
+        }
+        self.evictions += 1;
+        true
     }
     fn enforce_limits(&mut self) {
-        // Evict by count first
-        while self.order.len() > self.cap {
-            if let Some(old) = self.order.pop_front() {
-                if let Some(decoded) = self.map.remove(&old) {
-                    self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&decoded));
-                }
-                self.evictions += 1;
-            } else {
-                break;
-            }
+        if self.cap == 0 || self.max_bytes == 0 {
+            self.clear_storage();
+            return;
         }
-        // Then enforce byte budget
-        while self.cur_bytes > self.max_bytes {
-            if let Some(old) = self.order.pop_front() {
-                if let Some(decoded) = self.map.remove(&old) {
-                    self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&decoded));
-                }
-                self.evictions += 1;
-            } else {
+        while self.order.len() > self.cap || self.cur_bytes > self.max_bytes {
+            if !self.evict_oldest() {
                 break;
             }
         }
     }
     /// Decode the code buffer using the canonical decoder. Returns a shared slice of decoded ops.
-    pub fn decode_stream(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
+    pub fn decode_stream(code: &[u8]) -> Result<DecodedStream, crate::VMError> {
         if (code.len() as u64) > crate::memory::Memory::HEAP_START {
             return Err(crate::VMError::MemoryOutOfBounds);
         }
         let start = Instant::now();
-        let result: Result<Vec<DecodedOp>, crate::VMError> = (|| {
-            let mut pc = 0u64;
-            let mut out = Vec::new();
-            while (pc as usize) < code.len() {
-                let inst = decoder::decode_slice(code, pc)?;
-                out.push(DecodedOp { pc, inst });
-                pc += 4;
-            }
-            Ok(out)
-        })();
+        let result = SharedAllocation::try_from_iter((0..code.len().div_ceil(4)).map(|index| {
+            let pc = (index as u64) * 4;
+            decoder::decode_slice(code, pc).map(|inst| DecodedOp { pc, inst })
+        }));
         let elapsed_ns = start.elapsed().as_nanos();
         let elapsed_ns_u64 = if elapsed_ns > u64::MAX as u128 {
             u64::MAX
@@ -151,8 +185,7 @@ impl IvmCache {
             elapsed_ns as u64
         };
         match result {
-            Ok(out) => {
-                let decoded: Arc<[DecodedOp]> = Arc::from(out.into_boxed_slice());
+            Ok(decoded) => {
                 atomic_saturating_add(&DECODED_STREAMS, 1);
                 atomic_saturating_add(&DECODED_OPS, decoded.len() as u64);
                 atomic_saturating_add(&DECODE_TIME_NS, elapsed_ns_u64);
@@ -166,14 +199,14 @@ impl IvmCache {
         }
     }
     /// Get a pre-decoded stream from cache or decode it, retaining eligible results.
-    pub fn get_or_predecode(&mut self, code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
+    pub fn get_or_predecode(&mut self, code: &[u8]) -> Result<DecodedStream, crate::VMError> {
         let key = Self::key_for(code);
         self.get_or_predecode_with_key(key, code)
     }
     /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code bytes.
     pub fn decode_artifact(
         artifact: &[u8],
-    ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {
+    ) -> Result<(ProgramMetadata, DecodedStream), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
         validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
@@ -184,7 +217,7 @@ impl IvmCache {
     pub fn get_or_predecode_artifact(
         &mut self,
         artifact: &[u8],
-    ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {
+    ) -> Result<(ProgramMetadata, DecodedStream), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
         validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
@@ -196,8 +229,10 @@ impl IvmCache {
         &mut self,
         key: CacheKey,
         code: &[u8],
-    ) -> Result<Arc<[DecodedOp]>, crate::VMError> {
-        if self.cap == 0 {
+    ) -> Result<DecodedStream, crate::VMError> {
+        self.max_bytes = self.max_bytes.min(configured_max_bytes());
+        self.enforce_limits();
+        if self.cap == 0 || self.max_bytes == 0 {
             self.misses += 1;
             return Self::decode_stream(code);
         }
@@ -210,6 +245,7 @@ impl IvmCache {
                 self.cur_bytes = self.cur_bytes.saturating_sub(Self::entry_size(&hit));
                 self.evictions += 1;
                 self.misses += 1;
+                self.retain_index_or_clear();
                 return Self::decode_stream(code);
             }
             self.touch(&key);
@@ -222,8 +258,19 @@ impl IvmCache {
             return Ok(decoded);
         }
         let sz = Self::entry_size(&decoded);
+        if sz > self.max_bytes {
+            return Ok(decoded);
+        }
+        // Releasing a cache reference does not release another borrower's charge.
+        // A pinned budget therefore falls back to cold execution without waiting.
+        while !decoded.try_retain() {
+            if !self.evict_oldest() {
+                self.clear_storage();
+                return Ok(decoded);
+            }
+        }
         self.cur_bytes = self.cur_bytes.saturating_add(sz);
-        self.map.insert(key, decoded.clone());
+        self.map.insert(key, decoded.cache_clone());
         self.touch(&key);
         Ok(decoded)
     }
@@ -240,7 +287,7 @@ fn validate_supported_artifact_metadata(meta: &ProgramMetadata) -> Result<(), cr
 }
 // Global thread-safe cache and counters (Phase 2)
 pub struct ShardedCache {
-    shards: RwLock<Vec<Arc<Mutex<IvmCache>>>>,
+    shards: RwLock<crate::cache_memory::OwnedAllocation<Arc<Mutex<IvmCache>>>>,
     total_capacity: AtomicUsize,
 }
 const SHARD_ACTIVATION_THRESHOLD: usize = 64;
@@ -260,7 +307,7 @@ impl ShardedCache {
         total_capacity: usize,
         total_max_bytes: usize,
         suggested_shards: usize,
-    ) -> Vec<Arc<Mutex<IvmCache>>> {
+    ) -> crate::cache_memory::OwnedAllocation<Arc<Mutex<IvmCache>>> {
         let desired_shards = if total_capacity <= SHARD_ACTIVATION_THRESHOLD {
             1
         } else {
@@ -292,7 +339,7 @@ impl ShardedCache {
                 cap, max_bytes,
             ))));
         }
-        shards
+        shards.into()
     }
     fn shard_for_key(&self, key: &CacheKey) -> Arc<Mutex<IvmCache>> {
         let shards = self.shards.read().unwrap();
@@ -318,7 +365,7 @@ impl ShardedCache {
             std::mem::replace(&mut *guard, shard_vec)
         };
         let evicted = old_shards
-            .into_iter()
+            .iter()
             .map(|shard| {
                 let cache = shard.lock().unwrap();
                 cache.map.len() as u64
@@ -333,7 +380,13 @@ impl ShardedCache {
         for (index, shard) in shards.iter().enumerate() {
             let mut guard = shard.lock().unwrap();
             let before = guard.evictions;
-            guard.max_bytes = shard_share(total_max_bytes, shard_count, index);
+            let next_bytes = shard_share(total_max_bytes, shard_count, index);
+            if next_bytes < guard.max_bytes {
+                // A shrink releases every idle reference, including index
+                // capacity. Borrowed streams retain their own allocation charge.
+                guard.clear_storage();
+            }
+            guard.max_bytes = next_bytes;
             guard.enforce_limits();
             evicted = evicted.saturating_add(guard.evictions.saturating_sub(before));
         }
@@ -379,8 +432,7 @@ fn configured_max_decoded_ops() -> usize {
     if raw == 0 { usize::MAX } else { raw }
 }
 fn configured_max_bytes() -> usize {
-    let raw = CACHE_MAX_BYTES.load(Ordering::Relaxed);
-    if raw == 0 { usize::MAX } else { raw }
+    CACHE_MAX_BYTES.load(Ordering::Relaxed)
 }
 fn default_shard_count() -> usize {
     std::thread::available_parallelism()
@@ -421,7 +473,7 @@ pub fn global_cache() -> &'static ShardedCache {
     let _configuration = lock_cache_configuration();
     GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()))
 }
-pub fn global_get(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
+pub fn global_get(code: &[u8]) -> Result<DecodedStream, crate::VMError> {
     let cache = global_cache();
     let key = IvmCache::key_for(code);
     let shard = cache.shard_for_key(&key);
@@ -465,6 +517,10 @@ pub fn set_global_capacity(capacity: usize) {
     let _configuration = lock_cache_configuration();
     let cache = GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()));
     cache.set_capacity(capacity);
+    if capacity == 0 {
+        crate::ivm::clear_prepared_program_cache();
+        crate::cache_memory::evict_registered_caches();
+    }
     let mut limits = current_cache_limits_snapshot();
     limits.capacity = capacity;
     publish_cache_limits_snapshot(limits);
@@ -472,11 +528,7 @@ pub fn set_global_capacity(capacity: usize) {
 fn normalize_limits(limits: CacheLimits) -> CacheLimits {
     CacheLimits {
         capacity: limits.capacity,
-        max_bytes: if limits.max_bytes == 0 {
-            usize::MAX
-        } else {
-            limits.max_bytes
-        },
+        max_bytes: limits.max_bytes,
         max_decoded_ops: if limits.max_decoded_ops == 0 {
             usize::MAX
         } else {
@@ -494,7 +546,12 @@ pub fn configure_limits(limits: CacheLimits) {
 }
 fn configure_limits_locked(limits: CacheLimits) {
     let normalized = normalize_limits(limits);
-    CACHE_MAX_BYTES.store(normalized.max_bytes, Ordering::Relaxed);
+    let previous_bytes = CACHE_MAX_BYTES.swap(normalized.max_bytes, Ordering::Relaxed);
+    crate::cache_memory::set_retention_limit(normalized.max_bytes);
+    if normalized.max_bytes < previous_bytes || normalized.capacity == 0 {
+        crate::ivm::clear_prepared_program_cache();
+        crate::cache_memory::evict_registered_caches();
+    }
     CACHE_MAX_DECODED_OPS.store(normalized.max_decoded_ops, Ordering::Relaxed);
     if let Some(cache) = GLOBAL_CACHE.get() {
         let current = cache.total_capacity.load(Ordering::Relaxed);
@@ -508,13 +565,104 @@ fn configure_limits_locked(limits: CacheLimits) {
     }
     publish_cache_limits_snapshot(CacheLimits {
         capacity: normalized.capacity,
-        max_bytes: denormalize(normalized.max_bytes),
+        max_bytes: normalized.max_bytes,
         max_decoded_ops: denormalize(normalized.max_decoded_ops),
     });
 }
+/// Snapshot of cache limits. Zero bytes disables retention; zero ops is unlimited.
+pub fn cache_limits() -> CacheLimits {
+    current_cache_limits_snapshot()
+}
+/// RAII guard that restores previous cache limits when dropped.
+pub struct CacheLimitsGuard {
+    previous: CacheLimits,
+    _claim: CacheLimitsGuardClaim,
+    _configuration: ReentrantMutexGuard<'static, ()>,
+}
+struct CacheLimitsGuardClaim;
+impl CacheLimitsGuardClaim {
+    fn acquire() -> Self {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| {
+            assert!(
+                !active.replace(true),
+                "nested CacheLimitsGuard overrides on one thread are unsupported"
+            );
+        });
+        Self
+    }
+}
+impl Drop for CacheLimitsGuardClaim {
+    fn drop(&mut self) {
+        CACHE_LIMITS_GUARD_ACTIVE.with(|active| active.set(false));
+    }
+}
+impl CacheLimitsGuard {
+    /// Apply new cache limits for the lifetime of the guard.
+    ///
+    /// Other cache-limit writers and guards wait until this guard is dropped.
+    /// Constructing a second guard on the same thread panics before changing
+    /// the active limits; ordinary cache writers remain reentrant.
+    pub fn new(limits: CacheLimits) -> Self {
+        let claim = CacheLimitsGuardClaim::acquire();
+        let configuration = lock_cache_configuration();
+        let previous = current_cache_limits_snapshot();
+        configure_limits_locked(limits);
+        Self {
+            previous,
+            _claim: claim,
+            _configuration: configuration,
+        }
+    }
+}
+impl Drop for CacheLimitsGuard {
+    fn drop(&mut self) {
+        configure_limits_locked(self.previous);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_bytes_decodes_without_retaining_or_reusing_allocations() {
+        let mut cache = IvmCache::new_with_max_bytes(4, 0);
+        let code = crate::encoding::wide::encode_halt().to_le_bytes();
+        let first = cache.get_or_predecode(&code).expect("cold decode");
+        let second = cache.get_or_predecode(&code).expect("repeated cold decode");
+        assert_eq!(first.as_ref(), second.as_ref());
+        assert!(!DecodedStream::ptr_eq(&first, &second));
+        assert!(cache.map.is_empty());
+        assert_eq!(cache.counters(), (0, 2, 0));
+    }
+
+    #[test]
+    fn evicted_stream_stays_readable_until_its_last_borrower_returns() {
+        let mut cache = IvmCache::new_with_max_bytes(1, DEFAULT_CACHE_MAX_BYTES);
+        let first_code = crate::encoding::wide::encode_halt().to_le_bytes();
+        let second_code =
+            crate::encoding::wide::encode_ri(crate::instruction::wide::arithmetic::ADDI, 1, 0, 7)
+                .to_le_bytes();
+        let first = cache.get_or_predecode(&first_code).expect("first decode");
+        let borrower = first.clone();
+        drop(first);
+        let second = cache.get_or_predecode(&second_code).expect("second decode");
+        assert_eq!(borrower[0].inst, u32::from_le_bytes(first_code));
+        assert_eq!(second[0].inst, u32::from_le_bytes(second_code));
+        assert_eq!(cache.counters(), (0, 2, 1));
+        drop(cache);
+        assert_eq!(borrower[0].pc, 0);
+    }
+
+    #[test]
+    fn failed_decode_does_not_publish_a_partial_cache_entry() {
+        let mut cache = IvmCache::new_with_max_bytes(4, DEFAULT_CACHE_MAX_BYTES);
+        let mut code = crate::encoding::wide::encode_halt().to_le_bytes().to_vec();
+        code.push(0);
+        assert!(cache.get_or_predecode(&code).is_err());
+        assert!(cache.map.is_empty());
+        assert_eq!(cache.cur_bytes, 0);
+    }
 
     fn shard_limits(shards: &[Arc<Mutex<IvmCache>>]) -> Vec<(usize, usize)> {
         shards
@@ -558,6 +706,31 @@ mod tests {
     }
 
     #[test]
+    fn byte_limit_shrink_releases_index_storage_and_preserves_borrowed_stream() {
+        let cache = ShardedCache {
+            shards: RwLock::new(ShardedCache::build_shards(4, 1_000_000, 1)),
+            total_capacity: AtomicUsize::new(4),
+        };
+        let stream = {
+            let shards = cache.shards.read().unwrap();
+            let mut shard = shards[0].lock().unwrap();
+            let stream = shard
+                .get_or_predecode(&crate::encoding::wide::encode_halt().to_le_bytes())
+                .unwrap();
+            assert!(shard.index_memory.bytes() > 0);
+            stream
+        };
+        cache.set_max_bytes(999_999);
+        let shards = cache.shards.read().unwrap();
+        let shard = shards[0].lock().unwrap();
+        assert!(shard.map.is_empty());
+        assert_eq!(shard.map.capacity(), 0);
+        assert_eq!(shard.order.capacity(), 0);
+        assert_eq!(shard.index_memory.bytes(), 0);
+        assert_eq!(stream.len(), 1);
+    }
+
+    #[test]
     fn live_byte_limit_updates_remain_aggregate() {
         let cache = ShardedCache {
             shards: RwLock::new(ShardedCache::build_shards(67, 10, 4)),
@@ -590,7 +763,7 @@ mod tests {
             let shards = cache.shards.read().unwrap();
             let mut shard = shards[0].lock().unwrap();
             let key = [0xA5; 32];
-            let decoded: Arc<[DecodedOp]> = Arc::from(
+            let decoded = SharedAllocation::from_boxed(
                 vec![DecodedOp {
                     pc: 0,
                     inst: crate::encoding::wide::encode_halt(),
@@ -689,55 +862,5 @@ mod tests {
 
         drop(outer);
         assert_eq!(cache_limits(), baseline);
-    }
-}
-/// Snapshot of the current cache limits (0 denotes unlimited for max fields).
-pub fn cache_limits() -> CacheLimits {
-    current_cache_limits_snapshot()
-}
-/// RAII guard that restores previous cache limits when dropped.
-pub struct CacheLimitsGuard {
-    previous: CacheLimits,
-    _claim: CacheLimitsGuardClaim,
-    _configuration: ReentrantMutexGuard<'static, ()>,
-}
-struct CacheLimitsGuardClaim;
-impl CacheLimitsGuardClaim {
-    fn acquire() -> Self {
-        CACHE_LIMITS_GUARD_ACTIVE.with(|active| {
-            assert!(
-                !active.replace(true),
-                "nested CacheLimitsGuard overrides on one thread are unsupported"
-            );
-        });
-        Self
-    }
-}
-impl Drop for CacheLimitsGuardClaim {
-    fn drop(&mut self) {
-        CACHE_LIMITS_GUARD_ACTIVE.with(|active| active.set(false));
-    }
-}
-impl CacheLimitsGuard {
-    /// Apply new cache limits for the lifetime of the guard.
-    ///
-    /// Other cache-limit writers and guards wait until this guard is dropped.
-    /// Constructing a second guard on the same thread panics before changing
-    /// the active limits; ordinary cache writers remain reentrant.
-    pub fn new(limits: CacheLimits) -> Self {
-        let claim = CacheLimitsGuardClaim::acquire();
-        let configuration = lock_cache_configuration();
-        let previous = current_cache_limits_snapshot();
-        configure_limits_locked(limits);
-        Self {
-            previous,
-            _claim: claim,
-            _configuration: configuration,
-        }
-    }
-}
-impl Drop for CacheLimitsGuard {
-    fn drop(&mut self) {
-        configure_limits_locked(self.previous);
     }
 }

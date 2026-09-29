@@ -355,72 +355,6 @@ mod evidence_resource_tests {
         }
     }
 
-    #[test]
-    fn native_publication_index_resource_names_and_bytes_are_exact() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap();
-        let namespace = root.join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
-        std::fs::create_dir(&namespace).unwrap();
-        let digest = "a1".repeat(Hash::LENGTH);
-        let main = namespace.join(format!("00000000000000000001-{digest}.norito"));
-        let temporary = namespace.join(format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}A1b2C3"));
-        std::fs::write(&main, [1_u8; 13]).unwrap();
-        std::fs::write(&temporary, [2_u8; 17]).unwrap();
-        let paths = [main.clone(), temporary.clone()];
-        let observed = physical_resource_paths_usage(&paths, limits()).unwrap();
-        let evidence = observed[ResourceFamily::EvidenceKeyRecords as usize];
-        assert_eq!(evidence.persisted_entries, 2);
-        assert_eq!(evidence.index_bytes, 13);
-        assert_eq!(evidence.temporary_index_bytes, 17);
-        assert_eq!(evidence.resident_associations, 0);
-        assert_eq!(
-            observed[ResourceFamily::StorageBytes as usize].storage_bytes,
-            30
-        );
-        // A crash immediately after temporary creation retains one zero-byte
-        // physical record, without granting it any canonical publication authority.
-        std::fs::write(&temporary, []).unwrap();
-        let empty = physical_resource_paths_usage(&paths, limits()).unwrap();
-        assert_eq!(
-            empty[ResourceFamily::EvidenceKeyRecords as usize].persisted_entries,
-            2
-        );
-        assert_eq!(
-            empty[ResourceFamily::EvidenceKeyRecords as usize].temporary_index_bytes,
-            0
-        );
-        assert_eq!(
-            empty[ResourceFamily::StorageBytes as usize].storage_bytes,
-            13
-        );
-        for name in [
-            format!("1-{digest}.norito"),
-            format!("00000000000000000000-{digest}.norito"),
-            format!("00000000000000000001-{}.norito", digest.to_uppercase()),
-            format!("00000000000000000001-{digest}.norito.tmp"),
-            NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX.to_owned(),
-            format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}unowned.bad"),
-            "blocks.hashes".to_owned(),
-        ] {
-            assert!(evidence_resource_kind(&namespace.join(name), limits()).is_err());
-        }
-        std::fs::write(
-            &temporary,
-            vec![3_u8; NATIVE_AMX_PUBLICATION_INDEX_MAX_RECORD_BYTES + 1],
-        )
-        .unwrap();
-        assert!(physical_resource_paths_usage(&paths, limits()).is_err());
-        std::fs::remove_file(temporary).unwrap();
-        let observed = physical_resource_paths_usage(&paths, limits()).unwrap();
-        assert_eq!(
-            observed[ResourceFamily::EvidenceKeyRecords as usize].persisted_entries,
-            1
-        );
-        assert_eq!(
-            observed[ResourceFamily::StorageBytes as usize].storage_bytes,
-            13
-        );
-    }
 
     #[test]
     fn evidence_namespace_parsers_bind_exact_height_hash_and_claim_shard() {
@@ -511,43 +445,6 @@ mod evidence_resource_tests {
         }
     }
 
-    #[test]
-    fn real_native_records_preserve_main_temp_bytes_and_configured_bounds() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap();
-        let lane = root.join(LANE_ARTIFACTS_DIR_NAME);
-        std::fs::create_dir(&lane).unwrap();
-        let path = lane.join(Kura::native_amx_evidence_file_name(
-            NativeAmxEvidenceKind::Receipt,
-            1,
-        ));
-        let temporary = path.with_extension("norito.tmp");
-        std::fs::write(&path, [1_u8; 13]).unwrap();
-        std::fs::write(&temporary, [2_u8; 17]).unwrap();
-        let (format, is_temporary) = evidence_resource_kind(&path, limits()).unwrap().unwrap();
-        let main = index_resource_file_usage(&path, format, is_temporary).unwrap();
-        let (format, is_temporary) = evidence_resource_kind(&temporary, limits())
-            .unwrap()
-            .unwrap();
-        let staged = index_resource_file_usage(&temporary, format, is_temporary).unwrap();
-        let combined = main.checked_add(staged).unwrap();
-        assert_eq!(combined.persisted_entries, 2);
-        assert_eq!(combined.index_bytes, 13);
-        assert_eq!(combined.temporary_index_bytes, 17);
-        assert_eq!(combined.resident_associations, 0);
-        assert_eq!(combined.storage_bytes, 0);
-        std::fs::write(&temporary, [3_u8; 20]).unwrap();
-        assert!(index_resource_file_usage(&temporary, format, is_temporary).is_err());
-        std::fs::remove_file(&temporary).unwrap();
-        assert_eq!(
-            index_resource_file_usage(&temporary, format, is_temporary).unwrap(),
-            ResourceUsage::default()
-        );
-        let prune = lane.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
-        let (format, temporary) = evidence_resource_kind(&prune, limits()).unwrap().unwrap();
-        std::fs::write(&prune, [4_u8; 12]).unwrap();
-        assert!(index_resource_file_usage(&prune, format, temporary).is_err());
-    }
 
     #[test]
     fn evidence_formats_do_not_double_count_index_pairs_or_invent_fastpq_policy() {
@@ -609,59 +506,6 @@ mod evidence_resource_tests {
         );
     }
 
-    #[test]
-    fn immutable_native_limits_and_geometry_bounds_come_from_the_actual_owners() {
-        let kura = Kura::blank_kura_for_testing();
-        let observed = kura.evidence_resource_limits();
-        assert_eq!(
-            observed.native_record_bytes,
-            (kura.pending_control_sidecar_limits.aggregate_bytes as u64)
-                .min(STRICT_INIT_MAX_BLOCK_BYTES)
-        );
-        assert_eq!(
-            observed.native_prune_intent_bytes,
-            kura.native_amx_evidence_prune_intent_max_bytes() as u64
-        );
-        for (name, temporary) in [
-            ("lane_geometry_journal.norito", false),
-            ("lane_geometry_journal.norito.tmp", true),
-            ("lane_geometry_journal.norito.restore.tmp", true),
-            (".lane-incarnation.norito", false),
-            (".lane-incarnation.norito.tmp", true),
-        ] {
-            let (maximum, actual_temporary) =
-                lane_geometry::resource_evidence_file_kind(name).unwrap();
-            assert_eq!(actual_temporary, temporary);
-            assert!(maximum > 0);
-            assert!(
-                matches!(evidence_resource_kind(&Path::new("/unused").join(name), observed).unwrap(), Some((IndexResourceFormat::Singleton(bound), observed_temporary)) if bound == maximum && observed_temporary == temporary)
-            );
-        }
-        assert!(
-            lane_geometry::resource_evidence_file_kind("lane_geometry_journal.norito.compat")
-                .is_none()
-        );
-        assert!(
-            evidence_resource_kind(
-                &Path::new("/unused").join("lane_geometry_journal.norito.compat"),
-                observed,
-            )
-            .is_err()
-        );
-        assert!(
-            evidence_resource_kind(
-                &Path::new("/unused").join(format!("{PRUNE_INTENT_FILE_NAME}.bad")),
-                observed,
-            )
-            .is_err()
-        );
-        assert!(matches!(evidence_resource_kind(
-            &Path::new("/unused").join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)
-                .join(format!("{HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}bounded-crash")),
-            observed,
-        ).unwrap(), Some((IndexResourceFormat::Singleton(maximum), true))
-            if maximum == HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES as u64));
-    }
 
     #[test]
     fn fastpq_reserved_names_and_empty_temporary_preserve_exact_configured_geometry() {

@@ -583,6 +583,60 @@ public struct RegisterMusubiArchiveV1: MusubiInstructionV1 {
     }
 }
 
+/// Advance one pin authority's complete signed pin-intent inventory high-water.
+public struct AdvanceMusubiPinOutboxV1: MusubiInstructionV1 {
+    public static let stableWireID = "iroha.musubi.v1.pin_outbox.advance"
+    public static let schemaName =
+        "iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1"
+
+    public let networkID: NetworkId
+    public let pinAuthority: String
+    public let sessionID: [UInt8]
+    public let expectedRevision: UInt64
+    public let expectedInventoryDigest: [UInt8]
+    public let inventoryDigest: [UInt8]
+    private let pinAuthorityPayload: Data
+
+    public init(
+        networkID: NetworkId,
+        pinAuthority: String,
+        sessionID: [UInt8],
+        expectedRevision: UInt64,
+        expectedInventoryDigest: [UInt8],
+        inventoryDigest: [UInt8]
+    ) throws {
+        guard sessionID.count == 32, sessionID.contains(where: { $0 != 0 }),
+              expectedInventoryDigest.count == 32,
+              inventoryDigest.count == 32, inventoryDigest.contains(where: { $0 != 0 }),
+              inventoryDigest != expectedInventoryDigest,
+              (expectedRevision == 0) == expectedInventoryDigest.allSatisfy({ $0 == 0 }) else {
+            throw MusubiV1Error.invalidValue("Musubi pin-outbox advance is invalid.")
+        }
+        let authorityPayload = try CanonicalNorito.encodeCompactAccountId(pinAuthority)
+        self.networkID = networkID
+        self.pinAuthority = pinAuthority
+        self.sessionID = sessionID
+        self.expectedRevision = expectedRevision
+        self.expectedInventoryDigest = expectedInventoryDigest
+        self.inventoryDigest = inventoryDigest
+        self.pinAuthorityPayload = authorityPayload
+    }
+
+    public var wireID: String { Self.stableWireID }
+    public var concreteSchemaName: String { Self.schemaName }
+
+    public func barePayload() throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(networkID.bytes)
+        writer.writeField(pinAuthorityPayload)
+        writer.writeField(Data(sessionID))
+        writer.writeField(CompactNorito.encodeUInt64(expectedRevision))
+        writer.writeField(Data(expectedInventoryDigest))
+        writer.writeField(Data(inventoryDigest))
+        return writer.data
+    }
+}
+
 /// Register one immutable provider attestation for later location-set commitments.
 public struct RegisterMusubiProviderBundleAttestationV1: MusubiInstructionV1 {
     public static let stableWireID =

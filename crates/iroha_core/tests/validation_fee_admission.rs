@@ -136,7 +136,7 @@ fn payout_contract_artifact() -> (
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -172,6 +172,12 @@ fn payout_contract_artifact() -> (
         }],
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+            entry_pc: 0,
+            frame_bytes: 0,
+            argument_words: Vec::new(),
+            result_words: vec![ivm::call::CallWordV1::Unit],
+        }],
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-admission-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -198,7 +204,14 @@ fn payout_contract_artifact() -> (
     };
     let mut artifact = metadata.encode();
     artifact.extend_from_slice(&interface.encode_section());
-    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        artifact.extend_from_slice(&instruction.to_le_bytes());
+    }
     let verified =
         ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
     (artifact, verified.manifest)
@@ -212,7 +225,7 @@ fn pool_contract_artifact() -> (
         version_minor: 1,
         mode: 0,
         vector_length: 0,
-        max_cycles: 1,
+        max_cycles: 4,
         abi_version: 1,
     };
     let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
@@ -236,6 +249,12 @@ fn pool_contract_artifact() -> (
         triggers: Vec::new(),
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        callables: vec![ivm::call::EmbeddedCallableV1 {
+            entry_pc: 0,
+            frame_bytes: 0,
+            argument_words: Vec::new(),
+            result_words: vec![ivm::call::CallWordV1::Unit],
+        }],
         seiyaku_name: "ValidationFeePool".to_owned(),
         compiler_fingerprint: "validation-fee-pool-admission-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -262,7 +281,14 @@ fn pool_contract_artifact() -> (
     };
     let mut artifact = metadata.encode();
     artifact.extend_from_slice(&interface.encode_section());
-    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    for instruction in [
+        ivm::encoding::wide::encode_store(ivm::instruction::wide::memory::STORE64, 12, 0, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 12, 0),
+        ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 11, 0, 1),
+        ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+    ] {
+        artifact.extend_from_slice(&instruction.to_le_bytes());
+    }
     let verified = ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
     (artifact, verified.manifest)
 }
@@ -343,7 +369,7 @@ fn test_state() -> (
         LiveQueryStore::start_test(),
     );
     let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
+    state.install_lane_manifests_for_testing(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     state
@@ -1329,7 +1355,9 @@ fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> Strin
     let accepted = accept_transaction(state, tx);
     let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     match result {
         Ok(_) => "ok".to_string(),
         Err(error) => format!("{error:?}"),
@@ -1939,7 +1967,9 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_003_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(result.is_err(), "missing fee must reject before commit");
     drop(block);
     let view = state.view();
@@ -1970,7 +2000,9 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_004_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(result.is_err(), "underpaid fee must reject before commit");
     drop(block);
     let view = state.view();
@@ -2010,7 +2042,9 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_005_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         result.is_err(),
         "overdrawn principal after fee execution must reject"
@@ -2044,7 +2078,9 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_006_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert!(
         result.is_err(),
         "overdrawn fee after principal execution must reject"
@@ -2077,7 +2113,9 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         1_700_000_007_000,
     ));
     let mut ivm_cache = IvmCache::new();
-    let (_, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let (_, result) = block
+        .validate_transaction(accepted, &mut ivm_cache)
+        .expect("local execution completes");
     assert_eq!(result, Ok(Vec::new()));
     block
         .commit_world_overlay_for_testing()

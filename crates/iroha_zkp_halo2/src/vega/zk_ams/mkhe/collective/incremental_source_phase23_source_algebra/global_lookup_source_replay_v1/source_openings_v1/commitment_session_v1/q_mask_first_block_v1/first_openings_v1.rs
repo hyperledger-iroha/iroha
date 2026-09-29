@@ -88,7 +88,8 @@ fn require_sampled_entropy_v1(
     mask: u64,
 ) -> Result<(), QMaskSErrorV1> {
     let min = coordinate.sampled_values_through_v1() * 8;
-    if mask < min || mask > min * MAX_RANDOM_REJECTION_ATTEMPTS_V1 as u64 || mask % 8 != 0 {
+    if mask < min || mask > min * MAX_RANDOM_REJECTION_ATTEMPTS_V1 as u64 || !mask.is_multiple_of(8)
+    {
         return Err(QMaskSErrorV1::Source);
     }
     Ok(())

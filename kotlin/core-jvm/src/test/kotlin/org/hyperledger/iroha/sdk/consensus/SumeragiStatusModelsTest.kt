@@ -1,483 +1,100 @@
-// Copyright 2026 Hyperledger Iroha Contributors
-// SPDX-License-Identifier: Apache-2.0
-
 package org.hyperledger.iroha.sdk.consensus
 
 import java.math.BigInteger
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFails
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
-import org.hyperledger.iroha.sdk.core.util.HashLiteral
+import kotlin.test.*
+import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.client.JsonParser
 
 class SumeragiStatusModelsTest {
-    @Test
-    fun `authoritative parser preserves the complete typed v4 snapshot and exact u64 range`() {
-        val maximum = "18446744073709551615"
-        val status = SumeragiV2Status.parseJson(
-            statusJson(rootView = maximum, executedWireLen = maximum, noProgressAge = maximum),
-        )
-
-        assertEquals(SUMERAGI_STATUS_PROTOCOL_VERSION, status.protocolVersion)
-        assertEquals(BigInteger(maximum), status.view)
-        assertEquals(BigInteger(maximum), status.liveness.noProgressAgeMs)
-        assertEquals(
-            BigInteger(maximum),
-            status.lastCommitQc?.certificate?.executionCommitment?.executedBlockWireLen,
-        )
-        assertEquals(SumeragiStatusPhase.PREPARE, status.phase)
-        assertEquals(SumeragiStatusConsensusMode.PERMISSIONED, status.heightContext.mode)
-        assertEquals(SumeragiStatusWorkStage.COMPLETE, status.liveness.work.validation)
-        assertEquals(SumeragiStatusQueueKind.NETWORK_INGRESS, status.liveness.queues.single().queue)
-        assertEquals(
-            SumeragiStatusProgressTransition.PREPARE_VOTE_ADMITTED,
-            status.liveness.lastProgress?.transition,
-        )
-        assertNull(status.lockedPrepareQc)
-        assertFalse(status.restartRequired)
-        assertTrue(status.lastCommitQc != null)
-    }
-
-    @Test
-    fun `execution commitment accepts one thousand KAGEMUSHA top-ups and rejects legacy names`() {
-        val kagemushaTopUpRoot = hash(0x38)
-        val canonicalPayload = statusJson().replace(
-            "\"kagemusha_top_up_count\": 0,",
-            "\"kagemusha_top_up_root\": \"$kagemushaTopUpRoot\", " +
-                "\"kagemusha_top_up_count\": 1000,",
-        )
-        val commitment = SumeragiV2Status.parseJson(canonicalPayload)
-            .lastCommitQc?.certificate?.executionCommitment
-        assertEquals(BigInteger.valueOf(1_000), commitment?.kagemushaTopUpCount)
-        assertEquals(kagemushaTopUpRoot, commitment?.kagemushaTopUpRoot)
-
-        assertFails {
-            SumeragiV2Status.parseJson(
-                canonicalPayload.replace(
-                    "kagemusha_top_up_count",
-                    "topup_anchor_count",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                canonicalPayload.replace(
-                    "kagemusha_top_up_root",
-                    "topup_anchor_root",
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun `execution commitment requires and validates transaction tree options`() {
-        val inputField = "\"transaction_input_commitment\": null"
-        val outputField = "\"transaction_output_commitment\": null"
-        val inputTree = "\"transaction_input_commitment\": {\"root\": \"${hash(0x39)}\", \"leaf_count\": 2}"
-        val outputTree = "\"transaction_output_commitment\": {\"root\": \"${hash(0x3a)}\", \"leaf_count\": 3}"
-        val payload = statusJson()
-        val withTrees = payload.replace(inputField, inputTree).replace(outputField, outputTree)
-        val commitment = SumeragiV2Status.parseJson(withTrees)
-            .lastCommitQc?.certificate?.executionCommitment
-        assertEquals(hash(0x39), commitment?.transactionInputCommitment?.root)
-        assertEquals(BigInteger.valueOf(2), commitment?.transactionInputCommitment?.leafCount)
-        assertEquals(hash(0x3a), commitment?.transactionOutputCommitment?.root)
-        assertEquals(BigInteger.valueOf(3), commitment?.transactionOutputCommitment?.leafCount)
-
-        // An output-only tree is valid: internal invocations have outputs but no network-input leaf.
-        assertEquals(
-            BigInteger.valueOf(3),
-            SumeragiV2Status.parseJson(withTrees.replace(inputTree, inputField))
-                .lastCommitQc?.certificate?.executionCommitment?.transactionOutputCommitment?.leafCount,
-        )
-        assertFails { SumeragiV2Status.parseJson(payload.replace("$inputField,", "")) }
-        assertFails { SumeragiV2Status.parseJson(withTrees.replace(outputTree, outputField)) }
-        assertFails {
-            SumeragiV2Status.parseJson(withTrees.replace("\"leaf_count\": 3", "\"leaf_count\": 1"))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(withTrees.replace("\"leaf_count\": 2", "\"leaf_count\": 0"))
-        }
-    }
-
-    @Test
-    fun `authoritative parser decodes and validates the signed beacon horizon`() {
-        val horizon = """
-            {"epoch_length_blocks": 0, "next_required_pulse_height": 15,
-             "active_session_id": "${"AB".repeat(32)}",
-             "session_covers_next_pulse": true, "local_provider_ready": true}
-        """.trimIndent()
-        fun withHorizon(value: String): String =
-            statusJson().replaceFirst("{", "{\"beacon_horizon\": $value,")
-
-        assertNull(SumeragiV2Status.parseJson(statusJson()).beaconHorizon)
-        assertNull(SumeragiV2Status.parseJson(withHorizon("null")).beaconHorizon)
-        fun npos(value: String): String = withHorizon(value).replace(
-            "\"mode\": {\"mode\": \"permissioned\", \"details\": null}",
-            "\"mode\": {\"mode\": \"npos\", \"details\": null}",
-        )
-        val nposHorizon = horizon.replace("\"epoch_length_blocks\": 0", "\"epoch_length_blocks\": 64")
-        assertEquals(
-            BigInteger.valueOf(64),
-            requireNotNull(SumeragiV2Status.parseJson(npos(nposHorizon)).beaconHorizon).epochLengthBlocks,
-        )
-        assertFails { SumeragiV2Status.parseJson(npos(horizon)) }
-        val parsed = requireNotNull(SumeragiV2Status.parseJson(withHorizon(horizon)).beaconHorizon)
-        assertEquals(BigInteger.ZERO, parsed.epochLengthBlocks)
-        assertEquals(BigInteger.valueOf(15), parsed.nextRequiredPulseHeight)
-        assertEquals("AB".repeat(32), parsed.activeSessionId)
-        assertTrue(parsed.sessionCoversNextPulse)
-        assertTrue(parsed.localProviderReady)
-        for (broken in listOf(
-            horizon.replace("\"epoch_length_blocks\": 0", "\"epoch_length_blocks\": 64"),
-            horizon.replace("\"next_required_pulse_height\": 15", "\"next_required_pulse_height\": 9"),
-            horizon.replace("\"${"AB".repeat(32)}\"", "null"),
-            horizon.replace("AB".repeat(32), "ab".repeat(32)),
-            horizon.replace("{", "{\"extra\": true, "),
-            horizon.replace(", \"local_provider_ready\": true", ""),
-        )) {
-            assertFails { SumeragiV2Status.parseJson(withHorizon(broken)) }
-        }
-    }
-
-    @Test
-    fun `authoritative parser rejects unknown missing duplicate and noncanonical scalar fields`() {
-        val payload = statusJson()
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replaceFirst("{", "{\"mode_tag\":\"legacy\","))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replace("\"restart_required\": false,", ""))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replaceFirst("{", "{\"protocol_version\":4,"))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replaceFirst("\"height\": 10", "\"height\": \"10\""))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replaceFirst("\"view\": 2", "\"view\": -0"))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"view\": 2", "\"view\": 18446744073709551616"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(byteArrayOf(0x7b, 0x22, 0xc3.toByte(), 0x28, 0x22, 0x7d))
-        }
-    }
-
-    @Test
-    fun `authoritative parser enforces exact tags phase body and commit frontier geometry`() {
-        val payload = statusJson()
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"phase\": \"prepare\", \"details\": null", "\"phase\": \"prepare\""),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"state\": \"validated\"", "\"state\": \"missing\""),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"pending_persistence_id\": null", "\"pending_persistence_id\": 0"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"phase\": \"prepare\"", "\"phase\": \"commit\""),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"last_committed_height\": 9", "\"last_committed_height\": 10"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"last_committed_subject\": {", "\"last_committed_subject\": null, \"retired\": {"),
-            )
-        }
-    }
-
-    @Test
-    fun `authoritative parser enforces execution manifest carrier and commit QC invariants`() {
-        val payload = statusJson()
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replace(
-                    "\"native_amx_application_manifest_version\": 1",
-                    "\"native_amx_application_manifest_version\": 2",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replace(
-                    "\"native_amx_application_manifest_count\": 0",
-                    "\"native_amx_application_manifest_count\": 1",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replace("\"lane_finality_manifest\": null,", ""))
-        }
-        val laneRoot = hash(0x38)
-        val withLane = SumeragiV2Status.parseJson(
-            payload.replace(
-                "\"lane_finality_manifest\": null",
-                "\"lane_finality_manifest\": {\"root\": \"$laneRoot\", \"leaf_count\": 1}",
-            ),
-        )
-        assertEquals(
-            laneRoot,
-            withLane.lastCommitQc?.certificate?.executionCommitment?.laneFinalityManifest?.root,
-        )
-        assertEquals(
-            BigInteger.ONE,
-            withLane.lastCommitQc?.certificate?.executionCommitment?.laneFinalityManifest?.leafCount,
-        )
-        listOf(0, 1_025).forEach { count ->
-            assertFails {
-                SumeragiV2Status.parseJson(
-                    payload.replace(
-                        "\"lane_finality_manifest\": null",
-                        "\"lane_finality_manifest\": {\"root\": \"$laneRoot\", \"leaf_count\": $count}",
-                    ),
-                )
+    private fun root(): MutableMap<String, Any?> =
+        SumeragiJsonPrimitives.parseObject(NativeStatusFixtures.json(), "fixture").toMutableMap()
+    private fun changed(change: (MutableMap<String, Any?>) -> Unit): String =
+        JsonEncoder.encode(root().also(change))
+    @Test fun `Rust native corpus preserves all unsigned ranges and every halt variant`() {
+        assertEquals(8, NativeStatusFixtures.rows().size)
+        for ((name, row) in NativeStatusFixtures.rows()) {
+            val status = SumeragiStatus.parseJson(row.first)
+            assertEquals(8, status.protocolVersion)
+            assertEquals(BigInteger("18446744073709551615"), status.view)
+            assertEquals(BigInteger("4294967295"), status.level)
+            assertEquals(BigInteger("18446744073709551615"), status.footprint.votes)
+            assertEquals(BigInteger.ONE, status.applyLag())
+            assertEquals(status, SumeragiStatus.parseJson(row.first.toByteArray()))
+            assertEquals(status.hashCode(), SumeragiStatus.parseJson(row.first).hashCode())
+            if (name == "validator") {
+                assertTrue(status.isSigning()); assertFalse(status.isHalted())
+                assertEquals("AB".repeat(32), status.beaconHorizon?.activeSessionId)
+                assertTrue(requireNotNull(status.beaconHorizon).localProviderReady)
+            } else {
+                assertFalse(status.isSigning()); assertNull(status.beaconHorizon)
+                assertEquals(name != "observer", status.isHalted())
             }
         }
-        assertFails {
-            SumeragiV2Status.parseJson(payload.replace("\"merge_carrier\": null,", ""))
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replace("\"executed_block_wire_len\": 123", "\"executed_block_wire_len\": 0"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst(
-                    "\"signed_power\": 3",
-                    "\"signed_power\": 2",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"signer_count\": 3", "\"signer_count\": 4")
-                    .replaceFirst("\"signed_power\": 3", "\"signed_power\": 4"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst(
-                    "\"proposal_round\": {\"context_id\": [\"${hash(0x41)}\"], \"height\": 9, \"view\": 1}",
-                    "\"proposal_round\": {\"context_id\": [\"${hash(0x41)}\"], \"height\": 9, \"view\": 2}",
-                ),
-            )
-        }
     }
-
-    @Test
-    fun `authoritative liveness parser rejects future split duplicate and malformed records`() {
-        val payload = statusJson()
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst(
-                    "\"round\": {\"context_id\": [\"${hash(0x14)}\"], \"height\": 10, \"view\": 1}",
-                    "\"round\": {\"context_id\": [\"${hash(0x14)}\"], \"height\": 10, \"view\": 3}",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst(
-                    "\"proposal_round\": {\"context_id\": [\"${hash(0x14)}\"], \"height\": 10, \"view\": 1}",
-                    "\"proposal_round\": {\"context_id\": [\"${hash(0x14)}\"], \"height\": 10, \"view\": 0}",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replace(
-                    "\"queues\": [$QUEUE],",
-                    "\"queues\": [$QUEUE,$QUEUE],",
-                ),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"depth\": 1, \"capacity\": 4", "\"depth\": 5, \"capacity\": 4"),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("\"kind\": \"proposal\"", "\"kind\": \"timeout_vote\""),
-            )
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replace(
-                    "\"ignore_counts\": [$IGNORE_COUNT]",
-                    "\"ignore_counts\": [$IGNORE_COUNT,$IGNORE_COUNT]",
-                ),
-            )
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    @Test
-    fun `authoritative collections are defensive and operational diagnostics are rejected`() {
-        val payload = statusJson()
-        val status = SumeragiV2Status.parseJson(payload)
-
-        assertFails {
-            (status.liveness.queues as MutableList<SumeragiStatusQueue>).clear()
-        }
-        assertFails {
-            SumeragiV2Status.parseJson(
-                payload.replaceFirst("{", "{\"lane_settlement_commitments\":[],"),
-            )
-        }
-    }
-
-    private fun statusJson(
-        rootView: String = "2",
-        executedWireLen: String = "123",
-        noProgressAge: String = "19",
-    ): String {
-        val subject = SUBJECT
-        val commitment = executionCommitment(executedWireLen)
-        return """
-            {
-              "protocol_version": 4,
-              "node_fingerprint": "${hash(0x11)}",
-              "build_fingerprint": "${hash(0x12)}",
-              "config_fingerprint": "${hash(0x13)}",
-              "restart_required": false,
-              "height_context_id": ["${hash(0x14)}"],
-              "height": 10,
-              "view": $rootView,
-              "phase": {"phase": "prepare", "details": null},
-              "leader": 1,
-              "locked_prepare_qc": null,
-              "highest_prepare_qc": null,
-              "last_timeout_certificate": null,
-              "body_state": {"state": "validated", "details": null},
-              "pending_persistence_id": null,
-              "last_committed_height": 9,
-              "last_committed_subject": $subject,
-              "height_context": {
-                "epoch": 1,
-                "epoch_end_height": 20,
-                "mode": {"mode": "permissioned", "details": null},
-                "epoch_seed": "${(0..31).joinToString("") { "%02X".format(it) }}",
-                "validator_count": 4,
-                "quorum": {"min_signers": 3, "total_power": 4}
-              },
-              "last_commit_qc": {
-                "certificate": {
-                  "round": {"context_id": ["${hash(0x41)}"], "height": 9, "view": 1},
-                  "proposal_round": {"context_id": ["${hash(0x41)}"], "height": 9, "view": 1},
-                  "phase": {"phase": "commit", "details": null},
-                  "subject": $subject,
-                  "execution_commitment": $commitment
-                },
-                "validator_count": 4,
-                "signer_count": 3,
-                "min_signers": 3,
-                "signed_power": 3,
-                "total_power": 4
-              },
-              "liveness": {
-                "generation": 2,
-                "prepare_quorums": [{
-                  "round": {"context_id": ["${hash(0x14)}"], "height": 10, "view": 1},
-                  "proposal_round": {"context_id": ["${hash(0x14)}"], "height": 10, "view": 1},
-                  "subject": $subject,
-                  "execution_commitment": $commitment,
-                  "signer_count": 2,
-                  "signed_power": 2,
-                  "min_signers": 3,
-                  "total_power": 4
-                }],
-                "commit_quorums": [],
-                "timeout_quorums": [],
-                "outbound_intents": [{
-                  "kind": {"kind": "proposal", "details": null},
-                  "round": {"context_id": ["${hash(0x14)}"], "height": 10, "view": 1},
-                  "proposal_round": {"context_id": ["${hash(0x14)}"], "height": 10, "view": 1},
-                  "subject": $subject,
-                  "stage": {"stage": "sent", "details": null}
-                }],
-                "work": {
-                  "candidate": {"stage": "idle", "details": null},
-                  "body_recovery": {"stage": "idle", "details": null},
-                  "body_store": {"stage": "idle", "details": null},
-                  "validation": {"stage": "complete", "details": null},
-                  "application": {"stage": "idle", "details": null},
-                  "successor_height": {"stage": "idle", "details": null}
-                },
-                "queues": [$QUEUE],
-                "last_progress": {
-                  "generation": 2,
-                  "round": {"context_id": ["${hash(0x14)}"], "height": 10, "view": 1},
-                  "transition": {"transition": "prepare_vote_admitted", "details": null},
-                  "age_ms": 19
-                },
-                "no_progress_age_ms": $noProgressAge,
-                "blocker": {"blocker": "prepare_quorum_missing", "details": null},
-                "ignore_counts": [$IGNORE_COUNT]
-              }
+    @Test fun `every top level and nested field is required and unknown fields fail closed`() {
+        for (field in root().keys) assertFails(field) { SumeragiStatus.parseJson(changed { it.remove(field) }) }
+        for (owner in listOf("footprint", "beacon_horizon")) {
+            val original = SumeragiJsonPrimitives.objectValue(root()[owner], owner)
+            for (field in original.keys) assertFails("$owner.$field") {
+                SumeragiStatus.parseJson(changed { it[owner] = original.toMutableMap().also { nested -> nested.remove(field) } })
             }
-        """.trimIndent()
-    }
-
-    private fun executionCommitment(executedWireLen: String): String = """
-        {
-          "parent_state_root": "${hash(0x34)}",
-          "post_state_root": "${hash(0x35)}",
-          "ordinary_writes_root": "${hash(0x36)}",
-          "kagemusha_top_up_count": 0,
-          "native_amx_application_manifest_version": 1,
-          "native_amx_application_manifest_root": "$EMPTY_MANIFEST_ROOT",
-          "native_amx_application_manifest_count": 0,
-          "lane_finality_manifest": null,
-          "merge_carrier": null,
-          "executed_block_wire_len": $executedWireLen,
-          "executed_block_wire_hash": "${hash(0x37)}",
-          "transaction_input_commitment": null,
-          "transaction_output_commitment": null
+            assertFails { SumeragiStatus.parseJson(changed { it[owner] = original + ("legacy" to 0L) }) }
         }
-    """.trimIndent()
-
-    companion object {
-        private fun hash(seed: Int): String =
-            HashLiteral.canonicalize(ByteArray(32) { seed.toByte() })
-
-        private const val EMPTY_MANIFEST_ROOT =
-            "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-        private val SUBJECT = """
-            {
-              "parent_block_hash": "${hash(0x31)}",
-              "block_hash": "${hash(0x32)}",
-              "payload_hash": "${hash(0x33)}"
-            }
-        """.trimIndent()
-        private val QUEUE = """
-            {
-              "queue": {"queue": "network_ingress", "details": null},
-              "depth": 1, "capacity": 4, "oldest_age_ms": 17, "service_debt": 2
-            }
-        """.trimIndent()
-        private val IGNORE_COUNT = """
-            {"reason": {"reason": "duplicate", "details": null}, "count": 2}
-        """.trimIndent()
+        for (retired in listOf("height_context", "height_context_id", "phase", "locked_prepare_qc",
+            "highest_prepare_qc", "last_timeout_certificate", "last_commit_qc", "last_committed_subject",
+            "body_state", "liveness", "restart_required", "node_fingerprint", "build_fingerprint",
+            "execution_commitment", "transaction_input_commitment", "merge_carrier", "rbc_status")) {
+            assertFails(retired) { SumeragiStatus.parseJson(changed { it[retired] = null }) }
+        }
     }
+    @Test fun `malformed scalars duplicate keys and retired versions never alias canonical values`() {
+        val payload = NativeStatusFixtures.json()
+        for (version in listOf(0L, 4L, 6L, 7L, 9L)) assertFails { SumeragiStatus.parseJson(changed { it["protocol_version"] = version }) }
+        for (bad in listOf<Any?>(-1L, "15", 1.5, BigInteger.ONE.shiftLeft(64), null, true)) {
+            assertFails { SumeragiStatus.parseJson(changed { it["height"] = bad }) }
+        }
+        assertFails { SumeragiStatus.parseJson(changed { it["level"] = BigInteger.ONE.shiftLeft(32) }) }
+        assertFails { SumeragiStatus.parseJson(changed { it["stage"] = 3L }) }
+        for (field in listOf("awaiting", "unanchored", "abstaining")) assertFails { SumeragiStatus.parseJson(changed { it[field] = 1L }) }
+        assertFails { SumeragiStatus.parseJson("{\"view\":0," + payload.substring(1)) }
+        assertFails { SumeragiStatus.parseJson(changed { it["height"] = 15L }.replace("\"height\":15", "\"height\":-0")) }
+        assertFails { SumeragiStatus.parseJson(byteArrayOf(0x7b, 0xc3.toByte(), 0x28)) }
+        assertFails { SumeragiStatus.parseJson(ByteArray(1_048_577)) }
+        assertFails { SumeragiStatus.parseJson("") }
+        for (field in listOf("config_fingerprint", "instance")) {
+            assertFails { SumeragiStatus.parseJson(changed { it[field] = "00".repeat(32) + "00" }) }
+        }
+        assertFails { SumeragiStatus.parseJson(changed { it["instance"] = "CD".repeat(32) }) }
+        val key = root()["leader"] as String
+        for (bad in listOf("bls_normal:$key", key.lowercase(), " $key", "ea0130" + "00".repeat(48))) {
+            assertFails { SumeragiStatus.parseJson(changed { it["leader"] = bad }) }
+        }
+    }
+    @Test fun `horizon and halt shape retain exact optional semantics`() {
+        val h = SumeragiJsonPrimitives.objectValue(root()["beacon_horizon"], "horizon")
+        for ((field, value) in listOf("active_session_id" to null, "next_required_pulse_height" to null,
+            "active_session_id" to "ab".repeat(32), "local_provider_ready" to 1L)) {
+            assertFails { SumeragiStatus.parseJson(changed { it["beacon_horizon"] = h + (field to value) }) }
+        }
+        for (bad in listOf(mapOf("reason" to "unknown", "details" to null),
+            mapOf("reason" to "driver_anomaly", "details" to 1L),
+            mapOf("reason" to "apply_diverged", "details" to null),
+            mapOf("reason" to "safety_record_corrupt"))) {
+            assertFails { SumeragiStatus.parseJson(changed { it["halted"] = bad }) }
+        }
+    }
+    @Test fun `available horizon with no demand retains explicit nullable fields`() {
+        val value = SumeragiStatus.parseJson(changed {
+            it["beacon_horizon"] = mapOf("epoch_length_blocks" to 0L,
+                "next_required_pulse_height" to null, "active_session_id" to null,
+                "session_covers_next_pulse" to false, "local_provider_ready" to false)
+        })
+        val horizon = requireNotNull(value.beaconHorizon)
+        assertEquals(BigInteger.ZERO, horizon.epochLengthBlocks)
+        assertNull(horizon.activeSessionId)
+        assertNull(horizon.nextRequiredPulseHeight)
+        assertFalse(horizon.localProviderReady)
+        assertEquals(value, SumeragiStatusWire.decodeCanonical(SumeragiStatusWire.encode(value)))
+    }
+
 }

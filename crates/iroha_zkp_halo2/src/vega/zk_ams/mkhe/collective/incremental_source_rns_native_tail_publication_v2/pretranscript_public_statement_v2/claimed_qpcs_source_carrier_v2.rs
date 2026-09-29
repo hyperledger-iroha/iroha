@@ -756,6 +756,10 @@ where
     /// Work-cap refusal is atomic: the caller receives the owner with
     /// unchanged ledger counters. An accessor error also returns the owner,
     /// but its mutable implementation must establish a no-mutation invariant.
+    #[allow(
+        clippy::result_large_err,
+        reason = "atomic refusal hands back the same move-only owner that the Ok variant wraps, so boxing the error cannot shrink the Result"
+    )]
     pub(super) fn admit_canonical_merkle_and_rebind_leaf_hash_work_v2(
         mut self,
     ) -> Result<
@@ -1293,9 +1297,9 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
     /// Consume the complete retained-publication/direct/membership/
     /// same-opening lineage directly through the atomic composite verifier.
     /// No detached all-stage input or partial-stage result escapes this seam.
-    pub(in crate::vega::zk_ams::mkhe) fn verify_composite_v2<'envelope>(
+    pub(in crate::vega::zk_ams::mkhe) fn verify_composite_v2(
         self,
-        envelope: &'envelope ZkAmsMkheRnsNativeProofEnvelopeV1,
+        envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
     ) -> Result<
         ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
         RnsNativeClaimedQpcsCompositeVerificationErrorV2,

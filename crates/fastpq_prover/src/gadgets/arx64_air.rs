@@ -1,4 +1,4 @@
-//! Quadratic bit constraints for the 64-bit operations used by BLAKE2b.
+//! Quadratic bit constraints for the 64-bit operations used by `BLAKE2b`.
 //!
 //! Addition uses two 32-bit integer equations, with a Boolean carry between
 //! halves and a Boolean discarded carry. This proves wrapping modulo `2^64`,
@@ -7,14 +7,14 @@
 //!
 //! The operation schedule follows RFC 7693 section 3.1:
 //! <https://www.rfc-editor.org/rfc/rfc7693#section-3.1>.
-//! TODO: commit these operation rows and constrain the BLAKE2b schedule, register
+//! TODO: commit these operation rows and constrain the `BLAKE2b` schedule, register
 //! reads/writes, IV, message words, byte counters, final-block flag, output bytes
 //! and Iroha hash marker before using them to prove complete SMT hash relations.
 //! This module is a prerequisite and does not replace transfer witness replay.
 
 use super::transfer_integer_air::IntegerAirField;
 
-/// Bits in a BLAKE2b word, ordered least significant first.
+/// Bits in a `BLAKE2b` word, ordered least significant first.
 pub const WORD_BITS: usize = 64;
 /// Number of constraint numerators for one wrapping addition.
 pub const ADD_CONSTRAINT_COUNT: usize = 197;
@@ -75,14 +75,14 @@ impl Add64Witness<u64> {
     /// Generate the exact sum and both carries using native integer arithmetic.
     #[must_use]
     pub fn from_operands(left: u64, right: u64) -> Self {
-        let wide_sum = u128::from(left) + u128::from(right);
+        let (sum, carry_64) = left.overflowing_add(right);
         let low_sum = (left & u64::from(u32::MAX)) + (right & u64::from(u32::MAX));
         Self {
             left: BitWord64::from_integer(left),
             right: BitWord64::from_integer(right),
-            output: BitWord64::from_integer(wide_sum as u64),
+            output: BitWord64::from_integer(sum),
             carry_32: low_sum >> 32,
-            carry_64: (wide_sum >> 64) as u64,
+            carry_64: u64::from(carry_64),
         }
     }
 }
@@ -101,7 +101,7 @@ impl<F: IntegerAirField> Add64Witness<F> {
     }
 }
 
-/// The four fixed right rotations in the BLAKE2b G function.
+/// The four fixed right rotations in the `BLAKE2b` G function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blake2bRotation {
     /// First rotation: 32 bits.
@@ -139,7 +139,7 @@ pub struct XorRotate64Witness<F = u64> {
 }
 
 impl XorRotate64Witness<u64> {
-    /// Generate an exact bit witness for one fixed BLAKE2b rotation.
+    /// Generate an exact bit witness for one fixed `BLAKE2b` rotation.
     #[must_use]
     pub fn from_operands(left: u64, right: u64, rotation: Blake2bRotation) -> Self {
         Self {
@@ -194,7 +194,7 @@ pub fn add_residues<F: IntegerAirField>(
         bit_residues(
             active,
             word,
-            &mut residues[1 + index * 64..1 + (index + 1) * 64],
+            &mut residues[(1 + index * 64)..=((index + 1) * 64)],
         );
     }
     residues[193] = witness.carry_32.mul(witness.carry_32.sub(active));
@@ -232,7 +232,7 @@ pub fn xor_rotate_residues<F: IntegerAirField>(
         bit_residues(
             active,
             word,
-            &mut residues[1 + index * 64..1 + (index + 1) * 64],
+            &mut residues[(1 + index * 64)..=((index + 1) * 64)],
         );
     }
     for bit in 0..64 {
@@ -267,7 +267,7 @@ mod tests {
         let edges = [
             0,
             1,
-            u32::MAX as u64,
+            u64::from(u32::MAX),
             1 << 32,
             (1 << 56) - 1,
             1 << 56,
@@ -433,17 +433,18 @@ mod tests {
         // A third finite difference vanishes for every quadratic, including
         // at non-Boolean openings where accidental selector gates add degree.
         fn third_difference<const N: usize>(samples: [[u64; N]; 4]) {
-            for column in 0..N {
-                let difference = IntegerAirField::sub(
-                    samples[3][column],
-                    IntegerAirField::mul(3_u64, samples[2][column]),
-                );
-                let difference = IntegerAirField::add(
-                    difference,
-                    IntegerAirField::mul(3_u64, samples[1][column]),
-                );
+            let [first, second, third, fourth] = samples;
+            for (column, (((s0, s1), s2), s3)) in first
+                .into_iter()
+                .zip(second)
+                .zip(third)
+                .zip(fourth)
+                .enumerate()
+            {
+                let difference = IntegerAirField::sub(s3, IntegerAirField::mul(3_u64, s2));
+                let difference = IntegerAirField::add(difference, IntegerAirField::mul(3_u64, s1));
                 assert_eq!(
-                    IntegerAirField::sub(difference, samples[0][column]),
+                    IntegerAirField::sub(difference, s0),
                     0,
                     "cubic numerator at column {column}"
                 );

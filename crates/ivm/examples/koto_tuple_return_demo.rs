@@ -1,10 +1,13 @@
 //! Kotodama tuple-return demo: compile a function returning pointer-backed integers.
 use iroha_primitives::numeric_abi::IntValueV1;
 use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
-fn returned_int(vm: &IVM, register: usize) -> i64 {
+fn returned_int(vm: &IVM, word_index: usize) -> i64 {
+    let pointer = vm
+        .public_call_result_word(word_index)
+        .expect("read public completed result-table word");
     let tlv = vm
-        .validate_tlv(vm.register(register))
-        .unwrap_or_else(|error| panic!("validate returned int in r{register}: {error:?}"));
+        .validate_tlv(pointer)
+        .unwrap_or_else(|error| panic!("validate returned int at word {word_index}: {error:?}"));
     assert_eq!(tlv.type_id, PointerType::Int);
     IntValueV1::decode_frame(tlv.payload)
         .expect("decode canonical returned int")
@@ -46,9 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .expect("select main entrypoint");
     vm.run().expect("run");
-    // 4) Read canonical `IntValueV1` results from r10 and r11.
-    let out0 = returned_int(&vm, 10);
-    let out1 = returned_int(&vm, 11);
+    // 4) Read canonical `IntValueV1` values from the completed result table.
+    assert_eq!(vm.call_result_word_count()?, 2);
+    let out0 = returned_int(&vm, 0);
+    let out1 = returned_int(&vm, 1);
     println!("tuple return -> ({out0} , {out1})");
     assert_eq!(out0, 4);
     assert_eq!(out1, 6);

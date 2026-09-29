@@ -229,3 +229,58 @@ fn attached_hash_capture_moves_the_same_unpublished_root_and_revokes_terminal_ac
         vec![hash(1)]
     );
 }
+
+#[test]
+fn hash_busy_retry_preserves_original_nodes_charges_and_acquired_prefix_notices() {
+    let owner = BlockHashes::new(vec![hash(1), hash(2)]);
+    let mut original = owner.block();
+    original.push(hash(3));
+    let pointer = std::ptr::from_ref(original.get(0).unwrap());
+    let reserved = owner.budget.reserved_bytes();
+    let mut field = BlockHashField::new(original);
+    for _ in 0..3 {
+        let blocker = owner.released.guard(owner.map().unwrap().acquire_writer());
+        assert!(matches!(
+            field.try_prepare_publication(),
+            Err(PublicationPreparationError::Busy(_))
+        ));
+        field.release_for_retry();
+        assert_eq!(std::ptr::from_ref(field.get(0).unwrap()), pointer);
+        assert_eq!(owner.budget.reserved_bytes(), reserved);
+        drop(blocker);
+    }
+    let mut writer_wait = owner.released.observe().wait_for_release();
+    let mut reader_wait = owner
+        .map()
+        .unwrap()
+        .observe_reader_release()
+        .wait_for_release();
+    let callback = Arc::new(ObserveFence {
+        fence: Arc::new(Mutex::new(())),
+        calls: AtomicUsize::new(0),
+        busy: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&callback));
+    let mut cx = Context::from_waker(&waker);
+    assert!(Pin::new(&mut writer_wait).poll(&mut cx).is_pending());
+    assert!(Pin::new(&mut reader_wait).poll(&mut cx).is_pending());
+    for _ in 0..3 {
+        field.try_prepare_publication().unwrap();
+        field.release_for_retry();
+        assert!(owner.map().unwrap().try_acquire_writer().is_some());
+        assert_eq!(std::ptr::from_ref(field.get(0).unwrap()), pointer);
+        assert_eq!(owner.budget.reserved_bytes(), reserved);
+        assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
+    }
+    field.try_prepare_publication().unwrap();
+    field.publish_prepared();
+    assert_eq!(callback.calls.load(Ordering::SeqCst), 0);
+    drop(field);
+    assert!(Pin::new(&mut writer_wait).poll(&mut cx).is_ready());
+    assert!(Pin::new(&mut reader_wait).poll(&mut cx).is_ready());
+    assert_eq!(
+        owner.view().iter().copied().collect::<Vec<_>>(),
+        vec![hash(1), hash(2), hash(3)]
+    );
+    assert_eq!(std::ptr::from_ref(owner.view().get(0).unwrap()), pointer);
+}

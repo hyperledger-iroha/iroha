@@ -160,6 +160,11 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalContractLifecycleGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalGlobalDataTriggerPermissionGovernance,
+    GovernanceProposalKagemushaVerifierPolicyInstall,
+    GovernanceProposalKagemushaVerifierReleaseInstall,
+    GovernanceProposalKagemushaVerifierReleaseActivate,
+    GovernanceKagemushaEmptyVerifierRegistryV1,
+    GovernanceKagemushaReleaseAuthorityPolicyV1,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
     GovernanceProposalLifecycleStatus,
@@ -6140,7 +6145,7 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "NftView",
         "QueryPage",
         "AxtDescriptor",
-        "AssetHandle",
+        "AxtAnchoredSpendV1",
         "ProofBlob",
         "SoracloudRequest",
         "SoracloudResponse",
@@ -6549,6 +6554,9 @@ def _canonical_kotodama_state_type_name(
         if not _canonical_kotodama_struct_name(name) or not consume("{"):
             return None
 
+        # Empty products retain their validated nominal name and have no fields.
+        if consume("}"):
+            return "aggregate"
         fields: set[str] = set()
         while True:
             field = identifier()
@@ -6860,7 +6868,6 @@ class EntrypointValueTypeV1:
                 )
                 if (
                     not isinstance(descriptor, EntrypointStructTypeNodeV1)
-                    or not descriptor.fields
                     or (
                         not reserved_schema_name
                         and not _canonical_kotodama_struct_name(descriptor.name)
@@ -6898,12 +6905,7 @@ class EntrypointValueTypeV1:
                 EntrypointValueTypeNodeKindV1.RESULT,
                 EntrypointValueTypeNodeKindV1.LIST,
             )
-            if not suppress_words and (handle or node.kind in (
-                EntrypointValueTypeNodeKindV1.LEAF,
-                EntrypointValueTypeNodeKindV1.UNIT,
-                EntrypointValueTypeNodeKindV1.ERROR,
-                EntrypointValueTypeNodeKindV1.STATE_CURSOR,
-            )):
+            if not suppress_words and (handle or child_count(node) == 0):
                 word_count += 1
             children = child_count(node)
             if children is None:
@@ -7103,6 +7105,9 @@ class EntrypointArgumentFieldV1:
         )
 
 
+_KOTODAMA_CALL_TABLE_WORD_LIMIT_V1 = 8192
+
+
 @dataclass(frozen=True)
 class EntrypointArgumentSchemaV1:
     """Exact canonical V1 schema for one public argument record."""
@@ -7119,10 +7124,10 @@ class EntrypointArgumentSchemaV1:
         )
         names = [field.name for field in fields]
         if (
-            not 1 <= len(fields) <= 13
+            not 1 <= len(fields) <= _KOTODAMA_CALL_TABLE_WORD_LIMIT_V1
             or any(not _canonical_kotodama_identifier(name) for name in names)
             or len(set(names)) != len(names)
-            or sum(field.type.word_count for field in fields) > 13
+            or sum(field.type.word_count for field in fields) > _KOTODAMA_CALL_TABLE_WORD_LIMIT_V1
         ):
             raise TypeError("entrypoint argument schema violates canonical V1 bounds")
         return cls(fields=fields)
@@ -7385,7 +7390,7 @@ class ContractEntrypointDescriptor:
         exact_return = (
             descriptor.return_type is not None
             and descriptor.return_schema is not None
-            and descriptor.return_schema.word_count <= 13
+            and descriptor.return_schema.word_count <= _KOTODAMA_CALL_TABLE_WORD_LIMIT_V1
             and descriptor.return_schema.canonical_type_name == descriptor.return_type
         )
         lifecycle_kind = (
@@ -7414,7 +7419,7 @@ class ContractEntrypointDescriptor:
             descriptor.access_hints_complete is False and not descriptor.access_hints_skipped
         )
         if (
-            len(descriptor.params) > 13
+            len(descriptor.params) > _KOTODAMA_CALL_TABLE_WORD_LIMIT_V1
             or len(set(parameter_names)) != len(parameter_names)
             or any(
                 not _canonical_kotodama_identifier(parameter.name)
@@ -13851,6 +13856,11 @@ __all__ = [
     "GovernanceProposalContractEmergencyHold",
     "GovernanceProposalContractLifecycleGovernance",
     "GovernanceProposalGlobalDataTriggerPermissionGovernance",
+    "GovernanceProposalKagemushaVerifierPolicyInstall",
+    "GovernanceProposalKagemushaVerifierReleaseInstall",
+    "GovernanceProposalKagemushaVerifierReleaseActivate",
+    "GovernanceKagemushaEmptyVerifierRegistryV1",
+    "GovernanceKagemushaReleaseAuthorityPolicyV1",
     "GovernanceProposalKind",
     "GovernanceProposalKindTag",
     "GovernanceProposalMusubiRegistryGovernance",
@@ -21855,6 +21865,9 @@ class ToriiClient(
     ) -> Optional[Any]:
         """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
 
+        definition = _require_non_empty_string(
+            asset_definition_id, "asset_definition_id"
+        )
         params: Dict[str, Any] = {}
         if limit is not None:
             params["limit"] = int(limit)

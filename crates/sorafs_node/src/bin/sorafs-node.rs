@@ -6,7 +6,7 @@ use norito::json::{self, Map, Value};
 use sorafs_car::{
     CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload,
     FilePayload, FilePlan, PayloadSource, chunker_registry, compute_chunk_plan_digest_sha3,
-    fetch_plan::try_chunk_fetch_plan_to_json,
+    fetch_plan::try_chunk_fetch_plan_to_json, set_no_follow_flag,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -1968,96 +1968,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut fs::OpenOptions) {
-    options.custom_flags(platform_no_follow_flag());
-}
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!("SoraFS node output flags are not qualified for this Android architecture");
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("SoraFS node output flags are not qualified for this Unix target");
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-fn platform_no_follow_flag() -> i32 {
-    0x100
-}
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
     let mut buf = text.to_owned();
     if !buf.ends_with('\n') {
@@ -2474,77 +2384,6 @@ mod tests {
         let input_path = temp.path().join("input.to");
         std::os::unix::fs::symlink(&target_path, &input_path).expect("create symlink");
         assert!(read_bounded_por_file(&input_path, "proof", 3).is_err());
-    }
-    // Keep one target-gated assertion for every ABI branch. Overlapping branches
-    // fail with duplicate definitions; missing branches fail to resolve the flag.
-    #[cfg(all(
-        target_os = "linux",
-        any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        )
-    ))]
-    #[test]
-    fn linux_no_follow_flag_matches_low_flag_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        not(any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        ))
-    ))]
-    #[test]
-    fn linux_no_follow_flag_matches_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "aarch64", target_arch = "arm")
-    ))]
-    #[test]
-    fn android_arm_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "x86", target_arch = "x86_64")
-    ))]
-    #[test]
-    fn android_x86_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
-    #[test]
-    fn android_riscv64_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x400000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "riscv32", target_arch = "riscv64")
-    ))]
-    #[test]
-    fn linux_riscv_no_follow_flag_remains_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))]
-    #[test]
-    fn apple_and_bsd_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
     }
     #[test]
     fn write_bytes_creates_parent_and_writes_all_bytes() {

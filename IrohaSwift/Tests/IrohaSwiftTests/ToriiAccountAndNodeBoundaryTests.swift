@@ -1411,9 +1411,12 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             assetDefinitionId: faucet.assetDefinitionId,
             amount: KotodamaQuantity(faucet.amount)
         )
+        var substitutedAssetUUID = Data(repeating: 0xa5, count: 16)
+        substitutedAssetUUID[6] = 0x45
+        substitutedAssetUUID[8] = 0xa5
         let substitutedAssetId = try XCTUnwrap(
             AssetDefinitionAddressCodec.definitionLiteral(
-                uuidBytes: Data(repeating: 0xa5, count: 16)
+                uuidBytes: substitutedAssetUUID
             )
         )
         let substitutedAsset = try ToriiAccountFaucetPolicyV1(

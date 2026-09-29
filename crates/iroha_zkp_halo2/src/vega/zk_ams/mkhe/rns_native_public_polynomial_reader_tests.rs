@@ -1121,9 +1121,9 @@ fn independent_native_schedule_frame_v1(
     schedule: &RnsNativeQpcsRelationScheduleV1,
 ) -> ProofDigestV1 {
     let mut points = Vec::new();
-    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+    for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().enumerate() {
         points.extend_from_slice(&(limb as u16).to_be_bytes());
-        points.extend_from_slice(&ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb].to_be_bytes());
+        points.extend_from_slice(&modulus.to_be_bytes());
         for repetition in 0..REPETITIONS_V1 {
             points.extend_from_slice(&(repetition as u16).to_be_bytes());
             points.extend_from_slice(

@@ -12,7 +12,7 @@ use iroha_sumeragi::{
     api::{ExecOutcome, HaltReason, LocalFault},
     message::{Block, Evidence, Qc, SyncEntry, TrafficClass},
     safety::RecordState,
-    types::{Hash32, HeightConfig, Millis, PublicKey},
+    types::{AppliedConfig, Hash32, Millis, PublicKey},
 };
 
 use super::{FrameLimitExceeded, Worker};
@@ -175,6 +175,17 @@ impl Clock for SystemClock {
     }
 }
 
+/// A local publication failure, distinguished by whether the original owner may retry.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PublicationError {
+    /// No consuming publication began; the same original owner remains available.
+    #[error("retryable publication refusal: {0}")]
+    Retryable(String),
+    /// Publication consumed its owner, may be visible, or lost its worker; recovery is required.
+    #[error("publication recovery required: {0}")]
+    RecoveryRequired(String),
+}
+
 /// The application: speculative execution with a post-state cache keyed by block hash, apply,
 /// the payload builder and its quarantine (§12.2, O3, O4). The driver calls it from one thread,
 /// one call at a time, and schedules the calls (parking, most recent first, apply in order).
@@ -182,8 +193,8 @@ impl Clock for SystemClock {
 /// Apply sequencing: after a successful [`prepare`](Self::prepare) of a block, the driver's next
 /// executor call is [`commit`](Self::commit) of the same block (only the block-store append
 /// happens in between, retried as long as it fails), so the prepared post-state may be a single
-/// live overlay. If `commit` fails, the driver calls `prepare` of that block again before it
-/// retries `commit`; the block is then already in the block store.
+/// live overlay. A retryable refusal preserves that owner and retries after `prepare`; the
+/// durable append is retained. Recovery-required errors stop the instance without reexecution.
 pub trait Executor: Send {
     /// Execute `block` (hash `block_hash`) on its parent's post-state: the applied state or a
     /// cached post-state. `None` if that post-state is not held (not an error: the driver parks
@@ -192,21 +203,57 @@ pub trait Executor: Send {
     fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome>;
     /// Drop the post-states of the blocks at `height` other than `keep`.
     fn discard(&mut self, height: u64, keep: &[Hash32]);
-    /// The post-state of the next committed block (its parent is the applied state): the cached
-    /// one if its commitment equals `commit_qc.result`, otherwise by executing the block (a
-    /// missing cache entry is never a divergence, O3). Returns the local commitment, or `None`
-    /// if the block does not execute `Valid` locally.
+    /// The post-state of the next committed block (its parent is the applied state): the
+    /// original execution of that exact block, or a new execution only if no original is held
+    /// and publication has not begun (a missing cache entry is never a divergence, O3).
+    /// Returns the original local commitment, even on mismatch, or `None` for `Invalid`.
     ///
     /// # Errors
-    /// A local failure (I/O, resources); the driver retries.
-    fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String>;
+    /// A retryable refusal retains the original owner. A consuming failure or unwind requires
+    /// recovery; the driver halts instead of preparing or executing again.
+    fn prepare(
+        &mut self,
+        block: &Block,
+        commit_qc: &Qc,
+    ) -> Result<Option<Hash32>, PublicationError>;
     /// Make the prepared post-state of `block` the applied state (after the block store holds
-    /// it) and return the configuration of `height + 2` it schedules. Called only right after
+    /// it) and return its exact atomic epoch/configuration output. An ordinary block supplies
+    /// lag-2 parameters or a pending boundary; the applied boundary supplies both its immediate
+    /// successor and the following height. The driver transports this output unchanged.
+    /// Called only right after
     /// a successful `prepare` of `block` (see the trait documentation).
     ///
     /// # Errors
-    /// A local failure; the driver prepares again and retries.
-    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String>;
+    /// A retryable refusal retains the original owner. A consuming failure requires recovery;
+    /// the driver halts and never reports a successful apply for it.
+    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<AppliedConfig, PublicationError>;
+    /// Build exact canonical application control independently of transactions, including EMPTY.
+    /// A retryable refusal keeps the producer/source; it never substitutes an empty witness.
+    ///
+    /// # Errors
+    /// Local refusal/awaiting shares is retryable; a lost owner requires recovery.
+    fn build_control_witness(
+        &mut self,
+        context: &iroha_sumeragi::api::ControlWitnessContext,
+    ) -> Result<(iroha_sumeragi::types::ControlWitness, bool), PublicationError>;
+    /// Drive the single process-lived partial producer from this exact applied parent. Called
+    /// on every current member and bounded periodic retry, regardless of proposal leadership.
+    ///
+    /// # Errors
+    /// Revalidate the complete source against State; never trust caller-supplied parent result.
+    fn drive_control(
+        &mut self,
+        context: &iroha_sumeragi::api::ApplicationControlContext,
+    ) -> Result<Option<iroha_sumeragi::message::ApplicationControl>, PublicationError>;
+    /// Verify and reduce one bounded authenticated peer partial against the same applied State.
+    ///
+    /// # Errors
+    /// The application verifies sender/index, exact source/session and the partial signature.
+    fn receive_application_control(
+        &mut self,
+        from: &PublicKey,
+        message: &iroha_sumeragi::message::ApplicationControl,
+    ) -> Result<(), PublicationError>;
     /// Build a payload of at most `max_bytes` for `(height, view)` by peeking at the queue
     /// (never removing transactions) and return it with its commit-attestation flag (§3.7 A1).
     fn build(

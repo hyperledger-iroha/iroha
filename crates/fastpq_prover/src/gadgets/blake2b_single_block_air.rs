@@ -35,7 +35,7 @@ use super::{
 pub const MAX_MESSAGE_BYTES: usize = 128;
 /// Bits needed to represent every permitted byte count, including 128.
 pub const LENGTH_BITS: usize = 8;
-/// Fixed BLAKE2b parameter word for unkeyed sequential 32-byte output.
+/// Fixed `BLAKE2b` parameter word for unkeyed sequential 32-byte output.
 pub const DIGEST_PARAMETER_WORD: u64 = 0x0101_0020;
 /// Framing numerators before compression and output-conversion constraints.
 pub const FRAMING_CONSTRAINT_COUNT: usize = 1
@@ -185,16 +185,19 @@ pub fn framing_residues<F: IntegerAirField>(
                 .push(value.sub(witness.compression.message[byte / 8].bits[(byte % 8) * 8 + bit]));
         }
     }
-    for word in 0..8 {
-        let initialized =
-            INITIALIZATION_VECTOR[word] ^ if word == 0 { DIGEST_PARAMETER_WORD } else { 0 };
-        for bit in 0..64 {
+    for (word, (&vector, chaining)) in INITIALIZATION_VECTOR
+        .iter()
+        .zip(&witness.compression.chaining)
+        .enumerate()
+    {
+        let initialized = vector ^ if word == 0 { DIGEST_PARAMETER_WORD } else { 0 };
+        for (bit, &cell) in chaining.bits.iter().enumerate() {
             let expected = if (initialized >> bit) & 1 == 1 {
                 active
             } else {
                 F::ZERO
             };
-            residues.push(witness.compression.chaining[word].bits[bit].sub(expected));
+            residues.push(cell.sub(expected));
         }
     }
     for word in 0..2 {
@@ -248,7 +251,9 @@ mod tests {
     fn marked_bytes(output: &IrohaHashOutput) -> [u8; 32] {
         core::array::from_fn(|byte| {
             (0..8).fold(0, |value, bit| {
-                value | ((output.words[byte / 8].bits[(byte % 8) * 8 + bit] as u8) << bit)
+                value
+                    | (u8::try_from(output.words[byte / 8].bits[(byte % 8) * 8 + bit]).unwrap()
+                        << bit)
             })
         })
     }
@@ -267,12 +272,12 @@ mod tests {
 
     #[test]
     fn complete_boundary_messages_match_native_hash_new() {
-        for length in [0, 1, 7, 8, 31, 32, 63, 64, 81, 82, 127, 128] {
+        for length in [0_u8, 1, 7, 8, 31, 32, 63, 64, 81, 82, 127, 128] {
             let message: Vec<_> = (0..length)
-                .map(|index| ((index * 73 + 19) % 256) as u8)
+                .map(|index| index.wrapping_mul(73).wrapping_add(19))
                 .collect();
             let witness = SingleBlockHashWitness::from_bytes(&message).unwrap();
-            assert_eq!(witness.byte_len, length as u64);
+            assert_eq!(witness.byte_len, u64::from(length));
             assert!(valid(1, &witness), "length {length}");
             assert_eq!(
                 marked_bytes(&witness.output),
@@ -405,12 +410,12 @@ mod tests {
         ] {
             let mut chaining = INITIALIZATION_VECTOR;
             chaining[0] ^= parameter;
-            witness.compression = Box::new(Blake2bCompressionWitness::from_inputs(
+            *witness.compression = Blake2bCompressionWitness::from_inputs(
                 chaining,
                 message,
                 [counter, 0],
                 final_block,
-            ));
+            );
             witness.output =
                 IrohaHashOutput::from_blake2b_256_words(core::array::from_fn(|index| {
                     decode_word(&witness.compression.output[index].bits)
@@ -474,7 +479,7 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     struct Degree(usize);
     impl IntegerAirField for Degree {
         const ZERO: Self = Self(0);
@@ -533,13 +538,17 @@ mod tests {
                 final_block: Degree(1),
                 initialized: Box::new([word; 16]),
                 steps: CompressionSteps::new((0..G_COUNT).map(|_| g).collect()).unwrap(),
-                feed_forward: Box::new(
-                    [Xor64Witness {
+                feed_forward: vec![
+                    Xor64Witness {
                         left: word,
                         right: word,
                         output: word,
-                    }; 16],
-                ),
+                    };
+                    16
+                ]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
                 output: [word; 8],
             }),
             output: IrohaHashOutput { words: [word; 4] },

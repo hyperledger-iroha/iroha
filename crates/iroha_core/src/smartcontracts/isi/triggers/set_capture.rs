@@ -95,6 +95,18 @@ pub(crate) struct SetBlockCapture<'set, Admission> {
 }
 
 impl<'set> SetBlock<'set> {
+    /// Move the original phase and fields out of an enclosing heap shell.
+    /// The empty shell cannot execute or publish and releases no moved writer.
+    pub(crate) fn take_capture_slot<Admission>(&mut self) -> SetBlockCapture<'set, Admission> {
+        self.publication.assert_executing();
+        assert!(self.fields.is_some(), "original trigger block fields");
+        let original = SetBlock {
+            publication: std::mem::replace(&mut self.publication, AggregatePublication::Released),
+            fields: self.fields.take(),
+        };
+        original.capture_slot()
+    }
+
     /// Move all original writers into an inert caller-owned capture slot.
     pub(crate) fn capture_slot<Admission>(self) -> SetBlockCapture<'set, Admission> {
         SetBlockCapture {

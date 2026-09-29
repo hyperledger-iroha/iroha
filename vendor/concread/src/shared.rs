@@ -91,6 +91,17 @@ unsafe impl<T: Send + Sync> Sync for ErasedShared<T> {}
 
 impl<T> ErasedShared<T> {
     pub(crate) fn new<Charge: Send + Sync + 'static>(value: T, charge: Charge) -> Self {
+        Self::from_owner(Shared::new(value, charge))
+    }
+
+    pub(crate) fn try_new<Charge: Send + Sync + 'static>(
+        value: T,
+        charge: Charge,
+    ) -> Result<Self, (T, Charge, ReservationError)> {
+        Shared::try_new(value, charge).map(Self::from_owner)
+    }
+
+    fn from_owner<Charge: Send + Sync + 'static>(owner: Shared<T, Charge>) -> Self {
         unsafe fn clone_owner<T, Charge>(pointer: NonNull<()>) {
             let original = ManuallyDrop::new(Shared::<T, Charge> {
                 pointer: pointer.cast(),
@@ -103,7 +114,6 @@ impl<T> ErasedShared<T> {
                 pointer: pointer.cast(),
             });
         }
-        let owner = Shared::new(value, charge);
         let value = NonNull::from(&*owner);
         let owner = ManuallyDrop::new(owner);
         Self {
@@ -248,6 +258,22 @@ impl<T, Charge> Shared<T, Charge> {
     /// final reference has freed the allocation and destroyed its payload.
     pub fn new(value: T, charge: Charge) -> Self {
         Reserved::new(charge).initialize(value)
+    }
+
+    /// Fallibly allocate one initialized owner using the same exact layout and
+    /// final-reference destruction protocol as [`Self::new`].
+    ///
+    /// No payload or charge is cloned or destroyed when the allocator refuses.
+    /// The caller remains responsible for admitting this control allocation and
+    /// any nested payload allocations before entering this function.
+    ///
+    /// # Errors
+    /// Returns the original payload and charge unchanged with the exact refused layout.
+    pub fn try_new(value: T, charge: Charge) -> Result<Self, (T, Charge, ReservationError)> {
+        match Reserved::try_new(charge) {
+            Ok(reserved) => Ok(reserved.initialize(value)),
+            Err((charge, error)) => Err((value, charge, error)),
+        }
     }
 
     /// Whether both references retain the same original allocation.

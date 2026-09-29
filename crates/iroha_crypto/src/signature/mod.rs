@@ -5,13 +5,13 @@ pub(crate) mod bls;
 pub(crate) mod ed25519;
 #[cfg(feature = "gost")]
 pub(crate) mod gost;
+pub(crate) mod mldsa;
 pub(crate) mod secp256k1;
 #[cfg(feature = "sm")]
 pub(crate) mod sm;
-#[cfg(feature = "sm")]
-use crate::sm::Sm2Signature;
 use crate::{
-    Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, hex_decode,
+    Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, PublicKeyMaterial,
+    error::ParseError, hex_decode,
 };
 use core::marker::PhantomData;
 use derive_more::{Deref, DerefMut};
@@ -180,13 +180,45 @@ fn reset_public_key_full_fast_cache_for_tests() {
 fn public_key_full_fast_cache_stats_for_tests() -> PublicKeyFullFastCacheStats {
     PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow().stats())
 }
-pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKeyFull, Error> {
+#[cfg(all(test, feature = "bls"))]
+thread_local! {
+    static BLS_FULL_KEY_CACHE_ACCESSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn bls_full_key_cache_accesses_for_tests() -> usize {
+    BLS_FULL_KEY_CACHE_ACCESSES.with(std::cell::Cell::get)
+}
+
+fn public_key_material_cached(public_key: &PublicKey) -> Result<PublicKeyMaterial<'_>, Error> {
     let (algorithm, payload) = public_key.try_to_bytes()?;
+    if algorithm == Algorithm::MlDsa {
+        return crate::parse_public_key_material(algorithm, payload).map_err(Error::from);
+    }
+    #[cfg(feature = "sm")]
+    if algorithm == Algorithm::Sm2 {
+        return crate::parse_public_key_material(algorithm, payload).map_err(Error::from);
+    }
+    #[cfg(feature = "gost")]
+    if matches!(
+        algorithm,
+        Algorithm::Gost3410_2012_256ParamSetA
+            | Algorithm::Gost3410_2012_256ParamSetB
+            | Algorithm::Gost3410_2012_256ParamSetC
+            | Algorithm::Gost3410_2012_512ParamSetA
+            | Algorithm::Gost3410_2012_512ParamSetB
+    ) {
+        return crate::parse_public_key_material(algorithm, payload).map_err(Error::from);
+    }
+    #[cfg(all(test, feature = "bls"))]
+    if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
+        BLS_FULL_KEY_CACHE_ACCESSES.with(|count| count.set(count.get() + 1));
+    }
     if algorithm == Algorithm::Ed25519 {
         if let Some(full) =
             PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow_mut().get_ed25519(payload))
         {
-            return Ok(PublicKeyFull::Ed25519(full));
+            return Ok(PublicKeyMaterial::Decoded(PublicKeyFull::Ed25519(full)));
         }
         let payload_bytes: [u8; 32] = payload
             .try_into()
@@ -195,7 +227,7 @@ pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKey
         PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| {
             cache.borrow_mut().insert_ed25519(payload_bytes, full);
         });
-        return Ok(PublicKeyFull::Ed25519(full));
+        return Ok(PublicKeyMaterial::Decoded(PublicKeyFull::Ed25519(full)));
     }
     let algorithm_tag = algorithm as u8;
     PUBLIC_KEY_FULL_CACHE.with(|cache| {
@@ -206,9 +238,12 @@ pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKey
             let entry = cache.remove(pos);
             let full = entry.full.clone();
             cache.push(entry);
-            return Ok(full);
+            return Ok(PublicKeyMaterial::Decoded(full));
         }
-        let full = PublicKeyFull::from_bytes(algorithm, payload)?;
+        let material = crate::parse_public_key_material(algorithm, payload)?;
+        let PublicKeyMaterial::Decoded(full) = material else {
+            return Ok(material);
+        };
         cache.push(PublicKeyFullCacheEntry {
             algorithm: algorithm_tag,
             payload: payload.to_vec(),
@@ -218,7 +253,7 @@ pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKey
             let drain = cache.len() - PUBLIC_KEY_FULL_CACHE_LIMIT;
             cache.drain(0..drain);
         }
-        Ok(full)
+        Ok(PublicKeyMaterial::Decoded(full))
     })
 }
 impl Signature {
@@ -399,7 +434,27 @@ impl Signature {
     /// # Errors
     /// Fails if the message doesn't pass verification
     pub fn verify(&self, public_key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
-        let public_key_full = public_key_full_cached(public_key)?;
+        #[cfg(feature = "bls")]
+        {
+            let (algorithm, key_bytes) = public_key.try_to_bytes()?;
+            if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
+                return bls::verify_signature_bytes(algorithm, key_bytes, &self.payload, payload);
+            }
+        }
+        let material = public_key_material_cached(public_key)?;
+        let public_key_full = match material {
+            PublicKeyMaterial::MlDsa(bytes) => {
+                return mldsa::verify(bytes, &self.payload, payload)
+                    .map_err(mldsa::Rejection::into_error);
+            }
+            #[cfg(feature = "sm")]
+            PublicKeyMaterial::Sm2(key) => return key.verify(payload, &self.payload),
+            #[cfg(feature = "gost")]
+            PublicKeyMaterial::Gost { algorithm, bytes } => {
+                return gost::verify_bytes(algorithm, payload, &self.payload, bytes);
+            }
+            PublicKeyMaterial::Decoded(key) => key,
+        };
         if signature_payload_is_all_zero(&self.payload) {
             return Err(Error::BadSignature);
         }
@@ -409,31 +464,6 @@ impl Signature {
             }
             PublicKeyFull::Secp256k1(pk) => {
                 secp256k1::EcdsaSecp256k1Sha256::verify(payload, &self.payload, pk)
-            }
-            #[cfg(feature = "pqc")]
-            PublicKeyFull::MlDsa(pk_bytes) => {
-                use pqcrypto_mldsa::mldsa65 as dilithium;
-                use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
-                if self.payload.len() != dilithium::signature_bytes() {
-                    return Err(Error::BadSignature);
-                }
-                let sig = dilithium::DetachedSignature::from_bytes(&self.payload)
-                    .map_err(|_| Error::BadSignature)?;
-                if pk_bytes.len() != dilithium::public_key_bytes() {
-                    return Err(Error::BadSignature);
-                }
-                let pk =
-                    dilithium::PublicKey::from_bytes(pk_bytes).map_err(|_| Error::BadSignature)?;
-                if crate::verify_mldsa65_detached(&sig, payload, &pk).is_err() {
-                    return Err(Error::BadSignature);
-                }
-                Ok(())
-            }
-            #[cfg(not(feature = "pqc"))]
-            PublicKeyFull::MlDsa(_) => Err(Error::BadSignature),
-            #[cfg(feature = "gost")]
-            PublicKeyFull::Gost { algorithm, key } => {
-                gost::verify(*algorithm, payload, &self.payload, key)
             }
             #[cfg(feature = "bls")]
             PublicKeyFull::BlsSmall { key, .. } => {
@@ -448,16 +478,6 @@ impl Signature {
                     return Err(Error::BadSignature);
                 }
                 bls::BlsNormal::verify(payload, &self.payload, key)
-            }
-            #[cfg(feature = "sm")]
-            PublicKeyFull::Sm2(pk) => {
-                if self.payload.len() != Sm2Signature::LENGTH {
-                    return Err(Error::BadSignature);
-                }
-                let mut raw = [0u8; Sm2Signature::LENGTH];
-                raw.copy_from_slice(self.payload.as_ref());
-                let signature = Sm2Signature::from_bytes(&raw).map_err(|_| Error::BadSignature)?;
-                pk.verify(payload, &signature)
             }
         }?;
         Ok(())
@@ -507,7 +527,7 @@ fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::E
     Ok(unsafe { Box::from_raw(slice) })
 }
 
-/// Decode the advertised unpacked `ConstVec<u8>` layout: a sequence count
+/// Decode the canonical `ConstVec<u8>` layout: a sequence count
 /// followed by one exactly framed byte per element.
 fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
     let (count, raw_start) = ncore::read_seq_len_slice(bytes)?;
@@ -540,12 +560,7 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
 fn decode_signature_payload_from_slice(
     bytes: &[u8],
 ) -> Result<(ConstVec<u8>, usize), ncore::Error> {
-    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-    if ncore::packed_seq_enabled_for_flags(flags) {
-        <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
-    } else {
-        decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len()))
-    }
+    decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len()))
 }
 fn validate_signature_payload_for_decode(payload: &[u8]) -> Result<(), ncore::Error> {
     validate_signature_payload_for_admission(payload)
@@ -663,16 +678,8 @@ impl<'de> ncore::DeserializePayload<'de> for Signature {
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
-        let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-        let payload = if ncore::packed_seq_enabled_for_flags(flags) {
-            let (payload, used) = <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
-            ncore::note_payload_access(bytes, used);
-            payload
-        } else {
-            let payload = decode_signature_payload_unpacked(bytes)?;
-            ncore::note_payload_access(bytes, bytes.len());
-            payload
-        };
+        let payload = decode_signature_payload_unpacked(bytes)?;
+        ncore::note_payload_access(bytes, bytes.len());
         validate_signature_payload_for_decode(&payload)?;
         Ok(Signature { payload })
     }
@@ -1008,8 +1015,11 @@ mod tests {
         let (raw_public, _) = ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(vec![7u8; 32]));
         let public_key = PublicKey::new(PublicKeyFull::Ed25519(raw_public));
         reset_public_key_full_fast_cache_for_tests();
-        let first = public_key_full_cached(&public_key).expect("public key parses");
-        assert!(matches!(first, PublicKeyFull::Ed25519(_)));
+        let first = public_key_material_cached(&public_key).expect("public key parses");
+        assert!(matches!(
+            first,
+            PublicKeyMaterial::Decoded(PublicKeyFull::Ed25519(_))
+        ));
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
             PublicKeyFullFastCacheStats {
@@ -1018,8 +1028,11 @@ mod tests {
                 inserts: 1,
             }
         );
-        let second = public_key_full_cached(&public_key).expect("public key parses");
-        assert!(matches!(second, PublicKeyFull::Ed25519(_)));
+        let second = public_key_material_cached(&public_key).expect("public key parses");
+        assert!(matches!(
+            second,
+            PublicKeyMaterial::Decoded(PublicKeyFull::Ed25519(_))
+        ));
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
             PublicKeyFullFastCacheStats {
@@ -1046,6 +1059,30 @@ mod tests {
             .verify(&malformed, b"message")
             .expect_err("malformed public key must fail verification");
         assert!(matches!(err, Error::Parse(_)));
+    }
+    #[cfg(feature = "sm")]
+    #[test]
+    fn sm2_malformed_compact_key_precedes_empty_or_zero_signature_rejection() {
+        for (payload, expected) in [
+            (&[][..], "SM2 payload missing distid length prefix"),
+            (&[0, 2, b'x'][..], "SM2 payload truncated distid"),
+            (&[0, 1, 0xff][..], "SM2 distid must be valid UTF-8"),
+            (&[0, 0][..], "SM2 public key payload must be 65 bytes"),
+        ] {
+            let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Sm2, payload));
+            for bytes in [&[][..], &[0; 64][..]] {
+                let signature = Signature::from_bytes(bytes);
+                for result in [
+                    signature.verify(&malformed, b"message"),
+                    crate::verify_signature_for_admission(&signature, &malformed, b"message"),
+                ] {
+                    let Err(Error::Parse(error)) = result else {
+                        panic!("malformed SM2 key must retain parse-error precedence");
+                    };
+                    assert_eq!(error.to_string(), expected);
+                }
+            }
+        }
     }
     #[test]
     fn signature_verify_rejects_all_zero_payload_before_backend() {

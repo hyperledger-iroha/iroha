@@ -5,7 +5,7 @@ use crate::{
     Error, Result, StatusFailureReason,
     http::{Method, Response, StatusCode},
 };
-use iroha_torii_shared::{status::Status as NodeStatus, uri};
+use iroha_torii_shared::{route_catalog, status::Status as NodeStatus};
 
 pub(super) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_VERSION_BYTES: usize = 16 * 1024;
@@ -38,7 +38,10 @@ impl Status<'_> {
             self.client
                 .default_request(
                     Method::GET,
-                    join_torii_url(&self.client.torii_url, uri::STATUS),
+                    join_torii_url(
+                        &self.client.torii_url,
+                        route_catalog::diagnostic::STATUS.path(),
+                    ),
                 )
                 .max_response_bytes(MAX_RESPONSE_BYTES),
             self.client.wire_format_preference.accept_header(),
@@ -58,7 +61,10 @@ impl Status<'_> {
             self.client
                 .default_request(
                     Method::GET,
-                    join_torii_url(&self.client.torii_url, uri::API_VERSION),
+                    join_torii_url(
+                        &self.client.torii_url,
+                        route_catalog::core::API_VERSION.path(),
+                    ),
                 )
                 .max_response_bytes(MAX_VERSION_BYTES),
             // Public routes negotiate canonical typed errors before dispatch;

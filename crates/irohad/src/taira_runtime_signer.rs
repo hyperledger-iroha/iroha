@@ -1865,6 +1865,7 @@ mod tests {
             fixture.session.clone(),
             41,
             anchor,
+            iroha_core::beacon::pulse_context_fixture_v1(),
         )
         .expect("canonical pulse payload");
         let partial = signer

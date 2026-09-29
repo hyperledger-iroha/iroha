@@ -20,7 +20,7 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 - Keep changes deterministic across hardware. Every SIMD/Metal/CUDA path must have a byte-for-byte equivalent scalar fallback.
 - Features to know:
   - `metal` enables Apple Metal acceleration for SHA256BLOCK and vector helpers.
-  - `cuda` builds kernels from `cuda/`. Requires `nvcc`; failures should fall back gracefully.
+  - `cuda` loads the CUDA driver at runtime and consumes the signed embedded PTX bundle by default. Ordinary build/startup must not require a driver or `nvcc`. Explicit developer `generate`/`check` artifact workflows use `nvcc`; a missing or invalid required release bundle fails the build. Kernel execution failures quarantine the affected device/kernel and select the qualified CPU fallback.
   - ML-DSA verification is unconditional; `ivm_vrf_tests` and `ivm_zk_tests` gate heavy test suites.
 - Run `cargo test -p ivm` for the default set, plus targeted commands when relevant:
   - `cargo test -p ivm --features ivm_zk_tests`

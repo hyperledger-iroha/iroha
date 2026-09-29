@@ -103,6 +103,7 @@ zeroize = { workspace = true }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_test_samples = { workspace = true }
 assertables = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

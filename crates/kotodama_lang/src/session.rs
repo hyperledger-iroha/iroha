@@ -466,7 +466,7 @@ impl CompilerSession {
                     Some(resolved.program.get()),
                 )
             })?;
-        enforce_argument_register_window(&typed, &resolved.source, resolved.program.get())?;
+        enforce_call_table_bounds(&typed, &resolved.source, resolved.program.get())?;
         Ok(typed)
     }
     fn checked_program(
@@ -763,7 +763,7 @@ impl CompilerSession {
 fn source_range_span(source: &SourceFile, range: crate::source::SourceRange) -> Option<SourceSpan> {
     (source.id() == range.source).then(|| SourceSpan::from_range(source, range.range))
 }
-fn enforce_argument_register_window(
+fn enforce_call_table_bounds(
     program: &TypedProgram,
     source: &SourceFile,
     resolved: &crate::resolved::ResolvedProgram,
@@ -772,6 +772,19 @@ fn enforce_argument_register_window(
     let mut diagnostics = Vec::new();
     for item in &program.items {
         let crate::semantic::TypedItem::Function(function) = item;
+        let return_type = function
+            .ret_ty
+            .as_ref()
+            .unwrap_or(&crate::semantic::Type::Unit);
+        if crate::semantic::runtime_value_word_count_bounded(return_type, limit)
+            .is_some_and(|words| words > limit)
+        {
+            diagnostics.push(Diagnostic::error(
+                "K2007", DiagnosticPhase::Semantic,
+                format!("function `{}` returns more than {limit} flattened words; V1 result tables are bounded to 64 KiB", function.name),
+                function.name_source.and_then(|range| source_range_span(source, range)),
+            ));
+        }
         let counts = function
             .param_types
             .iter()
@@ -829,7 +842,7 @@ fn enforce_argument_register_window(
         {
             diagnostic.labels.push(DiagnosticLabel {
                 span,
-                message: "function exceeds the V1 argument-register window".to_owned(),
+                message: "function exceeds the V1 argument-table bound".to_owned(),
             });
         }
         diagnostics.push(diagnostic);
@@ -1595,64 +1608,25 @@ mod tests {
         );
     }
     #[test]
-    fn session_rejects_aggregate_arguments_over_the_register_word_limit() {
-        let source = source_fixture(include_str!("session/fixtures/wide_call.ko"));
+    fn session_accepts_aggregate_arguments_beyond_the_retired_register_limit() {
         let session = CompilerSession::default();
-        let request = CompileRequest {
-            source,
-            source_name: Some("wide-call.ko"),
-        };
-        let checked = session
-            .check(request)
-            .expect_err("oversized flattened argument ABI must fail semantic checking");
-        let diagnostics = session
-            .build(CompileRequest {
-                source,
-                source_name: Some("wide-call.ko"),
-            })
-            .expect_err("oversized flattened argument ABI must fail before lowering");
-        assert_eq!(checked, diagnostics);
-        let diagnostic = diagnostics
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "K2007")
-            .expect("stable argument-limit diagnostic");
-        assert_eq!(diagnostic.phase, DiagnosticPhase::Semantic);
-        let span = diagnostic.primary_span.as_ref().expect("parameter span");
-        assert_eq!(span.source.as_deref(), Some("wide-call.ko"));
-        let range = span.byte_range.expect("parameter byte range");
-        assert_eq!(
-            &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
-            "value"
-        );
-        let nested = source_fixture(include_str!("session/fixtures/nested_wide_call.ko"));
-        let nested_error = session
-            .check(CompileRequest {
-                source: nested,
-                source_name: Some("nested-wide-call.ko"),
-            })
-            .expect_err("nested aggregate must use the same recursive ABI word accounting");
-        let nested_diagnostic = nested_error
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "K2007")
-            .expect("nested aggregate argument-limit diagnostic");
-        let nested_range = nested_diagnostic
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.byte_range)
-            .expect("nested parameter range");
-        assert_eq!(
-            &nested[nested_range.start as usize..nested_range.end as usize],
-            "payload"
-        );
-        let at_limit = source.replace("int f13", "");
-        session
-            .build(CompileRequest {
-                source: &at_limit,
-                source_name: Some("wide-call-at-limit.ko"),
-            })
-            .expect("session preflight and lowering must admit exactly thirteen words");
+        for source in [
+            source_fixture(include_str!("session/fixtures/wide_call.ko")),
+            source_fixture(include_str!("session/fixtures/nested_wide_call.ko")),
+        ] {
+            session
+                .check(CompileRequest {
+                    source,
+                    source_name: Some("wide-call.ko"),
+                })
+                .expect("table ABI admits more than thirteen words");
+            session
+                .build(CompileRequest {
+                    source,
+                    source_name: Some("wide-call.ko"),
+                })
+                .expect("wide source check and build agree");
+        }
     }
     #[test]
     fn modules_can_be_checked_but_never_emitted_directly() {
@@ -2345,23 +2319,22 @@ mod tests {
             parsed_suite.contract_interface.is_none(),
             "local test images must keep the exact interface beside the generic artifact"
         );
-        let return_sentinel = outputs
+        let smoke = outputs
+            .suite
+            .report
+            .source_map
+            .iter()
+            .find(|function| function.function_name == "smoke")
+            .expect("test function");
+        let callable = outputs
             .suite
             .contract_interface
-            .entrypoints
+            .callables
             .iter()
-            .find(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
-            .expect("authenticated local return target");
-        assert_eq!(return_sentinel.return_type.as_deref(), Some("()"));
-        let schema = return_sentinel
-            .return_schema
-            .as_ref()
-            .expect("explicit Unit return schema");
-        assert_eq!(
-            schema.nodes,
-            vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit]
-        );
-        assert_eq!(schema.word_count(), Some(1));
+            .find(|callable| callable.entry_pc == smoke.pc_start)
+            .expect("authenticated test callable");
+        assert!(callable.argument_words.is_empty());
+        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
         assert!(
             outputs
                 .suite

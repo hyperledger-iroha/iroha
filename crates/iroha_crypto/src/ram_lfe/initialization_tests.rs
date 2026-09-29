@@ -78,12 +78,22 @@ fn framed_xof_binds_secret_policy_and_associated_data_without_split_aliases() {
     for (lane, &expected) in bytes.chunks_exact(32).zip(first.iter()) {
         assert_eq!(u64::from(independent_bit_remainder(lane)), expected);
     }
-    // Fixed public fixture material for independent first-release KAT review.
-    eprintln!(
-        "RAM_LFE_INITIALIZER_KAT canonical_frame={} stream={} residues={:?}",
+    // Captured from a normal native run, then checked with independent integer
+    // division. These are fixed public test inputs, never a runtime secret.
+    assert_eq!(
         hex::encode(&*canonical),
+        include_str!("../../tests/fixtures/ram_lfe_initializer_v1_frame.hex").trim(),
+    );
+    assert_eq!(
         hex::encode(&*bytes),
-        &*first,
+        include_str!("../../tests/fixtures/ram_lfe_initializer_v1_xof.hex").trim(),
+    );
+    assert_eq!(
+        *first,
+        [
+            180, 45, 216, 139, 123, 250, 57, 134, 174, 12, 99, 154, 95, 195, 158, 139, 203, 6, 139,
+            57, 135, 189, 237, 111, 237, 4, 197, 196, 201, 221, 232, 49,
+        ],
     );
     let guard = norito::core::DecodeFlagsGuard::enter(0);
     assert_eq!(first, derive_residues(b"a", policy, b"bc").unwrap());
@@ -129,14 +139,7 @@ fn initializer_bounds_are_closed_and_profile_digest_is_compiled() {
 #[cfg(feature = "json")]
 #[test]
 fn first_release_profile_requires_the_initializer_field() {
-    use super::super::{BfvProgrammedPublicParameters, BfvRamProgramProfile};
-    eprintln!(
-        "RAM_LFE_SCHEMA_IDS profile={} parameters={}",
-        hex::encode(norito::schema::identity::frame_hash::<BfvRamProgramProfile>()),
-        hex::encode(norito::schema::identity::frame_hash::<
-            BfvProgrammedPublicParameters,
-        >()),
-    );
+    use super::super::BfvRamProgramProfile;
     let current = super::super::bfv_program_profile();
     let text = norito::json::to_json(&current).unwrap();
     let decoded: BfvRamProgramProfile = norito::json::from_str(&text).unwrap();

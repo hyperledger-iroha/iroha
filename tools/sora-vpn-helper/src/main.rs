@@ -895,8 +895,7 @@ fn decode_authenticated_network_plan(
         relay_certificate_sha256,
         directory_snapshot_digest,
     ]
-    .iter()
-    .any(|value| *value == [0_u8; 32])
+    .contains(&[0_u8; 32])
     {
         return Err(ControllerError::State(
             "network-worker fixed plan contains an all-zero trust digest".to_owned(),
@@ -6673,7 +6672,7 @@ where
     exact_route_readback(&output, cidr)
 }
 fn capture_existing_route(family: IpFamily, cidr: &str) -> Result<Option<String>, ControllerError> {
-    capture_existing_route_with(family, cidr, |program, args| run_command(program, args))
+    capture_existing_route_with(family, cidr, run_command)
 }
 fn exact_route_readback(output: &str, cidr: &str) -> Result<Option<String>, ControllerError> {
     if output.as_bytes().contains(&0) {
@@ -8331,9 +8330,9 @@ fn validate_state_for_persistence(state: &State) -> Result<(), ControllerError> 
 fn validate_state_for_persistence_at(state: &State, now_ms: u64) -> Result<(), ControllerError> {
     validate_state_invariants(state)?;
     if state.active
-        && !state
+        && state
             .ticket_expires_at_ms
-            .is_some_and(|expires_at_ms| expires_at_ms > now_ms)
+            .is_none_or(|expires_at_ms| expires_at_ms <= now_ms)
     {
         return Err(ControllerError::State(
             "active state must retain an unexpired authenticated ticket deadline".to_owned(),

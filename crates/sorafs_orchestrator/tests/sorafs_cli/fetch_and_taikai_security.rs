@@ -449,12 +449,18 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .get("local_proxy_norito_spool")
         .and_then(Value::as_str)
         .expect("summary.local_proxy_norito_spool");
-    assert_eq!(summary_spool, PROVISION_SPOOL_DIR);
+    assert_eq!(
+        summary_spool,
+        sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR
+    );
     let summary_kaigi_spool = summary_value
         .get("local_proxy_kaigi_spool")
         .and_then(Value::as_str)
         .expect("summary.local_proxy_kaigi_spool");
-    assert_eq!(summary_kaigi_spool, PROVISION_SPOOL_DIR);
+    assert_eq!(
+        summary_kaigi_spool,
+        sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR
+    );
     let summary_kaigi_policy = summary_value
         .get("local_proxy_kaigi_policy")
         .and_then(Value::as_str)
@@ -480,11 +486,11 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     );
     #[cfg(unix)]
     assert_eq!(
-        fs::metadata(&manifest_out_path)
-            .expect("bootstrap manifest metadata")
-            .permissions()
-            .mode()
-            & 0o077,
+        std::os::unix::fs::PermissionsExt::mode(
+            &fs::metadata(&manifest_out_path)
+                .expect("bootstrap manifest metadata")
+                .permissions()
+        ) & 0o077,
         0,
         "bootstrap manifest must not grant group or world access"
     );

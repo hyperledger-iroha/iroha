@@ -70,10 +70,10 @@ fn manifest(value: &GameManifestV1) -> CodecResult<()> {
     {
         return Err(invalid("Game manifest bounds must be positive"));
     }
-    if let GameAccessV1::Invite(key) = &value.access {
-        if key.algorithm() != Algorithm::Ed25519 {
-            return Err(invalid("game invitation key must use Ed25519"));
-        }
+    if let GameAccessV1::Invite(key) = &value.access
+        && key.algorithm() != Algorithm::Ed25519
+    {
+        return Err(invalid("game invitation key must use Ed25519"));
     }
     bounded_bytes(
         &value.application_parameters,
@@ -181,6 +181,10 @@ fn verify(value: &VerifyExecutionProofV1) -> CodecResult<()> {
     proof(&value.proof)
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "fills the `fn(&T) -> CodecResult<()>` validator slot of `instruction_catalog!`"
+)]
 fn no_additional_wire_fields<T>(_: &T) -> CodecResult<()> {
     Ok(())
 }
@@ -264,7 +268,7 @@ fn parse<T: JsonDeserialize + JsonSerialize + Encode>(
 
 macro_rules! instruction_catalog {
     ($($ty:ident => ($validate:ident, $maximum:expr)),+ $(,)?) => {
-        pub(super) fn from_json(input: &Value) -> Option<CodecResult<InstructionBox>> {
+        pub fn from_json(input: &Value) -> Option<CodecResult<InstructionBox>> {
             let Value::Object(fields) = input else { return None; };
             let name = fields.keys().find(|name| matches!(name.as_str(), $(stringify!($ty))|+))?;
             if fields.len() != 1 {
@@ -277,12 +281,12 @@ macro_rules! instruction_catalog {
             })
         }
 
-        pub(super) fn is_game_instruction(instruction: &InstructionBox) -> bool {
+        pub fn is_game_instruction(instruction: &InstructionBox) -> bool {
             let instruction: &dyn Instruction = &**instruction;
             $(instruction.as_any().is::<$ty>())||+
         }
 
-        pub(super) fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
+        pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
             let instruction: &dyn Instruction = &**instruction;
             $(if let Some(typed) = instruction.as_any().downcast_ref::<$ty>() {
                 return Some(value(typed, stringify!($ty), $maximum, $validate).map(|payload| {

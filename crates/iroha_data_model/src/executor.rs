@@ -145,7 +145,6 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
-            #[norito(json = "crate::json_helpers::secret_string")]
             #[skip_from]
             #[skip_try_from]
             String,
@@ -465,8 +464,6 @@ impl norito::json::JsonDeserialize for Executor {
         Ok(Self { bytecode })
     }
 }
-/// Result type that every executor should return.
-pub type Result<T = (), E = crate::ValidationFail> = core::result::Result<T, E>;
 pub mod prelude {
     //! The prelude re-exports most commonly used traits, structs and macros from this crate.
     pub use super::{Executor, ExecutorDataModel};

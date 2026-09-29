@@ -116,19 +116,32 @@ fn committee_restore_requires_retained_finality_even_when_all_progress_is_omitte
     let fixture = fixture(4);
     let kura = crate::kura::Kura::blank_kura_for_testing();
     let world = World::new();
-    validate_committed_progress(&world.view(), fixture.incumbent.network_id, &[], &kura)
-        .expect("empty uncommitted State needs no finality");
+    let chain_id = iroha_model_base::chain::ChainId::from("committee-restore-cut");
+    validate_committed_progress(
+        &world.view(),
+        &chain_id,
+        fixture.incumbent.network_id,
+        &[],
+        &kura,
+    )
+    .expect("empty uncommitted State needs no finality");
     let hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-certified-cut"));
-    let error =
-        validate_committed_progress(&world.view(), fixture.incumbent.network_id, &[hash], &kura)
-            .expect_err("absence of progress does not permit absence of its authentication");
-    assert!(
-        error.contains("retained latest and epoch-boundary finality"),
-        "{error}"
+    let error = validate_committed_progress(
+        &world.view(),
+        &chain_id,
+        fixture.incumbent.network_id,
+        &[hash],
+        &kura,
+    )
+    .expect_err("absence of progress does not permit absence of its authentication");
+    assert_eq!(
+        error,
+        crate::sumeragi::certified_chain::ChainReadError::NotInView { height: 1 }.to_string()
     );
     assert!(
         validate_committed_progress(
             &fixture.world.view(),
+            &chain_id,
             fixture.incumbent.network_id,
             &[],
             &kura
@@ -136,4 +149,57 @@ fn committee_restore_requires_retained_finality_even_when_all_progress_is_omitte
         .is_err(),
         "a pre-genesis snapshot cannot invent preparation progress"
     );
+}
+
+#[test]
+fn committee_restore_authenticates_actual_native_prefix_and_rejects_schedule_omission() {
+    crate::sumeragi::threads::sumeragi_thread_builder("committee-restore-native")
+        .spawn(|| {
+            use crate::state::StateReadOnly as _;
+            use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+            let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+                .expect("actual signed genesis and original execution");
+            for height in [1, 2, 3] {
+                if height > 1 {
+                    chain.commit(Vec::new());
+                }
+                let view = chain.state().view();
+                let hashes = view.block_hashes().iter().copied().collect::<Vec<_>>();
+                assert_eq!(hashes.len() as u64, height);
+                validate_committed_progress(
+                    view.world(),
+                    view.chain_id(),
+                    *view.network_id(),
+                    &hashes,
+                    chain.kura(),
+                )
+                .expect("same verified native cut and complete schedule");
+                assert!(
+                    validate_committed_progress(
+                        &World::new().view(),
+                        view.chain_id(),
+                        *view.network_id(),
+                        &hashes,
+                        chain.kura()
+                    )
+                    .is_err(),
+                    "a retained certified prefix cannot excuse omission of its schedule"
+                );
+                let mut changed = hashes.clone();
+                changed[0] = HashOf::from_untyped_unchecked(Hash::new(b"different-pinned-genesis"));
+                assert!(
+                    validate_committed_progress(
+                        view.world(),
+                        view.chain_id(),
+                        *view.network_id(),
+                        &changed,
+                        chain.kura()
+                    )
+                    .is_err()
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

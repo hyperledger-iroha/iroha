@@ -1,6 +1,7 @@
 //! Ensure Metal-gated helpers degrade to scalar paths on platforms or builds
 //! without `feature = "metal"`. Guards the optional backend for non-macOS and
 //! metal-disabled configurations.
+#[cfg(not(all(feature = "metal", target_os = "macos")))]
 #[test]
 fn metal_helpers_report_unavailable_when_disabled() {
     // `metal_available` is compile-time false when the feature or platform is missing.

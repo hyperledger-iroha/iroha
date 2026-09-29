@@ -235,8 +235,8 @@ test("deployment instruction transactions are locally signed and verified", asyn
   });
   const payloadBytes = buildBrowserInstructionTransactionPayload({
     networkId: NETWORK_ID,
+    networkPrefix: 753,
     authority: AUTHORITY,
-    chainDiscriminant: 753,
     instructions: [instruction],
     feePayment: AUTHORITY_FEE_PAYMENT,
     creationTimeMs: 123_456,
@@ -244,6 +244,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
   });
   const signable = validateBrowserInstructionTransactionSignable({
     networkId: NETWORK_ID,
+    networkPrefix: 753,
     payloadBytes,
     payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753),
     authority: AUTHORITY,
@@ -279,6 +280,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     "x-iroha-signed-transaction-hash": finalized.hashHex,
   };
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () =>
       new Response("{}", {
         status: 202,

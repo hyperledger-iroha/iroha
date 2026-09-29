@@ -26,9 +26,7 @@ fn reward_distribution_requires_the_exact_treasury_authority() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-        b"reward_distribution_requires_the_exact_treasury_authority",
-    ));
+    let mut stx = state_block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let distribution = reward_distribution(lane, 0, &asset, &validator, 25);
@@ -167,9 +165,7 @@ fn reward_distributions_cannot_reuse_promised_funds() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-        b"reward_distributions_cannot_reuse_promised_funds",
-    ));
+    let mut stx = state_block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 200);
     // The fee sink owns 200 independently of the validator's bonded custody.
@@ -273,9 +269,7 @@ fn reward_obligation_audit_rejects_corrupt_record_keys() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-        b"reward_obligation_audit_rejects_corrupt_record_keys",
-    ));
+    let mut stx = state_block.transaction_for_callback_testing();
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     reward_distribution(lane, 1, &asset, &validator, 25)
@@ -440,9 +434,7 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
     let mut state_block = state.block(block.as_ref().header());
     let lane = LaneId::SINGLE;
     let (validator, assets, nexus) = {
-        let mut stx = state_block.transaction_for_fastpq_testing(Hash::new(
-            b"reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback",
-        ));
+        let mut stx = state_block.transaction_for_callback_testing();
         let (sink, validator, first_asset, _) = configure_reward_fixture(&mut stx, lane, 100);
         stx.nexus.staking.reward_dust_threshold = Quantity::zero();
         reward_distribution(lane, 0, &first_asset, &validator, 25)
@@ -468,7 +460,8 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
     };
     state_block.drain_transfer_transcripts();
     {
-        let mut stx = state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
+        let mut stx =
+            state_block.transaction_for_fastpq_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
         stx.nexus = nexus;
         // A later sorted custody asset is unavailable; the complete payout batch must roll back.
         stx.world.assets.remove(assets[1].clone());
@@ -510,7 +503,7 @@ fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollbac
         // Production rejects and drops this whole overlay on any instruction error.
     }
     assert!(state_block.drain_transfer_transcripts().is_empty());
-    let stx = state_block.transaction();
+    let stx = state_block.transaction_for_callback_testing();
     for asset in assets {
         assert_eq!(
             stx.world.assets.get(&asset).unwrap().as_ref(),

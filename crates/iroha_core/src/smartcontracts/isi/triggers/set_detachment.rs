@@ -18,6 +18,9 @@
 use super::*;
 use mv::storage::Detached as DetachedStorage;
 
+#[path = "set_frozen_read.rs"]
+mod frozen_read;
+
 #[path = "set_capture.rs"]
 mod capture;
 pub(crate) use capture::SetBlockCapture;

@@ -199,6 +199,26 @@ impl<B: CaptureWorldField + super::block_field::OriginalPublicationBlock> Captur
     }
 }
 
+// Extraction borrows the original heap shell. Only these aggregate fields can
+// relinquish their payload while leaving a safe, inert empty slot behind.
+trait TakeWorldCapture: CaptureWorldField {
+    fn take_capture(&mut self) -> Self::Capture;
+}
+
+impl<B: CaptureWorldField + super::block_field::OriginalPublicationBlock> TakeWorldCapture
+    for super::block_field::BlockField<B>
+{
+    fn take_capture(&mut self) -> Self::Capture {
+        self.take_executing().into_capture()
+    }
+}
+
+impl TakeWorldCapture for TriggerSetBlock<'_> {
+    fn take_capture(&mut self) -> Self::Capture {
+        self.take_capture_slot()
+    }
+}
+
 trait WorldCaptureSlot: Sized {
     type Target;
     type Retained: RetainedWorldField + 'static;
@@ -287,14 +307,14 @@ where
     }
 }
 
-struct RetainedCell<V: Value> {
+struct RetainedCell<V: Value, C: Send + Sync + 'static> {
     name: &'static str,
     // Empty only while the same box is held by its private prepared owner.
-    journal: Option<mv::cell::Detached<V, ()>>,
-    target: fn(&World) -> &Cell<V>,
+    journal: Option<mv::cell::Detached<V, (), C>>,
+    target: fn(&World) -> &Cell<V, C>,
 }
 
-impl<V: Value> RetainedWorldField for RetainedCell<V> {
+impl<V: Value, C: Send + Sync + 'static> RetainedWorldField for RetainedCell<V, C> {
     fn summary(&self) -> FieldSummary {
         let journal = self.journal.as_ref().expect("retained original journal");
         FieldSummary {
@@ -319,10 +339,10 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
     }
 }
 
-impl<'a, V: Value> CaptureWorldField for CellBlock<'a, V> {
-    type Target = Cell<V>;
-    type Retained = RetainedCell<V>;
-    type Capture = CellCaptureSlot<'a, V, ()>;
+impl<'a, V: Value, C: Send + Sync + 'static> CaptureWorldField for CellBlock<'a, V, C> {
+    type Target = Cell<V, C>;
+    type Retained = RetainedCell<V, C>;
+    type Capture = CellCaptureSlot<'a, V, (), C>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
@@ -331,9 +351,9 @@ impl<'a, V: Value> CaptureWorldField for CellBlock<'a, V> {
     }
 }
 
-impl<V: Value> WorldCaptureSlot for CellCaptureSlot<'_, V, ()> {
-    type Target = Cell<V>;
-    type Retained = RetainedCell<V>;
+impl<V: Value, C: Send + Sync + 'static> WorldCaptureSlot for CellCaptureSlot<'_, V, (), C> {
+    type Target = Cell<V, C>;
+    type Retained = RetainedCell<V, C>;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
         match self.try_capture(|_| Ok::<(), Infallible>(())) {
             Ok(()) => Ok(()),
@@ -451,9 +471,12 @@ pub(in crate::state) trait WorldJournalCapture {
 macro_rules! declare_world_capture {
     (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
         #[allow(non_camel_case_types)]
-        struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {
+        struct WorldCapture<OriginalShell, $($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {
             $($prefix: Option<($prefix, fn(&World) -> &<$prefix as WorldCaptureSlot>::Target)>,)* $($privacy: Option<($privacy, fn(&World) -> &<$privacy as WorldCaptureSlot>::Target)>,)* $($suffix: Option<($suffix, fn(&World) -> &<$suffix as WorldCaptureSlot>::Target)>,)*
             extras: Option<(DataSpaceCatalog, Vec<EventBox>)>,
+            // Retain the emptied original allocation and its charge until all
+            // enclosing writers release; moving capture cannot refund it early.
+            original_shell: Option<OriginalShell>,
             shells: Option<WorldJournalShellReservation>,
             mode: BlockMode,
             refusal: Option<CaptureError<Infallible>>,
@@ -463,8 +486,8 @@ macro_rules! declare_world_capture {
             operation_index_scope: Option<OwnedAllocationScope>,
         }
         #[allow(non_camel_case_types)]
-        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
-            WorldJournalCapture for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
+        impl<OriginalShell, $($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
+            WorldJournalCapture for WorldCapture<OriginalShell, $($prefix,)* $($privacy,)* $($suffix,)*>
         {
             fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
                 assert!(!self.started, "original World capture is one-shot");
@@ -502,6 +525,9 @@ macro_rules! declare_world_capture {
                     fields
                 });
                 let (dataspace_catalog, external_event_buf) = pending.extras.take().expect("original World extras");
+                // Materialization requires every enclosing writer free. Only
+                // now retire the same emptied shell and its retained control credit.
+                drop(pending.original_shell.take());
                 let scope = pending.operation_index_scope.take().expect("original operation index scope");
                 let operation_index_budget = scope.allocation_budget().clone();
                 // No writer remains in the detached carrier. Unlink this
@@ -512,8 +538,8 @@ macro_rules! declare_world_capture {
             }
         }
         #[allow(non_camel_case_types)]
-        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
-            Drop for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
+        impl<OriginalShell, $($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
+            Drop for WorldCapture<OriginalShell, $($prefix,)* $($privacy,)* $($suffix,)*>
         {
             fn drop(&mut self) {
                 self.release();
@@ -529,16 +555,17 @@ fn fill_world_capture(fill: impl FnOnce()) {
     fill()
 }
 
-// Keep each field's conversion temporaries out of the complete World handoff
-// frame. The slot receives the same original owner, without allocating or
-// releasing it; expanding every conversion inline exhausts ordinary debug stacks.
+// Never materialize the complete WorldBlockFields on the stack. Debug builds
+// otherwise retain a temporary for every heterogeneous field simultaneously.
+// This frame moves only one exact original owner into its existing caller slot.
 #[inline(never)]
-fn fill_world_capture_field<Field: CaptureWorldField>(
+fn take_world_capture_field<Field: TakeWorldCapture>(
+    original: &mut Field,
     pending: &mut Option<(Field::Capture, fn(&World) -> &Field::Target)>,
-    field: Field,
     target: fn(&World) -> &Field::Target,
 ) {
-    *pending = Some((field.into_capture(), target));
+    assert!(pending.is_none(), "original World capture slot is empty");
+    *pending = Some((original.take_capture(), target));
 }
 
 // Wrapper construction does not overlap native capture work. Each field also
@@ -578,7 +605,7 @@ macro_rules! capture_world_fields {
         let refusal = $original.capture_mode().err();
         let mut pending = WorldCapture {
             $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*
-            extras: None, shells: Some($shells), mode, refusal, started: false, complete: false,
+            extras: None, original_shell: None, shells: Some($shells), mode, refusal, started: false, complete: false,
             operation_index_scope: Some($original.operation_index_scope.clone()),
         };
         fill_world_capture(|| {
@@ -587,12 +614,21 @@ macro_rules! capture_world_fields {
                 $($prefix,)* $($privacy,)* $($suffix,)*
                 external_event_buf,
                 operation_index_scope: _scope,
-            } = *$original.fields.take().expect("original World block fields");
-            $(fill_world_capture_field(&mut pending.$prefix, $prefix, |target: &World| &target.$prefix);)*
-            $(fill_world_capture_field(&mut pending.$privacy, $privacy, |target: &World| &target.$privacy);)*
-            $(fill_world_capture_field(&mut pending.$suffix, $suffix, |target: &World| &target.$suffix);)*
-            pending.extras = Some((dataspace_catalog, external_event_buf));
+            } = $original.fields.as_deref_mut().expect("original World block fields");
+            // The exhaustive pattern binds references, not another complete
+            // World. Each helper moves the exact original into its caller slot.
+            $(take_world_capture_field($prefix, &mut pending.$prefix, |target: &World| &target.$prefix);)*
+            $(take_world_capture_field($privacy, &mut pending.$privacy, |target: &World| &target.$privacy);)*
+            $(take_world_capture_field($suffix, &mut pending.$suffix, |target: &World| &target.$suffix);)*
+            // Default creates a populated catalog. An empty checked catalog is
+            // allocation-free and exists only in the terminal empty shell.
+            let empty_catalog = DataSpaceCatalog::new(Vec::new()).expect("empty catalog is valid");
+            pending.extras = Some((
+                std::mem::replace(dataspace_catalog, empty_catalog),
+                std::mem::take(external_event_buf),
+            ));
         });
+        pending.original_shell = $original.fields.take();
         pending
     }};
 }

@@ -137,6 +137,7 @@ define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protoco
     pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
     pub(super) height: u64,
     pub(super) finalized_chain_anchor: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+    pub(super) context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
 });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconSeatReadinessRequestWireV1"; pub(super) GlobalBeaconSeatReadinessRequestWireV1 {
     pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,

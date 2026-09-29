@@ -7,6 +7,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
+    nexus::AxtAnchoredSpendV1,
     nft::NftId,
     prelude::{DecimalValueV1, IntValueV1, Json, QuantityValueV1},
     smart_contract::manifest::{ContractManifest, StateDescriptor},
@@ -17,10 +18,7 @@ use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
 use ivm_abi::{
     SyscallPolicy, VMError,
-    axt::{
-        AssetHandle, AxtDescriptor, ProofBlob, validate_asset_handle, validate_descriptor,
-        validate_proof_blob,
-    },
+    axt::{AxtDescriptor, ProofBlob, validate_descriptor, validate_proof_blob},
     codec::decode_canonical_norito,
     metadata::{
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
@@ -30,7 +28,7 @@ use ivm_abi::{
 };
 #[cfg(test)]
 use norito::NoritoSerialize;
-use std::{error::Error as StdError, fmt, fmt::Write as _};
+use std::fmt::Write as _;
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
@@ -58,45 +56,8 @@ pub struct VerifiedContractArtifact {
     /// Canonical unsigned on-chain manifest derived from the interface.
     pub manifest: ContractManifest,
 }
-/// Stable failure returned when a deployable artifact is malformed or unsafe.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ContractArtifactError {
-    message: String,
-    abi_hash_mismatch: Option<([u8; 32], [u8; 32])>,
-}
-impl ContractArtifactError {
-    /// Construct an ordinary admission error. Public for the native preparation
-    /// adapter; artifact callers should receive errors from verification.
-    #[doc(hidden)]
-    pub fn invalid(message: impl Into<String>) -> Self {
-        Self {
-            message: format!("invalid contract artifact: {}", message.into()),
-            abi_hash_mismatch: None,
-        }
-    }
-    /// Construct the ABI-descriptor mismatch variant.
-    #[doc(hidden)]
-    pub fn abi_hash_mismatch(expected: [u8; 32], actual: [u8; 32]) -> Self {
-        Self {
-            message: "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor".to_owned(),
-            abi_hash_mismatch: Some((expected, actual)),
-        }
-    }
-    /// Convert admission failure into the stable VM error surface.
-    #[must_use]
-    pub fn into_vm_error(self) -> VMError {
-        self.abi_hash_mismatch
-            .map_or(VMError::InvalidMetadata, |(expected, actual)| {
-                VMError::ArtifactAbiHashMismatch { expected, actual }
-            })
-    }
-}
-impl fmt::Display for ContractArtifactError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-impl StdError for ContractArtifactError {}
+mod error;
+pub use error::ContractArtifactError;
 /// Verify a self-describing IVM 1.1 artifact and derive its canonical manifest.
 ///
 /// # Errors
@@ -493,13 +454,16 @@ fn validate_literal_payload(
             let descriptor = decode_canonical_literal_payload::<AxtDescriptor>(payload)?;
             validate_descriptor(&descriptor).map_err(|_| VMError::InvalidMetadata)
         }
-        PointerType::AssetHandle => {
-            let handle = decode_canonical_literal_payload::<AssetHandle>(payload)?;
-            validate_asset_handle(&handle).map_err(|_| VMError::InvalidMetadata)
-        }
         PointerType::ProofBlob => {
             let proof = decode_canonical_literal_payload::<ProofBlob>(payload)?;
             validate_proof_blob(&proof).map_err(|_| VMError::InvalidMetadata)
+        }
+        PointerType::AxtAnchoredSpendV1 => {
+            let spend = decode_canonical_literal_payload::<AxtAnchoredSpendV1>(payload)?;
+            spend
+                .issuer_payload_v1()
+                .map(drop)
+                .map_err(|_| VMError::InvalidMetadata)
         }
         PointerType::SoracloudRequest => {
             let request =
@@ -699,12 +663,8 @@ fn cntr_section_missing(artifact: &[u8]) -> bool {
 mod tests {
     use super::*;
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-    use iroha_model_base::topology::LaneId;
     use ivm_abi::{
-        axt::{
-            AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
-            ProofBlob,
-        },
+        axt::{AxtDescriptor, AxtTouchSpec, ProofBlob},
         metadata::EmbeddedStateFieldDescriptor,
         pointer_abi::PointerType,
     };
@@ -712,6 +672,8 @@ mod tests {
         norito::to_bytes(descriptor).expect("encode canonical AXT descriptor")
     }
     fn contract_artifact_with_state_type(ty: EmbeddedStateType) -> Vec<u8> {
+        use ivm_abi::{encoding::wide as enc, instruction::wide};
+
         let entrypoint = EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Kotoage,
@@ -730,6 +692,12 @@ mod tests {
             entry_pc: 0,
         };
         let interface = EmbeddedContractInterfaceV1 {
+            callables: vec![ivm_abi::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 0,
+                argument_words: Vec::new(),
+                result_words: vec![ivm_abi::call::CallWordV1::Unit],
+            }],
             seiyaku_name: "DeepManifest".to_owned(),
             compiler_fingerprint: "ivm-artifact-admission-tests".to_owned(),
             abi_hash: ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1),
@@ -745,7 +713,14 @@ mod tests {
         };
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&interface.encode_section());
-        artifact.extend_from_slice(&ivm_abi::encoding::encode_halt().to_le_bytes());
+        for word in [
+            enc::encode_store(wide::memory::STORE64, 12, 0, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 10, 12, 0),
+            enc::encode_ri(wide::arithmetic::ADDI, 11, 0, 1),
+            enc::encode_rr(wide::control::JALR, 0, 1, 0),
+        ] {
+            artifact.extend_from_slice(&word.to_le_bytes());
+        }
         artifact
     }
     #[test]
@@ -893,97 +868,37 @@ mod tests {
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test keeps canonical, alternate-layout, malformed, and ambient-flag capability admission checks in one protocol fixture"
-    )]
-    fn capability_literal_validation_rejects_context_free_faults() {
-        let valid_handle = AssetHandle {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
-            scope: vec!["transfer".to_owned()],
-            subject: HandleSubject {
-                account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                origin_dsid: Some(DataSpaceId::new(7)),
-            },
-            budget: HandleBudget {
-                remaining: "1".parse().expect("canonical quantity"),
-                per_use: None,
-            },
-            handle_era: 1,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: vec![1],
-                epoch_id: 1,
-            },
-            target_lane: LaneId::new(0),
-            axt_binding: vec![1; 32],
-            manifest_view_root: vec![2; 32],
-            expiry_slot: 1,
-            max_clock_skew_ms: None,
-            issuer_context: iroha_data_model::nexus::AxtHandleIssuerContextV1::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let canonical_handle = encoded_value(&valid_handle);
+    fn anchored_spend_literal_requires_one_canonical_statically_bound_wire() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json"
+        )))
+        .expect("current signed-spend fixture");
+        let spend: AxtAnchoredSpendV1 =
+            norito::json::from_value(fixture["spends"]["happy"][0].clone())
+                .expect("signed-spend fixture");
+        let canonical =
+            ivm_abi::codec::encode_canonical_norito(&spend).expect("canonical signed-spend frame");
         assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &canonical_handle),
+            validate_literal_payload(PointerType::AxtAnchoredSpendV1, &canonical),
             Ok(())
         );
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate_handle = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            encoded_value(&valid_handle)
-        };
-        assert_ne!(alternate_handle, canonical_handle);
+        let mut malformed = spend;
+        malformed.draft.amount = Some(iroha_data_model::prelude::Quantity::from(99_u64));
+        let malformed =
+            ivm_abi::codec::encode_canonical_norito(&malformed).expect("canonical malformed frame");
         assert_eq!(
-            norito::decode_from_bytes::<AssetHandle>(&alternate_handle)
-                .expect("ordinary Norito accepts its advertised alternate layout"),
-            valid_handle
-        );
-        assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &alternate_handle),
+            validate_literal_payload(PointerType::AxtAnchoredSpendV1, &malformed),
             Err(VMError::InvalidMetadata)
         );
-        let mut malformed_handle = valid_handle.clone();
-        malformed_handle.axt_binding.pop();
         assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&malformed_handle)),
-            Err(VMError::InvalidMetadata)
+            PointerType::from_u16(0x000C),
+            None,
+            "retired standalone handle pointer type is unassigned"
         );
-        let mut unusable_handle = valid_handle.clone();
-        unusable_handle.budget.per_use = Some("0".parse().expect("zero quantity"));
-        assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&unusable_handle)),
-            Err(VMError::InvalidMetadata)
-        );
-        let mut malformed_handle = valid_handle.clone();
-        malformed_handle.scope.push("transfer".to_owned());
-        assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&malformed_handle)),
-            Err(VMError::InvalidMetadata)
-        );
-        let mut unusable_handle = valid_handle.clone();
-        unusable_handle.subject.account.clear();
-        assert_eq!(
-            validate_literal_payload(PointerType::AssetHandle, &encoded_value(&unusable_handle)),
-            Err(VMError::InvalidMetadata)
-        );
-        {
-            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            let ambient_before = encoded_value(&valid_handle);
-            assert_eq!(
-                validate_literal_payload(PointerType::AssetHandle, &canonical_handle),
-                Ok(())
-            );
-            assert_eq!(
-                encoded_value(&valid_handle),
-                ambient_before,
-                "admission must restore the caller's ambient Norito layout"
-            );
-        }
+    }
+    #[test]
+    fn proof_blob_literal_validation_rejects_empty_payload() {
         let valid_proof = ProofBlob {
             payload: vec![1],
             expiry_slot: None,

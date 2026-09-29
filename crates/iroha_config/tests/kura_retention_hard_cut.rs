@@ -1,13 +1,18 @@
-//! Validate the first-release hard cut to the canonical Kura lane-history retention setting.
+//! Validate that retired Kura retention settings are not configuration inputs.
 
-use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
+use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;
 
-const RETIRED_TOML_FIELDS: [&str; 2] = ["block_sync_roster_retention", "roster_sidecar_retention"];
-const RETIRED_ENV_NAMES: [&str; 2] = [
+const RETIRED_TOML_FIELDS: [&str; 3] = [
+    "block_sync_roster_retention",
+    "roster_sidecar_retention",
+    "lane_history_retention",
+];
+const RETIRED_ENV_NAMES: [&str; 3] = [
     "KURA_BLOCK_SYNC_ROSTER_RETENTION",
     "KURA_ROSTER_SIDECAR_RETENTION",
+    "KURA_LANE_HISTORY_RETENTION",
 ];
 
 fn base_reader() -> ConfigReader {
@@ -36,38 +41,6 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 #[test]
-fn canonical_lane_history_retention_parses_from_toml() {
-    let table = "[kura]\nlane_history_retention = 73\n"
-        .parse()
-        .expect("canonical inline TOML should parse");
-    let actual: ActualConfig = base_reader()
-        .with_toml_source(TomlSource::inline(table))
-        .read_and_complete::<UserConfig>()
-        .expect("canonical lane-history retention should be accepted")
-        .parse()
-        .expect("canonical lane-history retention should reach the actual config");
-
-    assert_eq!(actual.kura.lane_history_retention.get(), 73);
-}
-
-#[test]
-fn canonical_lane_history_retention_parses_from_environment() {
-    let env = MockEnv::new().set("KURA_LANE_HISTORY_RETENTION", "89");
-    let actual: ActualConfig = base_reader()
-        .with_env(env.clone())
-        .read_and_complete::<UserConfig>()
-        .expect("canonical lane-history environment setting should be accepted")
-        .parse()
-        .expect("canonical lane-history environment setting should reach the actual config");
-
-    assert_eq!(actual.kura.lane_history_retention.get(), 89);
-    assert!(
-        !env.unvisited().contains("KURA_LANE_HISTORY_RETENTION"),
-        "the canonical lane-history environment setting must be consumed"
-    );
-}
-
-#[test]
 fn retired_kura_retention_toml_fields_are_unknown() {
     for field in RETIRED_TOML_FIELDS {
         let table = format!("[kura]\n{field} = 17\n")
@@ -89,18 +62,15 @@ fn retired_kura_retention_toml_fields_are_unknown() {
 fn retired_kura_retention_environment_names_are_unvisited() {
     let env = MockEnv::new()
         .set(RETIRED_ENV_NAMES[0], "17")
-        .set(RETIRED_ENV_NAMES[1], "19");
-    let actual: ActualConfig = base_reader()
+        .set(RETIRED_ENV_NAMES[1], "19")
+        .set(RETIRED_ENV_NAMES[2], "23");
+    let _actual: ActualConfig = base_reader()
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment names are not schema inputs")
         .parse()
         .expect("retired environment names cannot alter Kura configuration");
 
-    assert_eq!(
-        actual.kura.lane_history_retention,
-        defaults::kura::LANE_HISTORY_RETENTION
-    );
     let unvisited = env.unvisited();
     for name in RETIRED_ENV_NAMES {
         assert!(

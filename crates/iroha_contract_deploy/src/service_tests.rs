@@ -9,7 +9,8 @@ use std::{
     num::NonZeroU64,
 };
 
-pub(super) fn fixture() -> Result<(Config, PlanRecord)> {
+/// Load the deterministic client configuration shared by deployment fixtures.
+fn fixture_config() -> Result<Config> {
     // Public deterministic SDK test identity; never a runtime deployment account.
     let source = br#"
 chain = "00000000-0000-0000-0000-000000000000"
@@ -27,6 +28,29 @@ nonce = false
     let (config, _) =
         Config::load_bytes_with_musubi_publication(Path::new("deployment-test.toml"), source)
             .map_err(|error| eyre!(format!("{error:?}")))?;
+    Ok(config)
+}
+
+/// Accepted fee quote for one exact signed fixture transaction.
+fn accepted_quote(fee: &FeePaymentIntent, transaction: &SignedTransaction) -> FeeQuoteResponse {
+    FeeQuoteResponse {
+        intent: fee.clone(),
+        observation: iroha_torii_shared::FeeQuoteObservation {
+            ledger_time_ms: 1,
+            next_block_height: 2,
+            route_dataspace_id: DataSpaceId::UNIVERSAL,
+        },
+        components: vec![],
+        capacities: vec![],
+        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+            debit_source: FeeDebitSource::Account(transaction.authority().clone()),
+            program_revision: None,
+        },
+    }
+}
+
+pub fn fixture() -> Result<(Config, PlanRecord)> {
+    let config = fixture_config()?;
     let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku Coffee { view fn points(int cups) -> int { return cups * 10; } }")
         .map_err(|error| eyre!(error))?;
@@ -65,20 +89,7 @@ nonce = false
     let sequence = deployment_transaction_sequence(false, uploads, register, commit);
     let quotes = sequence
         .iter()
-        .map(|(_, _, transaction)| FeeQuoteResponse {
-            intent: fee.clone(),
-            observation: iroha_torii_shared::FeeQuoteObservation {
-                ledger_time_ms: 1,
-                next_block_height: 2,
-                route_dataspace_id: DataSpaceId::UNIVERSAL,
-            },
-            components: vec![],
-            capacities: vec![],
-            decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
-                debit_source: FeeDebitSource::Account(transaction.authority().clone()),
-                program_revision: None,
-            },
-        })
+        .map(|(_, _, transaction)| accepted_quote(&fee, transaction))
         .collect();
     let transactions: Vec<_> = sequence
         .into_iter()
@@ -385,6 +396,55 @@ fn invalid_artifact_and_unauthenticated_governance_fail_before_network_access() 
 }
 
 #[test]
+fn native_sequence_signing_matches_the_retained_plan_layout() -> Result<()> {
+    let (config, record) = fixture()?;
+    let context = &record.preflight;
+    let service = DeploymentService::new(config.clone())?;
+    let artifact = hex::decode(&record.artifact_hex)?;
+    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
+    let request = DeploymentRequest {
+        artifact,
+        alias: context.contract_alias.clone(),
+        fee_payment: record.requested_fee.clone(),
+        governance_approvers: vec![],
+    };
+    // Signing reads only the nonce and the CAS address; the observed snapshot is inert here.
+    let state = ValidatedContractDeploymentState {
+        snapshot: norito::json::from_value(norito::json!({
+            "authority": (context.authority.to_string()),
+            "contract_alias": (context.contract_alias.to_string()),
+            "deploy_nonce": (context.deploy_nonce.to_string()),
+            "dataspace_alias": "universal",
+            "dataspace_id": "0",
+            "previous_contract_address": null,
+            "observed_block_height": "1",
+            "observed_block_hash": (context.observed_block_hash.clone()),
+            "ledger_time_ms": "1",
+            "chain_discriminant": (context.chain_discriminant.to_string()),
+        }))?,
+        deploy_nonce: context.deploy_nonce,
+        dataspace_id: context.dataspace_id,
+        previous_contract_address: context.previous_contract_address.clone(),
+    };
+    let sequence = service.sign_native_sequence(
+        &request,
+        verified.manifest.try_signed(&config.key_pair)?,
+        verified.code_hash,
+        &state,
+        &context.contract_address,
+    )?;
+    assert_eq!(sequence.len(), record.transactions.len());
+    for ((name, _, signed), retained) in sequence.iter().zip(&record.transactions) {
+        let expected = decode_transaction(retained)?;
+        assert_eq!(name, &retained.name);
+        assert_eq!(signed.authority(), expected.authority());
+        assert_eq!(signed.metadata(), expected.metadata());
+        assert_eq!(signed.instructions(), expected.instructions());
+    }
+    Ok(())
+}
+
+#[test]
 fn confirmed_rejection_or_expiry_is_durable_and_allows_only_explicit_new_work() -> Result<()> {
     for kind in ["Rejected", "Expired"] {
         let (_, record) = fixture()?;
@@ -403,6 +463,11 @@ fn confirmed_rejection_or_expiry_is_durable_and_allows_only_explicit_new_work() 
         assert!(!journal.exists("attempt-0001.json")?);
         let retained: DeploymentFailure = journal.read("failed-0000.json")?;
         assert_eq!(retained.proof, failure.proof);
+        // Boxed error evidence renders exactly like its durable failure record.
+        assert_eq!(
+            norito::json::to_vec(&failure)?,
+            norito::json::to_vec(&retained)?
+        );
         let JournalDisposition::Failed(inspected) =
             inspect_transactions(&record, &journal, &transport)?
         else {

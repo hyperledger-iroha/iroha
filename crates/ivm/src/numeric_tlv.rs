@@ -309,6 +309,27 @@ pub fn decode_quantity_bytes(envelope: &[u8]) -> Result<Quantity, VMError> {
         .map(QuantityValueV1::into_quantity)
         .map_err(map_frame_error)
 }
+/// Validate canonical numeric frames carried by generic pointer transport.
+///
+/// The pointer TLV header and hash are checked by the caller. This validates
+/// the nominal numeric payload before a guest can publish or consume it.
+pub(crate) fn validate_numeric_frame_if_needed(
+    pointer_type: PointerType,
+    frame: &[u8],
+) -> Result<(), VMError> {
+    match pointer_type {
+        PointerType::Int => IntValueV1::decode_frame(frame)
+            .map(|_| ())
+            .map_err(map_frame_error),
+        PointerType::Decimal => DecimalValueV1::decode_frame(frame)
+            .map(|_| ())
+            .map_err(map_frame_error),
+        PointerType::Quantity => QuantityValueV1::decode_frame(frame)
+            .map(|_| ())
+            .map_err(map_frame_error),
+        _ => Ok(()),
+    }
+}
 /// Strictly decode a staged integer operand.
 pub fn decode_int_metered(vm: &mut IVM, pointer: u64) -> Result<BigInt, VMError> {
     let snapshot = snapshot_metered(vm, pointer, PointerType::Int, MAX_INT_FRAME_BYTES_V1)?;
@@ -380,6 +401,37 @@ pub fn allocate_quantity_metered(vm: &mut IVM, value: &Quantity) -> Result<u64, 
 mod tests {
     use super::*;
     #[test]
+    fn pointer_transport_validates_numeric_frames_before_publication() {
+        let integer = BigInt::from_twos_bytes(&[0x7f; 64]).expect("signed 512-bit value");
+        let int_envelope = encode_int(&integer).expect("canonical Int envelope");
+        let int_frame = &int_envelope[OUTER_HEADER_BYTES..int_envelope.len() - OUTER_HASH_BYTES];
+        assert_eq!(
+            validate_numeric_frame_if_needed(PointerType::Int, int_frame),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_numeric_frame_if_needed(
+                PointerType::Int,
+                &norito::to_bytes(&17_i64).expect("retired i64 carrier")
+            ),
+            Err(VMError::PointerAbiFault(_))
+        ));
+        let mut oversized_body = vec![0_u8; 4 + 65];
+        oversized_body[..4].copy_from_slice(&65_u32.to_le_bytes());
+        oversized_body[4 + 64] = 1;
+        let oversized_frame =
+            norito::core::frame_bare_with_header_flags::<IntValueV1>(&oversized_body, 0)
+                .expect("well-framed out-of-domain Int");
+        assert!(matches!(
+            validate_numeric_frame_if_needed(PointerType::Int, &oversized_frame),
+            Err(VMError::PointerAbiFault(PointerAbiFaultV1::OversizedLength))
+        ));
+        assert_eq!(
+            validate_numeric_frame_if_needed(PointerType::Blob, b"untyped"),
+            Ok(())
+        );
+    }
+    #[test]
     fn all_three_envelopes_roundtrip_and_cross_types_fail() {
         let integer = BigInt::from_i128(-129);
         let decimal = Numeric::new(-125, 2);
@@ -411,7 +463,7 @@ mod tests {
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
         ));
         let mut unassigned = envelope.clone();
-        unassigned[..2].copy_from_slice(&0x0013_u16.to_be_bytes());
+        unassigned[..2].copy_from_slice(&0x000C_u16.to_be_bytes());
         assert!(matches!(
             decode_int_bytes(&unassigned),
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))

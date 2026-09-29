@@ -12,7 +12,6 @@ use iroha::{
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        sumeragi::SumeragiStatus,
         da::commitment::DaProofPolicyBundle,
         domain::Domain,
         isi::{
@@ -27,6 +26,7 @@ use iroha::{
             ManifestVersion, UniversalAccountId,
         },
         prelude::{FindAssetById, Identifiable, Quantity},
+        sumeragi::SumeragiStatus,
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
 };
