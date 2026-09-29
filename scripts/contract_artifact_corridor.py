@@ -24,8 +24,7 @@ Commands:
             artifact lock and the checkout sources.
 * `lock`    compile and rewrite the reviewed artifact lock, which records each
             contract's runtime template and named immutable references.
-* `materialize`, `compile-input`, `snapshot` serve the Node test harnesses and
-            the TRE qualification runner.
+* `materialize`, `compile-input` serve the Node test harnesses.
 """
 
 from __future__ import annotations
@@ -56,7 +55,6 @@ DEFAULT_OUTPUT_DIR = ROOT / "target" / "sccp-contract-artifacts"
 DEFAULT_COMPILER_CACHE = ROOT / "target" / "sccp-contract-tooling" / "compilers"
 MANIFEST_NAME = "sccp-contract-artifacts-v1.json"
 DEFAULT_MANIFEST = DEFAULT_OUTPUT_DIR / MANIFEST_NAME
-NATIVE_VECTORS_NAME = "native-transfer-event-v1.json"
 MANIFEST_SCHEMA = "iroha.sccp.contract-artifacts.v1"
 ARTIFACT_LOCK_SCHEMA = "iroha.sccp.contract-artifact-lock.v1"
 COMPILER_LOCK_SCHEMA = "iroha.sccp.contract-compiler-lock.v1"
@@ -1418,44 +1416,6 @@ def publish_manifest(output_dir: Path, manifest: Mapping[str, object]) -> Path:
     return output_dir / MANIFEST_NAME
 
 
-def snapshot_runtime_inputs(manifest_path: Path, native_vectors_path: Path, output_dir: Path) -> Tuple[Path, Path]:
-    """Publish one private, read-only snapshot of the TVM runtime inputs."""
-
-    if output_dir.exists() or output_dir.is_symlink():
-        raise CorridorError("runtime-input snapshot output must not already exist")
-    try:
-        parent_info = output_dir.parent.lstat()
-    except OSError as error:
-        raise CorridorError("runtime-input snapshot parent is unavailable") from error
-    if (
-        stat.S_ISLNK(parent_info.st_mode)
-        or not stat.S_ISDIR(parent_info.st_mode)
-        or parent_info.st_uid != os.geteuid()
-        or stat.S_IMODE(parent_info.st_mode) & 0o077
-    ):
-        raise CorridorError("runtime-input snapshot parent must be an owned private directory")
-    manifest_payload = _read_stable_regular_file(manifest_path, MAX_COMPILER_OUTPUT_BYTES, "contract artifact manifest")
-    vector_payload = _read_stable_regular_file(native_vectors_path, MAX_SOURCE_BYTES, "native transfer vectors")
-    _require_object(parse_json_bytes(manifest_payload, "contract artifact manifest"), "manifest")
-    _require_object(parse_json_bytes(vector_payload, "native transfer vectors"), "vectors")
-    os.mkdir(output_dir, 0o700)
-    outputs = ((output_dir / MANIFEST_NAME, manifest_payload), (output_dir / NATIVE_VECTORS_NAME, vector_payload))
-    try:
-        for destination, payload in outputs:
-            _write_private_file(destination, payload, 0o400)
-        os.chmod(output_dir, 0o500)
-        for destination, payload in outputs:
-            if _read_stable_regular_file(destination, MAX_COMPILER_OUTPUT_BYTES, destination.name) != payload:
-                raise CorridorError("runtime-input snapshot changed during publication")
-    except BaseException:
-        os.chmod(output_dir, 0o700)
-        for destination, _payload in outputs:
-            destination.unlink(missing_ok=True)
-        output_dir.rmdir()
-        raise
-    return outputs[0][0], outputs[1][0]
-
-
 def build_and_validate(
     repo_root: Path,
     compiler_lock_path: Path,
@@ -1509,12 +1469,6 @@ def _verify_command(args: argparse.Namespace) -> None:
     print(f"verified authenticated SCCP contract manifest: {args.manifest}")
 
 
-def _snapshot_command(args: argparse.Namespace) -> None:
-    manifest, vectors = snapshot_runtime_inputs(args.manifest, args.native_vectors, args.output_dir)
-    print(f"snapshotted authenticated SCCP contract manifest: {manifest}")
-    print(f"snapshotted Rust-generated SCCP native vectors: {vectors}")
-
-
 def _materialize_command(args: argparse.Namespace) -> None:
     spec = load_corridor_config().compilers[args.target]
     materialize_verified_compiler(spec, args.output, cache_dir=_cache(args))
@@ -1562,12 +1516,6 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--artifact-lock", type=Path, default=DEFAULT_ARTIFACT_LOCK)
     verify.add_argument("--repo-root", type=Path, default=ROOT)
     verify.set_defaults(handler=_verify_command)
-
-    snapshot = subcommands.add_parser("snapshot", help="copy TVM runtime inputs once into a private read-only directory")
-    snapshot.add_argument("--manifest", type=Path, required=True)
-    snapshot.add_argument("--native-vectors", type=Path, required=True)
-    snapshot.add_argument("--output-dir", type=Path, required=True)
-    snapshot.set_defaults(handler=_snapshot_command)
 
     materialize = subcommands.add_parser("materialize", help="authenticate and publish one native compiler")
     materialize.add_argument("--target", choices=TARGETS, required=True)

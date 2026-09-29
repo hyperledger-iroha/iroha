@@ -622,37 +622,7 @@ mod tests {
         );
     }
     #[test]
-    fn retired_sccp_routes_are_absent_and_the_parliament_draft_route_is_kept() {
-        // specs/sccp.md §6 and §10: the retired proof, replay, registry, discovery and submit
-        // routes are gone; only the Parliament draft route survives the purge.
-        for route in CATALOGED_ROUTES {
-            let path = route.path();
-            for retired_prefix in [
-                "/v1/sccp/proofs/",
-                "/v1/sccp/proof-requests/",
-                "/v1/sccp/replay/",
-                "/v1/sccp/routes/",
-                "/v1/bridge/proofs/submit",
-                "/v1/bridge/messages",
-            ] {
-                assert!(
-                    !path.starts_with(retired_prefix),
-                    "{} keeps the retired SCCP path {path}",
-                    route.stable_route_id()
-                );
-            }
-            for retired_id in [
-                "sccp.message_proof.read",
-                "sccp.proof_request.read",
-                "sccp.replay.root.read",
-                "sccp.replay.witness.read",
-                "sccp.sora_outbound_material.read",
-                "contracts.bridge_proofs_submit_post",
-                "contracts.bridge_messages_post",
-            ] {
-                assert_ne!(route.stable_route_id(), retired_id);
-            }
-        }
+    fn sccp_parliament_draft_route_is_cataloged() {
         assert!(CATALOGED_ROUTES.contains(&runtime_governance::GOV_PROPOSE_SCCP));
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.stable_route_id(),

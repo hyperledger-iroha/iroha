@@ -32769,7 +32769,7 @@ pub fn add_plain_scalar(
     params.validate()?;
     validate_plain_scalar(params, scalar)?;
     validate_ciphertext(params, ciphertext)?;
-    let mut encoded = zero_poly(params);
+    let mut encoded = zeroize::Zeroizing::new(zero_poly(params));
     encoded[0] = scalar % params.plaintext_modulus;
     Ok(BfvCiphertext {
         c0: poly_add_mod(params, &ciphertext.c0, &encoded),
@@ -34088,7 +34088,7 @@ fn validate_galois_automorphism_power(
     );
     Ok(power)
 }
-fn validate_ciphertext(params: &BfvParameters, ciphertext: &BfvCiphertext) -> Result<(), BfvError> {
+pub(crate) fn validate_ciphertext(params: &BfvParameters, ciphertext: &BfvCiphertext) -> Result<(), BfvError> {
     params.validate()?;
     validate_poly(params, &ciphertext.c0, "ciphertext c0")?;
     validate_poly(params, &ciphertext.c1, "ciphertext c1")

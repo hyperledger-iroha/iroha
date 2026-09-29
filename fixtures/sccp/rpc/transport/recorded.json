@@ -1,45 +1,6 @@
 {
   "captured": "2026-09-26",
   "exchanges": {
-    "beacon/bootstrap": {
-      "body": "beacon/light_client_bootstrap.ssz",
-      "content_type": "application/octet-stream",
-      "headers": {
-        "eth-consensus-version": "fulu"
-      },
-      "request": {
-        "accept": "application/octet-stream",
-        "method": "GET",
-        "path": "/eth/v1/beacon/light_client/bootstrap/0xfea1d5a9a843e3afece8bdf7cfe4e0701d9b6282af51715834783170128f6ecd"
-      },
-      "source": "https://lodestar-mainnet.chainsafe.io",
-      "status": 200
-    },
-    "beacon/finality_update": {
-      "body": "beacon/light_client_finality_update.ssz",
-      "content_type": "application/octet-stream",
-      "headers": {
-        "eth-consensus-version": "fulu"
-      },
-      "request": {
-        "accept": "application/octet-stream",
-        "method": "GET",
-        "path": "/eth/v1/beacon/light_client/finality_update"
-      },
-      "source": "https://lodestar-mainnet.chainsafe.io",
-      "status": 200
-    },
-    "beacon/finality_update_json_only": {
-      "body": "beacon/light_client_finality_update_json_only.json",
-      "content_type": "application/json",
-      "request": {
-        "accept": "application/octet-stream",
-        "method": "GET",
-        "path": "/eth/v1/beacon/light_client/finality_update"
-      },
-      "source": "https://ethereum-beacon-api.publicnode.com",
-      "status": 200
-    },
     "beacon/headers_finalized": {
       "body": "beacon/headers_finalized.json",
       "content_type": "application/json; charset=utf-8",
@@ -47,34 +8,6 @@
         "accept": "application/json",
         "method": "GET",
         "path": "/eth/v1/beacon/headers/finalized"
-      },
-      "source": "https://lodestar-mainnet.chainsafe.io",
-      "status": 200
-    },
-    "beacon/optimistic_update": {
-      "body": "beacon/light_client_optimistic_update.ssz",
-      "content_type": "application/octet-stream",
-      "headers": {
-        "eth-consensus-version": "fulu"
-      },
-      "request": {
-        "accept": "application/octet-stream",
-        "method": "GET",
-        "path": "/eth/v1/beacon/light_client/optimistic_update"
-      },
-      "source": "https://lodestar-mainnet.chainsafe.io",
-      "status": 200
-    },
-    "beacon/updates": {
-      "body": "beacon/light_client_updates.ssz",
-      "content_type": "application/octet-stream",
-      "headers": {
-        "eth-consensus-version": "fulu,fulu"
-      },
-      "request": {
-        "accept": "application/octet-stream",
-        "method": "GET",
-        "path": "/eth/v1/beacon/light_client/updates?start_period=1865&count=2"
       },
       "source": "https://lodestar-mainnet.chainsafe.io",
       "status": 200
@@ -202,45 +135,6 @@
       },
       "source": "https://ethereum-rpc.publicnode.com",
       "status": 200
-    },
-    "evm/eth_feeHistory": {
-      "body": "evm/eth_feeHistory.json",
-      "content_type": "application/json",
-      "request": {
-        "json_rpc": {
-          "method": "eth_feeHistory",
-          "params": [
-            "0x4",
-            "0x18daf08",
-            [
-              25,
-              75
-            ]
-          ]
-        },
-        "method": "POST",
-        "path": ""
-      },
-      "source": "https://ethereum-rpc.publicnode.com",
-      "status": 200
-    },
-    "evm/eth_getBlockByNumber_full": {
-      "body": "evm/eth_getBlockByNumber_full.json",
-      "content_type": "application/json",
-      "request": {
-        "json_rpc": {
-          "method": "eth_getBlockByNumber",
-          "params": [
-            "0x18daf08",
-            true
-          ]
-        },
-        "method": "POST",
-        "path": ""
-      },
-      "source": "https://ethereum-rpc.publicnode.com",
-      "status": 200,
-      "trimmed": "transactions reduced to the originals at indexes 32, 110, 186 and 317 (types 0x0, 0x3, 0x4, 0x2); header fields are verbatim"
     },
     "evm/eth_getBlockByNumber_hashes": {
       "body": "evm/eth_getBlockByNumber_hashes.json",

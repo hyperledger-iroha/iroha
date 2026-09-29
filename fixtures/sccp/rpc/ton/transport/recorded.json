@@ -17,11 +17,6 @@
       "answer_bytes": 5544,
       "request": "250e896bffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed200000000b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe"
     },
-    "get_all_shards_info": {
-      "answer": "answers/get_all_shards_info.tl",
-      "answer_bytes": 700,
-      "request": "6bfdd374ffffffff0000000000000080d418b0051d8e10b63fb95d5b1ebadc203cf69afc3810f980e0e1ef7d9c9f907b1fa6623d8da7a0ce3807681e8dd9c8f1b199276f5ab75fcdfa7e9dc458b31c3b1dcdeed2"
-    },
     "get_block": {
       "answer": "answers/get_block.tl",
       "answer_bytes": 10040,

@@ -464,119 +464,6 @@ class HttpClientTransport private constructor(
             )
         }
 
-    /** Fetch and strictly decode exact-lane SCCP capability discovery. */
-    fun getSccpCapabilities(): CompletableFuture<SccpCapabilities> =
-        fetchSccpJson(
-            buildJsonGetRequest(
-                "/v1/sccp/capabilities",
-                emptyMap(),
-                SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
-            ),
-            SccpJsonParser::parseCapabilities,
-            "SCCP capabilities",
-        )
-
-    /** Fetch and strictly decode the authoritative typed SCCP route registry. */
-    fun getSccpRegistry(): CompletableFuture<SccpRegistryV1> =
-        fetchSccpJson(
-            buildJsonGetRequest(
-                "/v1/sccp/registry",
-                emptyMap(),
-                SCCP_JSON_RESPONSE_MAX_BYTES,
-            ),
-            SccpJsonParser::parseRegistry,
-            "SCCP registry",
-        )
-
-    /** Fetch one query-free finalized SCCP message bundle by canonical message id. */
-    fun getSccpMessageBundle(messageIdHex: String): CompletableFuture<SccpMessageBundleV1> {
-        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
-        return fetchSccpJson(
-            buildJsonGetRequest(
-                "/v1/sccp/proofs/message/$messageId",
-                emptyMap(),
-                SCCP_JSON_RESPONSE_MAX_BYTES,
-            ),
-            Function { bytes ->
-                SccpJsonParser.parseMessageBundle(bytes).also {
-                    require(it.messageIdHex == messageId) {
-                        "SCCP bundle message id does not match the requested id"
-                    }
-                }
-            },
-            "SCCP message bundle",
-        )
-    }
-
-    /** Fetch one query-free state-derived Groth16 request by canonical message id. */
-    fun getSccpProofRequest(messageIdHex: String): CompletableFuture<SccpGroth16ProofRequestV1> {
-        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
-        return fetchSccpJson(
-            buildJsonGetRequest(
-                "/v1/sccp/proof-requests/$messageId",
-                emptyMap(),
-                SCCP_JSON_RESPONSE_MAX_BYTES,
-            ),
-            Function { bytes ->
-                SccpJsonParser.parseProofRequest(bytes).also {
-                    require(it.messageIdHex == messageId) {
-                        "SCCP proof request message id does not match the requested id"
-                    }
-                }
-            },
-            "SCCP proof request",
-        )
-    }
-
-    /** Fetch one concrete BN254 or TON BLS12-381 SCCP proof request as canonical Norito bytes. */
-    fun getSccpProofRequestNorito(messageIdHex: String): CompletableFuture<ByteArray> {
-        val messageId = normalizeExactNonZeroEvenLengthHex(messageIdHex, "messageIdHex", 32)
-        val request = buildExactNoritoGetRequest(
-            "/v1/sccp/proof-requests/$messageId",
-            SCCP_MAX_GROTH16_ARTIFACT_BYTES.toLong(),
-        )
-        return fetchExactNoritoBytes(request, "SCCP proof request")
-            .thenApply { validateCanonicalSccpProofRequestNorito(it, "SCCP proof request") }
-    }
-
-    /** Fetch newest-first exact-context SCCP outbound messages. */
-    @JvmOverloads
-    fun getSccpRecentMessages(
-        from: BigInteger? = null,
-        afterIndex: Int? = null,
-        limit: Int? = null,
-    ): CompletableFuture<SccpRecentMessages> {
-        require(from == null || (from.signum() > 0 && from.bitLength() <= 64)) {
-            "from must be a positive u64 height"
-        }
-        require(afterIndex == null || from != null) { "afterIndex requires the paired from height" }
-        require(afterIndex == null || afterIndex in 0 until SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1) {
-            "afterIndex must be between 0 and ${SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1}"
-        }
-        require(limit == null || limit in 1..50) { "limit must be between 1 and 50" }
-        val query = linkedMapOf<String, String>()
-        from?.let { query["from"] = it.toString() }
-        afterIndex?.let { query["after_index"] = it.toString() }
-        limit?.let { query["limit"] = it.toString() }
-        return fetchSccpJson(
-            buildJsonGetRequest(
-                "/v1/sccp/messages/recent",
-                query,
-                SCCP_RECENT_RESPONSE_MAX_BYTES,
-            ),
-            SccpJsonParser::parseRecentMessages,
-            "SCCP recent messages",
-        )
-    }
-
-    /** Continue newest-first SCCP discovery from an exact server-issued cursor. */
-    @JvmOverloads
-    fun getSccpRecentMessages(
-        cursor: SccpRecentCursor,
-        limit: Int? = null,
-    ): CompletableFuture<SccpRecentMessages> =
-        getSccpRecentMessages(cursor.from, cursor.afterIndex, limit)
-
     fun getIdentifierClaimByReceiptHash(receiptHash: String): CompletableFuture<Optional<IdentifierClaimRecord>> {
         val normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash")
         return fetchJsonAllowingNotFound(buildJsonGetRequest("/v1/identifiers/receipts/${encodePathSegment(normalizedReceiptHash)}", emptyMap()), IdentifierJsonParser::parseClaimRecord, "identifier claim lookup")
@@ -2297,12 +2184,6 @@ class HttpClientTransport private constructor(
         }
     }
 
-    private fun <T> fetchSccpJson(
-        request: TransportRequest,
-        parser: Function<ByteArray, T>,
-        errorContext: String,
-    ): CompletableFuture<T> = fetchExactJson(request, parser, errorContext)
-
     private fun <T> fetchExactJson(
         request: TransportRequest,
         parser: Function<ByteArray, T>,
@@ -2635,13 +2516,6 @@ class HttpClientTransport private constructor(
         }
     }
 
-    private fun requireExactSccpJsonResponse(
-        response: TransportResponse,
-        errorContext: String,
-    ) {
-        requireExactJsonResponse(response, errorContext)
-    }
-
     private fun requireExactJsonResponse(
         response: TransportResponse,
         errorContext: String,
@@ -2792,10 +2666,7 @@ class HttpClientTransport private constructor(
         private const val U32_MAX = 4_294_967_295L
         private const val FEE_QUOTE_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES = 64L * 1024L
-        private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
-        private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
-        private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
         private const val ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L
         private const val DEFAULT_TRANSACTION_TTL_MS = 100_000L
@@ -3469,81 +3340,10 @@ class HttpClientTransport private constructor(
             require(value.trim() == value) { "$field must be a canonical hex string" }
             return normalizeEvenLengthHex(value, field)
         }
-        @JvmStatic internal fun normalizeNonZeroEvenLengthHex(value: String, field: String, expectedByteLength: Int? = null): String {
-            val normalized = normalizeEvenLengthHex(value, field)
-            require(normalized.any { it != '0' }) { "$field must not be all zero" }
-            if (expectedByteLength != null) {
-                require(normalized.length == expectedByteLength * 2) { "$field must be a $expectedByteLength-byte hex string" }
-            }
-            return normalized
-        }
-        @JvmStatic internal fun normalizeExactNonZeroEvenLengthHex(value: String, field: String, expectedByteLength: Int? = null): String {
-            val normalized = normalizeExactEvenLengthHex(value, field)
-            require(normalized.any { it != '0' }) { "$field must not be all zero" }
-            if (expectedByteLength != null) {
-                require(normalized.length == expectedByteLength * 2) { "$field must be a $expectedByteLength-byte hex string" }
-            }
-            return normalized
-        }
         @JvmStatic internal fun normalizeHexBytes(value: String, field: String, expectedByteLength: Int): String {
             val normalized = normalizeEvenLengthHex(value, field)
             require(normalized.length == expectedByteLength * 2) { "$field must be a $expectedByteLength-byte hex string" }
             return normalized
-        }
-        @JvmStatic internal fun preflightSccpBridgeSubmitJson(body: ByteArray, path: String) {
-            require(String(body, StandardCharsets.UTF_8).toByteArray(StandardCharsets.UTF_8).contentEquals(body)) {
-                "SCCP bridge submit payload must be UTF-8 JSON"
-            }
-            val parsed = try {
-                JsonParser.parse(String(body, StandardCharsets.UTF_8))
-            } catch (ex: RuntimeException) {
-                throw IllegalArgumentException("bridge submit payload must be valid JSON", ex)
-            }
-            val fields = parsed as? Map<*, *>
-                ?: throw IllegalArgumentException("bridge submit payload must be a JSON object")
-            val allowed = when (path) {
-                "/v1/bridge/proofs/submit" -> SCCP_PROOF_SUBMIT_FIELDS
-                "/v1/bridge/messages" -> SCCP_MESSAGE_SUBMIT_FIELDS
-                else -> throw IllegalArgumentException("unsupported SCCP bridge submit path")
-            }
-            val unknown = fields.keys.firstOrNull { it !is String || it !in allowed }
-            require(unknown == null) { "unknown or retired bridge submit field `$unknown`" }
-            val authority = fields["authority"] as? String
-                ?: throw IllegalArgumentException("authority is required and must be canonical")
-            requireCanonicalSccpAuthority(authority)
-            FeePaymentJson.parse(
-                fields["fee_payment"],
-                "bridge submit payload.fee_payment",
-            )
-            val artifactField = if (path == "/v1/bridge/messages") {
-                "native_proof_b64"
-            } else {
-                "destination_proof_b64"
-            }
-            val artifact = optionalSccpArtifact(fields, artifactField)
-                ?: throw IllegalArgumentException("$artifactField is required")
-            validateCanonicalSccpNoritoBase64(
-                artifact,
-                artifactField,
-                if (artifactField == "destination_proof_b64") {
-                    SCCP_MAX_DESTINATION_ARTIFACT_BYTES
-                } else {
-                    SCCP_MAX_NATIVE_PROOF_BYTES
-                },
-                if (artifactField == "destination_proof_b64") {
-                    SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME
-                } else {
-                    SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME
-                },
-            )
-            if (path == "/v1/bridge/messages") {
-                val replayWitness = optionalSccpArtifact(fields, "replay_witness_b64")
-                    ?: throw IllegalArgumentException("replay_witness_b64 is required")
-                validateCanonicalSccpReplayWitnessBase64(
-                    replayWitness,
-                    "replay_witness_b64",
-                )
-            }
         }
         @JvmStatic internal fun normalizeHex16(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 32) { "$field must contain 32 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
@@ -3688,21 +3488,5 @@ class HttpClientTransport private constructor(
             }
             return out.toString()
         }
-
-        private val SCCP_PROOF_SUBMIT_FIELDS = setOf(
-            "authority", "fee_payment", "destination_proof_b64",
-        )
-        private val SCCP_MESSAGE_SUBMIT_FIELDS = setOf(
-            "authority", "fee_payment", "native_proof_b64", "replay_witness_b64",
-        )
-
-        private fun optionalSccpArtifact(fields: Map<*, *>, field: String): String? =
-            when (val value = fields[field]) {
-                null -> null
-                is String -> value
-                else -> throw IllegalArgumentException(
-                    "$field must be a canonical padded base64 string"
-                )
-            }
     }
 }

@@ -15,11 +15,9 @@ import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
-import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { canonicalizeDomainIdLabel } from "./domainId.js";
 
 import { parseCanonicalContractAddress } from "./contractAddress.js";
-import { networkIdBytes } from "./networkId.js";
 import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 export {
   buildActivateRetailDailyLimitV1InstructionJson,
@@ -105,7 +103,6 @@ const MIN_ELECTION_OPTIONS_V1 = 2;
 const MAX_ELECTION_OPTIONS_V1 = 64;
 const TEXT_MUST_BE_GREATER_THAN_ZERO = (TEXT_MUST_BE + "greater than zero");
 const TEXT_MULTISIG_PROPOSE_2 = "multisigPropose";
-const TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE = "proposeSccpRouteGovernance";
 const TEXT_GRANT_ACCOUNT_PERMISSION = "grantAccountPermission.";
 const TEXT_INCLUSIVE_FOR_DETERMINISTIC_JSON_ENCODING = " (inclusive) for deterministic JSON encoding";
 const TEXT_VALUE_PROGRAM = ".value.program_";
@@ -4707,30 +4704,6 @@ export function buildProposeDeployContractInstruction(options) {
     );
   }
   return { ProposeDeployContract: payload };
-}
-
-/**
- * Build a `ProposeSccpRouteGovernance` instruction payload.
- * @param {object} options
- * @returns {{ProposeSccpRouteGovernance: object}}
- */
-export function buildProposeSccpRouteGovernanceInstruction(options) {
-  const source = assertPlainObject(options, TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE);
-  rejectGovernancePrivateKeyFieldsDeep(source, TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE);
-  assertAllowedFields(
-    source,
-    new Set(["networkId", "action"]),
-    TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE,
-  );
-  networkIdBytes(source.networkId, "proposeSccpRouteGovernance.networkId");
-  return {
-    ProposeSccpRouteGovernance: {
-      anchor: {
-        network_id: source.networkId.literal,
-        action: normalizeSccpRouteGovernanceAction(source.action),
-      },
-    },
-  };
 }
 
 /**

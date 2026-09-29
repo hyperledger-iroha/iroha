@@ -1525,7 +1525,6 @@ macro_rules! with_world_overlay_fields {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
-            sccp_light_client_checkpoint_expiry,
             ]
         }
     };
@@ -6442,10 +6441,6 @@ pub struct WorldData {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         Storage<(iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    #[norito(skip)]
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        Storage<(u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Placeholder buffer of events pending publication to external subscribers.
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
@@ -7476,10 +7471,6 @@ pub struct WorldBlockFields<'world> {
     #[norito(skip)]
     pub(crate) sccp_light_client_stride_index:
         StorageField<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    #[norito(skip)]
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageField<'world, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Block-local buffer of events pending publication to external subscribers.
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
@@ -8129,7 +8120,6 @@ impl WorldBlock<'_> {
             sccp_light_client_sets,
             sccp_light_client_checkpoints,
             sccp_light_client_stride_index,
-            sccp_light_client_checkpoint_expiry,
         );
         out
     }
@@ -9053,9 +9043,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageTransaction<'block, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageTransaction<'block, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Parent block buffer that receives transaction-local external events on apply.
     pub(crate) external_event_sink: &'block mut Vec<EventBox>,
     /// Transaction-local buffer of external events. Dropping a transaction drops its events.
@@ -10844,9 +10831,6 @@ pub struct WorldView<'world> {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     pub(crate) sccp_light_client_stride_index:
         StorageView<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    pub(crate) sccp_light_client_checkpoint_expiry:
-        StorageView<'world, (u64, iroha_data_model::bridge::SccpNetworkV1, u64), ()>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageView<'world, Hash, EvidenceRecord>,
     /// Contract manifests
@@ -23952,8 +23936,6 @@ macro_rules! world_ro_accessors {
             storage sccp_light_client_checkpoints: (iroha_data_model::bridge::SccpNetworkV1, u64) => iroha_data_model::sccp::light_client::SccpLcCheckpointV1;
             /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
             storage sccp_light_client_stride_index: (iroha_data_model::bridge::SccpNetworkV1, u64) => u64;
-            /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-            storage sccp_light_client_checkpoint_expiry: (u64, iroha_data_model::bridge::SccpNetworkV1, u64) => ();
         );
     };
 }
@@ -27466,7 +27448,6 @@ impl WorldTransaction<'_, '_> {
             sccp_light_client_sets: _,
             sccp_light_client_checkpoints: _,
             sccp_light_client_stride_index: _,
-            sccp_light_client_checkpoint_expiry: _,
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
@@ -27786,7 +27767,6 @@ impl WorldTransaction<'_, '_> {
         self.sccp_light_client_sets.apply();
         self.sccp_light_client_checkpoints.apply();
         self.sccp_light_client_stride_index.apply();
-        self.sccp_light_client_checkpoint_expiry.apply();
         self.peers.apply();
         self.consensus_schedule.apply();
         self.parameters.apply();
@@ -33526,13 +33506,6 @@ impl State {
     #[track_caller]
     pub fn zk_snapshot(&self) -> iroha_config::parameters::actual::Zk {
         self.zk.clone()
-    }
-    /// Return the SCCP policy identity appropriate for peer capability matching.
-    ///
-    /// SCCP v1 has no node-local or registry-derived policy input; see [`sccp_policy_hash_v1`].
-    #[must_use]
-    pub fn sccp_policy_hash_snapshot(&self) -> [u8; 32] {
-        sccp_policy_hash_v1()
     }
     /// Snapshot the current pipeline configuration.
     ///
@@ -51920,12 +51893,12 @@ fn zk_policy_put_option_vk_ref(
 }
 /// SCCP input of the confidential consensus policy hash.
 ///
-/// The retired governed SCCP registry is gone: SCCP v1 consensus parameters live in world state
-/// and change only through Parliament enactment (`specs/sccp.md` §4.1), and the `[zk.sccp]` native
-/// verifier work limits are bound through [`compute_zk_consensus_policy_hash`]. The SCCP input
-/// binds the compiled light-client chain profiles and verifier bounds
-/// (`iroha_sccp::light_client::profile::policy_hash_contribution`), so peers that would verify
-/// source-chain proofs differently cannot agree on a policy (`specs/sccp.md` §4.13).
+/// SCCP v1 consensus parameters live in world state and change only through Parliament enactment
+/// (`specs/sccp.md` §4.1), and the `[zk.sccp]` native verifier work limits are bound through
+/// [`compute_zk_consensus_policy_hash`]. The SCCP input binds the compiled light-client chain
+/// profiles and verifier bounds (`iroha_sccp::light_client::profile::policy_hash_contribution`),
+/// so peers that would verify source-chain proofs differently cannot agree on a policy
+/// (`specs/sccp.md` §4.13).
 #[must_use]
 pub fn sccp_policy_hash_v1() -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -52016,7 +51989,6 @@ pub fn compute_zk_consensus_policy_hash(
         "stark.max_proof_bytes",
         zk_config.stark.max_proof_bytes,
     );
-    // TODO(ws21): meter SCCP v1 verifier work against these consensus-bound limits.
     let sccp = zk_config.sccp;
     zk_policy_put_u32(
         &mut h,

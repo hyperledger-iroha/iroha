@@ -16,6 +16,8 @@ class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val outputOpeningPublicKey: String,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
     @JvmField val phoneRetailAttestorPublicKey: String? = null,
+    /** Present for programmed RAM-FHE policies; the initializer identity is required within it. */
+    @JvmField val ramFheProfile: RamFheProfile? = null,
 ) {
     init {
         require(programId.isNotBlank()) { "programId must not be blank" }

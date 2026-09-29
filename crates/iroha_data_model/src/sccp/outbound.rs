@@ -11,9 +11,6 @@ use crate::{
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-/// Largest canonical transfer payload (§3.2).
-pub const SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1: usize = 4_096;
-
 /// How a destination voided a nonce (§4.16, §5.1.8).
 #[derive(
     Debug,
@@ -292,6 +289,5 @@ mod tests {
         for status in [recorded, voided, refunded, stranded] {
             assert!(!status.is_refund_pending());
         }
-        assert_eq!(SCCP_TRANSFER_PAYLOAD_MAX_BYTES_V1, 4_096);
     }
 }

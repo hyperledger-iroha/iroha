@@ -288,7 +288,6 @@ fn incentives_open_dispute_produces_payload() {
     let dispute_path = dispute_file.path().to_path_buf();
     let args = IncentivesOpenDisputeArgs {
         instruction: instruction_file.path().to_path_buf(),
-        treasury_account: sample_account_literal("treasury"),
         submitted_by: sample_account_literal("operator"),
         requested_amount: "25".into(),
         reason: "calibration".into(),

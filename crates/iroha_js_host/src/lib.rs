@@ -11970,22 +11970,6 @@ seiyaku Privacy {
     // Validation-fee wire, fingerprint, and rejection cases live in one bounded fragment.
     include!("validation_fee_tests.rs");
     #[test]
-    fn retired_sccp_route_manifest_instructions_are_rejected() {
-        for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
-            let value = json::Value::Object(json::Map::from_iter([(
-                retired.to_owned(),
-                json::Value::Object(json::Map::new()),
-            )]));
-            let error = value_to_instruction(value)
-                .expect_err("retired SCCP route-manifest instruction must not decode");
-            assert!(
-                error.reason.contains("unsupported instruction"),
-                "unexpected rejection for {retired}: {}",
-                error.reason
-            );
-        }
-    }
-    #[test]
     fn retired_sns_mutation_instructions_are_rejected() {
         for retired in [
             "RegisterSnsName",

@@ -12,8 +12,7 @@ whose `iroha_native._crypto` extension owns all cryptographic identity admission
 Account constructors and exact I105 parsers require ABI 24 and preserve all eleven
 key algorithms and complete weighted multisig policies. `AccountId` is always
 domainless. Missing native validation fails explicitly, and canonical parsers
-reject surrounding whitespace. SCCP account principals require exact COMPACT_LEN
-AccountId bytes and a 65,535-byte maximum.
+reject surrounding whitespace.
 
 ## Quickstart
 
@@ -444,7 +443,10 @@ Contract deployment is performed by locally signing the native code-upload,
 manifest-registration, and atomic `CommitContractDeployment` instructions;
 the client does not expose a server-side deployment wrapper.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+The IVM replay-binding backend label is `halo2/pasta/ivm-replay-binding-v1`;
+its canonical circuit ID is `halo2/pasta/ipa/ivm-replay-binding-v1`. These
+are distinct registry fields. The proof binds public commitments; validators
+establish execution validity through authenticated VM replay.
 
 Verifying-key register/update helpers validate production backends, the
 required `authority`, height ranges, and inline verifier-key commitments before

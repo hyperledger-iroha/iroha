@@ -1,14 +1,13 @@
-//! SCCP (SORA Cross-Chain Protocol) primitives for Iroha (`specs/sccp.md` revision 3).
+//! SCCP (SORA Cross-Chain Protocol) primitives for Iroha (`specs/sccp.md`).
 //!
 //! [`v1`] holds the network-free contract-visible encodings, [`light_client`] the stateless
 //! inbound light-client checks and [`api`] the Torii read-API records. The Ethereum consensus
 //! primitives (`ethereum_native`, re-exported at the crate root) and the Ethereum wire and
 //! execution-layer primitives ([`ethereum_source`]) back [`light_client::ethereum`] and the
-//! receipt openings of [`light_client::bsc`]. The TON module (`ton_native`) keeps the native
-//! chain-verification primitives its v1 light client is being built from; the retired Groth16,
-//! replay-archive and anchor-based message paths and the full Parlia and TRON schedule replays
-//! are gone. `test_support` (under `cfg(test)` and the `test-fixtures` feature)
-//! holds deterministic synthetic source chains.
+//! receipt openings of [`light_client::bsc`]. The TON module (`ton_native`, re-exported at the
+//! crate root) holds the native `BoC`, cell, TL, signature and transaction primitives behind
+//! [`light_client::ton`] and the `iroha_sccp_rpc` TON builders. `test_support` (under
+//! `cfg(test)` and the `test-fixtures` feature) holds deterministic synthetic source chains.
 //!
 //! The crate targets the Rust standard library unconditionally, and BLS verification is not
 //! feature-gated, so Cargo feature selection cannot change consensus admission results.
@@ -29,10 +28,8 @@ mod test_fixtures;
 use alloc::vec::Vec;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use test_fixtures::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1,
-    sccp_finalize_native_genesis_network_block_test_fixture_v1,
-    sccp_finalize_taira_block_test_fixture_v1,
-    sccp_finalize_taira_native_operation_block_test_fixture_v1, sccp_taira_finality_network_id_v1,
+    SccpFinalizedBlockTestFixtureV1, sccp_finalize_taira_block_test_fixture_v1,
+    sccp_finalize_taira_native_operation_block_test_fixture_v1,
 };
 
 /// Fixed 256-bit protocol hash or word.

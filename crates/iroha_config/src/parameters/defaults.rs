@@ -4914,7 +4914,7 @@ pub mod sccp {
         pub const POLL_INTERVAL_MS: u64 = 60_000;
         /// Timeout of one RPC request before failing over to the next endpoint.
         pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
-        /// Largest encoded advance the keeper builds.
+        /// Largest encoded advance the keeper submits.
         pub const MAX_ADVANCE_BYTES: usize = 262_144;
         /// Longest accepted endpoint list per chain.
         pub const MAX_ENDPOINTS_PER_LIST: usize = 64;

@@ -6,6 +6,8 @@
 //! the same polynomial and does not relax uncertain-completion admission.
 
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
+#[cfg(test)]
+use super::super::super::prover_observation;
 use super::*;
 use crate::privacy_engines::transparent_stark::masked_trace_coefficients_on_coset_v1;
 use fastpq_prover::goldilocks_transform::{
@@ -48,6 +50,8 @@ impl MainTraceCosetEvaluatorV1 {
             available,
             fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
         );
+        #[cfg(test)]
+        prover_observation::policy_v1(device_columns);
         Ok(Self {
             evaluation_rows: layout.common_lde_size(),
             device_columns,
@@ -68,9 +72,11 @@ impl MainTraceCosetEvaluatorV1 {
         // An already admitted CPU phase must also stop if another device call
         // has since left a live private allocation with uncertain completion.
         if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
+            #[cfg(test)]
+            prover_observation::failed_transform_v1();
             return Err(AggregateStarkErrorV1::InternalInvariant);
         }
-        self.evaluate_with_v1(columns, native_log, common_log, |values, root| {
+        let result = self.evaluate_with_v1(columns, native_log, common_log, |values, root| {
             transform_goldilocks_columns_v1(
                 values,
                 root,
@@ -78,7 +84,12 @@ impl MainTraceCosetEvaluatorV1 {
                 fastpq_prover::ExecutionMode::Auto,
             )
             .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
-        })
+        });
+        #[cfg(test)]
+        if result.is_err() {
+            prover_observation::failed_transform_v1();
+        }
+        result
     }
 
     fn evaluate_with_v1(
@@ -126,6 +137,8 @@ impl MainTraceCosetEvaluatorV1 {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             self.receipt.cpu_columns += columns.len();
+            #[cfg(test)]
+            prover_observation::completed_transform_v1(false, columns.len());
             return Ok(result);
         }
         // Guard both allocation levels before any private write. Each FFT
@@ -149,8 +162,16 @@ impl MainTraceCosetEvaluatorV1 {
         }
         for batch in words.chunks_mut(self.device_columns) {
             match transform(batch, root.0)? {
-                Backend::Cpu => self.receipt.cpu_columns += batch.len(),
-                Backend::Metal => self.receipt.metal_columns += batch.len(),
+                Backend::Cpu => {
+                    self.receipt.cpu_columns += batch.len();
+                    #[cfg(test)]
+                    prover_observation::completed_transform_v1(false, batch.len());
+                }
+                Backend::Metal => {
+                    self.receipt.metal_columns += batch.len();
+                    #[cfg(test)]
+                    prover_observation::completed_transform_v1(true, batch.len());
+                }
                 // Detection is process-immutable, and this evaluator is only
                 // admitted for Metal. Never reinterpret another backend receipt.
                 Backend::Cuda => return Err(AggregateStarkErrorV1::InvalidLayout),
@@ -218,7 +239,7 @@ mod tests {
             evaluator.device_columns,
             select_device_columns_v1(
                 layout.common_lde_size(),
-                600_114_496 - 288_345_698,
+                596_974_144 - 288_345_698,
                 fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
             )
         );
@@ -235,7 +256,7 @@ mod tests {
         assert_eq!(
             select_device_columns_v1(
                 layout.common_lde_size(),
-                600_114_496 - 288_345_698,
+                596_974_144 - 288_345_698,
                 Some(Backend::Metal),
             ),
             2
@@ -262,7 +283,10 @@ mod tests {
         let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
         let baseline = plan.check_before_sources_v1(0).unwrap();
         let assembly_limit = cap - baseline;
-        assert_eq!(assembly_limit, 600_114_496);
+        // The 12 GiB ceiling still reserves 6 GiB of native sources, 1 GiB
+        // of source scratch and 1 GiB of runtime beyond the live transforms.
+        assert_eq!(assembly_limit, (12_usize << 30) - 3_697_993_152 - (8 << 30));
+        assert_eq!(assembly_limit, 596_974_144);
         assert_eq!(
             select_metal_columns_v1(layout.common_lde_size(), assembly_limit - 288_345_698),
             2

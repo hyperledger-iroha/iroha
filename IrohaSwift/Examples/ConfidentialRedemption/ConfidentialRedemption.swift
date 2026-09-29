@@ -36,7 +36,12 @@ enum ConfidentialRedemptionExample {
     private static func random32() throws -> Data {
         var bytes = Data(count: 32)
         let status = bytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!) }
-        guard status == errSecSuccess else { throw ConfidentialNoteError.cryptographyFailed }
+        guard status == errSecSuccess else {
+            // Clear bytes that an unsuccessful entropy call may have partially filled.
+            // This does not guarantee erasure of other Swift-managed copies.
+            bytes.resetBytes(in: 0..<bytes.count)
+            throw ConfidentialNoteError.cryptographyFailed
+        }
         return bytes
     }
 }

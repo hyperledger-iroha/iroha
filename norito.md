@@ -542,12 +542,6 @@ hash and signatures; global CommitQC `ExecutionCommitment` authenticates the
 complete executed wire and state transition. State's private execution seals
 are not additional proposal claims or a second finality authority.
 
-The header still carries an SCCP commitment root. Existing Core SCCP staging is
-outcome-dependent and remains an unqualified proposal/metadata owner; the model's
-unchanged-header attachment test does not establish that path free of output/hash
-cycles. Native scratch currently rejects SCCP roots. Resolve the actual producer,
-validation and bridge proof boundary before enabling native SCCP delivery.
-
 The complete network-input projection comes from physical external inputs or
 native `groups`, with no synthetic Time inputs. Physical `external_*` APIs keep
 their named payload-field semantics. The header input Merkle root remains

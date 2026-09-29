@@ -52,7 +52,7 @@ SOURCE_LINE_LEDGER = {
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_672,
     'crates/iroha_torii/src/openapi.rs': 254,
     'crates/iroha_torii/src/openapi/tests.rs': 3_066,
-    'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 2_951,
+    'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 2_944,
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_880,
 }
 ASSETS = {
@@ -137,7 +137,7 @@ SECTION_ORDER = {
         'openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.rows.2',
         'openapi.static_account_operations_publish_exact_auth_and_private_responses.strings.1',
         'openapi.static_account_operations_publish_exact_auth_and_private_responses.rows.1',
-        'openapi.sccp_schema_serialization_excludes_retired_and_secret_fields.strings.1',
+        'openapi.sccp_schema_serialization_excludes_secret_fields.strings.1',
         'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.rows.1',
         'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.1',
         'openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.2',
@@ -161,7 +161,6 @@ SECTION_ORDER = {
         'openapi.generated_spec_includes_documented_paths.path_present.1',
         'openapi.generated_spec_includes_documented_paths.path_present.2',
         'openapi.generated_spec_includes_documented_paths.path_present.3',
-        'openapi.generated_spec_includes_documented_paths.path_absent.4',
         'openapi.generated_spec_includes_documented_paths.path_present.5',
         'openapi.generated_spec_includes_documented_paths.path_absent.6',
         'openapi.generated_spec_includes_documented_paths.path_present.7',
@@ -310,8 +309,8 @@ TEST_INVENTORY = {
     ),
     'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': (
         'static_authority_is_the_complete_catalog_projection_with_exact_effects',
-        'sccp_schema_serialization_excludes_retired_and_secret_fields',
-        'sccp_ton_openapi_tracks_state_init_and_curve_neutral_wire_contract',
+        'sccp_schema_serialization_excludes_secret_fields',
+        'sccp_governance_openapi_tracks_the_v1_parliament_proposal',
         'production_constants_embedded_in_openapi_remain_frozen',
         'openapi_route_auth_metadata_matches_enabled_catalog_projection',
         'openapi_standard_security_matches_enabled_catalog_authentication',
@@ -371,7 +370,7 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
     'crates/iroha_torii/src/openapi.rs': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
     'crates/iroha_torii/src/openapi/tests.rs': 'd9e6cb53f27640c5894b89707ef9a3bf0fd003a7b2d0dbd7817afbe25788106a',
-    'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': '4752ba88c214f8416f6cf202872e0cd8d2efbeaca1d9ec8ee8dba9b86bd61ef5',
+    'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': 'aba62dbf9b4549579d1940c2ddf57632fe0ddd483c730853c32e69c728b3fbab',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '6117af48b2adb690add8256579bfdddda01db37bc04025e1b345aaa65acec8c0',
 }
 

@@ -958,11 +958,14 @@ fn emit_node_v1(
         } else {
             PHASE_LENGTH_BODY
         };
+        // Every row describes the state before consuming its byte. The
+        // identifier transition enters LENGTH_FIRST with a zero payload;
+        // only the following LENGTH_BODY row carries this decoded count.
+        emit_parser_row_v1(rows, byte_rows, state, Some(byte))?;
         if length_index == 0 && byte & 0x80 != 0 {
             state.length_remaining = byte & 0x7f;
             state.long_length_two = state.length_remaining == 2;
         }
-        emit_parser_row_v1(rows, byte_rows, state, Some(byte))?;
         if length_index == 0 && byte & 0x80 == 0 {
             state.length_accumulator = u64::from(byte);
         } else if length_index != 0 {
@@ -1115,6 +1118,13 @@ fn emit_node_v1(
         if state.offset != end {
             return Err(ZkX509DerStarkErrorV1::Transition);
         }
+        // Primitive-only state ends with the last content byte. In
+        // particular an OID's final continuation flag and a BIT STRING's
+        // unused-bit count must not survive into the boundary row.
+        state.primitive_kind = 0;
+        state.primitive_first = false;
+        state.oid_start = false;
+        state.unused_bits = 0;
         state.phase = PHASE_BOUNDARY;
         state.boundary_parent = FrameV1::default();
         state.check_delta = if state.depth == 0 {
@@ -4213,3 +4223,7 @@ mod fp4_tests;
 #[cfg(test)]
 #[path = "der_stark_unit_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "der_stark_construction_tests.rs"]
+mod construction_tests;

@@ -19,7 +19,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from sccp_release_common import verify_ed25519
+from release_evidence_crypto import verify_ed25519
 import taira_constants
 
 

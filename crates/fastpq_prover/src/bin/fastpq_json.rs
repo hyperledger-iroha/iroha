@@ -3,11 +3,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
 use fastpq_prover::{
-    AXT_DEFAULT_PARAMETER, OperationKind, Prover, PublicInputs, StateTransition,
-    TransitionBatch, axt_proof_blob_from_bound_batch,
-    batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch_with_proof_metadata,
-    canonicalize_binding, set_axt_remote_spend_claims, transition_batch_from_model,
-    verify_axt_bound_batch,
+    AXT_DEFAULT_PARAMETER, OperationKind, PublicInputs, StateTransition, TransitionBatch,
+    axt_proof_blob_from_bound_batch, batch_manifest_sha256 as axt_batch_manifest_sha256,
+    bind_axt_batch_with_proof_metadata, canonicalize_binding, prove_axt_bound_batch,
+    set_axt_remote_spend_claims, transition_batch_from_model, verify_axt_bound_batch,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -489,16 +488,11 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
-fn prove_request(
-    request: &ProofRequest,
-) -> Result<(Vec<u8>, Duration, Duration, String), String> {
+fn prove_request(request: &ProofRequest) -> Result<(Vec<u8>, Duration, Duration, String), String> {
     let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
-    let prover = Prover::canonical(&request.parameter)
-        .map_err(|err| format!("failed to construct FASTPQ prover: {err}"))?;
     let prove_started = Instant::now();
-    let proof = prover
-        .prove_axt_bound(&batch, &binding)
+    let proof = prove_axt_bound_batch(&batch, &binding)
         .map_err(|err| format!("FASTPQ prove failed: {err}"))?;
     let prove_time = prove_started.elapsed();
     let verify_started = Instant::now();
@@ -732,10 +726,7 @@ fn build_lane_relay_proof_blob(
         Some(AXT_JSON_PROOF_EXPIRY_SLOT),
     )
     .map_err(|err| format!("failed to bind lane relay AXT metadata: {err}"))?;
-    let prover = Prover::canonical(&request.parameter)
-        .map_err(|err| format!("failed to construct lane relay FASTPQ prover: {err}"))?;
-    let proof = prover
-        .prove_axt_bound(&batch, &binding)
+    let proof = prove_axt_bound_batch(&batch, &binding)
         .map_err(|err| format!("lane relay FASTPQ prove failed: {err}"))?;
     axt_proof_blob_from_bound_batch(
         &batch,
@@ -1127,12 +1118,17 @@ mod tests {
         request.target_dsids = vec![12];
         request.claim_type = "authorization".to_owned();
         request.verified_effect_type = "fixture_effect".to_owned();
-        let error = prove_request(&request).expect_err("metadata-only effects have no transfer relation");
+        let error =
+            prove_request(&request).expect_err("metadata-only effects have no transfer relation");
         assert!(error.contains("axt_opaque_effect"), "{error}");
         let bytes = vec![0; 40];
-        assert!(handle_verify(VerifyInput {
-            request: request.clone(), proof_bytes_base64: BASE64_STANDARD.encode(&bytes),
-        }).is_err());
+        assert!(
+            handle_verify(VerifyInput {
+                request: request.clone(),
+                proof_bytes_base64: BASE64_STANDARD.encode(&bytes),
+            })
+            .is_err()
+        );
         assert!(build_axt_materials(&request, &bytes).is_err());
     }
 }

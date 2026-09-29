@@ -104,7 +104,6 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
-iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 assertables = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true }

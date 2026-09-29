@@ -507,7 +507,7 @@
     }
   ],
   "schema": "iroha.sccp.control.v1",
-  "spec": "specs/sccp.md §3.4, §4.14.6, §5.1.6 (revision 3)",
+  "spec": "specs/sccp.md §3.4, §4.14.6, §5.1.6 (revision 4)",
   "spec_examples": [
     {
       "control_nonce": 1,

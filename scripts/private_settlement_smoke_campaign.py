@@ -474,8 +474,8 @@ def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any])
         "nexus_amx_context_hash", "execution_policy_hash", "da_layout", "leader_seed"}, "height context")
     header = fields(proof["block_header"], {"height", "prev_block_hash", "merkle_root", "result_merkle_root",
         "da_proof_policies_hash", "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash",
-        "sccp_commitment_root", "creation_time_ms", "view_change_index", "confidential_features",
-        "execution_context_hash"}, "block header")
+        "creation_time_ms", "view_change_index", "confidential_features", "execution_context_hash"},
+        "block header")
     require(all(type(value) is int and value == result["finalized_height"] for value in
                 (header["height"], artifact["height"], context["height"])), "finality height substitution")
     require(all(type(value) is int and value == 4 for value in

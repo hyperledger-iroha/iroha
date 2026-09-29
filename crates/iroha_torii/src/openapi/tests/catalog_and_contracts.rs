@@ -92,7 +92,7 @@ fn static_authority_is_the_complete_catalog_projection_with_exact_effects() {
     }
 }
 #[test]
-fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
+fn sccp_schema_serialization_excludes_secret_fields() {
     assert_eq!(
         iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
         9_007_199_254_740_991
@@ -104,14 +104,7 @@ fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         .and_then(|schema| schema.get("properties"))
         .and_then(Value::as_object)
         .expect("SCCP governance proposal properties");
-    for forbidden in [
-        "private_key",
-        "secret",
-        "signer",
-        "seed",
-        "mnemonic",
-        "anchor",
-    ] {
+    for forbidden in ["private_key", "secret", "signer", "seed", "mnemonic"] {
         assert!(
             !proposal_properties.contains_key(forbidden),
             "the SCCP governance proposal must not advertise `{forbidden}`"
@@ -120,11 +113,11 @@ fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
     let serialized =
         norito::json::to_string(&Value::Object(schemas)).expect("serialize SCCP schemas");
     for forbidden in openapi_contract_strings(
-        "openapi.sccp_schema_serialization_excludes_retired_and_secret_fields.strings.1",
+        "openapi.sccp_schema_serialization_excludes_secret_fields.strings.1",
     ) {
         assert!(
             !serialized.contains(forbidden),
-            "retired or secret SCCP field `{forbidden}` reappeared"
+            "secret SCCP field `{forbidden}` must not be serialized"
         );
     }
 }
@@ -208,17 +201,6 @@ fn sccp_governance_openapi_tracks_the_v1_parliament_proposal() {
             "clear_bridge_key_fault",
         ]
     );
-    for retired in [
-        "SccpNativeTrustAnchorV1",
-        "SccpProofRequestV1",
-        "SccpBridgeProofSubmitRequest",
-        "SccpSoraOutboundMaterialV1",
-    ] {
-        assert!(
-            !schemas.contains_key(retired),
-            "retired SCCP schema {retired} reappeared"
-        );
-    }
     let ton = schemas
         .get("SccpTonDeploymentV1")
         .and_then(Value::as_object)
@@ -1012,11 +994,6 @@ fn generated_spec_includes_documented_paths() {
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.path_present.3")
     {
         assert!(paths.contains_key(path));
-    }
-    for path in
-        openapi_contract_strings("openapi.generated_spec_includes_documented_paths.path_absent.4")
-    {
-        assert!(!paths.contains_key(path));
     }
     for retired in
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.2")

@@ -3,12 +3,12 @@
 //! [`LiteClient`] is a blocking liteclient over ADNL-TCP ([`super::adnl`])
 //! bound to one [`LiteServerSet`]. It serves the queries SCCP needs:
 //! masterchain info, block lookup, block proofs (key-block hops and back
-//! links), shard configuration, blocks, single transactions, transaction
-//! history for discovery, get-methods and `sendMessage`, plus block headers,
-//! shard-block proofs, config parameters, account states and the server time
-//! for the evidence builders. Answers come back as typed values whose proofs
-//! and blocks are raw bag-of-cells bytes, or as the raw TL answer
-//! ([`LiteClient::query_raw`]) for journaling. Nothing here verifies them:
+//! links), blocks, single transactions, transaction history for discovery,
+//! get-methods and `sendMessage`, plus block headers, shard-block proofs,
+//! config parameters, account states and the server time for the evidence
+//! builders. Answers come back as typed values whose proofs and blocks are raw
+//! bag-of-cells bytes, or as the raw TL answer ([`LiteClient::query_raw`]) for
+//! journaling. Nothing here verifies them:
 //! `iroha_sccp` does, so a lying liteserver can only cause rejected
 //! submissions. The typed calls only reject answers that do not echo the
 //! request (another block than the one asked for), because such an answer is
@@ -37,8 +37,8 @@ use super::{
     adnl::{AdnlConnection, AdnlError, DEFAULT_MAX_PACKET_BYTES},
     peers::{LiteServer, LiteServerSet, PeerError},
     schema::{
-        AccountId, AccountState, AllShardsInfo, AnswerError, BlockData, BlockHeader, BlockId,
-        BlockIdExt, ConfigInfo, CurrentTime, LiteAnswer, LiteQuery, LiteServerError, LookupKey,
+        AccountId, AccountState, AnswerError, BlockData, BlockHeader, BlockId, BlockIdExt,
+        ConfigInfo, CurrentTime, LiteAnswer, LiteQuery, LiteServerError, LookupKey,
         MasterchainInfo, PartialBlockProof, RunMethodResult, SendMsgStatus, ShardBlockProof,
         TransactionInfo, TransactionList, WaitMasterchainSeqno, wrap_query,
     },
@@ -463,18 +463,6 @@ impl LiteClient {
                     "the complete proof ends at another block",
                 )
             },
-        )
-    }
-
-    /// `liteServer.getAllShardsInfo` of a masterchain block.
-    ///
-    /// # Errors
-    /// As [`Self::query_raw`]; shards of another block fail over.
-    pub fn get_all_shards_info(&self, id: BlockIdExt) -> Result<AllShardsInfo, LiteClientError> {
-        self.typed(
-            &LiteQuery::GetAllShardsInfo { id },
-            None,
-            |info: &AllShardsInfo| ensure(info.id == id, "the shards are of another block"),
         )
     }
 
@@ -950,7 +938,9 @@ mod tests {
             root_hash: [0; 32],
             file_hash: [0; 32],
         };
-        let error = client.get_all_shards_info(shard).expect_err("shard block");
+        let error = client
+            .get_block_proof(shard, None)
+            .expect_err("shard block");
         assert!(matches!(error, LiteClientError::InvalidRequest(_)));
         assert!(matches!(
             client.send_message(Vec::new()),

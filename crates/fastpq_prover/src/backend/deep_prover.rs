@@ -33,6 +33,7 @@ use super::{
     },
     deep_relation::DeepRelation,
     deep_striped_merkle::{RowCommitmentPlan, StreamLimits, open_cached_rows},
+    deep_trace_source::OwnedTraceSource,
     masked_quotient::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
@@ -50,10 +51,10 @@ pub(super) struct ConstructionLimits {
 
 /// One attempt's fixed pass schedule and conservative, checked payload/work bound.
 ///
-/// Includes the borrowed physical source, every retained private polynomial,
+/// Includes the consumed physical source, every retained private polynomial,
 /// active stripe/tree/frame buffers, all public prefix-cache slots, proof/codec
 /// storage and the self-check decode allowance. Phase buffers are sometimes
-/// deliberately summed. Excludes allocator metadata, thread stacks, process-wide
+/// deliberately summed, including the source after its early release. Excludes allocator metadata, thread stacks, process-wide
 /// constants, caller-owned AIR/RNG internals and unrelated caller allocations.
 /// It is neither peak RSS nor a timing estimate.
 pub(super) struct ProducerPlan<'a, R: DeepRelation> {
@@ -186,10 +187,11 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             2 * FRI_DEGREES[0] + FRI_DEGREES.iter().sum::<usize>(),
             F::BYTES,
         )?;
-        let active = quotient
-            .payload_bytes
-            .max(row.payload_bytes)
-            .max(add(replay.payload_bytes, coefficient_peak)?);
+        let active = active_phase_payload(
+            quotient.payload_bytes,
+            row.payload_bytes,
+            add(replay.payload_bytes, coefficient_peak)?,
+        )?;
         // The proof's bounded decode charge dominates its DTO's cells/Vec owners,
         // canonical output, frontier-plan storage and public transcript buffers.
         // Charge three separate allowances rather than relying on their lifetimes.
@@ -309,7 +311,31 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
     }
 
     /// Execute exactly the preflighted attempt; aborts never reuse entropy.
-    pub(super) fn build(self, columns: &[&[u64]], rng: &mut impl TryCryptoRng) -> Result<Vec<u8>> {
+    pub(super) fn build(
+        self,
+        columns: OwnedTraceSource,
+        rng: &mut impl TryCryptoRng,
+    ) -> Result<Vec<u8>> {
+        self.build_with_replay(rng, |limits, rng| columns.into_replay(limits, rng))
+    }
+
+    /// Preserve malformed borrowed-source controls without a second normal API.
+    #[cfg(test)]
+    fn build_from_borrowed_for_test(
+        self,
+        columns: &[&[u64]],
+        rng: &mut impl TryCryptoRng,
+    ) -> Result<Vec<u8>> {
+        self.build_with_replay(rng, |limits, rng| {
+            MaskedTraceReplay::new(limits, columns, rng)
+        })
+    }
+
+    fn build_with_replay<T: TryCryptoRng>(
+        self,
+        rng: &mut T,
+        initialize: impl FnOnce(ReplayLimits, &mut T) -> Result<MaskedTraceReplay>,
+    ) -> Result<Vec<u8>> {
         let Self {
             relation,
             binding,
@@ -331,7 +357,9 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
                 "DEEP producer did not begin with dummy transcript message",
             ));
         }
-        let mut replay = MaskedTraceReplay::new(replay_limits, columns, rng)?;
+        // Initialization consumes and clears the physical source before any tree
+        // cache is allocated, preserving the original transcript/RNG order.
+        let mut replay = initialize(replay_limits, rng)?;
         if replay.plan() != replay_plan {
             return Err(invalid("DEEP producer replay plan drift"));
         }
@@ -582,6 +610,17 @@ fn encode_bounded(proof: &DeepProof, maximum: usize) -> Result<Vec<u8>> {
     }
     Ok(output)
 }
+/// Digest stages already charge both live staging and the complete Metal pool.
+/// The CPU quotient follows the row commitment, so those idle pool allocations
+/// also survive that phase even though it performs no device dispatch.
+fn active_phase_payload(quotient: usize, rows: usize, coefficients: usize) -> Result<usize> {
+    Ok(
+        add(quotient, crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)?
+            .max(rows)
+            .max(coefficients),
+    )
+}
+
 fn stream_limits(limits: ConstructionLimits) -> StreamLimits {
     StreamLimits {
         digest_execution: limits.digest_execution,

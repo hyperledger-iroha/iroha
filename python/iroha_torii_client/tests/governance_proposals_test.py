@@ -25,168 +25,14 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
-    GovernanceSccpAdvanceLaneTrustAnchor,
-    GovernanceSccpEvmDestinationDeployment,
-    GovernanceSccpGovernedRoute,
-    GovernanceSccpInitializeLaneTrustAnchor,
-    GovernanceSccpRegisterRoute,
-    GovernanceSccpRouteAction,
-    GovernanceSccpRouteKey,
-    GovernanceSccpSetRouteActivation,
-    GovernanceSccpSwitchRouteRevision,
 )
 
 CONTRACT_ADDRESS = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
 NETWORK_ID = "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
-PUBLIC_SIGNAL_SCHEMA_HASH = (
-    "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB"
-)
-TAIRA_CHAIN_ID_HASH = (
-    "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
-)
 
 
-def _lane() -> dict[str, object]:
-    return {
-        "source": {"network": "ethereum_mainnet", "profile": None},
-        "target": {"network": "sora_taira", "profile": None},
-    }
-
-
-def _activation(value: str) -> dict[str, object]:
-    return {"activation": value, "direction": None}
-
-
-def _route_key(revision: int = 1) -> dict[str, object]:
-    return {
-        "lane_id": _lane(),
-        "route_id": "taira_eth_xor",
-        "asset_key": "xor",
-        "revision": revision,
-    }
-
-
-def _native_anchor(height: int, fill: str) -> dict[str, object]:
-    return {
-        "backend": {"backend": "ethereum_beacon_v1", "protocol": None},
-        "anchor_hash": fill * 64,
-        "checkpoint_height": height,
-    }
-
-
-def _g1(fill: str) -> dict[str, str]:
-    return {"x": fill * 64, "y": "01" * 32}
-
-
-def _g2(fill: str) -> dict[str, str]:
-    return {
-        "x_c0": fill * 64,
-        "x_c1": "01" * 32,
-        "y_c0": "02" * 32,
-        "y_c1": "03" * 32,
-    }
-
-
-def _verifying_key() -> dict[str, object]:
-    ic_fields = ("constant",) + tuple(f"signal_{index}" for index in range(11))
-    return {
-        "version": 1,
-        "alpha1": _g1("0"),
-        "beta2": _g2("0"),
-        "gamma2": _g2("1"),
-        "delta2": _g2("2"),
-        "ic": {field: _g1("0") for field in ic_fields},
-    }
-
-
-def _outbound_proof_policy() -> dict[str, object]:
-    return {
-        "version": 1,
-        "semantic_profile": {
-            "profile": "sora_taira_finality_inclusion_groth16_bn254",
-            "commitments": {
-                "version": 1,
-                "circuit_commitment": "20" * 32,
-                "witness_generator_commitment": "21" * 32,
-                "public_signal_schema_hash": PUBLIC_SIGNAL_SCHEMA_HASH,
-            },
-        },
-        "sora_finality_anchor": {
-            "version": 1,
-            "source_network": {"network": "sora_taira", "profile": None},
-            "protocol_version": 4,
-            "chain_id_hash": TAIRA_CHAIN_ID_HASH,
-            "epoch": 7,
-            "epoch_end_height": 150,
-            "roster_commitment": "25" * 32,
-            "checkpoint_height": 12,
-            "checkpoint_block_hash": "22" * 32,
-            "checkpoint_context_id": "23" * 32,
-            "checkpoint_finality_artifact_hash": "24" * 32,
-        },
-    }
-
-
-def _register_action() -> dict[str, object]:
-    route_address = "13" * 20
-    route_code_hash = "17" * 32
-    route = {
-        **_route_key(),
-        "activation": _activation("staged"),
-        "inbound_finality_cutoff": None,
-        "source_identity": {
-            "lane": _lane(),
-            "emitter": {
-                "emitter": "evm",
-                "identity": {
-                    "address": route_address,
-                    "runtime_code_hash": route_code_hash,
-                    "route_config_hash": "18" * 32,
-                },
-            },
-        },
-        "destination": {
-            "family": "evm",
-            "deployment": {
-                "token_address": "11" * 20,
-                "token_code_hash": "14" * 32,
-                "verifier_address": "12" * 20,
-                "verifier_code_hash": "15" * 32,
-                "verifying_key": _verifying_key(),
-                "verifier_key_hash": "16" * 32,
-                "outbound_proof_policy": _outbound_proof_policy(),
-                "route_address": route_address,
-                "route_code_hash": route_code_hash,
-                "replay_verifier_address": "14" * 20,
-                "replay_verifier_code_hash": "1B" * 32,
-                "mint_breaker_address": "15" * 20,
-                "mint_breaker_code_hash": "1C" * 32,
-                "taira_to_token_multiplier": 1_000_000_000,
-                "max_wrapped_supply": "1000000000000000000000",
-            },
-        },
-        "sora_outbound_execution_policy": {
-            "version": 1,
-            "semantics": "ivm_proved_record_sccp_message_v1",
-            "contract_artifact_sha256": "19" * 32,
-            "vk_ref": {
-                "backend": "halo2/ipa",
-                "name": "sccp_route_v1",
-                "version": 1,
-                "commitment": "1A" * 32,
-            },
-            "gas_limit": 1_000_000,
-        },
-        "settlement": {
-            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "payload_amount_scale": 9,
-            "max_outstanding_liability": "1000000000000",
-        },
-    }
-    return {
-        "action": "Register",
-        "route": {"route": route, "native_trust_anchor": None},
-    }
+def _bsc_network() -> dict[str, object]:
+    return {"network": "bsc_mainnet", "profile": None}
 
 
 def _payout_binding() -> dict[str, object]:
@@ -226,10 +72,6 @@ def _policy() -> dict[str, object]:
 
 
 def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
-    lane = {
-        "source": {"network": "ethereum_mainnet", "profile": None},
-        "target": {"network": "sora_taira", "profile": None},
-    }
     return [
         (
             "DeployContract",
@@ -264,17 +106,20 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
         (
             "SccpRouteGovernance",
             {
-                "anchor": {
+                "proposal": {
                     "network_id": NETWORK_ID,
-                    "action": {
-                        "action": "Remove",
-                        "route": {
-                            "lane_id": lane,
-                            "route_id": "eth-mainnet",
-                            "asset_key": "xor",
+                    "base_revisions": [
+                        {
+                            "subject": {"subject": "route", "key": _bsc_network()},
                             "revision": 1,
-                        },
-                    },
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "action": "remove_staged",
+                            "payload": {"network": _bsc_network(), "revision": 1},
+                        }
+                    ],
                 }
             },
             GovernanceProposalSccpRouteGovernance,
@@ -464,11 +309,6 @@ def test_attempt_proposal_u64_numbers_obey_the_exact_json_boundary() -> None:
 
 def test_closed_nested_action_tags_reject_unknown_values() -> None:
     variants = _variants()
-    sccp = copy.deepcopy(variants[2][1])
-    sccp["anchor"]["action"]["action"] = "ReplaceEverything"  # type: ignore[index]
-    with pytest.raises(TypeError, match="SCCP action"):
-        GovernanceProposalKind.from_payload({"kind": "SccpRouteGovernance", "payload": sccp})
-
     musubi = copy.deepcopy(variants[5][1])
     musubi["kind"] = "LegacyRecovery"
     with pytest.raises(TypeError, match="Musubi action"):
@@ -559,133 +399,34 @@ def test_global_data_trigger_permission_is_exact_account_and_closed_action() -> 
         )
 
 
-def test_sccp_register_action_is_recursively_typed() -> None:
-    parsed = GovernanceSccpRouteAction.from_payload(_register_action())
+def test_sccp_route_governance_keeps_the_exact_proposal_object() -> None:
+    payload = _variants()[2][1]
+    proposal = GovernanceProposalKind.from_payload(
+        {"kind": "SccpRouteGovernance", "payload": payload}
+    ).payload
+    assert isinstance(proposal, GovernanceProposalSccpRouteGovernance)
+    assert proposal.proposal["network_id"] == NETWORK_ID
+    assert proposal.proposal["actions"][0]["action"] == "remove_staged"
 
-    assert isinstance(parsed.route, GovernanceSccpRegisterRoute)
-    assert isinstance(parsed.route.route, GovernanceSccpGovernedRoute)
-    assert isinstance(
-        parsed.route.route.destination.deployment,
-        GovernanceSccpEvmDestinationDeployment,
-    )
-    assert parsed.route.route.destination.deployment.outbound_proof_policy.version == 1
-    assert parsed.route.route.sora_outbound_execution_policy.vk_ref.name == "sccp_route_v1"
-    assert parsed.route.route.settlement.max_outstanding_liability == 1_000_000_000_000
+    anchor = {"anchor": {"network_id": NETWORK_ID, "action": {}}}
+    with pytest.raises(TypeError, match="missing required field `proposal`"):
+        GovernanceProposalSccpRouteGovernance.from_payload(anchor)
 
+    extra = copy.deepcopy(payload)
+    extra["proposal"]["expected_head"] = None  # type: ignore[index]
+    with pytest.raises(TypeError, match="unknown field `expected_head`"):
+        GovernanceProposalSccpRouteGovernance.from_payload(extra)
 
-@pytest.mark.parametrize(
-    ("action", "route_type"),
-    [
-        (
-            {
-                "action": "SetActivation",
-                "route": {
-                    "key": _route_key(),
-                    "expected_current": _activation("staged"),
-                    "next": _activation("bidirectional"),
-                    "inbound_finality_cutoff": None,
-                },
-            },
-            GovernanceSccpSetRouteActivation,
-        ),
-        (
-            {
-                "action": "SwitchRevision",
-                "route": {
-                    "previous_key": _route_key(),
-                    "expected_previous": _activation("bidirectional"),
-                    "previous_next": _activation("inbound_only"),
-                    "previous_inbound_finality_cutoff": None,
-                    "successor_key": _route_key(2),
-                    "successor_next": _activation("bidirectional"),
-                },
-            },
-            GovernanceSccpSwitchRouteRevision,
-        ),
-        (
-            {
-                "action": "InitializeTrustAnchor",
-                "route": {
-                    "lane_id": _lane(),
-                    "expected_current": None,
-                    "initial": _native_anchor(10, "A"),
-                },
-            },
-            GovernanceSccpInitializeLaneTrustAnchor,
-        ),
-        (
-            {
-                "action": "AdvanceTrustAnchor",
-                "route": {
-                    "lane_id": _lane(),
-                    "expected_current": _native_anchor(10, "A"),
-                    "next": _native_anchor(11, "B"),
-                },
-            },
-            GovernanceSccpAdvanceLaneTrustAnchor,
-        ),
-        (
-            {"action": "Remove", "route": _route_key()},
-            GovernanceSccpRouteKey,
-        ),
-    ],
-)
-def test_every_non_register_sccp_action_has_a_typed_payload(
-    action: dict[str, object], route_type: type[object]
-) -> None:
-    assert isinstance(GovernanceSccpRouteAction.from_payload(action).route, route_type)
+    for actions in ([], [payload["proposal"]["actions"][0]] * 17):  # type: ignore[index]
+        bounded = copy.deepcopy(payload)
+        bounded["proposal"]["actions"] = actions  # type: ignore[index]
+        with pytest.raises(TypeError, match=r"1\.\.16 actions"):
+            GovernanceProposalSccpRouteGovernance.from_payload(bounded)
 
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda action: action["route"]["route"]["destination"]["deployment"].__setitem__(
-            "rpc_url", "https://example.invalid"
-        ),
-        lambda action: action["route"]["route"].pop("sora_outbound_execution_policy"),
-        lambda action: action["route"]["route"]["sora_outbound_execution_policy"][
-            "vk_ref"
-        ].__setitem__(
-            "commitment",
-            action["route"]["route"]["sora_outbound_execution_policy"][
-                "contract_artifact_sha256"
-            ],
-        ),
-        lambda action: action["route"]["route"]["destination"]["deployment"][
-            "outbound_proof_policy"
-        ]["sora_finality_anchor"].__setitem__("checkpoint_height", 1 << 53),
-        lambda action: action["route"]["route"]["destination"]["deployment"].__setitem__(
-            "token_code_hash", "aa" * 32
-        ),
-        lambda action: action["route"]["route"]["activation"].__setitem__(
-            "direction", {}
-        ),
-        lambda action: action["route"].pop("native_trust_anchor"),
-    ],
-)
-def test_sccp_register_rejects_nested_raw_fallbacks_and_noncanonical_values(
-    mutate: object,
-) -> None:
-    action = _register_action()
-    mutate(action)  # type: ignore[operator]
-
-    with pytest.raises(TypeError):
-        GovernanceSccpRouteAction.from_payload(action)
-
-
-def test_sccp_action_u64_fields_reject_unsafe_json_integers() -> None:
-    action = {
-        "action": "AdvanceTrustAnchor",
-        "route": {
-            "lane_id": _lane(),
-            "expected_current": _native_anchor(10, "A"),
-            "next": _native_anchor(11, "B"),
-        },
-    }
-    action["route"]["next"]["checkpoint_height"] = 1 << 53  # type: ignore[index]
-
-    with pytest.raises(TypeError, match="integer"):
-        GovernanceSccpRouteAction.from_payload(action)
+    malformed_network = copy.deepcopy(payload)
+    malformed_network["proposal"]["network_id"] = "chain"  # type: ignore[index]
+    with pytest.raises(TypeError, match="proposal.network_id must use canonical"):
+        GovernanceProposalSccpRouteGovernance.from_payload(malformed_network)
 
 
 def test_proposal_record_is_exact_and_rejects_retired_wrapper_fields() -> None:

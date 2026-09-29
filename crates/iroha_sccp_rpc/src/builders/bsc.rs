@@ -102,7 +102,7 @@ impl BscBuilder {
     fn headers_at(&self, numbers: &[u64]) -> Result<Vec<Vec<u8>>, BuildError> {
         let mut out = Vec::with_capacity(numbers.len());
         for chunk in numbers.chunks(MAX_JSON_RPC_BATCH) {
-            for (number, block) in chunk.iter().zip(self.rpc.blocks_by_number(chunk, false)?) {
+            for (number, block) in chunk.iter().zip(self.rpc.blocks_by_number(chunk)?) {
                 let block = block.ok_or_else(|| {
                     BuildError::Unavailable(format!("BSC block {number} is not served"))
                 })?;
@@ -132,7 +132,7 @@ impl BscBuilder {
     pub fn finalized_number(&self) -> Result<u64, BuildError> {
         Ok(self
             .rpc
-            .block_by_number(BlockTag::Finalized, false)?
+            .block_by_number(BlockTag::Finalized)?
             .ok_or_else(|| BuildError::Unavailable("no finalized BSC block is served".into()))?
             .header
             .number)
@@ -305,7 +305,7 @@ impl BscBuilder {
         let headers = self.headers(event_number..=vote.source_number)?;
         let event_block = self
             .rpc
-            .block_by_number(BlockTag::Number(event_number), false)?
+            .block_by_number(BlockTag::Number(event_number))?
             .ok_or_else(|| {
                 BuildError::Unavailable(format!("BSC block {event_number} is not served"))
             })?;

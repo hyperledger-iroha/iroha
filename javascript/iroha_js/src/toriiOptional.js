@@ -9,7 +9,6 @@ export {
   noritoEncodeMultisigProposeRequest,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeTransactionPayloadBatch,
-  validateNoritoFrame,
 } from "./norito.js";
 
 export {
@@ -26,17 +25,6 @@ export {
 } from "./kagemushaToriiV1.js";
 
 export { _encodeRedemptionRequestV1 } from "./kagemusha.js";
-
-export {
-  normalizeSccpCapabilities,
-  normalizeSccpMessageBundle,
-  normalizeSccpProofRequest,
-  normalizeSccpRecentMessages,
-  normalizeSccpRegistry,
-  normalizeSccpRouteGovernanceAction,
-  normalizeSccpSoraOutboundMaterial,
-  parseSccpJsonObject,
-} from "./sccp.js";
 
 export {
   PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,

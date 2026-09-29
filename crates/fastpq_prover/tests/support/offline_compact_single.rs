@@ -49,11 +49,14 @@ fn deep_context_rejected(error: VerificationError) {
     );
 }
 
-fn verify_one(
+pub(super) fn verify_count(
     bytes: &[u8],
     is_axt: bool,
     fixture: &capture::CaptureFixture,
+    count: usize,
+    maximum_child_bytes: Option<usize>,
 ) -> fastpq_prover::offline_compact::VerifiedArtifact {
+    assert_eq!(fixture.statement.transcripts.len(), count);
     let expected = fixture.expected;
     let context = fixture.context();
     let limits = VerificationLimits::default();
@@ -66,14 +69,16 @@ fn verify_one(
     };
     let accepted = verify(bytes, expected, limits).unwrap();
     assert_eq!(accepted.expected_statement(), expected);
-    assert_eq!(accepted.segments(), 1);
-    assert_eq!(accepted.air_row_roots().len(), 1);
-    assert_eq!(accepted.work().transcripts, 1);
-    assert_eq!(accepted.work().air_evaluations, 1);
-    assert_eq!(accepted.work().terminal_degree_checks, 1);
-    assert_eq!(accepted.work().row_leaves, 64);
-    assert_eq!(accepted.work().oracle_leaves, 64);
-    assert!(accepted.work().proof_bytes <= 512 * 1024);
+    assert_eq!(accepted.segments(), count);
+    assert_eq!(accepted.air_row_roots().len(), count);
+    assert_eq!(accepted.work().transcripts, count);
+    assert_eq!(accepted.work().air_evaluations, count);
+    assert_eq!(accepted.work().terminal_degree_checks, count);
+    assert_eq!(accepted.work().row_leaves, 64 * count);
+    assert_eq!(accepted.work().oracle_leaves, 64 * count);
+    assert!(accepted.work().proof_bytes <= count * 512 * 1024);
+    let maximum_child_bytes = maximum_child_bytes.unwrap_or(accepted.work().proof_bytes);
+    assert!(maximum_child_bytes <= limits.bundle.segment.max_proof_bytes);
     assert_eq!(accepted.identity().profile_id, quantity_profile_id());
     assert_eq!(
         accepted.identity().artifact_bytes,
@@ -116,11 +121,11 @@ fn verify_one(
     exact.transport.max_wire_bytes = bytes.len();
     exact.transport.max_bundle_frame_bytes = frame.len();
     exact.bundle.max_wire_bytes = frame.len();
-    exact.bundle.max_segments = 1;
-    exact.bundle.max_total_queries = 64;
+    exact.bundle.max_segments = count;
+    exact.bundle.max_total_queries = 64 * count;
     exact.bundle.max_total_statement_bytes = accepted.statement_bytes();
     exact.bundle.max_total_segment_bytes = accepted.work().proof_bytes;
-    exact.bundle.segment.max_proof_bytes = accepted.work().proof_bytes;
+    exact.bundle.segment.max_proof_bytes = maximum_child_bytes;
     assert_eq!(verify(bytes, expected, exact).unwrap(), accepted);
     for boundary in 0..9 {
         let mut low = limits;
@@ -128,11 +133,11 @@ fn verify_one(
             0 => low.transport.max_wire_bytes = bytes.len() - 1,
             1 => low.transport.max_bundle_frame_bytes = frame.len() - 1,
             2 => low.bundle.max_wire_bytes = frame.len() - 1,
-            3 => low.bundle.max_segments = 0,
-            4 => low.bundle.max_total_queries = 63,
+            3 => low.bundle.max_segments = count - 1,
+            4 => low.bundle.max_total_queries = 64 * count - 1,
             5 => low.bundle.max_total_statement_bytes = accepted.statement_bytes() - 1,
             6 => low.bundle.max_total_segment_bytes = accepted.work().proof_bytes - 1,
-            7 => low.bundle.segment.max_proof_bytes = accepted.work().proof_bytes - 1,
+            7 => low.bundle.segment.max_proof_bytes = maximum_child_bytes - 1,
             8 => low.max_segment_decode_allocation_charges = 0,
             _ => unreachable!(),
         }
@@ -264,6 +269,14 @@ fn verify_one(
         assert!(verify_quantity_axt_artifact(bytes, expected, context, limits).is_err());
     }
     accepted
+}
+
+fn verify_one(
+    bytes: &[u8],
+    is_axt: bool,
+    fixture: &capture::CaptureFixture,
+) -> fastpq_prover::offline_compact::VerifiedArtifact {
+    verify_count(bytes, is_axt, fixture, 1, None)
 }
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

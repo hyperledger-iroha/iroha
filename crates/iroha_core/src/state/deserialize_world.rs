@@ -8435,7 +8435,6 @@ fn parse_world(
         sccp_light_client_sets: Storage::default(),
         sccp_light_client_checkpoints: Storage::default(),
         sccp_light_client_stride_index: Storage::default(),
-        sccp_light_client_checkpoint_expiry: Storage::default(),
         external_event_buf,
     }));
     validate_da_pin_persistence(&world)?;

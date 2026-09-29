@@ -5,7 +5,7 @@
   },
   "generator": "crates/iroha_sccp/tests/ethereum_light_client.rs",
   "schema": "iroha_sccp/native_transfer_event_v1",
-  "spec": "specs/sccp.md revision 3, §3.2, §3.3, §4.12.1, §4.12.2, §4.16, §5.1.8",
+  "spec": "specs/sccp.md revision 4, §3.2, §3.3, §4.12.1, §4.12.2, §4.16, §5.1.8",
   "taira_network_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
   "transfers": [
     {

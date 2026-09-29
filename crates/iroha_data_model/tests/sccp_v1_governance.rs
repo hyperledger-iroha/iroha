@@ -1,6 +1,6 @@
 //! Public-boundary tests for the SCCP v1 Parliament governance payload and its value types.
 //!
-//! Covers `specs/sccp.md` (revision 3) §3.4 destination words, §4.1 parameters, §4.13 light-client
+//! Covers `specs/sccp.md` §3.4 destination words, §4.1 parameters, §4.13 light-client
 //! values and the §4.14.3 `SccpGovernanceProposalV1` payload: stable schema names, binary and JSON
 //! roundtrips, subject scoping of the expected head, every state-independent Propose check, and
 //! the exact JSON integer invariant at `2^53 − 1`.

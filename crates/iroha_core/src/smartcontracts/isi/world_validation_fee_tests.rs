@@ -539,9 +539,7 @@ fn verified_fee_sponsor_registration_fixture(
         Some(proof_expiry),
     )
     .expect("bind verified fee sponsor proof metadata");
-    let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-        .expect("construct FastPQ prover")
-        .prove_axt_bound(&batch, &binding)
+    let proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding)
         .expect("prove verified fee sponsor allocation");
     let proof_blob = fastpq_prover::axt_proof_blob_from_bound_batch(
         &batch,

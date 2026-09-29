@@ -1440,14 +1440,7 @@ mod tests {
             Some(expiry_slot),
         )
         .expect("bind AXT lane relay batch");
-        let proof = fastpq_prover::Prover::canonical_with_modes(
-            fastpq_prover::AXT_DEFAULT_PARAMETER,
-            fastpq_prover::ExecutionMode::Cpu,
-            fastpq_prover::PoseidonExecutionMode::Cpu,
-        )
-        .expect("FASTPQ prover")
-        .prove_axt_bound(&batch, &binding)
-        .expect("FASTPQ proof");
+        let proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
         let proof_envelope = AxtProofEnvelope {
@@ -1548,14 +1541,7 @@ mod tests {
             Some(expiry_slot),
         )
         .expect("bind AXT effect batch");
-        let proof = fastpq_prover::Prover::canonical_with_modes(
-            fastpq_prover::AXT_DEFAULT_PARAMETER,
-            fastpq_prover::ExecutionMode::Cpu,
-            fastpq_prover::PoseidonExecutionMode::Cpu,
-        )
-        .expect("FASTPQ prover")
-        .prove_axt_bound(&batch, &binding)
-        .expect("FASTPQ proof");
+        let proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("FASTPQ proof");
         let fastpq_payload =
             fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
         let proof_envelope = AxtProofEnvelope {

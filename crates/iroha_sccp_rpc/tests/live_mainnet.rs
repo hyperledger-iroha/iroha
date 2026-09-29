@@ -135,7 +135,7 @@ fn ethereum_bootstrap_and_advance_verify() {
     );
     let execution = EvmClient::new(transport(endpoints::ETHEREUM_EXECUTION));
     let finalized = execution
-        .block_by_number(BlockTag::Finalized, false)
+        .block_by_number(BlockTag::Finalized)
         .expect("finalized block")
         .expect("served")
         .header

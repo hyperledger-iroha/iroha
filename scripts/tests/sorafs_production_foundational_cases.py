@@ -1,6 +1,6 @@
 # Aggregate and foundational-prerequisite cases for production readiness.
 
-import sccp_release_common as RELEASE_CRYPTO
+import release_evidence_crypto as RELEASE_CRYPTO
 
 def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     write_all_gates(tmp_path)

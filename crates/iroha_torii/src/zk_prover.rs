@@ -275,6 +275,9 @@ impl PreparedProverConfiguration {
 #[cfg(test)]
 static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
+static TEST_REPORT_SAVE_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
 static TEST_SNAPSHOT_LOAD_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static TEST_MAX_SCAN_MILLIS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
@@ -2363,6 +2366,10 @@ fn process_attachment_snapshot_at(
     if !receipt.terminal {
         let _ = persist_prover_processing_receipt_if_referenced(&receipt)?;
     }
+    #[cfg(test)]
+    if TEST_REPORT_SAVE_FAILURE.swap(false, AtomicOrdering::SeqCst) {
+        return Err(IoError::other("injected report publication failure"));
+    }
     save_report(&rep)?;
     if !persist_prover_processing_receipt_if_referenced(&receipt)? {
         iroha_logger::debug!(
@@ -2912,12 +2919,9 @@ mod tests {
         assert_eq!(crate::zk_key_store_stem(&golden), expected);
         let keys_dir = Path::new("keys");
         let vk_path = crate::zk_vk_store_path(keys_dir, &golden);
-        let pk_path = crate::zk_pk_store_path(keys_dir, &golden);
         assert_eq!(vk_path, keys_dir.join(format!("{expected}.vk")));
-        assert_eq!(pk_path, keys_dir.join(format!("{expected}.pk")));
         assert_eq!(vk_path.parent(), Some(keys_dir));
-        assert_eq!(pk_path.parent(), Some(keys_dir));
-        assert_eq!(vk_path.file_stem(), pk_path.file_stem());
+        assert_eq!(vk_path.file_stem(), Some(std::ffi::OsStr::new(expected)));
         assert_eq!(
             vk_path
                 .file_name()
@@ -3506,30 +3510,23 @@ mod tests {
             iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
         );
         let vk_commitment = hash_vk(&vk);
-        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
-            1,
-            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-            None,
-            "test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pasta",
-            iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
-            vk_commitment,
-        );
+        let mut record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+            .expect("canonical replay-binding verifier record");
+        assert_eq!(record.commitment, vk_commitment);
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
         record.max_proof_bytes = 1024 * 1024;
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         record.activation_height = activation_height;
         record.withdraw_height = withdraw_height;
         record.key = Some(vk);
+        let circuit_key = (record.circuit_id.clone(), record.version);
         let mut world = iroha_core::state::World::new();
         world
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), record);
-        world.verifying_keys_by_circuit_mut_for_testing().insert(
-            (iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID.into(), 1),
-            vk_id,
-        );
+        world
+            .verifying_keys_by_circuit_mut_for_testing()
+            .insert(circuit_key, vk_id);
         let mut state = iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -3539,7 +3536,7 @@ mod tests {
         configure_zk(&mut zk);
         state
             .set_zk(zk)
-            .expect("empty SCCP outbox accepts prover test configuration");
+            .expect("empty state accepts prover test configuration");
         Arc::new(state)
     }
     fn fixture_state_with_vk_window(
@@ -4363,9 +4360,10 @@ mod tests {
         assert_eq!(persisted[0].id, report.id);
     }
     #[test]
-    fn load_report_summaries_rebuilds_empty_index_when_no_reports_exist() {
+    fn load_report_summaries_reads_initialized_empty_index_when_no_reports_exist() {
         let _env = TestDataDirGuard::new();
         init_test_cfg();
+        super::init_persistence().expect("initialize production report persistence");
         let summaries = load_report_summaries();
         assert!(summaries.is_empty());
         let persisted = read_report_summaries_locked();

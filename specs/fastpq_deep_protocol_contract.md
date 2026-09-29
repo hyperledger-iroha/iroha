@@ -140,11 +140,24 @@ structural work units; an oversized plan fails before private computation.
 Before internal-node retention, the September 28 fixed-SMT preflight fixture
 reported 1,065,090,768 payload bytes, 3,468,335,009,584 structural work units and
 69,362,447 hash calls. Those historical plan charges do not describe the new
-cache integration. Its native budget, root/frontier equivalence and complete
-seeded proof-byte checks are pending. The
+cache integration. The current fixed-SMT plan reports 1,900,861,480 payload
+bytes, 3,475,021,175,280 structural work units and 34,689,999 hash calls. Exact
+budget, root/frontier and erasure controls pass. A complete required-Metal seeded
+proof reproduces the pre-cache 482,978-byte proof hash, including independent
+verification and context/cap/tamper controls. It takes 950.82s wall time and peaks
+at 1,918,730,240 bytes RSS under concurrent load. The older root/opening fixture
+was migrated to the root-commit/bind/open sequence; both rebuilt integration
+tests and all 12 public API controls pass with unchanged production source. The
 [native validation record](../docs/history/2026-09-28/fastpq-masked-native-validation.md)
-separates these pending checks from the completed pre-cache child and ordinary/AXT
-proof runs. Checked payload charges are not measurements of peak RSS.
+separates these checks from the completed pre-cache child and ordinary/AXT
+proof runs. The latest retained child has SHA-256
+`6b0f68181920c7c506c949f5bea7bee9ba9951b0c7142837a536ef1f87020b19`;
+its separate artifact-only verifier and mutation controls pass in 2.15s. The same
+immutable binary's complete CPU proof also passes with byte-identical output:
+2,532.67s wall time, 1,895,317,504-byte peak RSS, and separate artifact verification
+in 2.07s. These are unoptimized Cargo test FASTPQ callers (opt-level 0, with
+`fastpq_isi` opt-level 2), not optimized release latency. Checked payload charges
+are not measurements of peak RSS.
 
 Fresh entropy comes from an explicit `TryCryptoRng`; the normal offline wrapper
 uses `OsRng`. Failed attempts do not reuse masks. CPU and required-device policies

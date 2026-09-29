@@ -553,6 +553,7 @@ function identifierPolicyFixture(overrides = {}) {
       verifying_key_bytes_b64: "AQID",
     },
     ram_fhe_profile: {
+      initializer_descriptor_hash: "ab".repeat(31) + "01",
       profile_version: 1,
       register_count: 4,
       memory_lane_count: 32,
@@ -591,6 +592,10 @@ test("listIdentifierPolicies normalizes BFV and proof-verifier metadata", async 
   assert.equal(result.items[0].proof_verifier.proof_backend, "halo2-ipa");
   assert.equal(result.items[0].proof_verifier.public_inputs_schema_hash, PROOF_SCHEMA_HASH);
   assert.equal(result.items[0].ram_fhe_profile.register_count, 4);
+  assert.equal(
+    result.items[0].ram_fhe_profile.initializer_descriptor_hash,
+    "ab".repeat(31) + "01",
+  );
   assert.equal(
     result.items[0].ram_fhe_profile.encrypted_input_mode,
     "encrypted_envelope_v1",
@@ -660,6 +665,50 @@ test("listIdentifierPolicies rejects non-exact policy metadata", async () => {
       new RegExp(`identifier policy list response\\.items\\[0\\]\\.${field.replaceAll(".", "\\.")}`),
       `identifier policy metadata ${field} exactness`,
     );
+  }
+});
+
+test("listIdentifierPolicies requires the exact initializer descriptor hash", async () => {
+  for (const hash of [undefined, null, "", "ab".repeat(31), "AB".repeat(32), ` ${"ab".repeat(32)}`, "ab".repeat(31) + "00"]) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, {
+        total: 1,
+        items: [identifierPolicyFixture({
+          ram_fhe_profile: {
+            ...identifierPolicyFixture().ram_fhe_profile,
+            initializer_descriptor_hash: hash,
+          },
+        })],
+      }),
+    });
+    await assert.rejects(
+      () => client.listIdentifierPolicies(),
+      /ram_fhe_profile\.initializer_descriptor_hash/u,
+    );
+  }
+});
+
+test("listIdentifierPolicies bounds profile dimensions and rejects retired modes", async () => {
+  const invalid = [
+    ["profile_version", 0], ["profile_version", 256],
+    ["register_count", 0], ["register_count", 65536],
+    ["memory_lane_count", 0], ["memory_lane_count", 65536],
+    ["ciphertext_mul_per_step", 0], ["ciphertext_mul_per_step", 256],
+    ["min_ciphertext_modulus", 0], ["min_ciphertext_modulus", "18446744073709551616"],
+    ["encrypted_input_mode", "resolver_canonicalized_envelope_v1"],
+    ["encrypted_input_mode", { mode: "EncryptedEnvelopeV1" }],
+    ["retired_initializer", "chacha20"],
+  ];
+  for (const [field, value] of invalid) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, {
+        total: 1,
+        items: [identifierPolicyFixture({
+          ram_fhe_profile: { ...identifierPolicyFixture().ram_fhe_profile, [field]: value },
+        })],
+      }),
+    });
+    await assert.rejects(() => client.listIdentifierPolicies(), /ram_fhe_profile/u);
   }
 });
 

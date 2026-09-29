@@ -718,7 +718,9 @@ seiyaku StarkProofRejection {
     .with_executable(Executable::Ivm(bytecode.clone()))
     .sign(kp.private_key());
     let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
-        &*block, &tx, &vk_record,
+        &*block,
+        tx.payload(),
+        &vk_record,
     )
     .expect("derive proved payload through the authorized contract entrypoint");
     assert!(

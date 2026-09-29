@@ -297,10 +297,6 @@ storage_map! {
     /// Lowest checkpoint height per `(network, stride bucket)`, kept permanently (§4.13.1).
     light_client_stride_index => sccp_light_client_stride_index: (SccpNetworkV1, u64) => u64
 }
-storage_map! {
-    /// Prunable checkpoints ordered by `(recorded_ms, network, source_height)` (§4.13.1).
-    light_client_checkpoint_expiry => sccp_light_client_checkpoint_expiry: (u64, SccpNetworkV1, u64) => ()
-}
 
 /// Return the governance revision of `subject`, which is 0 when absent (§4.14.3).
 #[must_use]

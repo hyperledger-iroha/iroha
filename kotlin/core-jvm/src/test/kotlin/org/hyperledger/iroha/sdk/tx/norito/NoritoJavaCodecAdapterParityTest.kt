@@ -9,10 +9,12 @@ import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -27,7 +29,6 @@ import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
-import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.MultisigSignatures
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -41,7 +42,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class NoritoJavaCodecAdapterParityTest {
-    private val adapter = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+    private val adapter = NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT)
     private val testFeePayment = FeePaymentIntent.authority(emptyList())
     private val testIvmFeePayment = FeePaymentIntent.authority(emptyList(), 1L)
 
@@ -103,8 +104,8 @@ class NoritoJavaCodecAdapterParityTest {
     fun `signed Taira DS transfer preserves exact authority and destination`() {
         val authority = sampleAuthority(0x39)
         val destination = sampleAuthority(0x3A)
-        assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(authority))
-        assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(destination))
+        assertEquals(TairaTestnetProfile.I105_DISCRIMINANT, AccountAddress.detectI105Discriminant(authority))
+        assertEquals(TairaTestnetProfile.I105_DISCRIMINANT, AccountAddress.detectI105Discriminant(destination))
         val transfer = TransferWirePayloadEncoder.encodeAssetTransfer(
             "$DS_ASSET_DEFINITION_ID#$authority",
             "10",
@@ -134,10 +135,45 @@ class NoritoJavaCodecAdapterParityTest {
         val decodedTransfer =
             TransferWirePayloadEncoder.decodeAssetTransferPayload(
                 wirePayload.payloadBytes,
-                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+                TairaTestnetProfile.I105_DISCRIMINANT,
             )
         assertEquals("$DS_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
         assertEquals(destination, decodedTransfer.destinationAccountId)
+    }
+
+    @Test
+    fun transactionCodecPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity() {
+        val selector =
+            "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+        val program = FeeSponsorProgramId.parse(selector)
+        val expectedFeePayment = FeePaymentIntent.sponsor(
+            programId = program,
+            programRevision = 1,
+            chargeLimits = emptyList(),
+            gasLimit = 9,
+        )
+        val encoded = adapter.encodeTransaction(
+            TransactionPayload(
+                networkId = TAIRA_NETWORK_ID,
+                authority = sampleAuthority(0x11),
+                creationTimeMs = 7,
+                executable = Executable.instructions(emptyList()),
+                feePayment = expectedFeePayment,
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            ),
+        )
+        val decoded = adapter.decodeTransaction(encoded)
+        val decodedSponsor = decoded.feePayment as FeePaymentIntent.Sponsor
+        assertEquals(
+            TairaTestnetProfile.I105_DISCRIMINANT,
+            AccountAddress.detectI105Discriminant(decodedSponsor.programId.sponsor),
+        )
+        assertTrue(adapter.encodeTransaction(decoded).contentEquals(encoded))
+        assertEquals(selector, program.literal())
+
+        assertFailsWith<IllegalArgumentException> {
+            FeeSponsorProgramId(program.sponsor, "cbsi_e\u0301")
+        }
     }
 
     @Test
@@ -145,7 +181,7 @@ class NoritoJavaCodecAdapterParityTest {
         val publicKey = TestEd25519Keys.publicKey(0x3A)
         val authority = AccountAddress
             .fromAccount(publicKey, "ed25519")
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT)
         val payload = TransactionPayload(
             feePayment = testIvmFeePayment,
             networkId = TEST_NETWORK_ID,
@@ -186,7 +222,7 @@ class NoritoJavaCodecAdapterParityTest {
         val policy = MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB))
         val authority = AccountAddress
             .fromMultisigPolicy(policy)
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT)
 
         val payload = TransactionPayload(
             feePayment = testIvmFeePayment,
@@ -626,7 +662,7 @@ class NoritoJavaCodecAdapterParityTest {
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
         .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
-        .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        .toI105(TairaTestnetProfile.I105_DISCRIMINANT)
 
     companion object {
         private const val DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
@@ -634,6 +670,9 @@ class NoritoJavaCodecAdapterParityTest {
             "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private val TEST_NETWORK_ID = NetworkId.parse(
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        private val TAIRA_NETWORK_ID = NetworkId.parse(
+            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
         )
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()

@@ -326,7 +326,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "canonical_auth.network_id != expected_network.literal",
             'response.url != f"{client._base_url}/v1/privacy/capabilities" or response.history',
             '"Cache-Control": "no-store",',
-            "_read_bounded_sccp_response_body(response, 256 * 1024, context)",
+            "_read_bounded_response_body(response, 256 * 1024, context)",
         ),
         _PYTHON_RUST_BRIDGE: (
             "manifest.require_authenticated_network(self.network_id)?;",
@@ -427,7 +427,7 @@ def _authenticated_network_authority(root: Path, sdk: str) -> bool:
     if sdk == "swift":
         source = _read(root, _SWIFT_TORII)
         start = source.find("    func makePrivacyExact12CapabilityRequestV1(")
-        end = source.find("    public func getSccpCapabilities()", start)
+        end = _swift_member_end(source, start)
         request = source[start:end] if 0 <= start < end else ""
         return all(marker in request for marker in (
             '"Cache-Control": "no-cache, no-store",',
@@ -435,6 +435,19 @@ def _authenticated_network_authority(root: Path, sdk: str) -> bool:
             "try applyCanonicalAuth(canonicalAuth, to: &request, body: nil)",
         ))
     return True
+
+
+_SWIFT_MEMBER_FUNCTION = re.compile(
+    r"^    (?:(?:public|private|fileprivate|internal)\s+)?(?:static\s+)?func\s", re.M
+)
+
+
+def _swift_member_end(source: str, start: int) -> int:
+    """Return the offset of the member function declared after ``start``, or -1."""
+    if start < 0:
+        return -1
+    match = _SWIFT_MEMBER_FUNCTION.search(source, start + 1)
+    return match.start() if match else -1
 
 
 def _read(root: Path, relative: str) -> str:
@@ -889,7 +902,9 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
         else ""
     )
     fetch_start = torii.find("    public func getPrivacyExact12CapabilityManifestV1(")
-    fetch_end = torii.find("    public func getSccpCapabilities()", fetch_start)
+    fetch_end = _swift_member_end(
+        torii, torii.find("    func makePrivacyExact12CapabilityRequestV1(", fetch_start)
+    )
     fetch = (
         torii[fetch_start:fetch_end]
         if fetch_start >= 0 and fetch_end > fetch_start

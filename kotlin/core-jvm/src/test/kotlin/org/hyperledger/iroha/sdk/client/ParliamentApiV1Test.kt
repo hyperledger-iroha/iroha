@@ -299,6 +299,82 @@ class ParliamentApiV1Test {
     }
 
     @Test
+    fun sccpRouteGovernanceAdmitsOnlyTheClosedProposalEnvelope() {
+        fun sccpProposal(edit: (MutableMap<String, Any?>) -> Unit): ByteArray {
+            val proposal = validProposal("SccpRouteGovernance")
+            @Suppress("UNCHECKED_CAST")
+            val payload = proposal["payload"] as MutableMap<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val sccp = payload["proposal"] as MutableMap<String, Any?>
+            edit(sccp)
+            return encode(proposal)
+        }
+        fun subject(subject: String, key: Any?): MutableMap<String, Any?> = linkedMapOf(
+            "base_revisions" to listOf(
+                linkedMapOf(
+                    "subject" to linkedMapOf("subject" to subject, "key" to key),
+                    "revision" to 0,
+                ),
+            ),
+        )
+
+        listOf(
+            subject("parameters", null),
+            subject("light_client", bscMainnet()),
+            subject("bridge_key_fault", "ea0130" + "AB".repeat(48)),
+        ).forEach { replacement ->
+            ParliamentApiV1.Proposal.fromJson(sccpProposal { it.putAll(replacement) })
+        }
+
+        val rejected = listOf<(MutableMap<String, Any?>) -> Unit>(
+            { it["anchor"] = null },
+            { it.remove("base_revisions") },
+            { it["base_revisions"] = emptyList<Any?>() },
+            { it["actions"] = emptyList<Any?>() },
+            { proposal ->
+                val action = (proposal["actions"] as List<*>).single()
+                proposal["actions"] = List(17) { action }
+            },
+            { it.putAll(subject("sora_taira", bscMainnet())) },
+            { it.putAll(subject("parameters", bscMainnet())) },
+            { it.putAll(subject("bridge_key_fault", "ea0130" + "ab".repeat(48))) },
+            {
+                it.putAll(
+                    subject(
+                        "route",
+                        linkedMapOf("network" to "sora_taira", "profile" to null),
+                    ),
+                )
+            },
+            {
+                it["actions"] = listOf(
+                    linkedMapOf("action" to "Remove", "payload" to linkedMapOf<String, Any?>()),
+                )
+            },
+            {
+                it["actions"] = listOf(
+                    linkedMapOf("action" to "freeze_light_client", "payload" to null),
+                )
+            },
+        )
+        rejected.forEachIndexed { index, edit ->
+            assertFailsWith<IllegalArgumentException>("accepted SCCP proposal mutation $index") {
+                ParliamentApiV1.Proposal.fromJson(sccpProposal(edit))
+            }
+        }
+        assertFailsWith<IllegalArgumentException>("accepted the anchor payload") {
+            val proposal = validProposal("SccpRouteGovernance")
+            proposal["payload"] = linkedMapOf(
+                "anchor" to linkedMapOf(
+                    "network_id" to networkId(),
+                    "action" to linkedMapOf<String, Any?>(),
+                ),
+            )
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+        }
+    }
+
+    @Test
     fun effectSensitiveProposalsRequireExactOperator() {
         listOf("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance").forEach { kind ->
             val valid = validProposal(kind)
@@ -1450,15 +1526,24 @@ class ParliamentApiV1Test {
                 ),
             )
             "SccpRouteGovernance" -> linkedMapOf(
-                "anchor" to linkedMapOf(
+                "proposal" to linkedMapOf(
                     "network_id" to networkId(),
-                    "action" to linkedMapOf(
-                        "action" to "Remove",
-                        "route" to linkedMapOf(
-                            "lane_id" to inboundLane(),
-                            "route_id" to "taira_bsc_xor",
-                            "asset_key" to "xor",
+                    "base_revisions" to listOf(
+                        linkedMapOf(
+                            "subject" to linkedMapOf(
+                                "subject" to "route",
+                                "key" to bscMainnet(),
+                            ),
                             "revision" to 1,
+                        ),
+                    ),
+                    "actions" to listOf(
+                        linkedMapOf(
+                            "action" to "remove_staged",
+                            "payload" to linkedMapOf(
+                                "network" to bscMainnet(),
+                                "revision" to 1,
+                            ),
                         ),
                     ),
                 ),
@@ -1556,10 +1641,8 @@ class ParliamentApiV1Test {
         },
     )
 
-    private fun inboundLane(): MutableMap<String, Any?> = linkedMapOf(
-        "source" to linkedMapOf("network" to "bsc_mainnet", "profile" to null),
-        "target" to linkedMapOf("network" to "sora_taira", "profile" to null),
-    )
+    private fun bscMainnet(): MutableMap<String, Any?> =
+        linkedMapOf("network" to "bsc_mainnet", "profile" to null)
 
     private fun account(seed: Int): String =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")

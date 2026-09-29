@@ -52,8 +52,8 @@ internal sealed class ConfidentialSecret : IDisposable
     private readonly byte[] bytes;
     private bool disposed;
     internal ConfidentialSecret(int length) => bytes = new byte[length];
-    internal T Read<T>(Func<byte[], T> read) { lock (bytes) { if (disposed) throw new ConfidentialProverException(-2); return read(bytes); } }
-    internal void WriteSpan(int offset, ReadOnlySpan<byte> value) { lock (bytes) { if (disposed) throw new ConfidentialProverException(-2); value.CopyTo(bytes.AsSpan(offset)); } }
+    internal T Read<T>(Func<byte[], T> read) { lock (bytes) { if (disposed) throw new ConfidentialProverException(-2); try { return read(bytes); } finally { GC.KeepAlive(this); } } }
+    internal void WriteSpan(int offset, ReadOnlySpan<byte> value) { lock (bytes) { if (disposed) throw new ConfidentialProverException(-2); try { value.CopyTo(bytes.AsSpan(offset)); } finally { GC.KeepAlive(this); } } }
     internal void Write(Action<byte[]> write) => Read(value => { write(value); return true; });
     public void Dispose() { lock (bytes) { CryptographicOperations.ZeroMemory(bytes); disposed = true; } GC.SuppressFinalize(this); }
     ~ConfidentialSecret() => CryptographicOperations.ZeroMemory(bytes);
@@ -183,9 +183,10 @@ public sealed class ConfidentialTreeEvidence : IDisposable
     public static ConfidentialTreeEvidence Commitments(ReadOnlySpan<byte> root, IReadOnlyList<byte[]> leaves)
     {
         ConfidentialChecks.Word(root); ArgumentNullException.ThrowIfNull(leaves);
-        if (leaves.Count > ConfidentialChecks.Capacity) throw new ConfidentialProverException(-12);
-        for (var i = 0; i < leaves.Count; i++) { ArgumentNullException.ThrowIfNull(leaves[i]); ConfidentialChecks.Word(leaves[i]); }
-        var count = leaves.Count; var evidence = new ConfidentialTreeEvidence(32 + count * 32, count, false, null); var r = root.ToArray();
+        var count = leaves.Count;
+        if ((uint)count > ConfidentialChecks.Capacity) throw new ConfidentialProverException(-12);
+        for (var i = 0; i < count; i++) { ArgumentNullException.ThrowIfNull(leaves[i]); ConfidentialChecks.Word(leaves[i]); }
+        var evidence = new ConfidentialTreeEvidence(32 + count * 32, count, false, null); var r = root.ToArray();
         try { evidence.secret.Write(value => { r.CopyTo(value, 0); for (var i = 0; i < count; i++) leaves[i].CopyTo(value, 32 + i * 32); }); return evidence; }
         catch { evidence.Dispose(); throw; }
         finally { CryptographicOperations.ZeroMemory(r); }
@@ -194,11 +195,15 @@ public sealed class ConfidentialTreeEvidence : IDisposable
     public static ConfidentialTreeEvidence Paths(ReadOnlySpan<byte> root, IReadOnlyList<ConfidentialMerklePath> membership)
     {
         ConfidentialChecks.Word(root); ArgumentNullException.ThrowIfNull(membership);
-        if (membership.Count is < 1 or > 2) throw new ConfidentialProverException(-13);
-        var evidence = new ConfidentialTreeEvidence(32 + membership.Count * 528, membership.Count, true, new int[membership.Count]);
-        var r = new byte[32]; var siblings = new byte[membership.Count * 512]; var directions = new byte[membership.Count * 16]; root.CopyTo(r);
-        try { for (var i = 0; i < membership.Count; i++) { ArgumentNullException.ThrowIfNull(membership[i]); membership[i].CopyTo(r, siblings, directions, i); evidence.indices![i] = membership[i].LeafIndex; }
-            evidence.secret.Write(value => { r.CopyTo(value, 0); siblings.CopyTo(value, 32); directions.CopyTo(value, 32 + siblings.Length); }); return evidence; }
+        var count = membership.Count;
+        if (count is < 1 or > 2) throw new ConfidentialProverException(-13);
+        var evidence = new ConfidentialTreeEvidence(32 + count * 528, count, true, new int[count]);
+        var r = new byte[32]; var siblings = new byte[evidence.count * 512]; var directions = new byte[evidence.count * 16]; root.CopyTo(r);
+        try
+        {
+            for (var i = 0; i < evidence.count; i++) { ArgumentNullException.ThrowIfNull(membership[i]); membership[i].CopyTo(r, siblings, directions, i); evidence.indices![i] = membership[i].LeafIndex; }
+            evidence.secret.Write(value => { r.CopyTo(value, 0); siblings.CopyTo(value, 32); directions.CopyTo(value, 32 + siblings.Length); }); return evidence;
+        }
         catch { evidence.Dispose(); throw; }
         finally { CryptographicOperations.ZeroMemory(r); CryptographicOperations.ZeroMemory(siblings); CryptographicOperations.ZeroMemory(directions); }
     }

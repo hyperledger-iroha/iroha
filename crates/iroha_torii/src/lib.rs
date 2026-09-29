@@ -14417,12 +14417,6 @@ fn zk_ivm_prove_job_id_with_rng<R: rand::rand_core::TryCryptoRng>(
     })?;
     Ok(hex::encode(job_id_bytes))
 }
-fn zk_ivm_synthetic_signer() -> Result<iroha_crypto::KeyPair, String> {
-    // Local proof derivation replaces the signed authority before use; this
-    // signer only satisfies transaction construction for non-broadcast payloads.
-    iroha_crypto::KeyPair::try_from_seed(vec![0x5d; 32], iroha_crypto::Algorithm::Ed25519)
-        .map_err(|err| format!("failed to derive synthetic IVM transaction signer: {err}"))
-}
 fn zk_ivm_prove_gc_jobs_at(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     now_ms: u64,
@@ -15265,51 +15259,116 @@ fn zk_ivm_prove_enqueue(
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
     iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
-fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-    record_id == env_id
-        && match iroha_core::zk::production_verify_backend_tag(backend) {
-            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
-                iroha_core::zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
-            }
-            Some(iroha_data_model::zk::BackendTag::Stark) => {
-                iroha_core::zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
-            }
-            None => false,
+/// Admit only backend identities implemented by the IVM proof generator.
+fn is_ivm_replay_binding_tooling_backend(backend: &str) -> bool {
+    backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA || is_stark_fri_v1_backend(backend)
+}
+/// Require the exact backend-qualified replay-binding relation at every tooling stage.
+fn ivm_replay_binding_circuit_id_matches(backend: &str, record_id: &str) -> bool {
+    if !is_ivm_replay_binding_tooling_backend(backend) {
+        return false;
+    }
+    match iroha_core::zk::production_verify_backend_tag(backend) {
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
+            record_id == iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID
+                && iroha_core::zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
         }
+        Some(iroha_data_model::zk::BackendTag::Stark) => {
+            record_id
+                .strip_prefix(backend)
+                .and_then(|suffix| suffix.strip_prefix(':'))
+                == Some(iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID)
+                && iroha_core::zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]
 mod exact_proof_circuit_id_tests {
-    use super::circuit_id_matches;
+    use super::{is_ivm_replay_binding_tooling_backend, ivm_replay_binding_circuit_id_matches};
+
+    #[test]
+    fn ivm_tooling_backend_admission_matches_available_provers() {
+        for backend in [
+            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+            iroha_core::zk::ZK_BACKEND_STARK_FRI_V1,
+        ] {
+            assert!(is_ivm_replay_binding_tooling_backend(backend));
+        }
+        for unsupported in [
+            iroha_core::zk::IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "stark/fri",
+            "unsupported",
+        ] {
+            assert!(!is_ivm_replay_binding_tooling_backend(unsupported));
+            assert!(!ivm_replay_binding_circuit_id_matches(
+                unsupported,
+                iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            ));
+        }
+    }
 
     #[test]
     fn proof_metadata_uses_core_canonical_identity_without_aliases() {
         let backend = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
         let canonical = iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID;
-        for halo2_backend in [backend, iroha_core::zk::IVM_REPLAY_BINDING_V1_HALO2_BACKEND] {
-            assert!(circuit_id_matches(halo2_backend, canonical, canonical));
-            for alias in [
-                "ivm-replay-binding-v1",
-                "halo2/pasta/ivm-replay-binding-v1",
-                "halo2/ipa:ivm-replay-binding-v1",
-                "halo2/pasta/ipa-v1/ivm-replay-binding-v1",
-                "halo2/pasta/ipa/ivm-execution-v1",
-            ] {
-                assert!(!circuit_id_matches(halo2_backend, alias, alias));
-                assert!(!circuit_id_matches(halo2_backend, alias, canonical));
-            }
+        assert!(ivm_replay_binding_circuit_id_matches(backend, canonical));
+        for alias in [
+            "ivm-replay-binding-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "halo2/pasta/ipa-v1/ivm-replay-binding-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
+        ] {
+            assert!(!ivm_replay_binding_circuit_id_matches(backend, alias));
         }
         let stark = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
         let exact = format!("{stark}:ivm-replay-binding-v1");
-        assert!(circuit_id_matches(stark, &exact, &exact));
+        assert!(ivm_replay_binding_circuit_id_matches(stark, &exact));
         for alias in [
             "ivm-replay-binding-v1".to_owned(),
             format!("{stark}/ivm-replay-binding-v1"),
             format!(" {exact}"),
         ] {
-            assert!(!circuit_id_matches(stark, &alias, &alias));
+            assert!(!ivm_replay_binding_circuit_id_matches(stark, &alias));
         }
-        assert!(!circuit_id_matches("unsupported", "equal", "equal"));
+        assert!(!ivm_replay_binding_circuit_id_matches(
+            "unsupported",
+            "equal"
+        ));
+    }
+
+    #[test]
+    fn ivm_tooling_rejects_other_relations_and_cross_backend_identities() {
+        let halo2 = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
+        let replay = iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID;
+        let unshield = iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID;
+        assert!(iroha_core::zk::halo2_open_verify_circuit_id_matches_backend(halo2, unshield));
+        assert!(!ivm_replay_binding_circuit_id_matches(halo2, unshield));
+        let stark = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
+        let stark_replay = format!("{stark}:ivm-replay-binding-v1");
+        assert!(!ivm_replay_binding_circuit_id_matches(halo2, &stark_replay));
+        assert!(!ivm_replay_binding_circuit_id_matches(stark, replay));
+        for suffix in [
+            "binding-v1",
+            "ivm-execution-v1",
+            "ivm-replay-binding-v1:extra",
+        ] {
+            assert!(!ivm_replay_binding_circuit_id_matches(
+                stark,
+                &format!("{stark}:{suffix}")
+            ));
+        }
+        for backend in ["halo2/ipa/pasta", "stark/fri", "unknown"] {
+            assert!(!ivm_replay_binding_circuit_id_matches(backend, replay));
+            assert!(!ivm_replay_binding_circuit_id_matches(
+                backend,
+                &stark_replay
+            ));
+        }
     }
 }
 const ZK_KEY_ID_PATH_DOMAIN_V1: &[u8] = b"iroha:torii:zk-key-id:v1";
@@ -15332,9 +15391,6 @@ fn zk_key_store_stem(id: &iroha_data_model::proof::VerifyingKeyId) -> String {
 }
 fn zk_vk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
     keys_dir.join(format!("{}.vk", zk_key_store_stem(id)))
-}
-fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
-    keys_dir.join(format!("{}.pk", zk_key_store_stem(id)))
 }
 #[cfg(feature = "app_api")]
 fn open_zk_key_file_direct(path: &Path) -> std::io::Result<std::fs::File> {
@@ -15526,10 +15582,10 @@ async fn handler_zk_ivm_derive(
     require_zk_ivm_derive_authority(&req.authority, &verified)?;
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
     let backend = req.vk_ref.backend.as_str();
-    if !iroha_core::zk::is_ivm_replay_binding_backend(backend) {
+    if !is_ivm_replay_binding_tooling_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
+                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri/poseidon-x7-goldilocks-6x64-v1`".to_owned(),
             ),
         )));
     }
@@ -15581,7 +15637,6 @@ async fn handler_zk_ivm_derive(
             // The owned permit lives inside the physical blocking task, so
             // request cancellation/timeout cannot detach unaccounted VM work.
             let _tooling_permit = tooling_permit;
-            let synthetic_signer = zk_ivm_synthetic_signer()?;
             let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
                 network_id,
                 authority.clone(),
@@ -15589,10 +15644,8 @@ async fn handler_zk_ivm_derive(
             )
             .with_metadata(metadata)
             .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
-            .try_sign(synthetic_signer.private_key())
-            .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
-            // Proof derivation needs a stable authority, but signature validity is not required here.
-            .with_authority(authority);
+            .into_payload()
+            .map_err(|err| format!("invalid unsigned IVM derive payload: {err}"))?;
             // Resolve lifecycle and policy from the same snapshot used to execute the IVM.
             let view = state.query_view();
             let execution_height = zk_ivm_next_execution_height(view.height())?;
@@ -15605,10 +15658,9 @@ async fn handler_zk_ivm_derive(
             if !vk_record.is_active_at(execution_height) {
                 return Err("verifying key is not active at the execution height".to_owned());
             }
-            if !circuit_id_matches(
+            if !ivm_replay_binding_circuit_id_matches(
                 vk_ref.backend.as_str(),
                 &vk_record.circuit_id,
-                iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             ) {
                 return Err(format!(
                     "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{}` (got `{}`)",
@@ -15725,10 +15777,10 @@ async fn handler_zk_ivm_prove(
     }
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
     let backend = req.vk_ref.backend.as_str();
-    if !iroha_core::zk::is_ivm_replay_binding_backend(backend) {
+    if !is_ivm_replay_binding_tooling_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm prove requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
+                "ivm prove requires vk_ref.backend == `halo2/ipa` or `stark/fri/poseidon-x7-goldilocks-6x64-v1`".to_owned(),
             ),
         )));
     }
@@ -15795,11 +15847,7 @@ async fn handler_zk_ivm_prove(
                 ),
             )));
         }
-        if !circuit_id_matches(
-            backend,
-            &vk_record.circuit_id,
-            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-        ) {
+        if !ivm_replay_binding_circuit_id_matches(backend, &vk_record.circuit_id) {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                     "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{backend}` (got `{}`)",
@@ -15965,11 +16013,7 @@ async fn handler_zk_ivm_prove(
                 if !vk_record.is_active_at(execution_height) {
                     return Err("verifying key is not active at the execution height".to_owned());
                 }
-                if !circuit_id_matches(
-                    backend.as_str(),
-                    &vk_record.circuit_id,
-                    iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
-                ) {
+                if !ivm_replay_binding_circuit_id_matches(backend.as_str(), &vk_record.circuit_id) {
                     return Err(format!(
                         "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{}` (got `{}`)",
                         backend.as_str(),
@@ -16039,7 +16083,6 @@ async fn handler_zk_ivm_prove(
                     );
                 }
                 let code_hash = ivm::contract_code_hash(bytecode.as_ref());
-                let synthetic_signer = zk_ivm_synthetic_signer()?;
                 let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
                     network_id,
                     authority.clone(),
@@ -16049,10 +16092,8 @@ async fn handler_zk_ivm_prove(
                 .with_executable(iroha_data_model::transaction::Executable::Ivm(
                     bytecode.clone(),
                 ))
-                .try_sign(synthetic_signer.private_key())
-                .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
-                // Proof derivation needs stable authority; signature validity is not required.
-                .with_authority(authority.clone());
+                .into_payload()
+                .map_err(|err| format!("invalid unsigned IVM prove payload: {err}"))?;
                 let derived_proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                     &view,
                     &tx,
@@ -16070,16 +16111,12 @@ async fn handler_zk_ivm_prove(
                             .to_owned(),
                     );
                 }
-                let overlay_bytes = norito::to_bytes(&derived_proved.overlay)
+                let overlay_bytes = norito::encode_canonical(&derived_proved.overlay)
                     .map_err(|_| "failed to encode derived proved overlay".to_owned())?;
                 let overlay_hash = iroha_crypto::Hash::new(&overlay_bytes);
                 let proof_box = if backend.as_str() == iroha_core::zk::ZK_BACKEND_HALO2_IPA {
-                    let pk_path = zk_pk_store_path(&keys_dir, &vk_ref);
-                    let pk_bytes = read_zk_key_file_bounded(
-                        &pk_path,
-                        "proving key",
-                        ZK_IVM_MAX_VERIFYING_KEY_BYTES,
-                    )?;
+                    // The fixed circuit derives its exact proving key from the
+                    // canonical registered VK; operators need no separate key file.
                     iroha_core::zk::prove_halo2_ipa_ivm_replay_binding_envelope(
                         circuit_id.as_str(),
                         &vk_box,
@@ -16087,7 +16124,7 @@ async fn handler_zk_ivm_prove(
                         overlay_hash,
                         derived_proved.events_commitment,
                         derived_proved.gas_policy_commitment,
-                        Some(pk_bytes.as_slice()),
+                        None,
                     )?
                 } else if is_stark_fri_v1_backend(backend.as_str()) {
                     #[cfg(feature = "zk-stark")]

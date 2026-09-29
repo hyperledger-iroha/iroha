@@ -12,7 +12,6 @@ use iroha_data_model::{
     block::{BlockHeader, builder::BlockBuilder},
     permission::Permissions,
 };
-use iroha_sccp::{SCCP_TAIRA_CHAIN_ID_V1, sccp_taira_finality_network_id_v1};
 use sorafs_manifest::signer::{
     custody::{
         SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyAuthorityV1,
@@ -21,6 +20,11 @@ use sorafs_manifest::signer::{
     protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
 };
 use std::sync::Arc;
+/// Fixed chain label of the fixture State.
+const FIXTURE_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Fixed genesis-derived network identity of the fixture State.
+const FIXTURE_NETWORK_ID: &str =
+    "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D60EF#BA85";
 fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("checked fixture key")
 }
@@ -59,8 +63,8 @@ fn fixture() -> Fixture {
         fixture_world(&authority, &other, provider),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
-        sccp_taira_finality_network_id_v1(),
+        FIXTURE_CHAIN_ID.parse().expect("fixture chain"),
+        FIXTURE_NETWORK_ID.parse().expect("fixture network"),
     );
     let attester = key(7);
     let policy = SignerCustodyPolicyV1 {

@@ -6547,7 +6547,7 @@ impl Executor {
             validate_governed_ivm_proved_execution_policy(state_transaction, &meta)?;
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
-                &transaction,
+                transaction.payload(),
                 &summary,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
@@ -6586,7 +6586,7 @@ impl Executor {
             proved_entrypoint_authorization = Some(authorization);
             crate::pipeline::overlay::enforce_manifest_is_pre_registered(
                 state_transaction,
-                &transaction,
+                transaction.payload(),
                 summary.code_hash,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
@@ -7008,7 +7008,7 @@ impl Executor {
                     validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
-                    &transaction_for_fee,
+                    transaction_for_fee.payload(),
                     &summary,
                 )
                 .map_err(overlay_build_error_to_validation_fail)?;

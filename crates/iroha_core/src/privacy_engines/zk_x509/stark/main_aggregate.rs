@@ -4,6 +4,8 @@
 //! and concrete trace providers owned by the parent STARK module.
 // This is a private continuation of the parent module's fixed protocol
 // vocabulary; it does not define an independent extension surface.
+#[cfg(test)]
+use super::super::prover_observation::{PhaseTimerV1, PhaseV1};
 use super::super::{
     der_stark::ZkX509DerStarkChallengesV1,
     rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
@@ -13,6 +15,12 @@ use super::super::{
     sha_word_stark::ZkX509ShaWordStarkChallengesV1,
 };
 use super::*;
+#[cfg(test)]
+#[path = "main_composition_ownership_tests.rs"]
+mod main_composition_ownership_tests;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "main_fixed_coset.rs"]
+mod main_fixed_coset;
 #[path = "main_oods.rs"]
 mod main_oods;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -132,6 +140,38 @@ fn sample_main_trace_group_v1<R: TryRngCore>(
                 }
             }
         },
+    )
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn sample_main_trace_group_batched_v1<R: TryRngCore>(
+    layout: &AggregateProofLayoutV1,
+    group_index: usize,
+    kind: MainTraceColumnKindV1,
+    sources: &MainTraceReplaySourcesV1<'_, '_>,
+    rng: &mut R,
+) -> Result<MainTraceMaskGroupV1, ZkX509StarkErrorV1> {
+    layout.validate_exact_full_profile_registration_v1()?;
+    let group = *layout
+        .trace_groups
+        .get(group_index)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
+        .get(group_index)
+        .copied()
+        != Some(group.native_trace_log2)
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let width = match kind {
+        MainTraceColumnKindV1::Base => group.base_width,
+        MainTraceColumnKindV1::Aux => group.aux_width,
+    };
+    MainTraceMaskGroupV1::sample_batched_v1(
+        group.native_trace_log2,
+        layout.common_lde_log2,
+        width,
+        rng,
+        |columns| sources.native_columns_v1(layout, kind, group_index, columns),
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -382,6 +422,8 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         return Err(ZkX509StarkErrorV1::WitnessStatementMismatch);
     }
     buffer_plan.check_source_shapes_v1(&layout, assembly)?;
+    #[cfg(test)]
+    let source_timer = PhaseTimerV1::start_v1(PhaseV1::BaseSources);
     let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
     let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
     let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
@@ -407,6 +449,10 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     let mut transcript =
         new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
     absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
+    #[cfg(test)]
+    source_timer.complete_v1();
+    #[cfg(test)]
+    let mask_timer = PhaseTimerV1::start_v1(PhaseV1::BaseMasks);
     let mut base_polynomials = Vec::new();
     base_polynomials
         .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
@@ -445,8 +491,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         base_polynomials.push(polynomials);
     }
     {
-        let mut source =
-            MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
+        let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
         buffer_plan.check_native_sources_v1(
             assembly.allocated_payload_bytes_v1(),
             &[
@@ -457,8 +502,22 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
                 source.allocated_payload_bytes_v1(),
             ],
         )?;
-        let polynomials =
-            sample_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
+        // The preflight wrapper owns metadata only; replay constructs its
+        // own wrapper, so do not overlap those allocations.
+        drop(source);
+        let polynomials = sample_main_trace_group_batched_v1(
+            &layout,
+            5,
+            MainTraceColumnKindV1::Base,
+            &MainTraceReplaySourcesV1::Base {
+                assembly,
+                sha: &sha,
+                p256: &p256,
+                projection: &projection,
+                io: &io,
+            },
+            rng,
+        )?;
         base_polynomials.push(polynomials);
     }
     let base_polynomials = MainTracePolynomialSetV1::from_ordered_v1(
@@ -466,6 +525,10 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         MainTraceColumnKindV1::Base,
         base_polynomials,
     )?;
+    #[cfg(test)]
+    mask_timer.complete_v1();
+    #[cfg(test)]
+    let commit_timer = PhaseTimerV1::start_v1(PhaseV1::BaseCommitment);
     let commitment = base_polynomials.commit_joined_v1(
         &layout,
         MainTraceColumnKindV1::Base,
@@ -479,6 +542,8 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
             io: &io,
         },
     )?;
+    #[cfg(test)]
+    commit_timer.complete_v1();
     session.accept_streaming_base_commitment_v1(&commitment)?;
     let trace_groups = vec![main_trace_group_root_v1(
         MainTraceColumnKindV1::Base,
@@ -542,9 +607,11 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
             .map_err(map_credential_pre_aux_error_v1)?;
         let post_base = binding.main_post_base();
+        #[cfg(test)]
+        let source_timer = PhaseTimerV1::start_v1(PhaseV1::BoundSources);
         projection.bind_challenges_v1(post_base)?;
         io.bind_challenges_v1(post_base)?;
-        let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        let log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
         )?;
         buffer_plan.check_native_sources_v1(
@@ -555,6 +622,10 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 io.allocated_payload_bytes_v1(),
             ],
         )?;
+        #[cfg(test)]
+        source_timer.complete_v1();
+        #[cfg(test)]
+        let mask_timer = PhaseTimerV1::start_v1(PhaseV1::AuxMasks);
         let mut aux_polynomials = Vec::new();
         aux_polynomials
             .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
@@ -608,11 +679,15 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             aux_polynomials.push(polynomials);
         }
         {
-            let polynomials = sample_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_batched_v1(
                 &layout,
                 5,
                 MainTraceColumnKindV1::Aux,
-                &mut log19,
+                &MainTraceReplaySourcesV1::Bound {
+                    log19: &log19,
+                    projection: &projection,
+                    io: &io,
+                },
                 rng,
             )?;
             aux_polynomials.push(polynomials);
@@ -622,6 +697,10 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             MainTraceColumnKindV1::Aux,
             aux_polynomials,
         )?;
+        #[cfg(test)]
+        mask_timer.complete_v1();
+        #[cfg(test)]
+        let commit_timer = PhaseTimerV1::start_v1(PhaseV1::AuxCommitment);
         let commitment = aux_polynomials.commit_joined_v1(
             &layout,
             MainTraceColumnKindV1::Aux,
@@ -633,6 +712,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 io: &io,
             },
         )?;
+        #[cfg(test)]
+        commit_timer.complete_v1();
         trace_groups[0].aux_root = commitment.commitment.root;
         aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
             .map_err(map_aggregate_error_v1)?;
@@ -673,6 +754,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         rng: &mut R,
     ) -> Result<Vec<u8>, ZkX509StarkErrorV1> {
         self.validate_v1()?;
+        #[cfg(test)]
+        let composition_timer = PhaseTimerV1::start_v1(PhaseV1::Composition);
         let composition_material = self.composition_material_v1()?;
         let sources = MainTraceReplaySourcesV1::Bound {
             log19: &self.log19,
@@ -704,6 +787,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &composition_roots,
         )
         .map_err(map_aggregate_error_v1)?;
+        #[cfg(test)]
+        composition_timer.complete_v1();
+        #[cfg(test)]
+        let deep_timer = PhaseTimerV1::start_v1(PhaseV1::DeepAndFri);
         let fri_masks = aggregate::build_fri_mask_oracles_v1(
             AGGREGATE_PARAMETERS_V1,
             AGGREGATE_DOMAINS_V1,
@@ -834,6 +921,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         .map_err(map_transparent_error_v1)?;
         absorb_grinding_nonce_v1(&mut self.transcript, grinding_nonce)?;
         let query_indices = query_indices_v1(&self.transcript, &self.layout)?;
+        #[cfg(test)]
+        deep_timer.complete_v1();
+        #[cfg(test)]
+        let opening_timer = PhaseTimerV1::start_v1(PhaseV1::QueryOpenings);
         let query_skeleton = query_indices
             .iter()
             .map(|index| {
@@ -990,6 +1081,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                     .collect::<Result<Vec<_>, _>>()?,
             });
         }
+        #[cfg(test)]
+        opening_timer.complete_v1();
         drop(self.base_polynomials);
         drop(self.aux_polynomials);
         let fri_lanes = fri_materials
@@ -1232,7 +1325,7 @@ impl Drop for ZeroizingMainFixedPolynomialSetV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
-    mut consume: impl FnMut(&ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
+    mut consume: impl FnMut(&mut ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     let mut pending: Option<ZeroizingMainFixedPolynomialSetV1> = None;
     provider.stream_fixed_polynomials_v1(|registration, local_column, coefficients| {
@@ -1248,13 +1341,13 @@ fn stream_main_fixed_polynomial_sets_v1(
             .as_ref()
             .is_some_and(|set| set.registration != registration)
         {
-            let completed = pending
+            let mut completed = pending
                 .take()
                 .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
             if completed.columns.len() != completed.registration.segment.fixed_width {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
-            consume(&completed)?;
+            consume(&mut completed)?;
         }
         let set = pending.get_or_insert_with(|| ZeroizingMainFixedPolynomialSetV1 {
             registration,
@@ -1274,11 +1367,11 @@ fn stream_main_fixed_polynomial_sets_v1(
         set.columns.push(retained);
         Ok(())
     })?;
-    let completed = pending.ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let mut completed = pending.ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     if completed.columns.len() != completed.registration.segment.fixed_width {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    consume(&completed)
+    consume(&mut completed)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_main_registration_index_v1(
@@ -1330,39 +1423,6 @@ fn main_registration_trace_columns_on_coset_v1(
             sources,
         )
     })
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn main_fixed_columns_on_coset_v1(
-    fixed: &ZeroizingMainFixedPolynomialSetV1,
-    stripe: main_quotient_stripes::MainQuotientStripeV1,
-) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
-    let registration = fixed.registration;
-    if fixed.columns.len() != registration.segment.fixed_width
-        || fixed
-            .columns
-            .iter()
-            .any(|column| column.len() != registration.segment.trace_size())
-    {
-        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-    }
-    let mut columns = ZeroizingBaseColumnsV1(Vec::new());
-    columns
-        .0
-        .try_reserve_exact(fixed.columns.len())
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    for batch in fixed
-        .columns
-        .chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-    {
-        let evaluated = batch
-            .par_iter()
-            .map(|coefficients| stripe.evaluate_v1(coefficients))
-            .collect::<Result<Vec<_>, _>>()?;
-        for column in evaluated {
-            columns.0.push(column.into_vec_v1());
-        }
-    }
-    Ok(columns)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainQuotientRowScratchV1 {
@@ -1444,7 +1504,7 @@ fn main_registration_composition_coefficient_chunks_v1(
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,
     sources: &MainTraceReplaySourcesV1<'_, '_>,
-    fixed: &ZeroizingMainFixedPolynomialSetV1,
+    fixed: &mut ZeroizingMainFixedPolynomialSetV1,
     alphas: &[Vec<E>],
     shared_layout: &aggregate::AggregateProofLayoutV1,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
@@ -1470,6 +1530,10 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
+    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
+        registration.segment.trace_log2,
+        core::mem::take(&mut fixed.columns),
+    )?;
     let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)?
         .quotient_cache_plan_v1(layout, registration)?;
     let cache = main_quotient_cache::MainQuotientReplayCacheV1::from_replay_v1(
@@ -1523,7 +1587,7 @@ fn main_registration_composition_coefficient_chunks_v1(
             stripe,
             &cache,
         )?;
-        let fixed_columns = main_fixed_columns_on_coset_v1(fixed, stripe)?;
+        let fixed_columns = fixed_coset.evaluate_v1(stripe)?;
         // Each task owns disjoint windows of the canonical full quotient. Only
         // this stripe's interleaved entries are written, so the original IFFT
         // sees exactly its original domain ordering after every stripe.
@@ -1557,7 +1621,7 @@ fn main_registration_composition_coefficient_chunks_v1(
                                     .checked_add(offset)
                                     .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
                                 let next = (row + stripe.next_stride) % stripe.rows;
-                                scratch.fill_v1(row, next, &base, &aux, &fixed_columns);
+                                scratch.fill_v1(row, next, &base, &aux, fixed_columns);
                                 *target = provider.composition_value_v1(
                                     registration,
                                     x,
@@ -1575,7 +1639,9 @@ fn main_registration_composition_coefficient_chunks_v1(
     }
     // Coefficients are no longer needed once all original quotient rows exist.
     drop(cache);
-    let mut coefficient_chunks = Vec::new();
+    drop(fixed_coset);
+    let mut coefficient_chunks =
+        ZeroizingExtensionLanesV1::new(Vec::new(), zeroize_extension_lanes_v1);
     coefficient_chunks
         .try_reserve_exact(SECURITY_LANES)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
@@ -1587,7 +1653,7 @@ fn main_registration_composition_coefficient_chunks_v1(
             shared_layout,
         )?);
     }
-    Ok(coefficient_chunks)
+    Ok(coefficient_chunks.into_vec())
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn add_main_composition_coefficient_chunks_v1(
@@ -1619,9 +1685,17 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
             let source_len = contribution[lane][chunk].len();
             let target = &mut accumulator[lane][chunk];
             if target.len() < source_len {
-                target
-                    .try_reserve_exact(source_len - target.len())
-                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                if target.capacity() < source_len {
+                    let mut replacement = ZeroizingExtensionColumnV1(Vec::new());
+                    replacement
+                        .0
+                        .try_reserve_exact(source_len)
+                        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                    replacement.0.extend_from_slice(target);
+                    // The guard now owns the displaced initialized allocation.
+                    // Its Drop clears it before the next replacement is built.
+                    core::mem::swap(target, &mut replacement.0);
+                }
             }
         }
     }
@@ -1639,6 +1713,10 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
                 .iter()
                 .rposition(|coefficient| *coefficient != E::ZERO)
                 .map_or(0, |degree| degree + 1);
+            // Cancellation makes the values zero mathematically, but only the
+            // explicit eraser guarantees that initialized cells are cleared
+            // before truncation removes them from the owner's Drop extent.
+            super::super::private_table::zeroize_words_v1(&mut target[retained..]);
             target.truncate(retained);
         }
     }
@@ -1662,38 +1740,74 @@ fn evaluate_main_composition_coefficient_chunks_v1(
     let coefficient_cap = shared_layout
         .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
         .map_err(map_aggregate_error_v1)?;
-    coefficient_chunks
-        .iter()
-        .map(|lane| {
-            lane.iter()
-                .map(|coefficients| {
-                    if coefficients.len() > coefficient_cap
-                        || coefficients
-                            .iter()
-                            .any(|coefficient| !coefficient.is_canonical())
-                    {
-                        return Err(ZkX509StarkErrorV1::ProfileMismatch);
-                    }
-                    if coefficients.is_empty() {
-                        let mut zero = Vec::new();
-                        zero.try_reserve_exact(common_rows)
-                            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-                        zero.resize(common_rows, E::ZERO);
-                        Ok(zero)
-                    } else {
-                        goldilocks_fp4_evaluate_coset_v1(
-                            coefficients,
-                            common_rows,
-                            common_root,
-                            F(GOLDILOCKS_GENERATOR_V1),
-                        )
-                        .map_err(map_transparent_error_v1)
-                    }
-                })
-                .collect()
-        })
-        .collect()
+    evaluate_main_composition_columns_v1(
+        coefficient_chunks,
+        common_rows,
+        common_root,
+        coefficient_cap,
+    )
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn evaluate_main_composition_columns_v1(
+    coefficient_chunks: &[Vec<Vec<E>>],
+    common_rows: usize,
+    common_root: F,
+    coefficient_cap: usize,
+) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
+    if coefficient_chunks.len() != SECURITY_LANES
+        || coefficient_chunks
+            .iter()
+            .any(|lane| lane.len() != COMPOSITION_DEGREE_CHUNKS)
+        || common_rows == 0
+        || !common_rows.is_power_of_two()
+        || coefficient_cap == 0
+        || coefficient_cap > common_rows
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let mut evaluations = ZeroizingExtensionLanesV1::new(Vec::new(), zeroize_extension_lanes_v1);
+    evaluations
+        .try_reserve_exact(coefficient_chunks.len())
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    for lane in coefficient_chunks {
+        // Install the lane in its clearing owner before any populated chunk.
+        evaluations.push(Vec::new());
+        let target = evaluations
+            .last_mut()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        target
+            .try_reserve_exact(lane.len())
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        for coefficients in lane {
+            if coefficients.len() > coefficient_cap
+                || coefficients
+                    .iter()
+                    .any(|coefficient| !coefficient.is_canonical())
+            {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            if coefficients.is_empty() {
+                let mut zero = Vec::new();
+                zero.try_reserve_exact(common_rows)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                zero.resize(common_rows, E::ZERO);
+                target.push(zero);
+                continue;
+            }
+            target.push(
+                goldilocks_fp4_evaluate_coset_v1(
+                    coefficients,
+                    common_rows,
+                    common_root,
+                    F(GOLDILOCKS_GENERATOR_V1),
+                )
+                .map_err(map_transparent_error_v1)?,
+            );
+        }
+    }
+    Ok(evaluations.into_vec())
+}
+
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_composition_material_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
@@ -1728,13 +1842,25 @@ fn main_composition_material_from_polynomials_v1(
     let coefficient_cap = shared_layout
         .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
         .map_err(map_aggregate_error_v1)?;
-    let mut coefficient_chunks = (0..SECURITY_LANES)
-        .map(|_| {
-            (0..COMPOSITION_DEGREE_CHUNKS)
-                .map(|_| Vec::new())
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let mut coefficient_chunks = ZeroizingExtensionLanesV1::new(
+        (0..SECURITY_LANES)
+            .map(|_| {
+                (0..COMPOSITION_DEGREE_CHUNKS)
+                    .map(|_| Vec::new())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        zeroize_extension_lanes_v1,
+    );
+    // The ledger already charges every complete accumulator chunk. Reserve
+    // before its first private write so later additions never reallocate it.
+    for lane in &mut *coefficient_chunks {
+        for chunk in lane {
+            chunk
+                .try_reserve_exact(coefficient_cap)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        }
+    }
     let mut seen_registrations = 0_usize;
     for (group_index, provider) in providers.iter().enumerate() {
         let expected = layout
@@ -1750,16 +1876,19 @@ fn main_composition_material_from_polynomials_v1(
             }
             let registration_index =
                 canonical_main_registration_index_v1(layout, fixed.registration)?;
-            let contribution = main_registration_composition_coefficient_chunks_v1(
-                layout,
-                provider,
-                base_polynomials,
-                aux_polynomials,
-                sources,
-                fixed,
-                &alphas[registration_index],
-                &shared_layout,
-            )?;
+            let contribution = ZeroizingExtensionLanesV1::new(
+                main_registration_composition_coefficient_chunks_v1(
+                    layout,
+                    provider,
+                    base_polynomials,
+                    aux_polynomials,
+                    sources,
+                    fixed,
+                    &alphas[registration_index],
+                    &shared_layout,
+                )?,
+                zeroize_extension_lanes_v1,
+            );
             add_main_composition_coefficient_chunks_v1(
                 &mut coefficient_chunks,
                 &contribution,
@@ -1780,7 +1909,7 @@ fn main_composition_material_from_polynomials_v1(
         evaluate_main_composition_coefficient_chunks_v1(&coefficient_chunks, &shared_layout)?;
     Ok(RetainedCompositionMaterialV1 {
         evaluations,
-        coefficient_chunks,
+        coefficient_chunks: coefficient_chunks.into_vec(),
     })
 }
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

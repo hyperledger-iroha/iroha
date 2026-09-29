@@ -2675,8 +2675,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -2685,8 +2685,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -2696,8 +2696,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add2inst-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -2707,8 +2707,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_2rows() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-2rows", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());

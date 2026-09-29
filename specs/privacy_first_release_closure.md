@@ -10,9 +10,7 @@ foreign VM/codec targets and retires their interfaces. Execution STARK frames
 now use the shared six-lane Goldilocks owner, and BFV delegates to that owner
 instead of retaining a duplicate permutation. The new execution source/profile
 identities and composed native SDK corrections are under verification; prior
-proof, hardware and release records do not qualify these changes. All eight
-SCCP R1CS identities were freshly measured on native macOS against their exact
-source closure; this does not qualify the pinned Linux builder or ceremonies.
+proof, hardware and release records do not qualify these changes.
 
 The [2026-09-10 current-source checks](../docs/history/2026-09-10/privacy-current-source-verification.md)
 pass 18 FASTPQ regressions and 140 Core source/reservation tests on separate
@@ -116,7 +114,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | The joined MAIN/current-row codec preserves the complete relation and bounds combined X5S1 at 9,204,362 bytes under the unchanged 9,437,184-byte limit. Produce actual maximum-shape proofs, regenerate artifacts, complete independent soundness/hiding review and measure the real implementation. |
+| ZK-X509 | Native certificate relation and bounded joined codec exist; activation is unavailable. The corrected RFC temporal relation awaits fresh integrated profile pins. | The complete relation bounds combined X5S1 at 9,420,938 bytes under the unchanged 9,437,184-byte limit. Produce actual maximum-shape proofs, regenerate artifacts, complete independent soundness/hiding review and measure the real implementation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -129,11 +127,15 @@ has a log-22 common domain and the accumulator pads its 104 active rows to
 8,192 rows on a log-16 LDE. All six MAIN groups retain their native polynomial
 and transition domains under one joined base root and one joined auxiliary root.
 Full current/next Fp4 DEEP constraints precede verification of the reduced
-current-row query wire. The combined codec bound is 9,204,362 bytes, leaving
-232,822 bytes under the unchanged 9,437,184-byte ceiling. This resolves the
+current-row query wire. The repaired RFC temporal relation uses 285 base, 280
+auxiliary and 102 verifier-fixed columns, with 1,681 degree-four constraints.
+The combined codec bound is 9,420,938 bytes, leaving 16,246 bytes under the
+unchanged 9,437,184-byte ceiling. Nine geometry controls pass. This resolves the
 encoding preflight failure; it does not establish maximum-shape proof generation,
 resource compliance, soundness, hiding or activation. Those require fresh native
-artifacts and independent qualification of the exact construction.
+artifacts and independent qualification of the exact construction. The
+[September 29 source record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md)
+separates isolated relation/resource evidence from pending integrated execution.
 
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and

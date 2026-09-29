@@ -1181,14 +1181,10 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
@@ -1197,36 +1193,22 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
     vk_record.activation_height = Some(2);
     vk_record.withdraw_height = Some(3);
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(
-        vk_record.key.as_ref().expect("vk_box"),
-    )
-    .expect("derive proving key bytes");
-    let pk_path = zk_pk_store_path(temp.path(), &vk_id);
-    std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
-    let req = make_ivm_prove_request(vk_id, bytecode, None);
+    let (bytecode, metadata) = install_ivm_prove_contract_fixture(
+        &app,
+        &sample_ivm_prove_authority_keypair(),
+        &vk_id,
+        vk_record,
+    );
+    assert_eq!(
+        std::fs::read_dir(temp.path())
+            .expect("read empty key directory")
+            .count(),
+        0
+    );
+    let mut req = make_ivm_prove_request(vk_id, bytecode, None);
+    req.metadata = metadata;
     let body = norito::json::to_vec(&req).expect("json encode request");
+    let supervisor = IvmProveSupervisorFixture::start(&app);
     let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
@@ -1281,16 +1263,25 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         }
     }
     let dto = final_dto.expect("prove job should complete");
+    assert_ivm_prove_response_replays(&app, &req, &dto, &sample_ivm_prove_authority_keypair());
     let attachment = dto
         .attachment
         .as_ref()
         .expect("expected proof attachment in done response");
     assert_eq!(attachment.vk_commitment, Some(vk_commitment));
+    assert_eq!(
+        std::fs::read_dir(temp.path())
+            .expect("read empty key directory")
+            .count(),
+        0,
+        "inline canonical VK proving must not require or publish a server PK file"
+    );
     let response = call_zk_ivm_prove_delete(app.clone(), job_id.clone())
         .await
         .expect("prove delete ok")
         .into_response();
     assert_eq!(response.status(), StatusCode::OK);
+    supervisor.shutdown().await;
 }
 #[cfg(feature = "zk-stark")]
 #[tokio::test]
@@ -1323,30 +1314,16 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
     vk_record.key = Some(vk_box.clone());
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
-    let req = make_ivm_prove_request(vk_id, bytecode, None);
+    let (bytecode, metadata) = install_ivm_prove_contract_fixture(
+        &app,
+        &sample_ivm_prove_authority_keypair(),
+        &vk_id,
+        vk_record,
+    );
+    let mut req = make_ivm_prove_request(vk_id, bytecode, None);
+    req.metadata = metadata;
     let body = norito::json::to_vec(&req).expect("json encode request");
+    let supervisor = IvmProveSupervisorFixture::start(&app);
     let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
@@ -1387,6 +1364,7 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
         }
     }
     let dto = final_dto.expect("prove job should complete");
+    assert_ivm_prove_response_replays(&app, &req, &dto, &sample_ivm_prove_authority_keypair());
     let attachment = dto
         .attachment
         .expect("expected proof attachment in done response");
@@ -1396,6 +1374,7 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
         iroha_core::zk::verify_backend(backend, &attachment.proof, Some(&vk_box),),
         "generated STARK attachment should verify"
     );
+    supervisor.shutdown().await;
 }
 #[tokio::test]
 async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
@@ -1422,47 +1401,25 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         .expect("fixture should include verifying key commitment");
     let vk_path = zk_vk_store_path(temp.path(), &vk_id);
     std::fs::write(&vk_path, &vk_box.bytes).expect("write verifying key bytes");
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
-        .expect("derive proving key bytes");
-    let pk_path = zk_pk_store_path(temp.path(), &vk_id);
-    std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
-    vk_record.vk_len = vk_box.bytes.len() as u32;
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
+    vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits");
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = None;
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
-    let req = make_ivm_prove_request(vk_id, bytecode, None);
+    let (bytecode, metadata) = install_ivm_prove_contract_fixture(
+        &app,
+        &sample_ivm_prove_authority_keypair(),
+        &vk_id,
+        vk_record,
+    );
+    let mut req = make_ivm_prove_request(vk_id, bytecode, None);
+    req.metadata = metadata;
     let body = norito::json::to_vec(&req).expect("json encode request");
+    let supervisor = IvmProveSupervisorFixture::start(&app);
     let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
@@ -1508,105 +1465,22 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         .as_ref()
         .expect("expected proof attachment in done response");
     assert_eq!(attachment.vk_commitment, Some(vk_commitment));
+    supervisor.shutdown().await;
 }
-#[tokio::test]
-async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut app = mk_ivm_prove_app_state_for_tests();
-    {
-        let state = Arc::get_mut(&mut app).expect("unique app");
-        state.zk_prover_keys_dir = temp.path().to_path_buf();
-        let core = Arc::get_mut(&mut state.state).expect("unique core state");
-        core.zk.halo2.enabled = true;
-    }
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-raw-pk");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
+#[test]
+fn zk_ivm_core_prover_rejects_non_archive_proving_key_bytes() {
+    let vk_box = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_box()
+        .expect("canonical replay-binding verifying key");
+    let error = iroha_core::zk::prove_halo2_ipa_ivm_replay_binding_envelope(
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+        &vk_box,
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
         Hash::new(b"gas"),
-    );
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture should include verifying key bytes");
-    let vk_commitment = fixture
-        .vk_hash("halo2/ipa")
-        .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
-    vk_record.vk_len = vk_box.bytes.len() as u32;
-    vk_record.max_proof_bytes = 8 * 1024 * 1024;
-    vk_record.key = Some(vk_box);
-    vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-    vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    let pk_path = zk_pk_store_path(temp.path(), &vk_id);
-    std::fs::write(&pk_path, b"raw-halo2-proving-key").expect("write raw proving key bytes");
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
-    let req = make_ivm_prove_request(vk_id, bytecode, None);
-    let body = norito::json::to_vec(&req).expect("json encode request");
-    let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
-        .await
-        .expect("prove submit ok")
-        .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let created: ZkIvmProveJobCreatedDto =
-        norito::json::from_slice(&body).expect("json decode created dto");
-    let job_id = created.job_id;
-    let mut final_dto: Option<ZkIvmProveJobDto> = None;
-    for _ in 0..4000 {
-        let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
-            .await
-            .expect("prove get ok")
-            .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: ZkIvmProveJobDto = norito::json::from_slice(&body).expect("decode job dto");
-        match dto.status.as_str() {
-            "pending" | "running" => tokio::time::sleep(Duration::from_millis(25)).await,
-            "error" => {
-                final_dto = Some(dto);
-                break;
-            }
-            "done" => panic!("prove job should fail for non-archive proving key bytes"),
-            other => panic!("unexpected prove job status: {other}"),
-        }
-    }
-    let dto = final_dto.expect("prove job should fail");
-    let error = dto.error.unwrap_or_default();
+        Some(b"raw-halo2-proving-key"),
+    )
+    .expect_err("optional Core proving-key archives still require canonical framing");
     assert!(
         error.contains("failed to decode proving key archive"),
         "unexpected error: {error}"
@@ -1635,55 +1509,31 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(
-        vk_record.key.as_ref().expect("vk_box"),
-    )
-    .expect("derive proving key bytes");
-    let pk_path = zk_pk_store_path(temp.path(), &vk_id);
-    std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
+    let (bytecode, metadata) = install_ivm_prove_contract_fixture(
+        &app,
+        &sample_ivm_prove_authority_keypair(),
+        &vk_id,
+        vk_record,
+    );
     let mismatched_proved = IvmProved {
         bytecode: bytecode.clone(),
         overlay: iroha_primitives::const_vec::ConstVec::new_empty(),
         events_commitment: Hash::new(b"wrong-events"),
         gas_policy_commitment: Hash::new(b"wrong-gas-policy"),
     };
-    let req = make_ivm_prove_request(vk_id, bytecode, Some(mismatched_proved));
+    let mut req = make_ivm_prove_request(vk_id, bytecode, Some(mismatched_proved));
+    req.metadata = metadata;
     let body = norito::json::to_vec(&req).expect("json encode request");
+    let supervisor = IvmProveSupervisorFixture::start(&app);
     let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
@@ -1724,11 +1574,13 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         error.contains("provided `proved` payload does not match node-derived execution payload"),
         "unexpected error: {error}"
     );
+    supervisor.shutdown().await;
 }
 #[tokio::test]
 async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
-    let authority =
-        checked_torii_test_account_id(0xfd, "derive ZK IVM derive authority fixture key");
+    let authority_keypair =
+        checked_torii_test_ed25519_keypair(0xfd, "derive ZK IVM derive authority fixture key");
+    let authority = AccountId::new(authority_keypair.public_key().clone());
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
@@ -1753,14 +1605,10 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        schema_hash,
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, schema_hash);
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -1768,34 +1616,13 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
     vk_record.activation_height = Some(2);
     vk_record.withdraw_height = Some(3);
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    {
-        let height = next_block_height(&app);
-        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world
-            .verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record);
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
-    }
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 1,
-        mode: ivm::ivm_mode::ZK,
-        ..Default::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
+    let (bytecode, metadata) =
+        install_ivm_prove_contract_fixture(&app, &authority_keypair, &vk_id, vk_record);
     let req = ZkIvmDeriveRequestDto {
         vk_ref: vk_id,
         authority: authority.clone(),
         fee_payment: sample_ivm_fee_payment(),
-        metadata: iroha_model_base::metadata::Metadata::default(),
+        metadata,
         bytecode: bytecode.clone(),
     };
     let body = norito::json::to_vec(&req).expect("json encode request");
@@ -2103,14 +1930,11 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        [0xAA; 32],
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
+    vk_record.public_inputs_schema_hash = [0xAA; 32];
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
@@ -2124,11 +1948,9 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), vk_record);
         stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit should persist VK at the explicit empty-block height");
     }
     let meta = ivm::ProgramMetadata {
         mode: ivm::ivm_mode::ZK,
@@ -2178,14 +2000,10 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
@@ -2199,11 +2017,9 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), vk_record);
         stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit should persist VK at the explicit empty-block height");
     }
     let _saturated = app
         .zk_ivm_prove_slots
@@ -2256,14 +2072,10 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
     let vk_commitment = fixture
         .vk_hash("halo2/ipa")
         .expect("fixture should include verifying key commitment");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pasta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
+    let mut vk_record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
+        .expect("canonical replay-binding verifier record");
+    assert_eq!(vk_record.commitment, vk_commitment);
+    assert_eq!(vk_record.public_inputs_schema_hash, fixture.schema_hash);
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
@@ -2277,11 +2089,9 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), vk_record);
         stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block.commit().expect("commit should persist vk record");
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit should persist VK at the explicit empty-block height");
     }
     let meta = ivm::ProgramMetadata {
         mode: ivm::ivm_mode::ZK,
@@ -2292,6 +2102,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
     let bytecode = IvmBytecode::from_compiled(program);
     let req = make_ivm_prove_request(vk_id, bytecode, None);
     let req_body = norito::json::to_vec(&req).expect("json encode request");
+    let supervisor = IvmProveSupervisorFixture::start(&app);
     let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(req_body.clone()))
         .await
         .expect("first submission ok")
@@ -2324,6 +2135,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
         1,
         "capacity slot should be released after delete cancels a queued job"
     );
+    supervisor.shutdown().await;
 }
 #[test]
 fn query_validation_message_preserves_conversion_source() {

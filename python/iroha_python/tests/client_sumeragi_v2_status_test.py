@@ -456,7 +456,7 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
         operator_signing_context=_OPERATOR_CONTEXT,
     )
 
-    def get_sccp_json_object(
+    def get_sumeragi_json_object(
         path: str,
         *,
         context: str,
@@ -469,7 +469,7 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
     monkeypatch.setattr(
         client,
         "_get_sumeragi_operator_json_object",
-        get_sccp_json_object,
+        get_sumeragi_json_object,
     )
 
     with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):

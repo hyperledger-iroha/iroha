@@ -40,7 +40,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "116ac702fd4e34a929b15290bb76f8d186546b39406e2b806a11238f5de392e3",
+        "cf4bb80ada63ffaae2415d9c76ed45c26dbc6c8a461ffc81fec5674928f78a85",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -98,7 +98,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "b3e728c149d3610fbc158dfde86dfb8bd75a0163084bf451bb982596a8e036b8",
+        "720f3863faf66ced3968bb561f2cd68b9f7b83ea27b5e3afb022db99ea277a21",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -2677,7 +2677,7 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
         usize::try_from(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1)
             .expect("profile proof bound fits usize")
     );
-    assert_eq!(maximum_encoded_bytes, 7_692_192);
+    assert_eq!(maximum_encoded_bytes, 7_908_768);
     assert!(
         maximum_encoded_bytes
             < usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),

@@ -131,6 +131,46 @@ public class NativeOracle {
     assert [operation["static"] for operation in operations] == [False, False, True, False]
 
 
+@pytest.fixture(scope="module")
+def compiled_inheritance(tmp_path_factory):
+    """Use javac as an independent parent-metadata oracle without loading classes."""
+    javac = shutil.which("javac")
+    if javac is None:
+        pytest.skip("JDK compiler is required for the independent inheritance oracle")
+    root = tmp_path_factory.mktemp("classfile-inheritance")
+    source = root / "InheritanceOracle.java"
+    source.write_text("""package oracle;
+interface ApiParent { void interfaceCall(); }
+class SuperParent { public void parentCall() {} }
+public abstract class InheritanceOracle extends SuperParent implements ApiParent {}
+""", encoding="utf-8")
+    subprocess.run([javac, "--release", "8", "-d", str(root), str(source)],
+                   check=True, capture_output=True, timeout=60)
+    return root
+
+
+def test_parser_preserves_actual_javac_superclass_and_interfaces(compiled_inheritance):
+    child = JVM.parse_class((compiled_inheritance / "oracle/InheritanceOracle.class").read_bytes())
+    parent = JVM.parse_class((compiled_inheritance / "oracle/SuperParent.class").read_bytes())
+    interface = JVM.parse_class((compiled_inheritance / "oracle/ApiParent.class").read_bytes())
+    assert child.major == parent.major == interface.major == 52
+    assert child.super_name == parent.name == "oracle/SuperParent"
+    assert child.interfaces == (interface.name,) == ("oracle/ApiParent",)
+    assert parent.methods[-1].name == "parentCall"
+    assert interface.methods[-1].name == "interfaceCall"
+    assert parent.methods[-1].flags & JVM.ACC_PUBLIC
+    assert interface.methods[-1].flags & JVM.ACC_PUBLIC
+
+
+@pytest.mark.parametrize("parent", [b"oracle/SuperParent", b"oracle/ApiParent"])
+def test_parser_rejects_parent_name_path_escape(compiled_inheritance, parent):
+    raw = (compiled_inheritance / "oracle/InheritanceOracle.class").read_bytes()
+    assert raw.count(parent) == 1
+    raw = raw.replace(parent, parent.replace(b"oracle/", b"or..le/"))
+    with pytest.raises(JVM.ClassFileError, match="parent class name"):
+        JVM.parse_class(raw)
+
+
 def test_parser_rejects_every_truncation_and_trailing_data():
     raw = class_bytes("sdk/Fixture", [native("call", "([B)J")])
     assert JVM.parse_class(raw).methods[0].descriptor == "([B)J"

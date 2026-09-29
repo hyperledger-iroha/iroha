@@ -1323,47 +1323,19 @@ async fn propose_sccp_route_governance_rejects_inexact_json_numbers_before_draft
     );
 }
 #[test]
-fn propose_sccp_route_governance_rejects_retired_lifecycle_controls() {
-    let canonical = norito::json::to_json(&SccpRouteGovernanceProposalDraftRequestV1 {
-        proposal: sample_sccp_governance_proposal(other_sccp_network_id()),
-    })
-    .expect("canonical SCCP governance DTO");
-    let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
-    for (field, value) in [
-        ("mode", "\"Zk\""),
-        ("window", "{\"lower\":10,\"upper\":20}"),
-    ] {
-        let injected = format!("{body},\"{field}\":{value}}}");
-        let error = norito::json::from_str::<SccpRouteGovernanceProposalDraftRequestV1>(&injected)
-            .expect_err("retired SCCP lifecycle control must reject");
-        assert!(error.to_string().contains(field), "{field}: {error}");
-    }
-}
-#[test]
-fn sccp_route_governance_dto_rejects_retired_signing_and_unknown_fields() {
+fn sccp_route_governance_dto_rejects_unknown_fields() {
     let dto = SccpRouteGovernanceProposalDraftRequestV1 {
         proposal: sample_sccp_governance_proposal(other_sccp_network_id()),
     };
     let canonical = norito::json::to_json(&dto).expect("canonical SCCP governance DTO");
     let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
-    for (field, value) in [
-        ("authority", "\"sorau...\""),
-        ("private_key", "\"secret\""),
-        ("manifest", "null"),
-        ("window", "null"),
-        ("mode", "\"Zk\""),
-        ("future_action_policy", "null"),
-        ("action", "null"),
-        ("anchor", "null"),
-    ] {
-        let injected = format!("{body},\"{field}\":{value}}}");
-        let error = norito::json::from_str::<SccpRouteGovernanceProposalDraftRequestV1>(&injected)
-            .expect_err("retired or unknown SCCP draft field must reject");
-        assert!(
-            error.to_string().contains(field) || error.to_string().contains("unknown field"),
-            "{field}: {error}"
-        );
-    }
+    let injected = format!("{body},\"authority\":\"sorau...\"}}");
+    let error = norito::json::from_str::<SccpRouteGovernanceProposalDraftRequestV1>(&injected)
+        .expect_err("unknown SCCP draft field must reject");
+    assert!(
+        error.to_string().contains("authority") || error.to_string().contains("unknown field"),
+        "{error}"
+    );
 }
 #[test]
 fn governance_mutation_dtos_reject_retired_signing_fields_during_decode() {

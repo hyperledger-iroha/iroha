@@ -1362,8 +1362,9 @@ signed body is present and retains it with the canonical header and proposal/
 executed-wire hashes. Local body eviction therefore cannot remove bounded
 serving authority. The retained reference is not standalone consensus
 evidence: the recipient still verifies the exact reference and merge QC against
-its own canonical carrier. Kura accepts only the current version-3 retained
-record. Pre-release version-2 bytes fail closed at direct read and startup;
+its own canonical carrier. Kura accepts only the current version-4 retained
+record. Any other version, including pre-release versions 2 and 3, fails closed
+at direct read and startup;
 operators must discard and rebuild that pre-release storage instead of asking
 the node to synthesize fields that were never authenticated.
 

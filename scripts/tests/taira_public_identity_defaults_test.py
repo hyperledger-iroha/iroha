@@ -35,14 +35,6 @@ def _independent_network_id(genesis_hash: str) -> str:
     return f"hash:{body}#{binascii.crc_hqx(payload, 0xFFFF):04X}"
 
 
-def _rust_string_constant(source: str, name: str) -> str:
-    match = re.search(
-        rf'pub const {re.escape(name)}: &str =\s*"([^"]+)";', source
-    )
-    assert match is not None, f"missing Rust string constant {name}"
-    return match.group(1)
-
-
 def _toml_string_assignment(source: str, name: str) -> str:
     matches = re.findall(rf'^\s*{re.escape(name)}\s*=\s*"([^"]+)"\s*$', source, re.M)
     assert len(matches) == 1, f"expected exactly one TOML assignment for {name}"
@@ -58,7 +50,6 @@ def test_public_taira_network_id_is_derived_from_the_live_genesis() -> None:
 
 
 def test_every_canonical_public_default_uses_the_same_live_identity() -> None:
-    rust_source = (ROOT / "crates/iroha_sccp/src/lib.rs").read_text(encoding="utf-8")
     canary_source = (
         ROOT / "configs/soranexus/taira/taira-canary-client.example.toml"
     ).read_text(encoding="utf-8")
@@ -70,21 +61,13 @@ def test_every_canonical_public_default_uses_the_same_live_identity() -> None:
 
     defaults = {
         "python": CONSTANTS.NETWORK_ID,
-        "sccp": _rust_string_constant(
-            rust_source, "SCCP_TAIRA_FINALITY_NETWORK_ID_V1"
-        ),
         "canary": _toml_string_assignment(canary_source, "network_id"),
         "explorer": explorer["networkId"],
     }
     assert set(defaults.values()) == {LIVE_NETWORK_ID}, defaults
-    assert (
-        _rust_string_constant(rust_source, "SCCP_TAIRA_GENESIS_HASH_V1")
-        == LIVE_GENESIS_HASH
-    )
 
     for path in (
         CONSTANTS_PATH,
-        ROOT / "crates/iroha_sccp/src/lib.rs",
         ROOT / "configs/soranexus/taira/taira-canary-client.example.toml",
         ROOT / "configs/soranexus/taira/explorer.runtime-config.json",
     ):

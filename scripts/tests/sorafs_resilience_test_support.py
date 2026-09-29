@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import sccp_release_common as RELEASE_CRYPTO
+import release_evidence_crypto as RELEASE_CRYPTO
 
 
 DEFAULT_SIGNING_SEED = bytes.fromhex("3f" * 32)

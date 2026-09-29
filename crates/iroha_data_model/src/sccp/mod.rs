@@ -1,7 +1,7 @@
 //! SCCP v1 Taira-side data model.
 //!
 //! SCCP (SORA Cross-Chain Protocol) moves Taira XOR between the Taira Iroha network and the
-//! Ethereum, BSC, TRON and TON mainnets. The normative design is `specs/sccp.md` (revision 3).
+//! Ethereum, BSC, TRON and TON mainnets. The normative design is `specs/sccp.md`.
 //! These modules hold the Taira-internal Norito types: consensus parameters, bridge keys and
 //! roster generations, attestation subjects and signatures, outbound and inbound records, block
 //! leaves and destination controls, the route registry and escrow identity, inbound

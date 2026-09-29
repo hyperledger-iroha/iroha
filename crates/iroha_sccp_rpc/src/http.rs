@@ -7,13 +7,12 @@
 //! endpoint: transport errors, timeouts, HTTP 401, 403, 406, 408, 429 and 5xx,
 //! JSON-RPC rate-limit and method-unsupported error objects (also inside a
 //! batch), a JSON-RPC batch refused as a whole, a success body that is not
-//! JSON where JSON was asked for, unusable secret headers, and a binary request
-//! answered with another content type. Every fully failed round backs off
-//! exponentially with seeded jitter. Answers about the request itself (a
-//! missing block, bad parameters, a revert, malformed hex) are returned at
-//! once. Bodies are bounded by [`HttpConfig::max_response_bytes`]; JSON bodies
-//! are parsed with `norito::json` inside the attempt, binary bodies are
-//! returned as bytes.
+//! JSON where JSON was asked for, and unusable secret headers. Every fully
+//! failed round backs off exponentially with seeded jitter. Answers about the
+//! request itself (a missing block, bad parameters, a revert, malformed hex)
+//! are returned at once. Bodies are bounded by
+//! [`HttpConfig::max_response_bytes`]; JSON bodies are parsed with
+//! `norito::json` inside the attempt.
 //!
 //! The client follows no redirects (a redirect could carry an endpoint's secret
 //! headers to another host), ignores proxy environment variables (runtime
@@ -75,10 +74,6 @@ pub const JSON_RPC_UNSUPPORTED_CODES: [i64; 2] = [-32601, -32004];
 pub const FAILOVER_CLIENT_STATUSES: [u16; 5] = [401, 403, 406, 408, 429];
 /// `application/json`.
 pub const MEDIA_TYPE_JSON: &str = "application/json";
-/// `application/octet-stream`, the beacon API's SSZ media type.
-pub const MEDIA_TYPE_SSZ: &str = "application/octet-stream";
-/// Beacon API response header naming the fork of an SSZ payload.
-pub const ETH_CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
 
 /// Longest endpoint-supplied message kept in an error.
 const ERROR_MESSAGE_LIMIT: usize = 256;
@@ -170,16 +165,6 @@ pub enum RpcError {
         /// The configured bound.
         limit: usize,
     },
-    /// A binary request was answered with another media type (for example a
-    /// beacon endpoint that ignores `Accept: application/octet-stream`).
-    UnexpectedContentType {
-        /// Endpoint origin.
-        endpoint: String,
-        /// Required media type.
-        expected: &'static str,
-        /// Media type of the response, when present.
-        found: Option<String>,
-    },
     /// A secret header of the endpoint could not be loaded; the request was not
     /// sent.
     SecretHeader {
@@ -244,16 +229,14 @@ impl RpcError {
     /// HTTP statuses ([`is_failover_status`]), JSON-RPC rate limits
     /// ([`JSON_RPC_RATE_LIMIT_CODES`]) and unsupported methods
     /// ([`JSON_RPC_UNSUPPORTED_CODES`]), rejected batches, success bodies that
-    /// are not JSON, unusable secret headers and unexpected binary content
-    /// types. Every other error is an answer about the request (for example
-    /// HTTP 404 for an unknown beacon block, JSON-RPC `-32000` "header not
-    /// found", `-32602` bad parameters or a code-3 revert) and is returned at
-    /// once.
+    /// are not JSON and unusable secret headers. Every other error is an answer
+    /// about the request (for example HTTP 404 for an unknown beacon block,
+    /// JSON-RPC `-32000` "header not found", `-32602` bad parameters or a
+    /// code-3 revert) and is returned at once.
     pub fn is_failover(&self) -> bool {
         match self {
             Self::Transport { .. }
             | Self::Timeout { .. }
-            | Self::UnexpectedContentType { .. }
             | Self::SecretHeader { .. }
             | Self::NotJson { .. }
             | Self::BatchRejected { .. } => true,
@@ -305,15 +288,6 @@ impl fmt::Display for RpcError {
             Self::ResponseTooLarge { endpoint, limit } => {
                 write!(formatter, "{endpoint}: response exceeds {limit} bytes")
             }
-            Self::UnexpectedContentType {
-                endpoint,
-                expected,
-                found,
-            } => write!(
-                formatter,
-                "{endpoint}: expected content type {expected}, got {}",
-                found.as_deref().unwrap_or("none")
-            ),
             Self::SecretHeader { endpoint, error } => {
                 write!(formatter, "{endpoint}: secret header refused: {error}")
             }
@@ -403,8 +377,6 @@ pub struct HttpResponse {
     pub status: u16,
     /// `Content-Type` header, when present and ASCII.
     pub content_type: Option<String>,
-    /// `Eth-Consensus-Version` header (beacon API fork context), when present.
-    pub consensus_version: Option<String>,
     /// Response body, at most [`HttpConfig::max_response_bytes`] bytes.
     pub body: Vec<u8>,
 }
@@ -453,7 +425,6 @@ struct RequestSpec<'a> {
     path: &'a str,
     accept: &'a str,
     body: Option<(&'static str, &'a [u8])>,
-    required_media_type: Option<&'static str>,
 }
 
 /// Blocking HTTP client bound to one endpoint list with failover.
@@ -570,26 +541,6 @@ impl HttpTransport {
             path,
             accept,
             body: None,
-            required_media_type: None,
-        })
-    }
-
-    /// `GET path` accepting only `media_type`; an endpoint answering with
-    /// another media type fails over.
-    ///
-    /// # Errors
-    /// Any [`RpcError`]; failover errors only after every round failed.
-    pub fn get_binary(
-        &self,
-        path: &str,
-        media_type: &'static str,
-    ) -> Result<HttpResponse, RpcError> {
-        self.execute(&RequestSpec {
-            method: Method::GET,
-            path,
-            accept: media_type,
-            body: None,
-            required_media_type: Some(media_type),
         })
     }
 
@@ -609,7 +560,6 @@ impl HttpTransport {
             path,
             accept,
             body: Some((content_type, body)),
-            required_media_type: None,
         })
     }
 
@@ -624,18 +574,8 @@ impl HttpTransport {
             path,
             accept: MEDIA_TYPE_JSON,
             body: None,
-            required_media_type: None,
         };
         self.execute_then(&spec, |response| response.json())
-    }
-
-    /// `POST path` with a JSON body and parse the JSON answer inside the
-    /// attempt, so an endpoint whose success body is not JSON fails over.
-    ///
-    /// # Errors
-    /// Any [`RpcError`].
-    pub fn post_json(&self, path: &str, body: &Value) -> Result<Value, RpcError> {
-        self.post_json_then(path, body, |_, value| Ok(value))
     }
 
     /// `POST path` with a JSON body; parses the answer and passes it with the
@@ -653,7 +593,6 @@ impl HttpTransport {
             path,
             accept: MEDIA_TYPE_JSON,
             body: Some((MEDIA_TYPE_JSON, &bytes)),
-            required_media_type: None,
         };
         self.execute_then(&spec, |response| {
             let value = response.json()?;
@@ -776,22 +715,11 @@ impl HttpTransport {
                 message: body.and_then(|body| error_message(content_type.as_deref(), &body)),
             });
         }
-        if let Some(required) = spec.required_media_type {
-            let found = content_type.as_deref().map(media_type_of);
-            if found.as_deref() != Some(required) {
-                return Err(RpcError::UnexpectedContentType {
-                    endpoint: origin.to_owned(),
-                    expected: required,
-                    found,
-                });
-            }
-        }
         let body = read_body(response, self.config.max_response_bytes, origin)?;
         Ok(HttpResponse {
             endpoint: origin.to_owned(),
             status,
             content_type,
-            consensus_version: header_text(&headers, ETH_CONSENSUS_VERSION_HEADER),
             body,
         })
     }
@@ -804,7 +732,6 @@ fn json_rpc_spec(body: &[u8]) -> RequestSpec<'_> {
         path: "",
         accept: MEDIA_TYPE_JSON,
         body: Some((MEDIA_TYPE_JSON, body)),
-        required_media_type: None,
     }
 }
 
@@ -837,14 +764,6 @@ fn json_rpc_request(id: u64, method: &str, params: Vec<Value>) -> Value {
 pub(crate) fn encode_json(value: &Value) -> Result<Vec<u8>, RpcError> {
     norito::json::to_vec(value)
         .map_err(|error| RpcError::InvalidRequest(format!("request is not encodable: {error}")))
-}
-
-/// Parses a UTF-8 JSON body.
-///
-/// # Errors
-/// [`RpcError::InvalidResponse`] if the body is not UTF-8 or not JSON.
-pub fn parse_json_body(body: &[u8]) -> Result<Value, RpcError> {
-    json_body(body).map_err(invalid_response)
 }
 
 /// Parses a UTF-8 JSON body, or says why it is not one.
@@ -1449,7 +1368,6 @@ mod tests {
         assert_eq!(spec.path, "");
         assert_eq!(spec.accept, MEDIA_TYPE_JSON);
         assert_eq!(spec.body, Some((MEDIA_TYPE_JSON, &b"{}"[..])));
-        assert_eq!(spec.required_media_type, None);
     }
 
     #[test]
@@ -1528,14 +1446,11 @@ mod tests {
         );
         assert!(required_array(map, "a", "obj").is_err());
         assert!(expect_object(&Value::Null, "obj").is_err());
-        assert!(matches!(
-            parse_json_body(b"\xff"),
-            Err(RpcError::InvalidResponse { detail }) if detail == "the response body is not UTF-8"
-        ));
-        assert!(matches!(
-            parse_json_body(b"{"),
-            Err(RpcError::InvalidResponse { .. })
-        ));
+        assert_eq!(
+            json_body(b"\xff"),
+            Err("the response body is not UTF-8".to_owned())
+        );
+        assert!(json_body(b"{").is_err());
         assert_eq!(json_body(b"[1]").expect("JSON"), parse("[1]"));
         assert!(
             json_body(b"<html>")
@@ -1550,7 +1465,6 @@ mod tests {
             endpoint: "https://rpc.example.org".to_owned(),
             status: 200,
             content_type: Some("Application/JSON; charset=utf-8".to_owned()),
-            consensus_version: None,
             body: br#"{"a":1}"#.to_vec(),
         };
         assert_eq!(response.media_type().as_deref(), Some("application/json"));

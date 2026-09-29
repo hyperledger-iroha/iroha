@@ -1,11 +1,12 @@
-//! Opt-in measurements of the public transfer prover and its default verifier.
+//! Opt-in developer-tool measurements of transparent replay proving and verification.
 //!
 //! Run each ignored case in a fresh, already compiled test process under
 //! `/usr/bin/time -l` to measure process peak RSS without including Cargo.
 //! Fixture construction, SMT witnesses, encoding, and artifact writes are outside
 //! the prove/verify timers. `Prover::prove` includes its mandatory self-check.
 //! `FASTPQ_RESOURCE_OUTPUT_DIR` optionally saves canonical inputs and returned
-//! proofs for these developer tests. One sample is diagnostic, not a latency SLO.
+//! proofs for these developer tests. These measurements do not describe the normal
+//! masked quantity API. One sample is diagnostic, not a latency SLO.
 
 use std::{fs, path::PathBuf, time::Instant};
 

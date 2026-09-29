@@ -877,14 +877,14 @@ pub(crate) fn goldilocks_fp4_evaluate_coset_v1(
     if coefficients.iter().any(|value| !value.is_canonical()) {
         return Err(TransparentStarkErrorV1::NonCanonicalField);
     }
-    let mut evaluations = vec![GoldilocksFp4V1::ZERO; size];
+    let mut evaluations = zeroize::Zeroizing::new(vec![GoldilocksFp4V1::ZERO; size]);
     let mut shift_power = GoldilocksFieldV1::ONE;
     for (target, coefficient) in evaluations.iter_mut().zip(coefficients.iter().copied()) {
         *target = coefficient.mul_base(shift_power);
         shift_power = shift_power.mul(shift);
     }
     goldilocks_fp4_fft_v1(&mut evaluations, root)?;
-    Ok(evaluations)
+    Ok(core::mem::take(&mut *evaluations))
 }
 /// Batch-invert a non-empty collection using one field inversion.
 pub(crate) fn goldilocks_batch_invert_v1(

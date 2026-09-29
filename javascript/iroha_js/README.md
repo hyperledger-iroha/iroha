@@ -3628,7 +3628,10 @@ The codec is exported by the package root and the browser-safe `./norito` leaf.
 It is intentionally absent from the broad `./browser` facade so applications
 that do not inspect release fixtures do not retain the complete Exact12 codec.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+The IVM replay-binding backend label is `halo2/pasta/ivm-replay-binding-v1`;
+its canonical circuit ID is `halo2/pasta/ipa/ivm-replay-binding-v1`. These
+are distinct registry fields. The proof binds public commitments; validators
+establish execution validity through authenticated VM replay.
 
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Read
 methods validate the canonical response before returning it; there is no parallel

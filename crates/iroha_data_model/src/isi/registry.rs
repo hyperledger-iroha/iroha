@@ -209,7 +209,6 @@ mod tests {
             "iroha_data_model::isi::governance::CastParliamentBallot",
             "iroha_data_model::isi::governance::FinalizeReferendum",
             "iroha_data_model::isi::governance::EnactReferendum",
-            "iroha_data_model::isi::governance::EnactSccpRouteGovernance",
         ] {
             assert!(
                 !registry.contains(retired),

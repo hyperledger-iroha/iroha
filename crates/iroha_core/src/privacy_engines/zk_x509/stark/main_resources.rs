@@ -176,15 +176,24 @@ fn registration_quotient_payload_v1(
     )?;
     let field = core::mem::size_of::<F>();
     let extension = core::mem::size_of::<E>();
-    // Trace stripe, fixed coefficients, quotient plus IFFT copy, and both
-    // accumulated/incoming chunks stay charged even where lifetimes separate.
+    // One trace/fixed stripe, quotient plus IFFT copy, and both accumulated/
+    // incoming chunks stay charged even where lifetimes separate. Fixed
+    // coefficients become stripe values in the same owned matrix; subsequent
+    // stripes recover coefficients in place, so no second fixed matrix lives.
     sum(&[
         product(&[
             sum(&[segment.base_width, segment.aux_width, segment.fixed_width])?,
             stripe.rows,
             field,
         ])?,
-        product(&[segment.fixed_width, segment.trace_size(), field])?,
+        // Padding a public fixed column may allocate its final stripe while
+        // the old native allocation is still live. Growth is serial; charge
+        // exactly one native-column overlap in addition to the final matrix.
+        if stripe.rows > segment.trace_size() {
+            product(&[segment.trace_size(), field])?
+        } else {
+            0
+        },
         product(&[2, SECURITY_LANES, plan.quotient_coset_rows, extension])?,
         product(&[
             2,

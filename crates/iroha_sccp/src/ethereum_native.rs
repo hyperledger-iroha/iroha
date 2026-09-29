@@ -185,10 +185,6 @@ impl EthereumFork {
     const fn uses_electra_state_layout(self) -> bool {
         matches!(self, Self::Electra | Self::Fulu)
     }
-    /// Whether light-client headers of this fork carry an execution payload header.
-    pub const fn has_execution_payload(self) -> bool {
-        !matches!(self, Self::Altair | Self::Bellatrix)
-    }
 }
 /// Activation parameters for one fixed Ethereum fork.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1263,8 +1259,6 @@ mod tests {
             generalized_indices(EthereumFork::Fulu),
             generalized_indices(EthereumFork::Electra)
         );
-        assert!(!EthereumFork::Bellatrix.has_execution_payload());
-        assert!(EthereumFork::Capella.has_execution_payload());
         assert_eq!(sync_committee_period_at_slot(8_191), 0);
         assert_eq!(sync_committee_period_at_slot(8_192), 1);
     }

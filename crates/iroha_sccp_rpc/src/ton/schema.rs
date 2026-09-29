@@ -74,10 +74,6 @@ pub mod id {
     /// `liteServer.signatureSet.simplex cc_seqno validator_set_hash signatures
     /// session_id slot candidate` (simplex consensus).
     pub const SIGNATURE_SET_SIMPLEX: u32 = 0xac24_9800;
-    /// `liteServer.getAllShardsInfo id`.
-    pub const GET_ALL_SHARDS_INFO: u32 = 0x74d3_fd6b;
-    /// `liteServer.allShardsInfo id proof data`.
-    pub const ALL_SHARDS_INFO: u32 = 0x098f_e72d;
     /// `liteServer.getBlock id`.
     pub const GET_BLOCK: u32 = 0x6377_cf0d;
     /// `liteServer.blockData id data`.
@@ -409,11 +405,6 @@ pub enum LiteQuery {
         /// The masterchain block to prove.
         target: Option<BlockIdExt>,
     },
-    /// `liteServer.getAllShardsInfo`.
-    GetAllShardsInfo {
-        /// A masterchain block.
-        id: BlockIdExt,
-    },
     /// `liteServer.getBlock`.
     GetBlock {
         /// The block.
@@ -492,7 +483,6 @@ impl LiteQuery {
             Self::LookupBlock { .. } => "liteServer.lookupBlock",
             Self::GetBlockHeader { .. } => "liteServer.getBlockHeader",
             Self::GetBlockProof { .. } => "liteServer.getBlockProof",
-            Self::GetAllShardsInfo { .. } => "liteServer.getAllShardsInfo",
             Self::GetBlock { .. } => "liteServer.getBlock",
             Self::GetOneTransaction { .. } => "liteServer.getOneTransaction",
             Self::GetTransactions { .. } => "liteServer.getTransactions",
@@ -516,9 +506,6 @@ impl LiteQuery {
                     || target.is_some_and(|target| !target.is_masterchain()) =>
             {
                 return Err("block proofs link masterchain blocks only".to_owned());
-            }
-            Self::GetAllShardsInfo { id } if !id.is_masterchain() => {
-                return Err("shard configurations live in masterchain blocks".to_owned());
             }
             Self::GetTransactions { count, .. }
                 if *count == 0 || *count > MAX_TRANSACTIONS_PER_QUERY =>
@@ -592,10 +579,6 @@ impl LiteQuery {
                 if let Some(target) = target {
                     target.write(&mut writer);
                 }
-            }
-            Self::GetAllShardsInfo { id } => {
-                writer = TlWriter::boxed(id::GET_ALL_SHARDS_INFO);
-                id.write(&mut writer);
             }
             Self::GetBlock { id } => {
                 writer = TlWriter::boxed(id::GET_BLOCK);
@@ -1014,30 +997,6 @@ impl LiteAnswer for PartialBlockProof {
     }
 }
 
-/// `liteServer.allShardsInfo`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AllShardsInfo {
-    /// The masterchain block.
-    pub id: BlockIdExt,
-    /// `BoC` proving the shard configuration in the block.
-    pub proof: Vec<u8>,
-    /// `BoC` of the `ShardHashes` dictionary.
-    pub data: Vec<u8>,
-}
-
-impl LiteAnswer for AllShardsInfo {
-    const CONSTRUCTOR: u32 = id::ALL_SHARDS_INFO;
-    const NAME: &'static str = "liteServer.allShardsInfo";
-
-    fn read_body(reader: &mut TlReader<'_>) -> Result<Self, TlError> {
-        Ok(Self {
-            id: BlockIdExt::read(reader)?,
-            proof: reader.bytes_vec()?,
-            data: reader.bytes_vec()?,
-        })
-    }
-}
-
 /// `liteServer.blockData`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockData {
@@ -1380,14 +1339,6 @@ mod tests {
             "liteServer.signatureSet validator_set_hash:int catchain_seqno:int signatures:vector liteServer.signature = liteServer.SignatureSet",
         ),
         (
-            id::GET_ALL_SHARDS_INFO,
-            "liteServer.getAllShardsInfo id:tonNode.blockIdExt = liteServer.AllShardsInfo",
-        ),
-        (
-            id::ALL_SHARDS_INFO,
-            "liteServer.allShardsInfo id:tonNode.blockIdExt proof:bytes data:bytes = liteServer.AllShardsInfo",
-        ),
-        (
             id::GET_BLOCK,
             "liteServer.getBlock id:tonNode.blockIdExt = liteServer.BlockData",
         ),
@@ -1568,7 +1519,6 @@ mod tests {
                 id: masterchain,
                 mode: 0,
             },
-            LiteQuery::GetAllShardsInfo { id: masterchain },
             LiteQuery::GetBlock { id: masterchain },
             LiteQuery::GetOneTransaction {
                 id: block(BASECHAIN, 1, 3),
@@ -1604,7 +1554,6 @@ mod tests {
                 known: masterchain,
                 target: Some(shard),
             },
-            LiteQuery::GetAllShardsInfo { id: shard },
             LiteQuery::GetTransactions {
                 count: 0,
                 account: account(),

@@ -20,7 +20,7 @@ use super::{
     codec::ZkX509WitnessV1,
     der_air::{
         ZkX509DerAirErrorV1, ZkX509Rfc5280TraceV1, build_zk_x509_rfc5280_trace_v1,
-        certificate_slot_2_active_v1, rfc5280_io_witnesses_v1,
+        certificate_slot_2_active_v1, rfc5280_io_witnesses_v1, trace_bytes_v1,
     },
     der_stark::{ZkX509DerStarkBaseV1, ZkX509DerStarkErrorV1, build_zk_x509_der_stark_base_v1},
     io_air::{
@@ -267,6 +267,9 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     /// Verifier-owned byte-channel declaration compilation or binding failed.
     #[error(transparent)]
     IoPlan(#[from] ZkX509MainIoPlanErrorV1),
+    /// Verifier-owned profile construction failed before private assembly.
+    #[error(transparent)]
+    VerifierProfile(#[from] ZkX509StarkErrorV1),
     /// The verifier-owned 49-registration topology is not exact.
     #[error("zk-X509 MAIN registration topology is invalid")]
     Registration,
@@ -276,11 +279,6 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     /// Bounded allocation or checked arithmetic failed.
     #[error("zk-X509 MAIN assembly resource envelope is exceeded")]
     Resource,
-}
-impl From<ZkX509StarkErrorV1> for ZkX509MainAssemblyErrorV1 {
-    fn from(_: ZkX509StarkErrorV1) -> Self {
-        Self::Registration
-    }
 }
 fn projection_witness_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -754,16 +752,29 @@ pub(crate) fn build_zk_x509_main_trace_assembly_v1(
         &witness.crl_der,
         rfc_statement_with_crl_number_v1(statement, governance.crl.crl_number),
     )?;
+    // RFC consumes byte and node events for both top-level documents and
+    // extension payloads, in this exact order. The numeric DER producer must
+    // authenticate that same document universe under its existing 19-slot cap.
+    let mut embedded_bytes = Vec::new();
+    embedded_bytes
+        .try_reserve_exact(rfc_trace.embedded_documents.len())
+        .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
+    for document in &rfc_trace.embedded_documents {
+        embedded_bytes.push(trace_bytes_v1(document)?);
+    }
     let mut documents = witness
         .certificate_chain_der
         .iter()
         .map(Vec::as_slice)
         .collect::<Vec<_>>();
     documents
-        .try_reserve_exact(1)
+        .try_reserve_exact(1 + embedded_bytes.len())
         .map_err(|_| ZkX509MainAssemblyErrorV1::Resource)?;
     documents.push(&witness.crl_der);
+    documents.extend(embedded_bytes.iter().map(|bytes| bytes.as_slice()));
     let der_base = build_zk_x509_der_stark_base_v1(&documents)?;
+    drop(documents);
+    drop(embedded_bytes);
     let rfc_base = build_zk_x509_rfc5280_stark_base_material_v1(&rfc_trace)?;
     let projection_trace = build_zk_x509_projection_trace_v1(
         statement,
@@ -915,19 +926,31 @@ mod tests {
         }
     }
     #[test]
+    fn assembly_preserves_profile_constructor_failure_cause() {
+        for (cause, expected) in [
+            (
+                ZkX509StarkErrorV1::ProfileMismatch,
+                ZkX509StarkErrorV1::ProfileMismatch,
+            ),
+            (
+                ZkX509StarkErrorV1::AllocationFailure,
+                ZkX509StarkErrorV1::AllocationFailure,
+            ),
+        ] {
+            let message = cause.to_string();
+            let wrapped = ZkX509MainAssemblyErrorV1::from(cause);
+            assert_eq!(wrapped.to_string(), message);
+            assert_eq!(
+                wrapped,
+                ZkX509MainAssemblyErrorV1::VerifierProfile(expected)
+            );
+        }
+    }
+    #[test]
     fn complete_main_assembly_scrub_is_recursive_idempotent_and_preserves_public_topology() {
         let fixture = fixture();
-        if construct_zk_x509_main_verifier_profile_v1().is_err() {
-            assert!(matches!(
-                build_zk_x509_main_trace_assembly_v1(
-                    &fixture.statement,
-                    fixture.governance(),
-                    &fixture.witness,
-                ),
-                Err(ZkX509MainAssemblyErrorV1::Registration)
-            ));
-            return;
-        }
+        construct_zk_x509_main_verifier_profile_v1()
+            .expect("canonical release-pinned MAIN profile");
         let mut assembly = build_zk_x509_main_trace_assembly_v1(
             &fixture.statement,
             fixture.governance(),

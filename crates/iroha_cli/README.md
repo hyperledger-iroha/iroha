@@ -36,6 +36,13 @@ Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 Local contract durable-state fixtures require exact NFC path spelling and
 reject duplicate decoded JSON keys.
 
+`iroha app zk ivm prove --wait` prints the terminal job JSON and exits unsuccessfully when
+proving fails. It checks that each response identifies the requested job;
+successful job creation alone does not establish successful proof generation.
+These IVM proofs bind public commitments. Validators still replay execution.
+The prove endpoint derives the proving key from the canonical registered verifier
+key, so operators do not need to install a separate proving-key archive.
+
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
 coordinator. Retry the same apply command with the same inventory and authorization;
@@ -554,57 +561,51 @@ The CLI builds, quotes, signs, and submits VK registry transactions with the acc
 the active client configuration. VK JSON files contain public registry data only; signing
 authorities and private keys are not accepted in these files.
 
-Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
+Generate and register the canonical IVM replay-binding key:
 
 The optional `namespace` field defaults to `core` when omitted or `null`. Set it
 to `kagemusha_v1` for KAGEMUSHA V1 verifier records. Explicit namespace values
 must be non-empty and must not contain leading or trailing whitespace.
 
 ```bash
-cat >vk_register.json <<'JSON'
-{
-  "backend": "halo2/ipa",
-  "name": "vk_add",
-  "version": 1,
-  "circuit_id": "circuit_alpha",
-  "namespace": "core",
-  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "vk_bytes": "BASE64..."
-}
-JSON
+cargo run --locked -p iroha_cli --features dev-tools --bin ivm_replay_binding_keygen -- \
+  --name ivm_replay_binding \
+  --vk-out replay-binding.vk \
+  --template-out vk_register.json
 iroha app zk vk register --json vk_register.json
 ```
 
-Update an existing verifying key (version must increase). You may supply only the commitment:
+The helper writes the complete public registration DTO using the compiled
+circuit's exact key, schema, curve and proof limit. Developers do not select
+transcript parameters or invent circuit names. This relation binds public
+commitments; validators still replay IVM execution. Server proving derives the
+proving key automatically. Add `--pk-out replay-binding.pk` only when an offline
+proving-key archive is needed.
+
+To update an existing record, use a generated registration DTO with the same
+registry name and increase its `version` before submitting it:
 
 ```bash
-cat >vk_update.json <<'JSON'
-{
-  "backend": "halo2/ipa",
-  "name": "vk_add",
-  "version": 2,
-  "circuit_id": "circuit_alpha",
-  "public_inputs_schema_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "commitment_hex": "0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd"
-}
-JSON
 iroha app zk vk update --json vk_update.json
 ```
+
+Register and update use the standard CLI fee-quote, signing and submission
+workflow. JSON mode returns the standard transaction receipt on stdout;
+submission does not claim that the transaction has reached `Applied` finality.
+
+Keep generated key metadata together. If you omit embedded `vk_bytes`, retain
+both the exact `commitment_hex` and the mandatory nonzero `vk_len`. Arbitrary
+circuit IDs and schema hashes are rejected by the production registry.
 
 Read a VK record as JSON:
 
 ```bash
-iroha app zk vk get --backend halo2/ipa --name vk_add
+iroha app zk vk get --backend halo2/ipa --name ivm_replay_binding
 ```
 
-Compute the schema hash expected in the VK registry:
-
-```bash
-# From a Norito-encoded OpenVerifyEnvelope
-iroha app zk schema-hash --norito proof_env.norito
-# Or from raw public-input bytes (hex)
-iroha app zk schema-hash --public-inputs-hex 0x0123abcd...
-```
+Use the canonical generator's `public_inputs_schema_hash_hex` unchanged. It
+identifies the circuit's fixed schema descriptor; hashing a proof's concrete
+public-input values does not produce a registry schema digest.
 
 ### ZK attachments (app API convenience)
 
@@ -639,9 +640,17 @@ settings do not authorize callers to inject opaque KAGEMUSHA commitments.
 Encrypted memo envelopes remain available as a local wallet utility:
 
 ```bash
-iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
-  --ciphertext-b64 AQIDBA== --print-json --output memo.bin
+iroha app zk envelope --envelope-json memo.json --output memo.bin
+iroha app zk envelope --envelope-json memo.json --format base64
 ```
+
+`memo.json` is one typed `ConfidentialMemoEnvelopeV1` produced by the wallet's
+encryption API. This command validates and encodes an existing encrypted memo.
+Choose `--format base64`, `hex`, or `json` for exactly one stdout value; base64
+is the default without `--output`. An output file contains Norito bytes. This
+local command does not load `client.toml` or signing credentials; transaction and
+credential globals are rejected. Input files and JSON allocations use the CLI's
+bounded decoder.
 
 ### Register a ZK-capable asset
 

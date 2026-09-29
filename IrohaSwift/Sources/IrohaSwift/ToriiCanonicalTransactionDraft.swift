@@ -343,7 +343,7 @@ struct ToriiCanonicalTransactionDraft {
       throw ToriiClientError.invalidPayload("\(context) creation_time_ms must be positive.")
     }
     do {
-      try SccpSubmitValidation.requireCanonicalTransactionFeePayment(feePayment)
+      try TransactionFeePaymentValidation.requireCanonicalTransactionFeePayment(feePayment)
     } catch {
       throw ToriiClientError.invalidPayload("\(context) fee_payment is not canonical.")
     }

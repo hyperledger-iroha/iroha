@@ -212,7 +212,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
     let proof_object = value.as_object().expect("proof object");
     set_contracts! { object_field_set(proof_object) => asset_field_set("bridge.proof.required"); }
     let header = contract_object(proof_object.get("block_header"), "block header");
-    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root", "sccp_commitment_root"]; }
+    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root"]; }
     assert!( header .get("npos_effects_hash") .is_some_and(|hash| hash.is_null() || hash.is_string()), "the finalized-block fixture must carry the nullable NPoS effects slot" );
     assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the finalized-block fixture must carry the required nullable execution-context slot" );
     let document = generate_spec();

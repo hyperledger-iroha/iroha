@@ -536,3 +536,423 @@ live-cell erasure, selected-stripe/fiber parity, full/reference frontier equalit
 and exact one-unit budget failures. The complete required-Metal seeded child
 additionally pins the previously generated 482,978-byte proof hash; this long
 proof-byte/entropy equivalence run has not yet executed against the cache code.
+
+The first feature-enabled cache test build ended before executing tests: an
+existing small-row fixture omitted the newly explicit optional node-cache
+argument. On resumption, that fixture supplies `None`, and its older
+already-complete-stream assertion now requires poisoning after a rejected extra
+insertion. The original build log remains preserved; it is not passing evidence.
+The current 221-file resumed source manifest is
+`/tmp/fastpq-source-20260928-node-cache-resume.json`, SHA-256
+`4bf0682ffcc49c9b6b99576b0a1e655c0601d1f9a00438345a3d35bf2001169c`.
+It includes the concurrent first-release protocol/codec test cuts without
+rewriting them. Locked offline metadata succeeds, and the resumed geometry,
+hiding and source-budget Python selection passes 37 tests in 9.86s. The fresh
+native build and complete seeded proof comparison remain pending.
+
+
+### Resumed production-cache native controls
+
+The fresh feature-enabled build succeeds in 24m48s including shared-target lock
+wait. Its immutable library and external API binaries have SHA-256
+`b1f3955ff646200055d90ed74649050cb7e7203bc1b626ca3b5f904fb154b8a2`
+and `b879953c0b8084b47f7eac71bda8b8c08ce0f49e384400bfd2fc04456429f325`.
+The focused selection passes 203 tests, fails one and ignores 13 diagnostics in
+20.84s. All new node-cache, selected-stripe/fiber, frontier-erasure and budget
+controls pass. The failure is an older integration fixture supplying queries to
+the now root-only commit helper. Its test-only correction uses the actual root
+commit, same-attempt cache binding and selected opening sequence; all independent
+materialized-tree and mutation assertions remain. Its fresh rebuild/rerun is
+pending. No production code changes after this binary capture.
+
+The fixed-SMT resource fixture reports 1,900,861,480 charged payload bytes,
+3,475,021,175,280 work units and 34,689,999 hash calls. Each one-unit reduction
+below these exact charges is rejected. The 12 external API controls pass in
+0.49s; three actual required-Metal hashing controls pass in 6.09s with 32,948,224
+bytes maximum RSS. Reusing the preserved ordinary/AXT artifacts and negative
+controls passes in 6.42s with 29,786,112 bytes maximum RSS. An initial attempt
+using their durable backup paths failed the test's canonical output-directory
+precondition; the successful rerun uses the unchanged original SHA-addressed
+files. Both logs are retained.
+
+The full seeded required-Metal proof comparison is running from this immutable
+binary with an attempt-specific charge of 1,900,861,550 bytes (70 context bytes
+above the fixed fixture). The prior proof hash/length assertion and default caps
+remain unchanged. The separate test-only fixture rebuild does not change its
+production source. No complete-proof cache timing or equivalence result is yet
+available. The controls receipt has SHA-256
+`0dda0d54e61724717c6d47198d0951f9a2f2410910f19236975c622eb13d293c`
+and is retained with the binaries, source captures and completed logs under the
+FASTPQ evidence directory.
+
+
+### Completed cached child: exact seeded proof parity
+
+The complete required-Metal child diagnostic finishes successfully from immutable
+binary `b1f3955ff646200055d90ed74649050cb7e7203bc1b626ca3b5f904fb154b8a2`.
+The production source matches its captured manifest; the only later change is
+the documented test-only integration fixture. The generated child is exactly
+482,978 bytes and matches the pre-cache Iroha hash
+`7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507`.
+Independent verification plus smaller-cap, changed-context and proof-tamper
+controls all pass. This verifies the complete seeded construction's unchanged
+wire bytes and entropy/transcript outcome, beyond the small frontier controls.
+
+| Complete cached fixed-SMT child measurement | Result |
+| --- | --- |
+| Build and independent self-check | 948.983 seconds |
+| Test including retained verifier controls | 950.80 seconds; one passed |
+| Wall / user / system time | 950.82 / 5,492.41 / 436.49 seconds |
+| Maximum RSS | 1,918,730,240 bytes |
+| Peak memory footprint | 1,905,625,320 bytes |
+| Swaps | 0 |
+| Checked attempt payload | 1,900,861,550 bytes |
+| Checked structural work | 3,475,021,175,280 units |
+| Checked hash calls | 34,689,999 |
+
+Default limits remain 2 GiB charged payload, 2^42 work units and 524,288 child
+bytes. Observed process RSS includes costs outside the payload ledger. The host
+was compiling other native targets throughout; these observations do not support
+a controlled speed ratio against earlier runs. Two brief stack samples after
+observed phase changes confirmed quotient interpolation and later coefficient
+commitment. No repeated profiling or process intervention occurred.
+
+The completed log has SHA-256
+`b7a8963daf461d240eaa3ed1ce5b57c2e6baf4331d866ec037670b2b4f736831`;
+the scoped receipt has SHA-256
+`b6e1e9fb584484aca13cd6ea8ad79d7c67f3099ff2b4926cc4216c80dd8c0d25`.
+Both are retained under `dist/zk-remediation/2026-09-28/fastpq/` with immutable
+binaries, source manifests and the separately indexed earlier public artifacts.
+This diagnostic checks the raw child in process and does not write a separate
+child file. The seeded fixture/binary and exact public hash remain reproducible.
+The fresh test-fixture rerun is still pending. Whole-transcript privacy/soundness,
+ledger authority, multi-child and deployment-latency qualification remain open.
+
+
+### Rebuilt cache fixture controls
+
+The fresh test-only fixture build completes successfully. Both integration tests
+pass in 0.19 seconds, including the repaired root-commit/bind/open test and its
+independent materialized frontier and mutation assertions. All 12 external API
+controls pass again in 0.48 seconds (four full diagnostics remain ignored in this
+selection). Production source is unchanged from the 203-passing-control and
+complete cached child binary above.
+
+The 221-file source manifest has SHA-256
+`78b14ec460161ea39da683415e0ede9af5772e7544ea4820de138ec68f6328ca`; the
+rebuilt unit binary has SHA-256
+`f7cbdeedf786c2de1c2d6a558cb88a4b6d8591b9a9f099c9d1b4e2e20769139c`.
+The API binary remains
+`b879953c0b8084b47f7eac71bda8b8c08ce0f49e384400bfd2fc04456429f325`.
+The manifest, immutable binaries, logs and scoped receipt are retained in the
+FASTPQ evidence directory and its SHA index. This resolves the test-fixture
+failure recorded above without replacing or relabeling the original failed run.
+
+
+### Retained public child and independent artifact replay
+
+A test-only retention helper now saves the public child and a public receipt
+before the existing size, hash and verification assertions. It does not record
+private witnesses, masks or coefficients. The measured build/self-check timer
+still stops immediately after construction; filesystem work is outside that
+timer. Content-addressed writes reject differing existing contents, and the
+independent reader checks its cap and SHA-256 before verification.
+
+The feature-enabled warm build completes successfully. The new retention, cache,
+integration, frontier and resource selection passes 14 tests in 0.69 seconds
+(six diagnostics ignored), all 12 public API controls pass in 0.48 seconds, and
+three actual required-Metal controls pass in 2.18 seconds. The 222-file source
+capture has SHA-256
+`c0500bcf5a06272a4f7296cdea948b30bec6fcf81162e0cda5e59b22fd5459d2`;
+this scopes FASTPQ, ISI and build configuration, not the complete dependency
+closure. The immutable unit binary has SHA-256
+`eb19553839df39e50f53880046ec7afd0bf7b99dbc9b7bac6661df52addbda9a`.
+Production code is unchanged from the completed cached child above.
+
+The complete required-Metal diagnostic passes again and retains the actual
+482,978-byte child as
+`dist/fastpq-proof-diagnostics/seeded-fixed-smt-6b0f68181920c7c506c949f5bea7bee9ba9951b0c7142837a536ef1f87020b19.bin`.
+Its SHA-256 is
+`6b0f68181920c7c506c949f5bea7bee9ba9951b0c7142837a536ef1f87020b19`;
+its Iroha hash remains the pre-cache
+`7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507`.
+
+| Retained child measurement | Result |
+| --- | --- |
+| Build and self-check | 907.486 seconds |
+| Complete test | 1 passed; 909.42 seconds |
+| Wall / user / system | 909.44 / 5,440.80 / 443.17 seconds |
+| Maximum RSS / peak memory footprint | 1,919,795,200 / 1,906,788,536 bytes |
+| Independent artifact replay | 1 passed; 2.15 seconds |
+| Replay maximum RSS | 19,644,416 bytes |
+
+The separate artifact process reconstructs its expected public statement before
+reading the file and performs no witness construction or proving. It verifies
+the valid child and rejects a smaller proof cap, changed context, altered proof
+and five independently changed statement fields. Checked attempt charges remain
+1,900,861,550 bytes, 3,475,021,175,280 work units and 34,689,999 hash calls, under
+unchanged 2 GiB, 2^42 and 524,288-byte defaults. These are contended observations,
+not controlled comparative latency measurements.
+
+The artifact, per-run public receipt, source manifest, immutable binaries and
+logs are copied to `dist/zk-remediation/2026-09-28/fastpq/`; all 99 indexed files
+verify. The scoped completion receipt has SHA-256
+`9c0aaaecb94884e76cfcdafb3e036d30aa8c7093640d374ce61a729b4fa882f6`,
+and the index at this checkpoint has SHA-256
+`56da609a13dc032a6a564e57f4a3348fe92280b95fc8892168da68548dab7484`.
+The prior 950.82-second run remains preserved separately.
+
+Current complete-child evidence uses required Metal hashing with CPU arithmetic.
+Exact-size CPU/Metal kernel parity and complete pre/post-cache Metal proof parity
+are established; full current CPU proof parity has not yet completed. The same
+immutable binary's CPU diagnostic is now running with identical seed, fixture,
+caps and golden assertions. The historical September 26 CPU child is a different
+fixture/candidate and does not establish this cross-backend parity. Independent
+hiding/soundness review, maximum application shapes, multi-child resource
+behavior and authenticated network qualification remain open.
+
+
+## Explicit compilation scope for current child and facade timings
+
+The retained child build log reports Cargo `test` profile `[unoptimized]`.
+Its captured root manifest has no `fastpq_prover` optimization override, so
+FASTPQ Rust caller and FFT code uses opt-level 0; `fastpq_isi` has the explicit
+opt-level 2 test/development package override. The corresponding test-target
+fingerprint has empty Rust flags. The earlier retained one-child facade build
+also reports `[unoptimized]`. Runtime-compiled Metal kernels are a separate
+execution component. Exact historical rustc command lines were not retained;
+this clarification records the captured manifest, build summary and fingerprint
+rather than inventing an observed command line.
+
+The supplemental profile receipt has SHA-256
+`6bd08576cc56c768a55f61273972f40a5aaaa856b2b4f574e541ddb72854b50c`.
+It and the fingerprint are retained in the FASTPQ evidence directory; all 101
+indexed files verify, with index SHA-256
+`3dbe077324aa05f4ecef78615abf803d734781ecc6e482741137fa2e225f691d`.
+Original proof receipts remain unchanged. The current same-binary CPU parity
+run continues uninterrupted, but these contended test timings must not be read
+as optimized production latency. The next current two-child facade measurement
+will capture actual verbose release compilation settings and retain an immutable
+optimized executable after the API and test changes have passed normal gates.
+
+
+## Complete same-binary CPU and required-Metal proof parity
+
+The CPU run finishes normally with exit 0, without a timeout or process signal.
+It uses the same immutable test executable
+`eb19553839df39e50f53880046ec7afd0bf7b99dbc9b7bac6661df52addbda9a`,
+222-file source capture, fixed public statement, `StdRng` seed, default resource
+limits and golden assertions as the retained Metal run. The 482,978-byte result
+has SHA-256 `6b0f68181920c7c506c949f5bea7bee9ba9951b0c7142837a536ef1f87020b19`
+and Iroha hash `7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507`.
+The content-addressed retention helper reads and compares every byte of the
+already-saved Metal file before accepting it, establishing actual complete
+CPU/Metal parity rather than only a printed digest match.
+
+| Complete CPU measurement | Result |
+| --- | --- |
+| Build and self-check | 2,531.223 seconds |
+| Complete test | 1 passed; 2,532.65 seconds |
+| Wall / user / system | 2,532.67 / 31,187.99 / 321.41 seconds |
+| Maximum RSS / peak memory footprint | 1,895,317,504 / 1,886,554,032 bytes |
+| Swaps | 0 |
+| Separate artifact-only verification | 1 passed; 2.07 seconds |
+| Separate replay maximum RSS | 19,628,032 bytes |
+
+The fresh artifact-only process reconstructs its expected statement before file
+access and runs the complete cap/context/tamper and five statement mutation
+controls without a witness or prover. The CPU run has its own public receipt;
+all previous Metal receipts remain unchanged. Source rehashing finds no drift in
+the captured 222 files. Other native builds/tests were present, so the two times
+are contended observations, not a controlled backend speed comparison. The
+compilation scope immediately above applies: FASTPQ Rust opt-level 0, ISI opt-level
+2; optimized release public-facade latency remains unmeasured.
+
+The complete CPU receipt SHA-256 is
+`3b82b327506430d551f838d5eb267987637bba6af10f61f5fc80b6d8c6cffdd8`.
+The original logs and unique per-run receipt are copied into the FASTPQ evidence
+directory. All 106 indexed files verify; this checkpoint's index SHA-256 is
+`e3d5480f7da5a94e7c0faf5089b90c7721833c171a2fd71aafe0a7968ff92285`.
+This establishes the scoped complete CPU/Metal byte-parity criterion. It does
+not establish independent soundness/hiding, maximum application shapes,
+multi-child ordinary/AXT resources, fallback-failure behavior or network authority.
+
+
+### First-release API cut and canonical fixture repair (September 29 JST)
+
+The normal library exposes `prove_axt_bound_batch` directly. The self-ignoring
+`Prover::prove_axt_bound` method is removed and all thirteen callers are migrated.
+Transparent `Proof`, `Prover`, verification and their exclusively replay-related
+backend helpers are compiled only for tests or `dev-tools`. Shared field,
+FFT/device and masked producer/verifier code remains normal. Five compile-fail
+Rustdoc controls establish that the retired normal surface is unavailable.
+
+Native execution found and fixed one early binder omission: a transcript with
+another source transaction could be sealed before the later preparation check
+rejected it. The binder now invokes the same existing source check before any
+metadata mutation. The regression preserves exact rejection and verifies that
+the failed call leaves the complete batch unchanged. Malformed binding Norito
+continues to assert the precise `TransferMetadataDecode` error.
+
+Current normal external API tests pass 15 controls, with four artifact-dependent
+tests ignored. AXT unit selection passes 53, with one complete-proof diagnostic
+ignored. Developer integration passes 28, with eight resource/artifact diagnostics
+ignored; its exact raw-transcript fixture passes separately, including decoding,
+resource limits, verification and byte-identical regeneration. Rustdoc passes five
+compile-fail checks and one normal public workflow example. These are overlapping
+selections, not an aggregate count. Normal and developer builds emit no FASTPQ
+warnings. Optimized two-child public producer tests have not yet run.
+
+The original test failures and fixture bytes are retained. Independent source
+review traced the stale transfer ordering golden to the Norito frame-identity
+cutover: two nested balance-key headers changed from the private Rust module
+identity `d97d38c142a1bec78e8a4c588d136275` to the declared canonical identity
+`22d8c818e398a8cf2343eb1b0a046206`. On the exact current 456-byte public transition
+preimage, substituting only those two schema hashes and recomputing the dependent
+outer CRC64-XZ reproduces the historical ordering hash exactly, using independent
+Python Blake2b-256 and the Iroha marker bit. The metadata preimage/golden remains
+unchanged. The canonical producer regenerated the stale ordering and raw-proof
+fixtures; all original exact assertions were rerun. No predecessor decoder or
+alternate production layout was added.
+
+Logs, exact original/current fixtures, preimage/cause receipts and source
+captures are retained under
+`dist/zk-remediation/2026-09-28/fastpq-postcut-validation/`. The feature-enabled
+normal external test target is being built with Cargo `release`; its actual
+FASTPQ rustc optimization command and immutable executable will be captured
+before complete two-child ordinary/AXT measurements. Previous CPU/Metal proof
+receipts retain their earlier source and unoptimized caller scope.
+
+### Optimized ordinary two-child facade (September 29 JST)
+
+The normal public `offline_compact` test target completed its actual release
+build with default and `fastpq-gpu` features, without `dev-tools`. The verbose
+rustc command records `-C opt-level=3` for `fastpq_prover` itself. Its immutable
+6,625,824-byte executable has SHA-256
+`c994d5722bcaa18fedf666371359f4e4e09b4fb927e814e93e64e4b501004986`.
+The 223-file FASTPQ/ISI/build manifest has no drift at build capture or ordinary
+completion; it is a scoped capture rather than a dependency-closure attestation.
+The immutable executable first passed all 15 normal controls, with its eight
+explicit artifact/proof diagnostics ignored.
+
+The required-Metal two-child ordinary producer then passed with unchanged
+per-segment 2 GiB structural payload and 2^42 work caps. The 968,475-byte artifact
+has SHA-256 `66130f25f755e702e87ab6161fc956afe53059fe5e3d186cad38890e606055cf`;
+its two children total 965,116 bytes. Construction plus self-verification took
+1,726.793824083 seconds. The complete test, including all reused-artifact
+rejection controls, passed in 1,735.01 seconds; `/usr/bin/time -l` recorded
+1,735.04 seconds wall time and 2,174,222,336 bytes maximum RSS. This exceeds
+2 GiB by 26,738,688 bytes. The structural allocation limit remains distinct
+from whole-process RSS, and this result does not qualify a 2 GiB RSS ceiling.
+
+The independent artifact-only process reconstructed its fixed expected
+statement before reading the proof and passed without witness construction or
+reproving: 7.62 seconds wall time and 29,687,808 bytes maximum RSS. Verified work
+includes two transcripts, 128 row leaves, 128 oracle leaves, 602 FRI leaves,
+8,606 parent hashes, two AIR evaluations and two terminal-degree checks. Both
+processes use the same retained executable. Timings are from a contended host;
+no controlled comparison with the earlier unoptimized runs is claimed.
+
+Public bytes, receipt, logs, source/build provenance and executable are retained
+under `dist/zk-remediation/2026-09-28/fastpq-two-child-release-run1/`.
+The ordinary-only 15-file evidence index has SHA-256
+`127abbe6b63a84fa5266543a509eee2bb53de63fb6d9d81bb72728c7ec2c6789`.
+It excludes the still-running AXT log and mutable combined progress. The driver
+has started the corresponding required-Metal two-child AXT diagnostic from the
+same immutable binary; that outcome remains pending.
+
+### Optimized AXT two-child completion (September 29 JST)
+
+The same immutable normal opt-level 3 executable completed the AXT two-child
+producer with Required Metal and unchanged structural limits. Its 971,571-byte
+artifact has SHA-256
+`ea2aa128229045c6e8d3c990bbbb7e590d313f0d2622ba7f9321ffdccd7f7246`;
+children total 966,608 bytes. Construction plus self-verification took
+1,727.693928458 seconds; all reused-artifact controls passed in 1,741.21 seconds.
+Time-l recorded 1,741.24 seconds wall and 2,087,878,656 bytes maximum RSS.
+The separate no-prover artifact replay passed in 13.99 seconds (14.00 wall),
+with 37,371,904 bytes maximum RSS. Verification visits two transcripts, 128 row
+leaves, 128 oracle leaves, 610 FRI leaves, 8,601 parent hashes, two AIR checks and
+two terminal-degree checks. This does not remove the ordinary route's observed
+RSS overrun or establish maximum-shape/fleet qualification.
+
+Driver session 91103 terminated successfully; the final 223-file source seal
+has zero drift. Both public artifacts, original receipts, complete generation
+and independent replay logs, immutable binary and build provenance are retained
+in `dist/zk-remediation/2026-09-28/fastpq-two-child-release-run1/`. The completed
+SHA index is `c179f6fbb27fe233021ec30fe14983347d164b0152ae6e1f8963a4d914ccfda9`.
+Timings retain their contended-host scope. A subsequent memory correction will
+have separate source and measurement evidence; these baseline artifacts remain
+immutable.
+
+
+## 2026-09-29 — physical-source release and retained device-pool admission
+
+The completed optimized ordinary two-child run above exceeded 2 GiB RSS by
+26,738,688 bytes. The source audit found 179,306,496 bytes of physical columns
+retained unnecessarily after masked coefficients had been copied. The producer
+now consumes a fixed contiguous clearing source matrix during that unchanged
+initializer, preserving all coefficient values and entropy order. The source is
+cleared before the first row commitment. This removes a concrete allocation
+overlap; it does not by itself establish a process-RSS bound.
+
+Digest admission also now charges the complete 64 MiB shared Metal pool,
+including oversized reused pages. The subsequent CPU quotient phase carries
+that allowance across its phase boundary. Defaults remain 2 GiB, 2^42 structural
+work and 524,288 bytes per child. The fixed-SMT diagnostic plan charges
+1,967,970,414 bytes, 3,475,021,175,280 work units and 34,689,999 hash calls.
+
+The final normal `default+fastpq-gpu` opt-level 3 library/test build passed with
+zero drift across its 225 scoped FASTPQ/ISI/build inputs. The scoped manifest
+SHA-256 is `12c0640f2138927693377e84d69550434b0fb813ba032dc62efb76f1deb89090`.
+It is not a complete dependency-closure attestation. The immutable unit binary
+has SHA-256 `193a54c2e050cd1a067c8c5eafb3aa7c4745fc7a46f41de04f41a5343b8f8403`;
+the public facade binary has SHA-256
+`a3952ef7ed707a5af9af0ca2f3001915402c62c970305d4be8cd3a0de7c4a68f`.
+The exact current selection passed 39 unit controls and 15 external API controls,
+with long diagnostics excluded explicitly. Actual-cell tests cover source
+success/error/unwind, retained pool reuse, entropy/coefficient equivalence and
+inclusive phase admission. Earlier build/control attempts remain separately
+retained rather than being relabeled as this snapshot.
+
+Build, source, invocation and control receipts are under
+`dist/zk-remediation/2026-09-29/fastpq-source-owner-native-clean/`. The separately
+retained source archive and immutable seeded proof/facade driver are under
+`dist/zk-remediation/2026-09-29/fastpq-source-owner-proof-run1/`. At this entry's
+creation the full seeded RequiredMetal proof, artifact-only replay and both
+optimized two-child process remeasurements are running; no new full-proof or RSS
+result is inferred from the focused controls. Existing baseline proofs and their
+receipts remain unchanged.
+
+A separate current immutable selection also passes all four non-diagnostic
+`goldilocks_transform::tests` controls, including exact pool/cache/staging
+accounting. The full native19/common22 device diagnostic remains explicitly
+ignored in that selection. The four executed controls perform CPU/shape/error
+checks and introduce no competing GPU workload into the ongoing proof run.
+
+
+### Completed repaired-source seeded child
+
+The immutable opt-level 3 unit diagnostic above completed successfully. The
+canonical child is exactly the prior 482,978 bytes, with SHA-256
+`6b0f68181920c7c506c949f5bea7bee9ba9951b0c7142837a536ef1f87020b19` and Iroha
+hash `7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507`.
+Construction plus self-verification took 2,416.611 seconds; whole-test wall time
+was 2,421.09 seconds and maximum RSS was 1,765,064,704 bytes. Separate retained
+artifact verification passed in 2.09 seconds with 19,234,816 bytes maximum RSS.
+All byte, context, cap and changed-statement controls passed; the 225-file
+source seal had zero drift. The complete public proof and per-run receipt are
+retained beside `seeded-result.json`, logs, binary and source archive in the
+current attempt directory. `seeded-sha256-index.json` indexes only these closed
+files, excluding the ongoing two-child directory.
+
+The run occurred on a contended host and includes one bounded one-second
+call-stack sample during coefficient commitment; no private values were dumped.
+It is not a controlled speed comparison or a production-latency qualification.
+The prior raw child also fit under 2 GiB: this new result preserves full-proof
+parity and demonstrates the repair's raw-child process outcome, but does not
+yet resolve the prior ordinary two-child RSS failure. Both current normal
+library facade remeasurements continue from their immutable executable. Their
+fixture reaches default two-segment/four-update occurrence counts, near-maximum
+signed 512-bit sender and scale-28 receiver values; it repeats ALICE/BOB keys,
+so it does not cover every distinct-key/touched-tree shape.

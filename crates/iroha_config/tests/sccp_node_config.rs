@@ -278,7 +278,9 @@ fn secret_header_entries_parse() {
     let keeper = &config.sccp.light_client_keeper;
     let endpoint = actual::parse_sccp_http_endpoint("https://eth.example.org/rpc").expect("url");
     let headers: Vec<_> = keeper
-        .secret_headers_for(&endpoint)
+        .secret_headers
+        .iter()
+        .filter(|header| header.endpoint == endpoint)
         .map(|header| (header.header.as_str(), header.value_file.clone()))
         .collect();
     assert_eq!(

@@ -76,8 +76,7 @@ pub fn available_goldilocks_transform_backend_v1() -> Option<GoldilocksTransform
 // Shared with Metal's actual pool policy when this module is wired. Charging
 // the complete pool independently of this request also covers oversized cache
 // entries reused for a smaller request. Stage twiddles are only one u64/stage.
-pub(crate) const EXACT_ROOT_METAL_POOL_CACHED_PAGES_V1: usize = 4096;
-pub(crate) const EXACT_ROOT_METAL_PAGE_BYTES_V1: usize = 16 * 1024;
+use crate::gpu_memory::{METAL_PAGE_BYTES, METAL_POOL_MAX_CACHED_BYTES};
 pub(crate) const EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1: usize = 64;
 
 /// Conservative additional host/shared payload for one bounded Metal FFT.
@@ -108,12 +107,12 @@ pub fn metal_goldilocks_transform_extra_payload_v1(
         .and_then(|n| n.checked_mul(2))
         .ok_or(GoldilocksTransformErrorV1::InvalidShape)?;
     let padding = columns
-        .checked_mul(EXACT_ROOT_METAL_PAGE_BYTES_V1 - 1)
+        .checked_mul(METAL_PAGE_BYTES - 1)
         .ok_or(GoldilocksTransformErrorV1::InvalidShape)?;
     [
         private,
         padding,
-        EXACT_ROOT_METAL_POOL_CACHED_PAGES_V1 * EXACT_ROOT_METAL_PAGE_BYTES_V1,
+        METAL_POOL_MAX_CACHED_BYTES,
         (EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1 + 2) * 32 * 8,
         1 << 20,
     ]

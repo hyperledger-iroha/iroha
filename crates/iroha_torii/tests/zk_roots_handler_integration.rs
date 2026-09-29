@@ -125,7 +125,7 @@ fn seeded_zk_roots_state(
         .set_zk(zk_config_with_tree_roots_history_len(
             tree_roots_history_len,
         ))
-        .expect("empty SCCP outbox accepts roots test configuration");
+        .expect("empty state accepts roots test configuration");
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("zkd", "universal").expect("domain id"),

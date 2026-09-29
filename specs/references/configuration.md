@@ -353,8 +353,8 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
       after which the keeper submits a proof-carrying advance from the bridge key's account.
     - `poll_interval_ms` / `request_timeout_ms` (defaults: `60000` / `10000`, both non-zero):
       light-client state check cadence and per-request RPC timeout before failover.
-    - `max_advance_bytes` (default: `262144`, non-zero): largest advance the keeper builds; the
-      on-chain per-instruction bounds still apply.
+    - `max_advance_bytes` (default: `262144`, non-zero): largest advance the keeper submits; it
+      drops a larger built advance with a warning. The on-chain per-instruction bounds still apply.
     - `[sccp.light_client_keeper.endpoints]`: `ethereum_execution`, `ethereum_beacon`, `bsc`
       and `tron` (URL lists; `https`, or `http` for loopback hosts only, no embedded
       credentials) and `ton_liteservers` (`<ipv4>:<port>:<base64 ed25519 public key>`). Each

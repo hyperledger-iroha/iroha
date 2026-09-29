@@ -831,9 +831,13 @@ mv <network>/genesis.expected_hash.next <network>/genesis.expected_hash
    Parliament TLE session and keep every validator's beacon and TLE signers
    running (§4.14.5 items 5 to 7). TODO(ws55): the in-node beacon/TLE DKG
    automation and node-generated credentials replace the manual ceremony.
-6. Run a Parliament driver from a funded account. TODO(ws42):
-   `iroha sccp governance drive` is not available yet; until then drive
-   attempts by hand (`scripts/taira_devnet.py citizens` on devnets).
+6. Run the Parliament driver from a funded account, with one `--release-peer`
+   per validator Torii root:
+   `iroha --config <client.toml> sccp governance drive --release-peer <torii-1> ... --release-peer <torii-N> [--relay-dir <dir>]`.
+   Keep it running while any SCCP proposal is Proposed or any attempt is
+   active (§4.14.5 item 4). The driver does not vote; citizens cast their own
+   ballots (`scripts/taira_devnet.py citizens` acts for the genesis citizens on
+   devnets, see [Devnet citizens](#devnet-citizens)).
 7. Check the result with `iroha taira doctor --parliament`.
 
 ### Doctor
@@ -854,8 +858,8 @@ eligible citizen census against every body size, the live `[gov]` profile,
 escrow and adaptive faucet policy, the global-beacon session and roster, and
 the Parliament TLE session with its remaining fresh-ballot capacity and
 lifetime. TODO(ws35): a signer-free Parliament readiness projection turns these
-into live checks. SCCP attempt progress (next due checkpoint, last progress,
-tip growth) is reported once the SCCP Parliament driver lands.
+into live checks. TODO(ws42): the doctor does not yet report SCCP attempt
+progress (next due checkpoint, last progress, tip growth).
 
 ### Devnet citizens
 

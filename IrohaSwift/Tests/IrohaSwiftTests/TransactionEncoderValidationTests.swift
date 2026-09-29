@@ -40,13 +40,13 @@ final class TransactionEncoderValidationTests: XCTestCase {
         )
         let authority = try AccountAddress
             .fromAccount(publicKey: signingKey.publicKey())
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let destinationSigningKey = try SigningKey.ed25519(
             privateKey: Data(repeating: 0x32, count: 32)
         )
         let destination = try AccountAddress
             .fromAccount(publicKey: destinationSigningKey.publicKey())
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let transfer = TransferRequest(
             networkId: TestNetworkIds.canonical,
             authority: authority,
@@ -318,12 +318,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {
         let owner = try canonicalOwnerLiteral(
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(
             from: signingKey,
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
@@ -520,12 +520,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testCastZkBallotRejectsInvalidRootHintHex() throws {
         let owner = try canonicalOwnerLiteral(
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(
             from: signingKey,
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
@@ -649,12 +649,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
             "NoritoBridge not available"
         )
         let owner = try canonicalOwnerLiteral(
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(
             from: signingKey,
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,

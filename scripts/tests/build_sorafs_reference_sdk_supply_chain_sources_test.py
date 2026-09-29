@@ -27,7 +27,7 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+import release_evidence_crypto as RELEASE_CRYPTO  # noqa: E402
 import sorafs_reference_sdk_supply_chain as SOURCES  # noqa: E402
 
 

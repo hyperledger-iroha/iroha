@@ -55,15 +55,30 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
         .map(|i| dense(i as u64))
         .collect::<Vec<_>>();
     let indices = [0, 1, 31, 64, 127];
-    let actual = commit(
+    let mut committed = commit(
         replay,
         &binding,
         oracle,
-        &indices,
+        &[],
         &[&coefficients],
         stream_limits(),
     )
     .unwrap();
+    let cache = committed
+        .cache
+        .take()
+        .unwrap()
+        .bind(&binding, oracle, committed.root)
+        .unwrap();
+    let actual = open(
+        cache,
+        replay,
+        &indices,
+        &[&coefficients],
+        DigestExecutionV1::Cpu,
+    )
+    .unwrap();
+    assert_eq!(actual.root, committed.root);
     let plan = multiproof(128, &indices);
     let mut levels = vec![
         (0..128)

@@ -27,7 +27,7 @@ final class AliasSetupV1Tests: XCTestCase {
     func testAliasPlanBodiesRejectRetiredChainAliasesAndNonCanonicalNetworkIds() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0x18))
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let anchor = try AliasPlanAnchorV1(
             blockHeight: 1,
             blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
@@ -124,7 +124,7 @@ final class AliasSetupV1Tests: XCTestCase {
     func testAccountAliasIntentPreservesTairaTargetAccount() throws {
         let target = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0x17))
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let intent = try AliasAccountIntentV1(
             alias: ResolvedAccountAliasV1(
                 canonicalName: "merchant@paynet",

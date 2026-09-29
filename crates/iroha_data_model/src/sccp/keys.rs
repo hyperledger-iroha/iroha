@@ -18,8 +18,6 @@ pub const SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1: &str = "iroha.sccp.bridge_key.v1";
 /// Maximum retired-key tombstones kept per peer; the oldest is dropped from the list only (its
 /// address stays burned in `sccp_bridge_key_owners`).
 pub const SCCP_BRIDGE_KEY_RETIRED_MAX_V1: usize = 16;
-/// Byte length of a compressed secp256k1 public key.
-pub const SCCP_BRIDGE_PUBLIC_KEY_BYTES_V1: usize = 33;
 
 /// Reference to one recorded attestation fault: the key of `sccp_attestation_faults`.
 ///
@@ -267,12 +265,6 @@ impl SccpBridgeKeyBindingV1 {
     pub fn domain(&self) -> &str {
         &self.domain
     }
-
-    /// Return whether the domain equals [`SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1`].
-    #[must_use]
-    pub fn has_canonical_domain(&self) -> bool {
-        self.domain == SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1
-    }
 }
 
 /// Recorded equivocation evidence (`sccp_attestation_faults[(address, height)]`, §4.11).
@@ -448,7 +440,6 @@ mod tests {
         );
         let binding = SccpBridgeKeyBindingV1::new(network_id(9), peer(9), Some([3; 33]), 1, 0);
         assert_eq!(binding.domain(), SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1);
-        assert!(binding.has_canonical_domain());
         let json = norito::json::to_json(&binding).expect("json");
         assert!(
             json.contains("\"domain\":\"iroha.sccp.bridge_key.v1\""),
@@ -456,7 +447,7 @@ mod tests {
         );
         let forged = json.replace("iroha.sccp.bridge_key.v1", "iroha.sccp.other.v1");
         let decoded = norito::json::from_json::<SccpBridgeKeyBindingV1>(&forged).expect("decodes");
-        assert!(!decoded.has_canonical_domain());
+        assert_ne!(decoded.domain(), SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1);
         assert_ne!(decoded, binding);
     }
 

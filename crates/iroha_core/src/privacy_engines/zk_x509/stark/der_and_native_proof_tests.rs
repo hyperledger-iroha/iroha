@@ -469,8 +469,8 @@ fn verifier_owned_segment_registration_is_exact_and_full_profile_stays_closed() 
 #[test]
 fn full_main_complete_relation_proof_budget_fits_before_witness_or_entropy() {
     assert_eq!(validate_zk_x509_main_proof_budget_v1(), Ok(()));
-    assert_eq!(136 * 5623 * 8, 6_117_824);
-    assert!(136 * 5623 * 8 < super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
+    assert_eq!(136 * 5811 * 8, 6_322_368);
+    assert!(136 * 5811 * 8 < super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 }
 
 /// Count the current direct-opening owners without trusting width-only sums.
@@ -553,7 +553,7 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
     let (registrations, columns) =
         full_main_opening_partition_for_test_v1(&layout).expect("complete MAIN partition");
     assert_eq!(registrations, [36, 4, 9]);
-    assert_eq!(columns, [4_000, 668, 955]);
+    assert_eq!(columns, [4_000, 668, 1_143]);
     let retained_scalar_bus_columns = layout
         .registered_segments
         .iter()
@@ -569,22 +569,22 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
             .map(|group| group.base_width + group.aux_width)
             .sum::<usize>()
     );
-    assert_eq!(columns.iter().sum::<usize>(), 5_623);
+    assert_eq!(columns.iter().sum::<usize>(), 5_811);
 
     let shared = layout.as_shared().unwrap();
     assert_eq!(shared.trace_commitment_count_v1(), 1);
     assert_eq!(
         aggregate::maximum_encoded_proof_with_deep_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared)
             .unwrap(),
-        7_692_192
+        7_908_768
     );
     assert_eq!(
         aggregate::exact_deep_opening_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared).unwrap(),
-        360_064
+        372_096
     );
     assert_eq!(
         usize::from(ZK_X509_FRI_QUERY_COUNT_V1) * columns.iter().sum::<usize>() * 8,
-        6_117_824
+        6_322_368
     );
 }
 

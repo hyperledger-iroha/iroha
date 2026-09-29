@@ -158,7 +158,7 @@ The existing snapshot/checkpoint machinery has these distinct guarantees:
 | `kura/prune_commit_merge_support.rs::CommitManifest::binds_authenticated_v2_commit_authority` | Checks the exact block, execution-witness roots, QC digest and artifact authority digest. The manifest also stores a WSV checkpoint hash, but that hash is not part of the quorum-signed execution commitment or the artifact authority seal. A locally coherent checkpoint and manifest do not add quorum authentication of accumulated WSV contents. |
 | `sumeragi/v2_recovery.rs::V2StartupReplayPlan::replay_complete_prefix` | Authenticated full-body replay starts after the restored state's committed height. It does not independently re-execute the snapshot's preceding activation history. |
 | `sumeragi/v2_recovery.rs::authenticate_v2_snapshot_replay_boundary` | Verifies the separately authenticated hash-only bootstrap lineage when one exists. The ordinary full-body path has no such bootstrap prefix; this function does not mint a retail snapshot proof for it. |
-| `kura/bound_progress_and_retained_support.rs::KuraRetainedBlockRecord` | Retains the block header, proposal and executed-wire hashes, merge reference and SCCP archive after body eviction. It does not retain the original retail activation input/output needed to verify the activation independently. |
+| `kura/bound_progress_and_retained_support.rs::KuraRetainedBlockRecord` | Retains the block header, proposal and executed-wire hashes and merge reference after body eviction. It does not retain the original retail activation input/output needed to verify the activation independently. |
 
 The execution-policy digest in
 `state.rs::execution_policy_digest_with_runtime_policies_v1` binds configured

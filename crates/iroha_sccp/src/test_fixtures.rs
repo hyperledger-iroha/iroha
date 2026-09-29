@@ -26,14 +26,11 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 
-/// Public TAIRA chain label used by the finalized-block fixtures.
-pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Genesis-derived TAIRA network identity bound into the finalized-block fixtures.
 const SCCP_TAIRA_FINALITY_NETWORK_ID_V1: &str =
     "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D60EF#BA85";
 /// Return the fixed TAIRA network identity used by the finalized-block fixtures.
-#[must_use]
-pub fn sccp_taira_finality_network_id_v1() -> iroha_data_model::NetworkId {
+fn sccp_taira_finality_network_id_v1() -> iroha_data_model::NetworkId {
     SCCP_TAIRA_FINALITY_NETWORK_ID_V1
         .parse()
         .expect("fixture Taira network identity must be canonical")
@@ -274,7 +271,6 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         block,
         parent,
         SccpFinalityFixtureEpochSchedule::Ordinary,
-        false,
     )
 }
 
@@ -295,24 +291,6 @@ pub fn sccp_finalize_taira_native_operation_block_test_fixture_v1(
         block,
         parent,
         SccpFinalityFixtureEpochSchedule::NativeOperations,
-        false,
-    )
-}
-
-/// Finalize a native test chain whose network identity is derived from its actual signed genesis.
-/// The same exact four-validator, three-vote RS16 fixture applies; no production State is injected.
-/// # Panics
-/// Rejects malformed blocks, wrong parents or heights outside the bounded 255-height epoch.
-#[must_use]
-pub fn sccp_finalize_native_genesis_network_block_test_fixture_v1(
-    block: &SignedBlock,
-    parent: Option<&SccpFinalizedBlockTestFixtureV1>,
-) -> SccpFinalizedBlockTestFixtureV1 {
-    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
-        block,
-        parent,
-        SccpFinalityFixtureEpochSchedule::NativeOperations,
-        true,
     )
 }
 
@@ -324,7 +302,6 @@ fn sccp_finalize_taira_epoch_boundary_test_fixture_v1(
         block,
         None,
         SccpFinalityFixtureEpochSchedule::GenesisBoundary,
-        false,
     )
 }
 
@@ -343,7 +320,6 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
     epoch_schedule: SccpFinalityFixtureEpochSchedule,
-    derive_genesis_network: bool,
 ) -> SccpFinalizedBlockTestFixtureV1 {
     let block_header = block.header();
     let height = block_header.height().get();
@@ -388,14 +364,7 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
         max_payload_size_bytes: 4096,
         max_chunk_count: 8,
     };
-    let network_id = if derive_genesis_network {
-        parent.map_or_else(
-            || iroha_data_model::NetworkId::from_genesis_hash(block.hash()),
-            |parent| parent.proof().finality_artifact.height_context.network_id,
-        )
-    } else {
-        sccp_taira_finality_network_id_v1()
-    };
+    let network_id = sccp_taira_finality_network_id_v1();
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => {
             use iroha_data_model::isi::kagemusha_v1::{

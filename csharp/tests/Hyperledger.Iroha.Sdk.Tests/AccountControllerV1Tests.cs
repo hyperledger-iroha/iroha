@@ -3,7 +3,7 @@ using System.Text.Json;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
-using Hyperledger.Iroha.Sccp;
+using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -28,7 +28,7 @@ public sealed class AccountControllerV1Tests
             var address = AccountAddress.Parse(item.GetProperty("i105").GetString()!, 753);
             Assert.Equal(Convert.FromHexString(item.GetProperty("canonical_address_hex").GetString()!), address.CanonicalBytes());
             var payload = Convert.FromHexString(item.GetProperty("account_id_payload_hex").GetString()!);
-            Assert.Equal(payload, SccpReplayPrincipalV1.SoraAccount(payload).Bytes);
+            Assert.Equal(address.ControllerBytes(), ToriiSubmitValidation.RequireCanonicalAuthority(payload));
             var actual = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
             Assert.Equal(payload, actual);
             var frame = Convert.FromHexString(item.GetProperty("account_id_frame_hex").GetString()!);
@@ -57,7 +57,7 @@ public sealed class AccountControllerV1Tests
         {
             Assert.Equal(2, item.GetProperty("layout_flags").GetInt32());
             var payload = Convert.FromHexString(item.GetProperty("account_id_payload_hex").GetString()!);
-            Assert.ThrowsAny<ArgumentException>(() => SccpReplayPrincipalV1.SoraAccount(payload));
+            Assert.ThrowsAny<ArgumentException>(() => ToriiSubmitValidation.RequireCanonicalAuthority(payload));
         }
     }
 
@@ -108,16 +108,47 @@ public sealed class AccountControllerV1Tests
     }
 
     [Fact]
-    public void SccpSingleControllerRejectsOversizedAndMalformedCompactPayloads()
+    public void CanonicalAuthorityRejectsOversizedAndMalformedSingleKeyPayloads()
     {
         var oversizedKey = new CanonicalNoritoWriter();
         oversizedKey.WriteUInt64LittleEndian((ulong)ushort.MaxValue + 2);
         var authority = new CanonicalNoritoWriter();
         authority.WriteUInt32LittleEndian(0);
         authority.WriteField(oversizedKey.ToArray());
-        Assert.ThrowsAny<ArgumentException>(() => SccpReplayPrincipalV1.SoraAccount(authority.ToArray()));
+        Assert.ThrowsAny<ArgumentException>(() => ToriiSubmitValidation.RequireCanonicalAuthority(authority.ToArray()));
         foreach (var bytes in new[] { new byte[] { 0, 0, 0, 0 }, new byte[] { 2, 0, 0, 0 }, new byte[] { 0, 0, 0, 0, 0 } })
-            Assert.ThrowsAny<ArgumentException>(() => SccpReplayPrincipalV1.SoraAccount(bytes));
+            Assert.ThrowsAny<ArgumentException>(() => ToriiSubmitValidation.RequireCanonicalAuthority(bytes));
+    }
+
+    [Fact]
+    public void CanonicalAuthorityRejectsTruncatedTrailingAndNoncanonicalFraming()
+    {
+        var address = AccountAddress.FromPublicKey(Keys(1)[0]);
+        var canonical = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
+        Assert.Equal(address.ControllerBytes(), ToriiSubmitValidation.RequireCanonicalAuthority(canonical));
+        var unknownController = canonical.ToArray();
+        unknownController[0] = 2;
+        var overlongLength = new byte[canonical.Length + 1];
+        canonical.AsSpan(0, 4).CopyTo(overlongLength);
+        overlongLength[4] = (byte)(canonical[4] | 0x80);
+        canonical.AsSpan(5).CopyTo(overlongLength.AsSpan(6));
+        var shortKey = new CanonicalNoritoWriter();
+        shortKey.WriteSequenceLength((ulong)Ed25519Signer.PublicKeyLength);
+        shortKey.WriteByteElements(new byte[Ed25519Signer.PublicKeyLength]);
+        var shortEd25519 = new CanonicalNoritoWriter();
+        shortEd25519.WriteUInt32LittleEndian(0);
+        shortEd25519.WriteField(shortKey.ToArray());
+        foreach (var malformed in new[]
+        {
+            Array.Empty<byte>(),
+            new byte[] { 0 },
+            canonical[..^1],
+            canonical.Concat(new byte[] { 0 }).ToArray(),
+            unknownController,
+            overlongLength,
+            shortEd25519.ToArray(),
+        })
+            Assert.ThrowsAny<ArgumentException>(() => ToriiSubmitValidation.RequireCanonicalAuthority(malformed));
     }
 
     [Fact]
@@ -162,7 +193,7 @@ public sealed class AccountControllerV1Tests
         var keys = Keys(2);
         var address = Address(2, [(keys[0], 1), (keys[1], 2)]);
         var encoded = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
-        Assert.Equal(encoded, SccpReplayPrincipalV1.SoraAccount(encoded).Bytes);
+        Assert.Equal(address.ControllerBytes(), ToriiSubmitValidation.RequireCanonicalAuthority(encoded));
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(encoded));
         var weighted = Address(2, [(keys[0], 2), (keys[1], 1)]);
         var threshold = Address(1, [(keys[0], 1), (keys[1], 2)]);
@@ -195,7 +226,7 @@ public sealed class AccountControllerV1Tests
         var address = Address(256, keys.Select(static key => (key, (ushort)1)).ToArray());
         Assert.Equal(new byte[] { 1, 0 }, address.CanonicalBytes()[5..7]);
         var encoded = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
-        Assert.Equal(encoded, SccpReplayPrincipalV1.SoraAccount(encoded).Bytes);
+        Assert.Equal(address.ControllerBytes(), ToriiSubmitValidation.RequireCanonicalAuthority(encoded));
         Assert.Equal(256, address.GetMultisigPolicy()!.Members.Count);
     }
 

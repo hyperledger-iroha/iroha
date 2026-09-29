@@ -1,30 +1,37 @@
+#[cfg(any(test, feature = "dev-tools"))]
+use crate::field::GoldilocksFp4V1;
+use crate::{Error, Result, TransitionBatch, trace};
+#[cfg(test)]
+use crate::{backend::AIR_COMPOSITION_ALPHA_COUNT, trace_commitment};
+#[cfg(any(test, feature = "dev-tools"))]
 use crate::{
-    Error, Result, TransitionBatch,
     backend::{
         self, BackendArtifact, BackendConfig, ExecutionMode, LOOKUP_PRODUCT_DOMAIN,
         MerkleTreeRoleV1, PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS,
         TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_COLUMN_MIX_PREFIX, TRANSCRIPT_TAG_GAMMA,
         TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
     },
-    field::GoldilocksFp4V1,
     ordering,
     semantics::{ProofSemantics, validate_batch_semantics},
-    trace,
 };
-#[cfg(test)]
-use crate::{backend::AIR_COMPOSITION_ALPHA_COUNT, trace_commitment};
+#[cfg(any(test, feature = "dev-tools"))]
 use core::convert::TryFrom;
+#[cfg(any(test, feature = "dev-tools"))]
 use fastpq_isi::{
     CANONICAL_PARAMETER_SETS, GoldilocksDigest384V1 as NativeGoldilocksDigest384V1,
     StarkParameterSet, find_by_name,
 };
+#[cfg(any(test, feature = "dev-tools"))]
 use iroha_crypto::Hash;
+#[cfg(any(test, feature = "dev-tools"))]
 use iroha_data_model::privacy::GoldilocksDigest384V1;
 use norito::{NoritoDeserialize, NoritoSerialize};
 
+#[cfg(any(test, feature = "dev-tools"))]
 #[path = "proof/lde_leaf_cache.rs"]
 mod lde_leaf_cache;
 /// Protocol version advertised by the V1 prover implementation.
+#[cfg(any(test, feature = "dev-tools"))]
 const PROTOCOL_VERSION: u16 = 1;
 #[cfg(test)]
 /// Canonical first-release root-frame identity for [`PublicIO`].
@@ -88,6 +95,7 @@ pub struct PublicIO {
 }
 /// Mixed-trace evaluation opening at a verifier query in the LDE domain.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct QueryOpening {
     /// Domain index opened by the prover.
     pub index: u32,
@@ -100,6 +108,7 @@ pub struct QueryOpening {
 }
 /// Opened FRI fold group for one query at one round.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct FriRoundOpening {
     /// FRI round number.
     pub round: u32,
@@ -116,6 +125,7 @@ pub struct FriRoundOpening {
 }
 /// Per-query FRI opening chain across all committed rounds.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct FriQueryOpening {
     /// Initial evaluation-domain index sampled by the transcript.
     pub initial_index: u32,
@@ -133,6 +143,7 @@ pub struct FriQueryOpening {
 }
 /// Sampled AIR row and composition opening.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct AirConstraintOpening {
     /// Evaluation-domain index sampled by the verifier transcript.
     pub index: u32,
@@ -150,12 +161,13 @@ pub struct AirConstraintOpening {
     /// Merkle authentication path for `composition_value` under `air_composition_root`.
     pub composition_path: Vec<GoldilocksDigest384V1>,
 }
-/// Proof artifact produced by the FASTPQ prover.
+/// Transparent batch-replay fixture available only to tests and `dev-tools`.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::proof::Proof",
     frame = "fastpq_prover::proof::FastpqStateTransitionProofV1"
 )]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct Proof {
     /// Protocol version used to derive Fiat–Shamir challenges.
     pub protocol_version: u16,
@@ -195,6 +207,7 @@ pub struct Proof {
     /// Per-round FRI openings for the same sampled query indices.
     pub fri_queries: Vec<FriQueryOpening>,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl Proof {
     /// Access the canonical six-lane preprocessing-trace commitment.
     pub fn commitment(&self) -> GoldilocksDigest384V1 {
@@ -243,6 +256,7 @@ impl Default for VerifyLimits {
         }
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn prover_self_check_limits(batch: &TransitionBatch, proof: &Proof) -> VerifyLimits {
     VerifyLimits {
         max_transitions: DEFAULT_MAX_VERIFY_TRANSITIONS.max(batch.transitions.len()),
@@ -258,14 +272,18 @@ pub fn enforce_default_verify_batch_limits(batch: &TransitionBatch) -> Result<()
     enforce_batch_size_limit(batch, limits)
 }
 /// Enforce every default verifier resource limit on an already generated proof.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn enforce_default_verify_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     enforce_verify_limits(batch, proof, VerifyLimits::default())
 }
-/// FASTPQ prover wiring canonical STARK parameters to the backend.
+/// Transparent batch-replay prover available only to tests and `dev-tools`.
+/// Canonical quantity artifacts use [`crate::offline_compact`].
 #[derive(Debug, Clone)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub struct Prover {
     backend: StarkBackend,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl Prover {
     fn new(params: StarkParameterSet) -> Self {
         Self::from_backend_config(BackendConfig::new(params))
@@ -277,7 +295,8 @@ impl Prover {
     }
     /// Construct a prover using a canonical parameter set.
     ///
-    /// The returned prover initialises the production backend.
+    /// This diagnostic reconstructs the supplied batch at verification. It is not
+    /// the canonical masked quantity-artifact producer.
     ///
     /// # Errors
     ///
@@ -298,7 +317,7 @@ impl Prover {
     ///
     /// Returns [`Error::UnknownParameter`] when the supplied name is not part of
     /// the canonical FASTPQ catalogue, or [`Error::NativeV1GpuUnavailable`] for an explicit GPU
-    /// request. Final-V1 proof GPU dispatch is not implemented.
+    /// request. Transparent replay fixture GPU dispatch is not implemented.
     pub fn canonical_with_execution_mode(
         parameter_name: &str,
         mode: ExecutionMode,
@@ -335,7 +354,7 @@ impl Prover {
     pub fn canonical_parameter_sets() -> &'static [StarkParameterSet] {
         &CANONICAL_PARAMETER_SETS
     }
-    /// Produce a proof for the provided batch.
+    /// Produce a transparent replay fixture for the provided batch.
     ///
     /// Every returned proof satisfies the same default resource limits as
     /// [`verify`]. The transition-count and proof-byte ceilings apply together;
@@ -371,7 +390,8 @@ impl Prover {
     ///
     /// This escape hatch is available only to unit tests and `dev-tools` builds. It proves byte
     /// and transcript determinism, not that the supplied operations constitute valid state
-    /// updates. Production callers must use [`Self::prove`] or an AXT-bound proving wrapper.
+    /// updates. Canonical artifact callers use [`crate::offline_compact`] or
+    /// [`crate::prove_axt_bound_batch`].
     /// Batch-count and byte limits expand for these developer fixtures; their
     /// proofs can exceed the default production verifier's resource limits.
     ///
@@ -407,7 +427,7 @@ impl Prover {
         Ok(proof)
     }
 }
-/// Verify a V1 proof with default proof-size and transcript limits.
+/// Verify a transparent replay fixture with default resource limits.
 ///
 /// # Errors
 ///
@@ -415,11 +435,13 @@ impl Prover {
 /// contains only operations with a production root-bound V1 relation,
 /// [`Error::UnknownParameter`] when the proof references an unknown parameter set, or another
 /// [`Error`] identifying the invalid proof component.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     verify_with_semantics(batch, proof, ProofSemantics::StateTransition)
 }
 
 /// Verify a proof under an explicitly selected, caller-authenticated semantic profile.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_with_semantics(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -427,7 +449,7 @@ pub fn verify_with_semantics(
 ) -> Result<()> {
     verify_with_limits_and_semantics(batch, proof, VerifyLimits::default(), semantics)
 }
-/// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths, AIR openings,
+/// Verify a transparent replay fixture from proof contents, public inputs, commitments, AIR openings,
 /// FRI query chains, challenges, and protocol/parameter checks.
 ///
 /// # Errors
@@ -437,6 +459,7 @@ pub fn verify_with_semantics(
 /// without a production root-bound V1 relation, [`Error::UnknownParameter`] for unknown parameter
 /// sets, or another [`Error`] identifying the invalid proof component.
 #[allow(clippy::too_many_lines)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_with_limits(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -446,6 +469,7 @@ pub fn verify_with_limits(
 }
 
 /// Verify a proof under explicit resource limits and a caller-authenticated semantic profile.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_with_limits_and_semantics(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -458,6 +482,7 @@ pub fn verify_with_limits_and_semantics(
     verify_prechecked_with_semantics(batch, proof, limits.max_air_row_values, semantics)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_prechecked_with_semantics(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -507,6 +532,7 @@ pub fn verify_raw_statement_with_limits(
     verify_with_limits_raw(batch, proof, limits)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_with_limits_raw(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -518,6 +544,7 @@ fn verify_with_limits_raw(
     verify_after_limits(batch, proof)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
     validate_canonical_goldilocks_transcript_scalars(proof)?;
     validate_canonical_goldilocks_queries(proof)?;
@@ -525,6 +552,7 @@ fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
     validate_canonical_goldilocks_fri_openings(proof)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
     ensure_canonical_goldilocks(proof.lookup_grand_product, "lookup_grand_product", &[])?;
     ensure_canonical_goldilocks(proof.lookup_challenge, "lookup_challenge", &[])?;
@@ -537,6 +565,7 @@ fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()>
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_canonical_goldilocks_queries(proof: &Proof) -> Result<()> {
     for (query_index, query) in proof.queries.iter().enumerate() {
         ensure_canonical_fp4(query.value, "queries.value", &[query_index])?;
@@ -547,6 +576,7 @@ fn validate_canonical_goldilocks_queries(proof: &Proof) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_canonical_goldilocks_air_openings(proof: &Proof) -> Result<()> {
     for (query_index, opening) in proof.air_openings.iter().enumerate() {
         for (value_index, &value) in opening.current_row.iter().enumerate() {
@@ -572,6 +602,7 @@ fn validate_canonical_goldilocks_air_openings(proof: &Proof) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn validate_canonical_goldilocks_fri_openings(proof: &Proof) -> Result<()> {
     for (query_index, query) in proof.fri_queries.iter().enumerate() {
         for (round_index, round) in query.rounds.iter().enumerate() {
@@ -599,6 +630,7 @@ fn validate_canonical_goldilocks_fri_openings(proof: &Proof) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_canonical_goldilocks(value: u64, context: &'static str, indices: &[usize]) -> Result<()> {
     if value >= GOLDILOCKS_MODULUS {
         return Err(Error::NonCanonicalGoldilocksElement {
@@ -609,6 +641,7 @@ fn ensure_canonical_goldilocks(value: u64, context: &'static str, indices: &[usi
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_canonical_fp4(
     value: GoldilocksFp4V1,
     context: &'static str,
@@ -622,6 +655,7 @@ fn ensure_canonical_fp4(
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_wire_merkle_path(
     cache: &mut backend::MerkleNodeCache,
     role: MerkleTreeRoleV1,
@@ -638,6 +672,7 @@ fn verify_wire_merkle_path(
     cache.verify_path(role, root, leaf, leaf_index, &path)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_lde_air_row_binding(
     query_pos: usize,
     query_value: GoldilocksFp4V1,
@@ -660,6 +695,7 @@ fn ensure_lde_air_row_binding(
 }
 
 #[allow(clippy::too_many_lines)]
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     if proof.protocol_version != PROTOCOL_VERSION {
         return Err(Error::UnsupportedProtocolVersion {
@@ -973,6 +1009,7 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     Ok(())
 }
 #[allow(clippy::too_many_lines)]
+#[cfg(any(test, feature = "dev-tools"))]
 fn enforce_verify_limits(
     batch: &TransitionBatch,
     proof: &Proof,
@@ -1122,6 +1159,7 @@ fn enforce_batch_size_limit(batch: &TransitionBatch, limits: VerifyLimits) -> Re
     Ok(())
 }
 #[derive(Clone, Copy)]
+#[cfg(any(test, feature = "dev-tools"))]
 struct FriQueryVerification<'a> {
     query_pos: usize,
     initial_index: usize,
@@ -1135,6 +1173,7 @@ struct FriQueryVerification<'a> {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(any(test, feature = "dev-tools"))]
 struct FriFinalVerification<'a> {
     query_pos: usize,
     index: usize,
@@ -1169,6 +1208,7 @@ pub(crate) mod compact_fri_support {
     }
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_fri_query_chain(
     merkle_cache: &mut backend::MerkleNodeCache,
     fri_query: &FriQueryOpening,
@@ -1281,6 +1321,7 @@ fn verify_fri_query_chain(
     Ok(())
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_fri_final_opening(
     merkle_cache: &mut backend::MerkleNodeCache,
     fri_query: &FriQueryOpening,
@@ -1332,6 +1373,7 @@ fn verify_fri_final_opening(
     }
     Ok(())
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn expected_fri_layer_lengths(
     domain_size: usize,
     arity: u32,
@@ -1369,6 +1411,7 @@ fn expected_fri_layer_lengths(
     Ok(lengths)
 }
 
+#[cfg(any(test, feature = "dev-tools"))]
 fn fri_terminal_degree_bound(
     domain_size: usize,
     blowup_factor: u32,
@@ -1428,6 +1471,7 @@ fn fri_terminal_degree_bound(
     }
     Ok(degree_bound)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn pad_len_to_arity(len: usize, arity: usize) -> Result<usize> {
     if arity == 0 {
         return Err(Error::FriArity(0));
@@ -1439,6 +1483,7 @@ fn pad_len_to_arity(len: usize, arity: usize) -> Result<usize> {
     len.checked_add(arity - remainder)
         .ok_or(Error::TraceLengthOverflow { rows: len })
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn leaf_count_for_values(value_count: usize, chunk_size: usize) -> Result<usize> {
     if value_count == 0 || chunk_size == 0 {
         return Err(Error::QueryIndexOutOfRange {
@@ -1448,6 +1493,7 @@ fn leaf_count_for_values(value_count: usize, chunk_size: usize) -> Result<usize>
     }
     Ok(value_count.div_ceil(chunk_size))
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn expected_leaf_value_len(
     value_count: usize,
     chunk_size: usize,
@@ -1470,6 +1516,7 @@ fn expected_leaf_value_len(
     }
     Ok(value_count.saturating_sub(start).min(chunk_size))
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
     if leaf_count == 0 {
         return Err(Error::QueryIndexOutOfRange { index: 0, len: 0 });
@@ -1488,7 +1535,9 @@ fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
         current = next;
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+#[cfg(any(test, feature = "dev-tools"))]
 fn fold_fri_values(
     values: &[GoldilocksFp4V1],
     challenge: GoldilocksFp4V1,
@@ -1517,6 +1566,7 @@ fn batch_size_hint(batch: &TransitionBatch) -> usize {
     }
     total
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn proof_size_hint(proof: &Proof) -> usize {
     let mut total = 0usize;
     total = total.saturating_add(2); // protocol_version
@@ -1594,10 +1644,12 @@ fn proof_size_hint(proof: &Proof) -> usize {
     }
     total
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn public_io_size_hint(public_io: &PublicIO) -> usize {
     let _ = public_io;
     16 + 8 + 32 * 5
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<Proof> {
     if artifact.query_openings.len() != artifact.query_chunks.len() {
         return Err(Error::QueryCountMismatch {
@@ -1665,6 +1717,7 @@ fn materialise_proof(public_io: PublicIO, artifact: BackendArtifact) -> Result<P
         fri_queries: artifact.fri_query_openings,
     })
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn build_public_io(batch: &TransitionBatch, ordering_hash: Hash) -> PublicIO {
     let inputs = &batch.public_inputs;
     PublicIO {
@@ -1677,6 +1730,7 @@ fn build_public_io(batch: &TransitionBatch, ordering_hash: Hash) -> PublicIO {
         ordering_hash: ordering_hash.into(),
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn ensure_public_io_matches(expected: &PublicIO, actual: &PublicIO) -> Result<()> {
     if actual.dsid != expected.dsid {
         return Err(Error::PublicIoMismatch { field: "dsid" });

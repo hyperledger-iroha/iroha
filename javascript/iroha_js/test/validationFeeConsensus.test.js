@@ -624,6 +624,172 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
   assert.equal(page.promotedCheckpoint.height, 127n);
 });
 
+const PROOF_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+
+// Hand-built response so the raw Content-Length reaches the reader untouched:
+// WHATWG `Headers` trims " 1" and "1 " to "1", which would hide the
+// canonical-form check.
+function proofResponse({
+  bytes = Buffer.from([9]),
+  chunks: providedChunks,
+  contentType = "application/x-norito",
+  contentLength,
+  readable = true,
+} = {}) {
+  const chunks = (providedChunks ?? [bytes]).map((chunk) => new Uint8Array(chunk));
+  const streamState = { cancelled: false, released: false };
+  let locked = false;
+  let nextChunk = 0;
+  const body = readable
+    ? {
+        get locked() { return locked; },
+        getReader() {
+          if (locked) throw new TypeError("test response body is already locked");
+          locked = true;
+          return {
+            async read() {
+              if (streamState.cancelled || nextChunk >= chunks.length) {
+                return { done: true, value: undefined };
+              }
+              const value = chunks[nextChunk];
+              nextChunk += 1;
+              return { done: false, value };
+            },
+            async cancel() { streamState.cancelled = true; },
+            releaseLock() { locked = false; streamState.released = true; },
+          };
+        },
+        async cancel() { streamState.cancelled = true; },
+      }
+    : {
+        locked: false,
+        async cancel() { streamState.cancelled = true; },
+      };
+  return {
+    status: 200,
+    statusText: "OK",
+    headers: {
+      get(name) {
+        const normalized = String(name).toLowerCase();
+        if (normalized === "content-length") return contentLength ?? null;
+        if (normalized === "content-type") return contentType;
+        return null;
+      },
+    },
+    body,
+    streamState,
+  };
+}
+
+function proofPageClient(response, verifyProof = () => {
+  assert.fail("rejected proof responses must not reach the native verifier");
+}) {
+  const native = {
+    connectNoritoBridgeAbiVersion: () => 24,
+    validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([1, 2, 3]),
+    validationFeeVerifyCurrentPolicyProofV1(proofNorito) {
+      verifyProof(proofNorito);
+      return JSON.stringify(completeVerifiedProjection());
+    },
+  };
+  const client = new ToriiClient("https://torii.invalid", {
+    localSigningContext: new LocalSigningContext(binding.networkId, 753),
+    fetchImpl: async () => assert.fail("overridden request path should be used"),
+    [TORII_TEST_NATIVE_BINDING]: native,
+  });
+  client._request = async () => response;
+  return client;
+}
+
+function fetchProofPage(client) {
+  return client.getValidationFeeCurrentPolicyProofPage(binding, null, {
+    canonicalAuth: {
+      accountId: proposalOperator,
+      privateKey: Buffer.alloc(32, 0x31),
+    },
+  });
+}
+
+test("Torii validation-fee proof pages accept an exact-bound streamed response", async () => {
+  const exact = Buffer.alloc(PROOF_RESPONSE_MAX_BYTES, 0x5a);
+  const streamed = proofResponse({
+    chunks: [
+      exact.subarray(0, 7),
+      exact.subarray(7, PROOF_RESPONSE_MAX_BYTES - 1),
+      exact.subarray(PROOF_RESPONSE_MAX_BYTES - 1),
+    ],
+    contentLength: String(PROOF_RESPONSE_MAX_BYTES),
+  });
+  let verifiedLength = null;
+  const client = proofPageClient(streamed, (proofNorito) => {
+    verifiedLength = proofNorito.length;
+  });
+
+  const page = await fetchProofPage(client);
+  assert.equal(verifiedLength, PROOF_RESPONSE_MAX_BYTES);
+  assert.equal(page.proofNorito.length, PROOF_RESPONSE_MAX_BYTES);
+  assert.equal(page.promotedCheckpoint.height, 127n);
+  assert.equal(streamed.streamState.cancelled, false);
+  assert.equal(streamed.streamState.released, true);
+});
+
+test("Torii validation-fee proof pages reject malformed and noncanonical Content-Length values", async () => {
+  for (const contentLength of ["", "-1", "+1", "01", "1.0", "1, 1", "1 ", " 1"]) {
+    const malformed = proofResponse({ contentLength });
+    await assert.rejects(
+      () => fetchProofPage(proofPageClient(malformed)),
+      /validation-fee proof response Content-Length must be a canonical unsigned decimal integer/u,
+      JSON.stringify(contentLength),
+    );
+    assert.equal(malformed.streamState.cancelled, true, JSON.stringify(contentLength));
+  }
+});
+
+test("Torii validation-fee proof pages reject declared, missing-length, and understated overflows", async () => {
+  const oversized = Buffer.alloc(PROOF_RESPONSE_MAX_BYTES + 1, 0x5a);
+  const cases = [
+    {
+      name: "declared overflow",
+      response: proofResponse({ contentLength: String(PROOF_RESPONSE_MAX_BYTES + 1) }),
+    },
+    {
+      name: "actual overflow without Content-Length",
+      response: proofResponse({ bytes: oversized }),
+    },
+    {
+      name: "actual overflow with understated Content-Length",
+      response: proofResponse({ bytes: oversized, contentLength: "1" }),
+    },
+  ];
+  for (const entry of cases) {
+    await assert.rejects(
+      () => fetchProofPage(proofPageClient(entry.response)),
+      /validation-fee proof response exceeds its 4194304-byte size bound/u,
+      entry.name,
+    );
+    assert.equal(entry.response.streamState.cancelled, true, entry.name);
+  }
+});
+
+test("Torii validation-fee proof pages reject a body that is not a byte stream", async () => {
+  const unreadable = proofResponse({ readable: false });
+  await assert.rejects(
+    () => fetchProofPage(proofPageClient(unreadable)),
+    /validation-fee proof response body is not readable as a byte stream/u,
+  );
+  assert.equal(unreadable.streamState.cancelled, true);
+});
+
+test("Torii validation-fee proof pages reject non-Norito content before reading", async () => {
+  const json = proofResponse({ contentType: "application/json" });
+  await assert.rejects(
+    () => fetchProofPage(proofPageClient(json)),
+    /validation-fee proof response must use application\/x-norito/u,
+  );
+  assert.equal(json.streamState.cancelled, true);
+  assert.equal(json.streamState.released, false);
+});
+
 test("proof catch-up promotes only consecutive locally verified pages", async () => {
   const client = new ToriiClient("https://torii.invalid", {
     localSigningContext: new LocalSigningContext(binding.networkId, 753),

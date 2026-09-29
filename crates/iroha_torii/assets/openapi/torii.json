@@ -4273,6 +4273,11 @@
           "encrypted_input_mode": {
             "$ref": "#/components/schemas/BfvRamEncryptedInputMode"
           },
+          "initializer_descriptor_hash": {
+            "description": "Canonical hash binding the compiled secret commitment and bounded programmed-memory initializer.",
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": "string"
+          },
           "memory_lane_count": {
             "description": "Number of ciphertext memory lanes persisted across program steps.",
             "format": "uint16",
@@ -4300,7 +4305,8 @@
           "memory_lane_count",
           "ciphertext_mul_per_step",
           "encrypted_input_mode",
-          "min_ciphertext_modulus"
+          "min_ciphertext_modulus",
+          "initializer_descriptor_hash"
         ],
         "type": "object"
       },

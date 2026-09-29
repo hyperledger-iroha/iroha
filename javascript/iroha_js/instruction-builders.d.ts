@@ -48,7 +48,6 @@ export {
   buildProposeMultisigExecuteTriggerInstruction,
   buildProposeMultisigExecuteTriggerNorito,
   buildProposeMultisigInstruction,
-  buildProposeSccpRouteGovernanceInstruction,
   buildRecordKaigiUsageInstruction,
   buildRedeemRwaInstruction,
   buildRegisterAccountInstruction,

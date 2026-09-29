@@ -18,7 +18,6 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion;
-use iroha_sccp::{SCCP_TAIRA_CHAIN_ID_V1, sccp_taira_finality_network_id_v1};
 use sorafs_manifest::signer::{
     protocol::{
         SignerOperationActionV1, SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
@@ -30,6 +29,11 @@ use sorafs_manifest::signer::{
 mod custody;
 
 const DEPLOYMENT: &str = "release-primary";
+/// Fixed chain label of the fixture State.
+const FIXTURE_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Fixed genesis-derived network identity of the fixture State.
+const FIXTURE_NETWORK_ID: &str =
+    "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D60EF#BA85";
 
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixture key");
@@ -89,8 +93,8 @@ fn fixture() -> Fixture {
             fixture_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
-            sccp_taira_finality_network_id_v1(),
+            FIXTURE_CHAIN_ID.parse().expect("fixture chain"),
+            FIXTURE_NETWORK_ID.parse().expect("fixture network"),
         ),
         manager: account(1),
         operator: account(2),

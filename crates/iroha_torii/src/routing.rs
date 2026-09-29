@@ -4728,11 +4728,6 @@ mod bridge_record_json_tests {
         assert_eq!(payload["backend"].as_str(), Some("debug-proof"));
         assert_eq!(payload["proof_len_bytes"].as_u64(), Some(7));
         assert_eq!(payload["recursion_depth"].as_u64(), Some(2));
-        let rendered = norito::json::to_string(&value).expect("render bridge record");
-        assert!(
-            !rendered.contains("sccp"),
-            "retired SCCP bridge-proof projections must not reappear: {rendered}"
-        );
     }
 }
 

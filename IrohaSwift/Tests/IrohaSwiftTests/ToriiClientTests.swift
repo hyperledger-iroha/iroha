@@ -193,7 +193,6 @@ private func nativeAmxDiagnosticsPayload(
             "da_proof_policies_hash": NSNull(),
             "da_commitments_hash": NSNull(),
             "da_pin_intents_hash": NSNull(),
-            "sccp_commitment_root": NSNull(),
             "creation_time_ms": 1_700_000_000_000,
             "view_change_index": 9,
             "confidential_features": NSNull(),
@@ -917,6 +916,7 @@ final class ToriiClientTests: XCTestCase {
               "memory_lane_count":32,
               "ciphertext_mul_per_step":1,
               "encrypted_input_mode":"encrypted_envelope_v1",
+              "initializer_descriptor_hash":"ababababababababababababababababababababababababababababababab01",
               "min_ciphertext_modulus":1099511627776
             },
             "proof_verifier":{
@@ -1838,6 +1838,7 @@ final class ToriiClientTests: XCTestCase {
                   "memory_lane_count":32,
                   "ciphertext_mul_per_step":1,
                   "encrypted_input_mode":"encrypted_envelope_v1",
+                  "initializer_descriptor_hash":"ababababababababababababababababababababababababababababababab01",
                   "min_ciphertext_modulus":1099511627776
                 },
                 "proof_verifier":{
@@ -1989,7 +1990,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testListIdentifierPoliciesAcceptsTaggedEncryptedInputMode() async throws {
+    func testListIdentifierPoliciesRejectsTaggedEncryptedInputMode() async throws {
         let owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
@@ -2033,6 +2034,7 @@ final class ToriiClientTests: XCTestCase {
                     "mode":"EncryptedEnvelopeV1",
                     "value":null
                   },
+                  "initializer_descriptor_hash":"ababababababababababababababababababababababababababababababab01",
                   "min_ciphertext_modulus":4503599627370496
                 },
                 "note":"retail email policy"
@@ -2042,21 +2044,18 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let response = try await makeClient().listIdentifierPolicies()
-        XCTAssertEqual(response.total, 1)
-        XCTAssertEqual(response.items.first?.policyId, "email#retail")
-        XCTAssertEqual(
-            response.items.first?.ramFheProfile?.encryptedInputMode,
-            .encryptedEnvelopeV1
-        )
-        XCTAssertEqual(
-            response.items.first?.inputEncryptionPublicParametersDecoded?.maxInputBytes,
-            63
-        )
+        do {
+            _ = try await makeClient().listIdentifierPolicies()
+            XCTFail("expected retired encrypted input mode rejection")
+        } catch let ToriiClientError.decoding(error) {
+            XCTAssertTrue(String(describing: error).contains("encrypted_input_mode"))
+        } catch {
+            XCTFail("expected encrypted input mode decoding error, got \(error)")
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testListIdentifierPoliciesAcceptsLiveResolverCanonicalizedInputMode() async throws {
+    func testListIdentifierPoliciesRejectsRetiredResolverCanonicalizedInputMode() async throws {
         let owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
@@ -2099,6 +2098,7 @@ final class ToriiClientTests: XCTestCase {
                     "mode":"ResolverCanonicalizedEnvelopeV1",
                     "value":null
                   },
+                  "initializer_descriptor_hash":"ababababababababababababababababababababababababababababababab01",
                   "min_ciphertext_modulus":4503599627370496
                 },
                 "note":"Retail identifier policy email#retail"
@@ -2108,13 +2108,14 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let response = try await makeClient().listIdentifierPolicies()
-        XCTAssertEqual(response.items.first?.policyId, "email#retail")
-        XCTAssertEqual(response.items.first?.programId, "")
-        XCTAssertEqual(
-            response.items.first?.ramFheProfile?.encryptedInputMode,
-            .resolverCanonicalizedEnvelopeV1
-        )
+        do {
+            _ = try await makeClient().listIdentifierPolicies()
+            XCTFail("expected retired encrypted input mode rejection")
+        } catch let ToriiClientError.decoding(error) {
+            XCTAssertTrue(String(describing: error).contains("encrypted_input_mode"))
+        } catch {
+            XCTFail("expected encrypted input mode decoding error, got \(error)")
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2437,7 +2438,7 @@ final class ToriiClientTests: XCTestCase {
 
     func testIdentifierReceiptPreservesTairaAccountRoundTrip() throws {
         let accountId = try canonicalOwnerLiteral(
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            chainDiscriminant: TairaTestnetProfile.i105Discriminant
         )
         let payload = makeSignedIdentifierReceiptPayload(
             accountId: accountId,
@@ -2456,7 +2457,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(
             try AccountAddress.inspectI105NetworkPrefix(decoded.accountId)
                 .chainDiscriminant,
-            SccpV1.tairaI105DiscriminantV1
+            TairaTestnetProfile.i105Discriminant
         )
         XCTAssertFalse(
             try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(decoded)
@@ -5015,19 +5016,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(payload?.hash, Self.pipelineHash)
         XCTAssertEqual(payload?.payload.signer, "json-signer")
         XCTAssertEqual(payload?.signature, "cafe")
-    }
-
-    private func sccpAbiWord(_ value: UInt32) -> Data {
-        var out = Data(repeating: 0, count: 32)
-        out[28] = UInt8((value >> 24) & 0xff)
-        out[29] = UInt8((value >> 16) & 0xff)
-        out[30] = UInt8((value >> 8) & 0xff)
-        out[31] = UInt8(value & 0xff)
-        return out
-    }
-
-    private func hexString(_ data: Data) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
     }
 
     private func sha256Hex(_ data: Data) -> String {
@@ -7780,7 +7768,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetAssetsPreservesTairaAccountDiscriminant() async throws {
         let accountId = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0x61))
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         StubURLProtocol.handler = { request in
             self.assertDecodedPath(
                 request,
@@ -15641,7 +15629,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.lastCommitQC?.certificate.phase, .commit)
         XCTAssertEqual(snapshot.liveness.generation, 2)
 
-        let invalidResponses: [(Data, Int, [String: String], String)] = [
+        var invalidResponses: [(Data, Int, [String: String], String)] = [
             (
                 duplicateSumeragiRootField(#"{"protocol_version":4,"#, in: payload),
                 200, ["Content-Type": "application/json"], "duplicate object keys"
@@ -15658,6 +15646,18 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 ["Content-Type": "application/json"], "1048576-byte limit"
             ),
         ]
+        for declaredLength in ["01", "+1", "1, 1", "18446744073709551616"] {
+            invalidResponses.append((
+                payload, 200,
+                ["Content-Type": "application/json", "Content-Length": declaredLength],
+                "malformed or noncanonical Content-Length"
+            ))
+        }
+        invalidResponses.append((
+            payload, 200,
+            ["Content-Type": "application/json", "Content-Length": "1"],
+            "did not match its Content-Length"
+        ))
         for (body, statusCode, headers, errorFragment) in invalidResponses {
             servedPayload = body
             servedStatus = statusCode
@@ -15666,9 +15666,26 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 _ = try await makeClient().getSumeragiStatus()
                 XCTFail("invalid status response must fail closed")
             } catch {
-                XCTAssertTrue(String(describing: error).contains(errorFragment))
+                XCTAssertTrue(
+                    String(describing: error).contains(errorFragment),
+                    "expected \(errorFragment) for \(headers), got \(error)"
+                )
             }
         }
+
+        let maximumBytes = 1_048_576
+        var exactPayload = payload
+        XCTAssertLessThan(exactPayload.count, maximumBytes)
+        exactPayload.append(Data(repeating: 0x20, count: maximumBytes - exactPayload.count))
+        servedPayload = exactPayload
+        servedStatus = 200
+        servedHeaders = [
+            "Content-Type": "application/json",
+            "Content-Length": String(maximumBytes),
+        ]
+        let exactSnapshot = try await makeClient().getSumeragiStatus()
+        XCTAssertEqual(exactSnapshot.height, 15)
+        XCTAssertEqual(exactSnapshot.liveness.generation, 2)
     }
 
     func testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest() throws {

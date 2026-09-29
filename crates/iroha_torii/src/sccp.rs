@@ -5,8 +5,9 @@
 //! JSON by `Accept`. Proof routes answer `409 sccp_attestation_pending` until the chosen
 //! subject is attested.
 //!
-//! TODO(ws35): attestation, history, bridge-key and governance views, `ETag` headers on proof
-//! bundles, and the Kura fallback for pruned signatures.
+//! TODO(ws35): attestation, history and bridge-key views, the remaining §6 governance targets
+//! (`/proposals/{proposal_id}`, readiness), `ETag` headers on proof bundles, and the Kura fallback
+//! for pruned signatures.
 
 use axum::{
     extract::{Path, State},

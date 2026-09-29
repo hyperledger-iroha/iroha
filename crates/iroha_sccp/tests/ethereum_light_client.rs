@@ -1505,7 +1505,7 @@ fn native_transfer_event_fixture() -> Value {
         ("schema", text("iroha_sccp/native_transfer_event_v1")),
         (
             "spec",
-            text("specs/sccp.md revision 3, §3.2, §3.3, §4.12.1, §4.12.2, §4.16, §5.1.8"),
+            text("specs/sccp.md revision 4, §3.2, §3.3, §4.12.1, §4.12.2, §4.16, §5.1.8"),
         ),
         ("generator", text(GENERATOR)),
         ("taira_network_id", hex(&TAIRA)),

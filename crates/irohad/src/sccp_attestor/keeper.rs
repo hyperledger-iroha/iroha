@@ -3,9 +3,10 @@
 //! Every validator with an active or pending bridge key keeps Taira's inbound light clients
 //! fresh: when a light client's head is older than `advance_after` (default `ws_bound_ms / 4`),
 //! the keeper builds an advance from the configured (or compiled public) endpoints and submits
-//! it fee-exempt from its bridge key's account. Several keepers are harmless: the advance
-//! carries the expected state hash, so only the first one moves the head and the rest fail
-//! admission instead of paying.
+//! it fee-exempt from its bridge key's account. A built advance larger than `max_advance_bytes`
+//! is dropped with a warning instead of being submitted. Several keepers are harmless: the
+//! advance carries the expected state hash, so only the first one moves the head and the rest
+//! fail admission instead of paying.
 //!
 //! Ethereum, BSC and TRON advances use HTTP endpoints, TON advances ADNL liteservers.
 
@@ -13,8 +14,9 @@ use std::time::Instant;
 
 use iroha_config::parameters::actual::SccpLightClientKeeper;
 use iroha_data_model::{
-    bridge::SccpNetworkV1, isi::sccp::AdvanceSccpLightClientV1,
-    sccp::light_client::SccpLightClientV1,
+    bridge::SccpNetworkV1,
+    isi::sccp::AdvanceSccpLightClientV1,
+    sccp::light_client::{SccpLcAdvanceBytesV1, SccpLightClientV1},
 };
 use iroha_sccp_rpc::{
     BeaconClient, EvmClient, HttpEndpointKind, HttpTransport, TronClient,
@@ -145,11 +147,14 @@ impl Keeper {
                     SccpNetworkV1::SoraTaira => return None,
                 };
                 match built {
-                    Ok(advance) => Some(AdvanceSccpLightClientV1 {
-                        network,
-                        expected_state_hash: Some(light_client.state_hash),
-                        advance,
-                    }),
+                    Ok(advance) if fits_advance_bound(&self.config, network, &advance) => {
+                        Some(AdvanceSccpLightClientV1 {
+                            network,
+                            expected_state_hash: Some(light_client.state_hash),
+                            advance,
+                        })
+                    }
+                    Ok(_) => None,
                     Err(error) => {
                         iroha_logger::warn!(
                             %error,
@@ -162,6 +167,26 @@ impl Keeper {
             })
             .collect()
     }
+}
+
+/// Whether a built `advance` fits the configured `max_advance_bytes`. An oversized advance is
+/// dropped with a warning instead of being submitted.
+fn fits_advance_bound(
+    config: &SccpLightClientKeeper,
+    network: SccpNetworkV1,
+    advance: &SccpLcAdvanceBytesV1,
+) -> bool {
+    let max_advance_bytes = config.max_advance_bytes.get();
+    let fits = advance.len() <= max_advance_bytes;
+    if !fits {
+        iroha_logger::warn!(
+            network = network.profile_key(),
+            advance_bytes = advance.len(),
+            max_advance_bytes,
+            "SCCP keeper: dropping an advance larger than max_advance_bytes"
+        );
+    }
+    fits
 }
 
 /// How often the keeper looks for a new TON key block: TON light clients have no
@@ -186,7 +211,7 @@ mod tests {
     use iroha_data_model::sccp::light_client::{
         SccpLcHeadV1, SccpLcPointV1, SccpLightClientParamsV1,
     };
-    use std::time::Duration;
+    use std::{num::NonZeroUsize, time::Duration};
 
     fn light_client(last_progress_taira_ms: u64) -> SccpLightClientV1 {
         SccpLightClientV1 {
@@ -226,6 +251,21 @@ mod tests {
             SccpLightClientParamsV1::defaults_for(SccpNetworkV1::TonMainnet).expect("ton defaults");
         assert!(!is_stale(&config, &ton, TON_ADVANCE_AFTER_MS - 1));
         assert!(is_stale(&config, &ton, TON_ADVANCE_AFTER_MS));
+    }
+
+    #[test]
+    fn advances_above_max_advance_bytes_are_dropped() {
+        let mut config = SccpLightClientKeeper::default();
+        config.max_advance_bytes = NonZeroUsize::new(4).expect("nonzero bound");
+        let advance = |len: usize| SccpLcAdvanceBytesV1::new(vec![0; len]).expect("advance bytes");
+        let network = SccpNetworkV1::EthereumMainnet;
+        assert!(fits_advance_bound(&config, network, &advance(1)));
+        assert!(fits_advance_bound(&config, network, &advance(4)));
+        assert!(!fits_advance_bound(&config, network, &advance(5)));
+        let default = SccpLightClientKeeper::default();
+        let bound = default.max_advance_bytes.get();
+        assert!(fits_advance_bound(&default, network, &advance(bound)));
+        assert!(!fits_advance_bound(&default, network, &advance(bound + 1)));
     }
 
     #[test]

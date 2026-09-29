@@ -58,9 +58,10 @@ identity and project the same `Vec<T>` root frame. Element types still compose
 nominally. Their bare payload implementation requires only payload codecs;
 typed framing separately requires the declared identity.
 
-HTTP producers and typed consumers use one shared wire definition. SCCP
-capability and recent-message records are owned by `iroha_sccp::api`; bounded
-PoR status pages are owned by `sorafs_manifest::por`. Torii, the Rust SDK and
+HTTP producers and typed consumers use one shared wire definition. SCCP Torii
+read-API records (capabilities, proof bundles, rotation chains) are owned by
+`iroha_sccp::api`; bounded PoR status pages are owned by
+`sorafs_manifest::por`. Torii, the Rust SDK and
 CLI import these owners directly. Duplicate SDK/server declarations and their
 competing frame identities are removed, without aliases or alternate accepted
 hashes. Declared producer names remain protocol identities independent of the
@@ -189,8 +190,8 @@ none is counted as a pass. The following SDK qualification advances that
 consumer batch; remaining workspace migration, strict dependent/workspace
 Clippy, model extraction and release qualification remain open.
 
-The SDK, SCCP and executor model now declare 136 additional production owners
-against 271 original serializer/decoder observations. Three required HTTP model
+The SDK and executor model declare 35 additional production owners against 70
+original serializer/decoder observations. Three required HTTP model
 owners add six observations for validation errors and DA ingest requests and
 receipts. All recorded owner bodies, field order and captured frame roots stay
 fixed. The shared library passes 293 tests, the model frame selection passes 25,

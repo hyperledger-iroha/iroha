@@ -77,16 +77,16 @@ final class TransactionParityFixturesTests: XCTestCase {
 
     func testSwiftParityFixturesUseOnlyTheTairaAddressDiscriminant() throws {
         let loader = try Self.fixtures()
-        XCTAssertEqual(FixtureConstants.networkPrefix, SccpV1.tairaI105DiscriminantV1)
+        XCTAssertEqual(FixtureConstants.networkPrefix, TairaTestnetProfile.i105Discriminant)
         for (name, payload) in loader.payloads {
             let authorityPrefix = try AccountAddress.inspectI105NetworkPrefix(
                 payload.authority,
-                expectedPrefix: SccpV1.tairaI105DiscriminantV1
+                expectedPrefix: TairaTestnetProfile.i105Discriminant
             )
             XCTAssertEqual(authorityPrefix.sentinel, "test", "\(name): authority sentinel")
             XCTAssertEqual(
                 authorityPrefix.chainDiscriminant,
-                SccpV1.tairaI105DiscriminantV1,
+                TairaTestnetProfile.i105Discriminant,
                 "\(name): authority discriminant"
             )
             let instructions: [TransactionInstruction]
@@ -105,12 +105,12 @@ final class TransactionParityFixturesTests: XCTestCase {
                 guard let destination = instruction.arguments["destination"] else { continue }
                 let destinationPrefix = try AccountAddress.inspectI105NetworkPrefix(
                     destination,
-                    expectedPrefix: SccpV1.tairaI105DiscriminantV1
+                    expectedPrefix: TairaTestnetProfile.i105Discriminant
                 )
                 XCTAssertEqual(destinationPrefix.sentinel, "test", "\(name): destination sentinel")
                 XCTAssertEqual(
                     destinationPrefix.chainDiscriminant,
-                    SccpV1.tairaI105DiscriminantV1,
+                    TairaTestnetProfile.i105Discriminant,
                     "\(name): destination discriminant"
                 )
             }
@@ -120,7 +120,7 @@ final class TransactionParityFixturesTests: XCTestCase {
         XCTAssertThrowsError(
             try AccountAddress.parseEncoded(
                 legacyMinamotoLiteral,
-                expectedPrefix: SccpV1.tairaI105DiscriminantV1
+                expectedPrefix: TairaTestnetProfile.i105Discriminant
             )
         )
     }
@@ -1602,5 +1602,5 @@ private enum FixtureError: Error, LocalizedError {
 
 private enum FixtureConstants {
     static let signingSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"
-    static let networkPrefix = SccpV1.tairaI105DiscriminantV1
+    static let networkPrefix = TairaTestnetProfile.i105Discriminant
 }

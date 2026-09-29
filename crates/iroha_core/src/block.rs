@@ -22386,10 +22386,8 @@ mod commit {
                 (expiry_slot != 0).then_some(expiry_slot),
             )
             .expect("bind AXT test batch");
-            let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-                .expect("FASTPQ prover")
-                .prove_axt_bound(&batch, &binding)
-                .expect("FASTPQ proof");
+            let proof =
+                fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("FASTPQ proof");
             let fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
                 .expect("AXT FASTPQ payload");
             let envelope = AxtProofEnvelope {

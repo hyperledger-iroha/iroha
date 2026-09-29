@@ -4,13 +4,9 @@ use iroha_crypto::{
     BfvIdentifierPublicParameters, Hash, RamLfeBackend, RamLfeVerificationMode,
     decode_bfv_programmed_public_parameters,
 };
-use iroha_data_model::{
-    proof::VerifyingKeyBox,
-    ram_lfe::{
-        RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramPolicy,
-        RamLfeReceiptAttestation,
-    },
-    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds},
+use iroha_data_model::ram_lfe::{
+    RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramPolicy,
+    RamLfeReceiptAttestation,
 };
 use iroha_telemetry::metrics;
 
@@ -378,120 +374,21 @@ fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result
             )
         })
 }
-/// Verify a proof-mode RAM-LFE receipt under explicit node guardrails.
+/// Reject proof-mode receipts until a complete RAM-LFE relation is compiled.
 ///
-/// The envelope cap is checked before decoding so callers cannot bypass the runtime backend policy
-/// or configured proof limits through this specialized verification path.
+/// This boundary refuses independently of policy registration and caller preflight.
+/// A valid proof for another relation, caller-supplied verifier metadata, or four
+/// public payload-hash limbs cannot establish hidden program execution. Refusal
+/// precedes envelope parsing, key allocation and native verification.
 pub(crate) fn verify_execution_proof(
-    proof: &iroha_data_model::proof::ProofBox,
-    execution: &RamLfeExecutionReceiptPayload,
-    verifier: &iroha_crypto::RamLfeProofVerifierMetadata,
-    guardrails: crate::zk::ZkVerifyGuardrails,
+    _proof: &iroha_data_model::proof::ProofBox,
+    _execution: &RamLfeExecutionReceiptPayload,
+    _verifier: &iroha_crypto::RamLfeProofVerifierMetadata,
+    _guardrails: crate::zk::ZkVerifyGuardrails,
 ) -> Result<(), String> {
-    if proof.backend.as_str() != verifier.proof_backend {
-        return Err(format!(
-            "RAM-LFE proof backend {} does not match verifier backend {}",
-            proof.backend.as_str(),
-            verifier.proof_backend
-        ));
-    }
-    let expected_backend_tag =
-        crate::zk::production_verify_backend_tag(&verifier.proof_backend).ok_or_else(|| {
-            format!(
-                "RAM-LFE proof verifier backend {} is not admitted by the native verifier registry for production verification",
-                verifier.proof_backend
-            )
-        })?;
-    if expected_backend_tag != BackendTag::Halo2IpaPasta {
-        return Err(format!(
-            "RAM-LFE proof verifier backend {} must use Halo2 IPA Pasta envelopes",
-            verifier.proof_backend
-        ));
-    }
-    if !guardrails.halo2_enabled {
-        return Err(
-            "RAM-LFE Halo2 proof verification is disabled in node configuration".to_owned(),
-        );
-    }
-    if proof.bytes.len() > guardrails.halo2_max_envelope_bytes {
-        return Err(format!(
-            "RAM-LFE proof envelope is {} bytes, exceeding the configured maximum of {} bytes",
-            proof.bytes.len(),
-            guardrails.halo2_max_envelope_bytes
-        ));
-    }
-    let envelope: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).map_err(|err| {
-        format!("RAM-LFE proof receipt must use a canonical OpenVerifyEnvelope payload: {err}")
-    })?;
-    if envelope.backend != expected_backend_tag {
-        return Err("RAM-LFE proof envelope backend tag must be Halo2 IPA Pasta".to_owned());
-    }
-    if envelope.circuit_id != verifier.circuit_id {
-        return Err(format!(
-            "RAM-LFE proof circuit {} does not match verifier circuit {}",
-            envelope.circuit_id, verifier.circuit_id
-        ));
-    }
-    if Hash::new(&envelope.public_inputs) != verifier.public_inputs_schema_hash {
-        return Err(
-            "RAM-LFE proof public-input schema hash does not match verifier metadata".to_owned(),
-        );
-    }
-    if !envelope.aux.is_empty() {
-        return Err("RAM-LFE proof envelope auxiliary bytes must be empty".to_owned());
-    }
-    let verifying_key = VerifyingKeyBox::new(
-        verifier.proof_backend.clone().into(),
-        verifier.verifying_key_bytes.clone(),
-    );
-    if envelope.vk_hash == [0u8; Hash::LENGTH] {
-        return Err("RAM-LFE proof envelope verifier-key hash must be non-zero".to_owned());
-    }
-    if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
-        return Err("RAM-LFE verifier metadata contains a mismatched verifying key".to_owned());
-    }
-    envelope
-        .validate_with_bounds(OpenVerifyEnvelopeBounds {
-            max_proof_bytes: guardrails.halo2_max_proof_bytes,
-            ..OpenVerifyEnvelopeBounds::default()
-        })
-        .map_err(|err| format!("RAM-LFE proof envelope exceeds configured bounds: {err}"))?;
-    let expected_instances = expected_execution_payload_hash_instances(
-        execution
-            .payload_hash()
-            .map_err(|err| format!("Failed to encode RAM-LFE execution receipt payload: {err}"))?,
-    );
-    let actual_instances = crate::zk::extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
-        .ok_or_else(|| {
-        "RAM-LFE proof does not expose the expected Halo2 public instances".to_owned()
-    })?;
-    if actual_instances != expected_instances {
-        return Err(
-            "RAM-LFE proof public instances do not match the execution payload hash".to_owned(),
-        );
-    }
-    let report = crate::zk::verify_backend_with_timing_guardrails(
-        &verifier.proof_backend,
-        proof,
-        Some(&verifying_key),
-        guardrails,
-    );
-    if !report.ok {
-        return Err("RAM-LFE proof verification failed".to_owned());
-    }
-    Ok(())
-}
-fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8; 32]>> {
-    let bytes: &[u8; 32] = payload_hash.as_ref();
-    (0..4)
-        .map(|index| {
-            let mut scalar = [0u8; 32];
-            let start = index * 8;
-            let end = start + 8;
-            scalar[..8].copy_from_slice(&bytes[start..end]);
-            vec![scalar]
-        })
-        .collect()
+    // TODO: replace with the complete policy-bound relation described in
+    // specs/ram_lfe_execution_proof.md; never delegate to a generic binding verifier.
+    Err(PROOF_RELATION_UNAVAILABLE.to_owned())
 }
 #[cfg(test)]
 mod tests {
@@ -499,9 +396,9 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
     use iroha_data_model::{
         account::AccountId,
-        proof::ProofBox,
+        proof::{ProofBox, VerifyingKeyBox},
         ram_lfe::{RamLfeProgramId, RamLfeReceiptAttestation},
-        zk::OpenVerifyEnvelope,
+        zk::{BackendTag, OpenVerifyEnvelope},
     };
     use std::str::FromStr as _;
     fn checked_keypair() -> KeyPair {
@@ -662,6 +559,59 @@ mod tests {
             verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
         }
     }
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn unavailable_execution_relation_rejects_a_valid_unrelated_native_proof() {
+        let hash = Hash::new(b"ram-lfe-unrelated-replay-binding");
+        let fixture =
+            crate::zk::test_utils::halo2_ivm_replay_binding_envelope(hash, hash, hash, hash);
+        let proof = fixture.proof_box(crate::zk::ZK_BACKEND_HALO2_IPA);
+        let key = fixture
+            .vk_box(crate::zk::ZK_BACKEND_HALO2_IPA)
+            .expect("key");
+        crate::zk::verify_for_relation(
+            crate::zk::ProofRelation::IvmReplayBinding,
+            &proof,
+            &key,
+            test_guardrails(),
+        )
+        .expect("control is a valid native replay-binding proof");
+        let verifier = RamLfeProofVerifierMetadata {
+            proof_backend: proof.backend.to_string(),
+            circuit_id: crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.to_owned(),
+            public_inputs_schema_hash: Hash::new(&fixture.public_inputs),
+            verifying_key_bytes: key.bytes,
+        };
+        assert_eq!(
+            verify_execution_proof(
+                &proof,
+                &sample_proof_payload(),
+                &verifier,
+                test_guardrails()
+            ),
+            Err(PROOF_RELATION_UNAVAILABLE.to_owned()),
+        );
+    }
+
+    #[test]
+    fn unavailable_execution_relation_rejects_before_reading_proof_or_key() {
+        let proof = ProofBox::new(String::new(), vec![0xff]);
+        let verifier = RamLfeProofVerifierMetadata {
+            proof_backend: String::new(),
+            circuit_id: String::new(),
+            public_inputs_schema_hash: Hash::prehashed([0; 32]),
+            verifying_key_bytes: vec![0xff],
+        };
+        assert_eq!(
+            verify_execution_proof(
+                &proof,
+                &sample_proof_payload(),
+                &verifier,
+                test_guardrails()
+            ),
+            Err(PROOF_RELATION_UNAVAILABLE.to_owned()),
+        );
+    }
     fn sample_proof_box(
         verifier: &RamLfeProofVerifierMetadata,
         mutate: impl FnOnce(&mut OpenVerifyEnvelope),
@@ -693,26 +643,35 @@ mod tests {
         });
         let err = verify_execution_proof(&bad_backend, &execution, &verifier, test_guardrails())
             .expect_err("wrong envelope backend tag must reject before proof parsing");
-        assert!(err.contains("backend tag"), "unexpected error: {err}");
+        assert!(
+            err.contains(PROOF_RELATION_UNAVAILABLE),
+            "unexpected error: {err}"
+        );
         let aux = sample_proof_box(&verifier, |envelope| {
             envelope.aux = b"unbound-ram-lfe-proof-metadata".to_vec();
         });
         let err = verify_execution_proof(&aux, &execution, &verifier, test_guardrails())
             .expect_err("non-empty auxiliary bytes must reject before proof parsing");
-        assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
+        assert!(
+            err.contains(PROOF_RELATION_UNAVAILABLE),
+            "unexpected error: {err}"
+        );
         let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
             envelope.vk_hash = [0u8; Hash::LENGTH];
         });
         let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier, test_guardrails())
             .expect_err("zero verifier-key hash must reject before proof parsing");
-        assert!(err.contains("non-zero"), "unexpected error: {err}");
+        assert!(
+            err.contains(PROOF_RELATION_UNAVAILABLE),
+            "unexpected error: {err}"
+        );
         let schema_drift = sample_proof_box(&verifier, |envelope| {
             envelope.public_inputs.extend_from_slice(b":schema-drift");
         });
         let err = verify_execution_proof(&schema_drift, &execution, &verifier, test_guardrails())
             .expect_err("public-input schema drift must reject before proof parsing");
         assert!(
-            err.contains("public-input schema hash"),
+            err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
         let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
@@ -721,7 +680,7 @@ mod tests {
         let err = verify_execution_proof(&wrong_vk_hash, &execution, &verifier, test_guardrails())
             .expect_err("wrong verifier-key hash must reject before proof parsing");
         assert!(
-            err.contains("mismatched verifying key"),
+            err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
     }
@@ -739,7 +698,7 @@ mod tests {
             let err = verify_execution_proof(&malformed, &execution, &verifier, test_guardrails())
                 .expect_err("non-production backend labels must reject before decoding");
             assert!(
-                err.contains("native verifier registry"),
+                err.contains(PROOF_RELATION_UNAVAILABLE),
                 "backend {backend}: unexpected error: {err}"
             );
         }
@@ -762,7 +721,7 @@ mod tests {
         let err = verify_execution_proof(&alternate, &execution, &verifier, test_guardrails())
             .expect_err("alternate-layout RAM-LFE proof envelope must reject");
         assert!(
-            err.contains("canonical OpenVerifyEnvelope"),
+            err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
     }
@@ -781,7 +740,7 @@ mod tests {
         );
     }
     #[test]
-    fn verify_execution_proof_enforces_node_guardrails_before_decode() {
+    fn verify_execution_proof_refuses_regardless_of_node_guardrails() {
         let verifier = sample_proof_verifier();
         let execution = sample_proof_payload();
         let proof = sample_proof_box(&verifier, |_| {});
@@ -790,7 +749,7 @@ mod tests {
         let err = verify_execution_proof(&proof, &execution, &verifier, disabled)
             .expect_err("disabled Halo2 verification must reject");
         assert!(
-            err.contains("disabled in node configuration"),
+            err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
         let mut envelope_limited = test_guardrails();
@@ -798,13 +757,16 @@ mod tests {
         let err = verify_execution_proof(&proof, &execution, &verifier, envelope_limited)
             .expect_err("oversized envelope must reject before decode");
         assert!(
-            err.contains("exceeding the configured maximum"),
+            err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
         let mut proof_limited = test_guardrails();
         proof_limited.halo2_max_proof_bytes = 1;
         let err = verify_execution_proof(&proof, &execution, &verifier, proof_limited)
             .expect_err("oversized inner proof must reject");
-        assert!(err.contains("configured bounds"), "unexpected error: {err}");
+        assert!(
+            err.contains(PROOF_RELATION_UNAVAILABLE),
+            "unexpected error: {err}"
+        );
     }
 }

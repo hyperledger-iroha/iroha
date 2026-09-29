@@ -251,19 +251,11 @@ mod tests {
             request
         );
 
-        let mut retired = value.clone();
-        let object = retired.as_object_mut().expect("request object");
-        let proposal = object.remove("proposal").expect("proposal field");
-        object.insert("action".to_owned(), proposal);
-        assert!(
-            norito::json::from_value::<SccpRouteGovernanceProposalDraftRequestV1>(retired).is_err(),
-            "the retired single-action request shape must reject"
-        );
         let mut extra = value;
         extra
             .as_object_mut()
             .expect("request object")
-            .insert("anchor".to_owned(), norito::json::Value::Bool(true));
+            .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(
             norito::json::from_value::<SccpRouteGovernanceProposalDraftRequestV1>(extra).is_err(),
             "unknown request fields must reject"

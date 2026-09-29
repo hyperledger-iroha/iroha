@@ -123,15 +123,46 @@ fn report_persistence_failure_leaves_a_retryable_provisional_receipt() {
     let tenant_key = anon_tenant_key();
     let body = fixture_attachment_bytes();
     let id = store_scanner_attachment(&tenant_key, &body, "application/x-norito");
-    fs::create_dir_all(prover_dir()).expect("create prover directory");
-    fs::write(reports_dir(), b"not a directory").expect("block report-directory creation");
-
-    process_attachment_once(&id).expect_err("report persistence failure must be visible");
-    try_load_report(&id).expect_err("blocked report directory must remain a visible failure");
+    super::init_persistence().expect("initialize production report persistence");
+    struct ResetSaveFailure;
+    impl Drop for ResetSaveFailure {
+        fn drop(&mut self) {
+            super::TEST_REPORT_SAVE_FAILURE.store(false, AtomicOrdering::SeqCst);
+        }
+    }
+    let _reset = ResetSaveFailure;
+    super::TEST_REPORT_SAVE_FAILURE.store(true, AtomicOrdering::SeqCst);
+    let error =
+        process_attachment_once(&id).expect_err("report publication failure must be visible");
+    assert_eq!(error.kind(), IoErrorKind::Other);
+    assert_eq!(error.to_string(), "injected report publication failure");
+    assert!(
+        !super::TEST_REPORT_SAVE_FAILURE.load(AtomicOrdering::SeqCst),
+        "fault must be reached after verification and provisional receipt publication"
+    );
+    assert_eq!(proof_verification_attempt_count(), 1);
+    assert!(
+        try_load_report(&id)
+            .expect("report lookup remains healthy")
+            .is_none()
+    );
+    let provisional = load_prover_processing_receipt(&id).expect("durable provisional receipt");
+    assert!(!provisional.terminal);
+    assert_eq!(provisional.retry_count, 1);
+    let retry_at = provisional
+        .retry_not_before_ms
+        .expect("recorded retry deadline");
+    assert!(retry_at > provisional.processed_ms);
+    for before_deadline in [provisional.processed_ms, retry_at - 1] {
+        assert_eq!(
+            prover_processing_decision(&id, before_deadline),
+            ProverProcessingDecision::Suppress,
+            "the provisional receipt must suppress retries throughout its backoff"
+        );
+    }
     assert_eq!(
-        prover_processing_decision(&id, crate::utils::unix_now_ms()),
-        ProverProcessingDecision::Suppress,
-        "the provisional receipt must bound immediate retries"
+        prover_processing_decision(&id, retry_at),
+        ProverProcessingDecision::Due { retry_count: 1 }
     );
     assert_eq!(
         prover_processing_decision(&id, u64::MAX),
@@ -408,7 +439,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     assert!(second_report.proofs[0].ok);
     assert_eq!(
         second_report.proofs[0].circuit_id.as_deref(),
-        Some(iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID),
+        Some(iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID),
         "a cached proof report must preserve registry circuit attribution"
     );
     assert!(!second_report.proofs[1].ok);
@@ -551,7 +582,15 @@ fn nonregular_attachment_body_produces_a_zero_read_rejection_report() {
     );
     let error = process_attachment_once(&id)
         .expect_err("nonregular persisted body must be a storage failure");
-    assert!(error.to_string().contains("securely open"));
+    // Directory discovery securely opens each entry before yielding metadata;
+    // it can reject the same nonregular body before the body-loader wrapper.
+    assert_eq!(error.kind(), IoErrorKind::InvalidData);
+    assert!(error.to_string().contains("regular file"));
+    assert!(
+        try_load_report(&id)
+            .expect("inspect report absence")
+            .is_none()
+    );
 }
 #[cfg(unix)]
 #[test]
@@ -1427,12 +1466,26 @@ fn snapshot_that_crosses_time_budget_is_charged_and_completed_once() {
     let stats = block_on_scan().expect("run prover scan");
     assert_eq!(stats.processed_reports, 1);
     assert_eq!(stats.bytes_processed, body_size);
-    assert_eq!(stats.remaining_pending, 0);
+    // A bounded discovery cursor may still advertise one unknown location
+    // when its time window closes; the accepted snapshot itself completed.
+    assert!(stats.remaining_pending <= 1);
     assert_eq!(stats.budget_exhausted, Some("time"));
     assert!(stats.duration_ms >= max_scan_millis);
     assert!(
         load_report(&id).expect("cross-budget snapshot report").ok,
         "an immutable snapshot read before the time check must complete exactly once"
+    );
+    let attempts = proof_verification_attempt_count();
+    super::TEST_MAX_SCAN_MILLIS_OVERRIDE.store(0, AtomicOrdering::SeqCst);
+    super::TEST_SNAPSHOT_LOAD_DELAY_MS.store(0, AtomicOrdering::SeqCst);
+    let completed = block_on_scan().expect("finish the retained discovery cursor");
+    assert_eq!(completed.processed_reports, 0);
+    assert_eq!(completed.bytes_processed, 0);
+    assert_eq!(completed.remaining_pending, 0);
+    assert_eq!(
+        proof_verification_attempt_count(),
+        attempts,
+        "cross-budget snapshot must never be verified twice"
     );
 }
 #[test]
@@ -1482,6 +1535,9 @@ fn scan_bounds_concurrency() {
 async fn scan_once_handles_current_thread_runtime() {
     let _env = TestDataDirGuard::new();
     init_test_cfg();
+    super::super::zk_attachments::init_persistence()
+        .expect("initialize production attachment persistence");
+    super::init_persistence().expect("initialize production report persistence");
     assert_eq!(super::scan_once().expect("run one prover scan"), 0);
 }
 #[test]

@@ -505,7 +505,7 @@ impl EthereumBuilder {
 
     fn block(&self, number: u64) -> Result<EvmBlock, BuildError> {
         self.execution
-            .block_by_number(BlockTag::Number(number), false)?
+            .block_by_number(BlockTag::Number(number))?
             .ok_or_else(|| BuildError::Unavailable(format!("block {number} is not served")))
     }
 

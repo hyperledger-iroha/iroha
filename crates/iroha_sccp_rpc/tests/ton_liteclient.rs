@@ -834,15 +834,13 @@ fn recorded_proofs_replay_through_typed_queries() {
     assert!(back.to_key_block);
     assert!(!back.state_proof.is_empty());
 
-    let shards = client.get_all_shards_info(block).expect("shards");
-    assert!(!shards.proof.is_empty() && !shards.data.is_empty());
     let data = client.get_block(block).expect("block");
     assert_eq!(&data.data[..4], &[0xb5, 0xee, 0x9c, 0x72]);
     let config = client
         .get_config_params(0, key, vec![34, 28, 15])
         .expect("config");
     assert!(!config.config_proof.is_empty());
-    assert_replayed(&server, &recording, &client, 6);
+    assert_replayed(&server, &recording, &client, 5);
 }
 
 #[test]

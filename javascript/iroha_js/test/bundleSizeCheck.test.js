@@ -162,13 +162,13 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
     [
       {
         label: "toriiClient.js",
-        limitKb: 797,
+        limitKb: 788,
         lazyChunks: [
           {
             specifier: "./toriiOptional.js",
             edgeCount: 1,
-            reviewedBytes: 327_517,
-            limitKb: 322,
+            reviewedBytes: 186_878,
+            limitKb: 183,
           },
           {
             specifier: "./sumeragiTyped.js",
@@ -618,7 +618,7 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 815_761, modules: 127 }],
+    ["toriiClient.js", { bytes: 806_184, modules: 127 }],
     ["transactionCodec.js (browser)", { bytes: 216_285, modules: 63 }],
     ["nexusApp.js (browser)", { bytes: 225_121, modules: 72 }],
     ["canonicalRequest.js (browser)", { bytes: 92_163, modules: 46 }],
@@ -685,20 +685,20 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        367,
-        "Torii hard ceiling must retain the measured 367-byte eager headroom",
+        728,
+        "Torii hard ceiling must retain the measured 728-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
         [
-          { specifier: "./toriiOptional.js", bytes: 241_836 },
-          { specifier: "./sumeragiTyped.js", bytes: 65_896 },
+          { specifier: "./toriiOptional.js", bytes: 186_878 },
+          { specifier: "./sumeragiTyped.js", bytes: 68_037 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_123_493);
-      assert.equal(splitMetrics.combinedLimitKb, 1_191);
-      assert.equal(target.reviewedEagerBytes, 814_534);
-      assert.equal(target.reviewedCombinedBytes, 1_214_544);
+      assert.equal(splitMetrics.combinedBytes, 1_061_099);
+      assert.equal(splitMetrics.combinedLimitKb, 1_043);
+      assert.equal(target.reviewedEagerBytes, 806_184);
+      assert.equal(target.reviewedCombinedBytes, 1_065_555);
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
     assert.ok(

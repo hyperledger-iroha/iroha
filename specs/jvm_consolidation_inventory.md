@@ -3,8 +3,9 @@
 This 2026-09-06 source review resolves the 33-entry queue in
 `target/architecture-redesign/jvm-unmatched-source-names.json` (SHA-256
 `32704aaa153bc3ba33c7730e52ab93449b8a1f9e4abc086ababb5ac9f94ed5da`).
-It compares implementations and consumers, not filenames. Eleven entries have
-an existing Kotlin owner; eight expose missing capabilities or invariants;
+It compares implementations and consumers, not filenames. Eleven entries had
+an existing Kotlin owner at review time (`SccpSubmitEncoding` has none now: its
+Kotlin owner is removed with it); eight expose missing capabilities or invariants;
 fourteen are duplicate implementations, construction wrappers or samples to
 retire after their capability dependencies are satisfied. This closes that
 queue only: it is not a complete SDK parity or runtime qualification claim.
@@ -34,7 +35,7 @@ platform discovery or a JDK 11 implementation in the JDK 8 API surface.
 | J `privacy/ConfidentialNoteCrypto.java` | Removed. K `privacy/ConfidentialNote.kt:149–390`: public-key derivation, X25519 agreement, HKDF and authenticated note encryption/decryption, including deterministic entropy entry points. Kotlin `ConfidentialNoteTest.kt:170` covers plaintext contract and tampering. |
 | J `client/ZkRootsJson.java` | K `client/ZkRoots.kt:69`: response parser is absorbed by the response companion; preserves root strings and evaluated block height/hash checks. |
 | J `client/AccountAliasUInt64.java` | K `client/AccountAliasReadModels.kt:202`: `requireAliasU64`/`aliasU64` retain BigInteger range and integer-token validation. Existing `AccountAliasReadModelsTest.kt` covers the read models. |
-| J `client/SccpSubmitEncoding.java` | K `client/SccpSubmitRequests.kt:90–211`: canonical base64/Norito envelopes, bounded compact cursor and sparse replay non-membership witness validation. Keep these internal to SCCP submissions. |
+| J `client/SccpSubmitEncoding.java` | Removed with no Kotlin owner: its Kotlin counterpart K `client/SccpSubmitRequests.kt` is removed too. Per `specs/sccp.md` §8, Java has no SCCP surface, and Kotlin SCCP read models, `RecordSccpMessage` building and bundle verification are phase-2 work through `connect_norito_bridge`. The only SCCP code the JVM SDKs keep is `SccpRouteGovernance` payload validation in `ParliamentProposalValidatorV1`. |
 | J `client/ZkMerklePathJson.java` | K `client/ZkMerklePath.kt`, response companion parser: required `next_zero_path`, integer directions, witness nodes and evaluated snapshot are retained. Kotlin `ConfidentialAssetToriiClientTest.kt` and `ZkAssetMerklePathTest.kt` are relevant consumers. |
 | J `client/transport/BoundedResponseBodyReader.java` | K `client/transport/BoundedResponseBodyReader.kt`: canonical single Content-Length, CL/TE rejection, decoded-body limits, premature EOF, zero-progress/invalid stream-read checks and bodyless HTTP responses. Its existing Kotlin test covers these cases. Extract a shared internal body reader only if another retained transport needs it. |
 | J `model/instructions/ZkInstructionUtils.java` | K `core/model/instructions/ZkAssetInstructions.kt:458–555`: exact text, portable verifier components, verifier-key IDs, fixed/nonzero bytes and fixed-32 flattening already have canonical owners. |
@@ -327,25 +328,6 @@ also rejects retired witness owners and test-fixture leakage into main outputs.
 Engine-specific Rust witnesses remain local to their governed builders. A
 generic witness serializer is not a replacement for an SDK proving route;
 complete SDK proof-construction qualification remains open.
-
-## SCCP Java assertion ownership (2026-09-21)
-
-The SCCP release corridor's Java-source phase is `java-source-kotlin`; the retired
-`java-android` evidence name is rejected. The 13 codec groups and 18 client groups
-move from the duplicate Java harness to one shared Java-source test directory
-under Kotlin. JVM and Android host-native tasks compile and execute the same
-assertions against Kotlin-owned types. Both original public-method absence
-checks are retained as compiled-declaration controls across each API owner and
-its ancestors, with JDK 8 terminals authenticated from the compiler's `ct.sym`.
-The checker rejects missing parents, restored public writes, and absent or skipped
-runtime groups. No reflection or production visibility change is introduced.
-
-The focused sponsor wrapper and duplicate SCCP harness registrations are removed
-with those superseded Java suites. Remaining duplicate Java implementation
-retirement still requires its other consumers to migrate. This ownership change
-does not complete candidate-specific JVM/Android execution, device qualification,
-SDK package provenance, or the full SCCP production release gate.
-
 
 The capacity-declaration instruction now has one Kotlin-owned declaration payload,
 with canonical bounded Base64, defensive byte ownership and strict rejection of

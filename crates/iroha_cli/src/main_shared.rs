@@ -1253,6 +1253,17 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         return map_command_result(command.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    if matches!(
+        &args.command,
+        Command::App(app::Command::Zk(zk::Command::Envelope(_)))
+    ) {
+        reject_irrelevant_local_tool_globals(&args, "app zk envelope")?;
+        if let Command::App(app::Command::Zk(zk::Command::Envelope(command))) = args.command {
+            return map_command_result(command.run_without_client_config(io::stdout()))
+                .map(|()| std::process::ExitCode::SUCCESS);
+        }
+        unreachable!("local memo dispatch matched above");
+    }
     if matches!(&args.command, Command::App(app::Command::Execution(_))) {
         reject_irrelevant_local_tool_globals(&args, "app execution")?;
         if let Command::App(app::Command::Execution(command)) = args.command {

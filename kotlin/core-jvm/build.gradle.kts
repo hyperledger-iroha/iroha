@@ -51,7 +51,6 @@ kotlin {
 
 // One Java assertion owner is compiled against both JVM and Android Kotlin consumers.
 sourceSets.test {
-    java.srcDir("src/sccpJavaTest/java")
     java.srcDir("src/sorafsJavaTest/java")
 }
 

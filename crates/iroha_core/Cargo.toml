@@ -356,10 +356,10 @@ required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
-# SCCP v1 core skeleton public-boundary tests (`specs/sccp.md` §4).
+# SCCP v1 core public-boundary tests (`specs/sccp.md` §4).
 [[test]]
-name = "sccp_skeleton"
-path = "tests/sccp_skeleton.rs"
+name = "sccp_public_boundary"
+path = "tests/sccp_public_boundary.rs"
 
 [[test]]
 name = "iroha_core_group_01"

@@ -88,7 +88,7 @@ from sorafs_topology_qualification import (  # noqa: E402
     lane_summary_deployment_context,
     load_signed_topology_qualification_binding,
 )
-from sccp_release_common import verify_ed25519  # noqa: E402
+from release_evidence_crypto import verify_ed25519  # noqa: E402
 from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     SOURCE_ARTIFACT_KINDS,
     SupplyChainSourceResult,

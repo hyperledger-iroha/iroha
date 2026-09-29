@@ -1,12 +1,12 @@
 # Iroha Torii client
 
 Anonymous HTTP operations do not require a native extension. Account construction,
-parsing, governance identity checks, and SCCP Sora-account principals require the
-matching `iroha-native` wheel on Python 3.10 or newer. Install
-`iroha-torii-client[native]` for those operations. The Rust owner validates all
-eleven key algorithms, complete weighted multisig policies, exact I105 literals,
-and canonical SCCP AccountId bytes. Missing native support is an explicit error;
-there is no structural identity fallback or dependency on the full Python SDK.
+parsing, and governance identity checks require the matching `iroha-native` wheel
+on Python 3.10 or newer. Install `iroha-torii-client[native]` for those
+operations. The Rust owner validates all eleven key algorithms, complete weighted
+multisig policies, and exact I105 literals. Missing native support is an explicit
+error; there is no structural identity fallback or dependency on the full Python
+SDK.
 
 `get_governance_tally(referendum_id, canonical_auth=...)` returns the shared
 `GovernanceTally` model, or `None` for a missing referendum. The six-field

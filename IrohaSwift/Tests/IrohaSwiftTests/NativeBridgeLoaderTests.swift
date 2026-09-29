@@ -175,11 +175,11 @@ final class NativeBridgeLoaderTests: XCTestCase {
             scopeAvailable: false
         ))
         XCTAssertNoThrow(try NoritoNativeBridge.validateChainDiscriminantContext(
-            SccpV1.tairaI105DiscriminantV1,
+            TairaTestnetProfile.i105Discriminant,
             scopeAvailable: true
         ))
         XCTAssertThrowsError(try NoritoNativeBridge.validateChainDiscriminantContext(
-            SccpV1.tairaI105DiscriminantV1,
+            TairaTestnetProfile.i105Discriminant,
             scopeAvailable: false
         )) { error in
             XCTAssertEqual(error as? NativeBridgeError, .bridgeUnavailable)

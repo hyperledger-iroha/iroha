@@ -1,7 +1,7 @@
 //! Canonical AXT binding, transport and independently supplied context regressions.
 
 use super::*;
-use crate::proof::{Prover, VerifyLimits};
+use crate::proof::VerifyLimits;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -1038,14 +1038,12 @@ fn transition_batch_model_roundtrip_preserves_operations_and_metadata() {
 }
 
 #[test]
-fn prove_axt_bound_checks_limits_before_missing_binding_metadata() {
+fn direct_axt_batch_producer_checks_limits_before_missing_binding_metadata() {
     let binding = sample_binding();
     let (batch, row_count) = oversized_unbound_axt_batch(&binding);
     let limits = VerifyLimits::default();
 
-    let err = Prover::canonical(DEFAULT_PARAMETER)
-        .expect("prover")
-        .prove_axt_bound(&batch, &binding)
+    let err = prove_axt_bound_batch(&batch, &binding)
         .expect_err("limits must take precedence over missing AXT binding metadata");
     assert!(matches!(
         err,
@@ -1860,9 +1858,7 @@ fn opaque_metadata_carriers_have_no_canonical_prover_or_verifier_route() {
         Err(Error::InvalidProofSemantics { .. })
     ));
     assert!(matches!(
-        Prover::canonical(DEFAULT_PARAMETER)
-            .unwrap()
-            .prove_axt_bound(&batch, &binding),
+        prove_axt_bound_batch(&batch, &binding),
         Err(Error::InvalidProofSemantics { .. })
     ));
     assert!(matches!(
@@ -1942,7 +1938,7 @@ fn canonical_preparation_rejects_missing_and_changed_bound_metadata_before_provi
         .insert(AXT_FASTPQ_BINDING_METADATA_KEY.into(), vec![0xFF]);
     assert!(matches!(
         compact::prepare(&changed, &binding),
-        Err(Error::InvalidAxtBinding { .. })
+        Err(Error::TransferMetadataDecode { .. })
     ));
 }
 
@@ -1962,7 +1958,17 @@ fn canonical_preparation_rejects_wrong_transfer_statement_even_when_resealed() {
         TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
         to_bytes(&transcripts).unwrap(),
     );
-    assert!(bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32])).is_err());
+    let before = batch.clone();
+    assert!(matches!(
+        bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32])),
+        Err(Error::InvalidAxtBinding { details })
+            if details.contains("transfer transcript batch_hash does not match source_tx_commitment")
+    ));
+    assert_eq!(
+        batch, before,
+        "rejected source binding must not rewrite metadata"
+    );
+    assert!(compact::prepare(&batch, &binding).is_err());
     batch.push(StateTransition::new(
         b"opaque appended row".to_vec(),
         vec![],
@@ -2102,10 +2108,7 @@ fn canonical_masked_axt_proof_roundtrip_and_context_mutations() {
         Some(100),
     )
     .unwrap();
-    let proof = Prover::canonical(DEFAULT_PARAMETER)
-        .unwrap()
-        .prove_axt_bound(&batch, &binding)
-        .unwrap();
+    let proof = prove_axt_bound_batch(&batch, &binding).unwrap();
     verify_axt_bound_batch(&batch, &proof, &binding).unwrap();
     let envelope =
         axt_proof_envelope_from_bound_batch(&batch, proof.clone(), [0x42; 32], Some([0x24; 32]))

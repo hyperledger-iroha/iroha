@@ -36,12 +36,9 @@ public sealed class ConfidentialProof
                 _ => throw new ConfidentialProverException(-100),
             };
             var backend = value.GetProperty("backend").GetString();
-            var expectedBackend = relation switch
-            {
-                ConfidentialProofRelation.Transfer => "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-                ConfidentialProofRelation.FullRedemption => "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-                _ => "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            };
+            // ProofBox.backend identifies the proof system. The native producer
+            // chooses and self-verifies the exact circuit carried in its envelope.
+            const string expectedBackend = "halo2/ipa";
             byte[] Hex(JsonElement item, int? length = null)
             {
                 var text = item.GetString() ?? throw new ConfidentialProverException(-100);
@@ -81,8 +78,9 @@ internal sealed class ConfidentialNativeJob : IDisposable
     private readonly IConfidentialWalletDriver driver;
     private readonly object gate = new();
     private ulong handle;
-    internal ConfidentialNativeJob(IConfidentialWalletDriver driver, ulong handle) { this.driver = driver; this.handle = handle; }
-    internal byte[] Prove() { ulong previous; lock (gate) { previous = handle; handle = 0; } if (previous == 0) throw new ConfidentialProverException(-2); return driver.Prove(previous); }
+    internal ConfidentialNativeJob(IConfidentialWalletDriver driver) => this.driver = driver;
+    internal void Attach(ulong value) { lock (gate) { if (handle != 0 || value == 0) throw new ConfidentialProverException(-100); handle = value; } }
+    internal byte[] Prove() { ulong previous; lock (gate) { previous = handle; handle = 0; } if (previous == 0) throw new ConfidentialProverException(-2); try { return driver.Prove(previous); } finally { driver.CloseJob(previous); } }
     public void Dispose() { ulong previous; lock (gate) { previous = handle; handle = 0; } try { if (previous != 0) driver.CloseJob(previous); } finally { GC.SuppressFinalize(this); } }
     ~ConfidentialNativeJob() { try { if (handle != 0) driver.CloseJob(handle); } catch { /* Native cleanup cannot throw from finalization. */ } }
 }
@@ -120,11 +118,13 @@ public sealed class ConfidentialProver : IDisposable
     private Task<ConfidentialProof> Prepare(ConfidentialTreeEvidence tree, IReadOnlyList<ConfidentialInputNote> inputValues, IReadOnlyList<ConfidentialOutputNote>? outputValues, UInt128 publicAmount, ConfidentialChangeNote? change)
     {
         ArgumentNullException.ThrowIfNull(tree); ArgumentNullException.ThrowIfNull(inputValues);
-        if (inputValues.Count is < 1 or > 2) throw new ConfidentialProverException(-11);
-        if (outputValues is not null && outputValues.Count is < 1 or > 2) throw new ConfidentialProverException(-18);
-        var inputs = new ConfidentialInputNote[inputValues.Count];
+        var inputCount = inputValues.Count;
+        var transferOutputCount = outputValues?.Count;
+        if (inputCount is < 1 or > 2) throw new ConfidentialProverException(-11);
+        if (transferOutputCount is < 1 or > 2) throw new ConfidentialProverException(-18);
+        var inputs = new ConfidentialInputNote[inputCount];
         for (var i = 0; i < inputs.Length; i++) inputs[i] = inputValues[i];
-        var outputs = outputValues is null ? null : new ConfidentialOutputNote[outputValues.Count];
+        var outputs = outputValues is null ? null : new ConfidentialOutputNote[transferOutputCount!.Value];
         if (outputs is not null) for (var i = 0; i < outputs.Length; i++) outputs[i] = outputValues![i];
         ConfidentialNativeJob? job = null; byte[]? root = null;
         try
@@ -152,9 +152,10 @@ public sealed class ConfidentialProver : IDisposable
                 relation = change is null ? ConfidentialProofRelation.FullRedemption : ConfidentialProofRelation.RedemptionWithChange; outputCount = change is null ? 0 : 1;
             }
             root = tree.Root; ulong id;
+            job = new ConfidentialNativeJob(driver);
             lock (gate) { if (handle == 0) throw new ConfidentialProverException(-2); id = driver.Job(handle, outputs is null ? (byte)1 : (byte)0, root, publicAmount); }
             if (id == 0) throw new ConfidentialProverException(-100);
-            job = new ConfidentialNativeJob(driver, id);
+            job.Attach(id);
             foreach (var input in inputs) input.Append(driver, id);
             if (outputs is not null) foreach (var output in outputs) output.Append(driver, id);
             change?.Append(driver, id); tree.Append(driver, id);

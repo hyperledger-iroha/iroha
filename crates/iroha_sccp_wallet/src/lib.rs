@@ -8,9 +8,6 @@
 //!   Parliament controls against the destination's own state, and destination
 //!   transaction encodings (EVM calldata and EIP-1559 signing; TRON and TON),
 //!   exportable to SDK bridges;
-//! - `flows`: the resumable outbound, inbound and refund flows of §7, which
-//!   verify every piece of evidence before paying and journal it before
-//!   submitting anything;
 //! - `config`: the file-only `[sccp]` table (endpoint lists, timeouts, pinned
 //!   deployments per Taira `NetworkId`), kept in its own file beside the
 //!   client config until the `iroha` client config root nests it;
@@ -19,8 +16,12 @@
 //!
 //! This crate is never linked into `irohad`; the `sccp_wallet` layer in
 //! `ci/dependency_budget.json` enforces that boundary.
+//!
+//! TODO(ws51): add the resumable outbound (§7.1), inbound (§7.2) and refund
+//! (§7.3) flows, which verify every piece of evidence before paying and
+//! journal it before submitting anything, with a shared flow driver and
+//! resume logic.
 
 pub mod config;
-pub mod flows;
 pub mod journal;
 pub mod pure;

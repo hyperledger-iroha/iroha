@@ -6,7 +6,7 @@
 //! Taira's identity word is its runtime `NetworkId` (the genesis header hash); nothing
 //! Taira-specific is compiled in, so every function takes the Taira network id as input.
 
-use iroha_data_model::{NetworkId, bridge::SccpNetworkV1};
+use iroha_data_model::bridge::SccpNetworkV1;
 
 use super::{
     constants::{
@@ -36,12 +36,6 @@ pub const EXTERNAL_NETWORKS: [SccpNetworkV1; 4] = [
     SccpNetworkV1::TonMainnet,
 ];
 
-/// Return the canonical 32 identity bytes of a Taira `NetworkId`.
-#[must_use]
-pub fn taira_network_id_bytes(network_id: &NetworkId) -> [u8; 32] {
-    *network_id.as_bytes()
-}
-
 /// Profile tag `0x40..=0x44` (§2.1).
 #[must_use]
 pub const fn tag(network: SccpNetworkV1) -> u8 {
@@ -51,19 +45,6 @@ pub const fn tag(network: SccpNetworkV1) -> u8 {
         SccpNetworkV1::BscMainnet => TAG_BSC,
         SccpNetworkV1::TronMainnet => TAG_TRON,
         SccpNetworkV1::TonMainnet => TAG_TON,
-    }
-}
-
-/// Profile of a tag, if any.
-#[must_use]
-pub const fn network_from_tag(tag: u8) -> Option<SccpNetworkV1> {
-    match tag {
-        TAG_SORA_TAIRA => Some(SccpNetworkV1::SoraTaira),
-        TAG_ETHEREUM => Some(SccpNetworkV1::EthereumMainnet),
-        TAG_BSC => Some(SccpNetworkV1::BscMainnet),
-        TAG_TRON => Some(SccpNetworkV1::TronMainnet),
-        TAG_TON => Some(SccpNetworkV1::TonMainnet),
-        _ => None,
     }
 }
 
@@ -102,14 +83,6 @@ pub const fn route_id(network: SccpNetworkV1) -> Option<&'static str> {
         SccpNetworkV1::TronMainnet => Some(ROUTE_ID_TRON),
         SccpNetworkV1::TonMainnet => Some(ROUTE_ID_TON),
     }
-}
-
-/// External profile of a route id, if any.
-#[must_use]
-pub fn network_from_route_id(route_id: &str) -> Option<SccpNetworkV1> {
-    EXTERNAL_NETWORKS
-        .into_iter()
-        .find(|network| self::route_id(*network) == Some(route_id))
 }
 
 /// Account codec of an external profile's own accounts (§3.1, §3.2); `None` for Taira.
@@ -201,22 +174,14 @@ mod tests {
     const TAIRA: [u8; 32] = [0x11; 32];
 
     #[test]
-    fn tags_domains_and_routes_roundtrip() {
+    fn domains_roundtrip_and_taira_has_no_route() {
         for network in ALL_NETWORKS {
-            assert_eq!(network_from_tag(tag(network)), Some(network));
             assert_eq!(network_from_domain(domain(network)), Some(network));
             assert_eq!(domain(network), network.domain_id());
-            if let Some(route) = route_id(network) {
-                assert_eq!(network_from_route_id(route), Some(network));
-            }
         }
-        assert_eq!(network_from_tag(0x45), None);
-        assert_eq!(network_from_tag(0x3f), None);
         assert_eq!(network_from_domain(3), None);
         assert_eq!(network_from_domain(6), None);
         assert_eq!(route_id(SccpNetworkV1::SoraTaira), None);
-        assert_eq!(network_from_route_id("taira_sol_xor"), None);
-        assert_eq!(network_from_route_id("TAIRA_ETH_XOR"), None);
     }
 
     #[test]
@@ -285,13 +250,5 @@ mod tests {
         assert_eq!(evm_chain_id(SccpNetworkV1::BscMainnet), Some(56));
         assert_eq!(evm_chain_id(SccpNetworkV1::TronMainnet), Some(0x2b66_53dc));
         assert_eq!(evm_chain_id(SccpNetworkV1::TonMainnet), None);
-    }
-
-    #[test]
-    fn network_id_bytes_are_the_genesis_hash() {
-        let hash =
-            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x11; 32]));
-        let network_id = NetworkId::from_genesis_hash(hash);
-        assert_eq!(taira_network_id_bytes(&network_id), [0x11; 32]);
     }
 }

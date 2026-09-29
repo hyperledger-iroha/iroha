@@ -2656,7 +2656,7 @@ def generate_network(
 # timed-OVN ballots) through ``iroha gov parliament`` with each citizen's own
 # generated client config.
 # TODO(ws42): run the SCCP Parliament driver (`iroha sccp governance drive`)
-# for the devnet once it exists; until then attempts are driven by hand.
+# for the devnet.
 # ---------------------------------------------------------------------------
 
 PARLIAMENT_GENESIS_CITIZENS = 16

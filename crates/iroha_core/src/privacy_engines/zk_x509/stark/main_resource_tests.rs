@@ -136,7 +136,7 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
 fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-    assert_eq!(plan.masks, 81_690_944);
+    assert_eq!(plan.masks, 84_422_208);
     assert_eq!(
         plan.joined_streams,
         layout.common_lde_size()
@@ -159,7 +159,16 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
     );
-    assert!(plan.remaining_source_and_runtime_envelope > 0);
+    assert_eq!(plan.quotient_stage, 3_158_310_912);
+    assert_eq!(plan.maximum_live_buffers, 3_697_993_152);
+    assert_eq!(plan.remaining_source_and_runtime_envelope, 9_186_908_736);
+    assert_eq!(
+        plan.remaining_source_and_runtime_envelope
+            - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
+            - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+            - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+        596_974_144,
+    );
     // This remainder must also cover borrowed sources and process overhead;
     // passing this buffer check is not whole-prover or RSS qualification.
     eprintln!("MAIN replay transform buffer plan: {plan:?}");
@@ -184,7 +193,7 @@ fn whole_main_retaining_every_masked_coefficient_exceeds_the_release_memory_ceil
             (15, 49),
             (16, 805),
             (18, 67),
-            (19, 3712)
+            (19, 3900)
         ]
     );
     let masks = MASK_DEGREE + 1;
@@ -197,12 +206,57 @@ fn whole_main_retaining_every_masked_coefficient_exceeds_the_release_memory_ceil
         .iter()
         .map(|(_, width)| *width as u64 * masks as u64 * 8)
         .sum::<u64>();
-    assert_eq!(coefficient_bytes, 16_226_947_392);
-    assert_eq!(mask_bytes, 81_690_944);
+    assert_eq!(coefficient_bytes, 17_018_207_808);
+    assert_eq!(mask_bytes, 84_422_208);
     assert!(coefficient_bytes > super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1);
     // This is a payload lower bound, excluding borrowed assembly/source traces,
     // quotient matrices, public fixed polynomials, FFT scratch and allocator overhead.
-    assert_eq!(((1_u64 << 19) + masks as u64) * 3712 * 8, 15_623_184_384);
+    assert_eq!(((1_u64 << 19) + masks as u64) * 3900 * 8, 16_414_444_800);
+}
+
+/// Admit the actual complete maximum fixture before entropy or commitments.
+#[test]
+fn maximum_profile_assembly_payload_fits_source_admission_before_masks() {
+    use super::super::super::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
+        .expect("maximum structural release fixture");
+    fixture.resource_shape.validate_v1().unwrap();
+    assert_eq!(fixture.witness.certificate_chain_der.len(), 3);
+    assert_eq!(fixture.statement.disclosed_attributes.len(), 4);
+    assert_eq!(fixture.crl_entry_count, 64);
+    assert_eq!(fixture.resource_shape.maximum_serial_bytes, 20);
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .expect("complete maximum structural MAIN assembly");
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let payload = assembly.allocated_payload_bytes_v1();
+    let allowance = plan.remaining_source_and_runtime_envelope
+        - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
+        - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+        - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1;
+    eprintln!(
+        "maximum complete MAIN assembly payload={payload}, allowance={allowance}; capacity accounting only, no RSS or full-proof qualification"
+    );
+    assert_eq!(allowance, 596_974_144);
+    assert!(payload <= allowance);
+    plan.check_source_shapes_v1(&layout, &assembly)
+        .expect("all native source forecasts admitted before masking");
 }
 
 /// Run in a separate optimized process with `/usr/bin/time -l` on macOS.
@@ -476,6 +530,8 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     let mut quotient_fp4_inverse_butterflies = 0_u64;
     let mut other_native_butterflies = 0_u64;
     let mut fixed_native_butterflies = 0_u64;
+    let mut fixed_recovery_iffts = 0_u64;
+    let mut fixed_recovery_butterflies = 0_u64;
     let mut columns = 0_u64;
     for registration in &layout.registered_segments {
         let segment = registration.segment;
@@ -513,29 +569,36 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         // accumulation each replay every original masked trace polynomial.
         other_native_butterflies += 4 * width * (n / 2) * u64::from(segment.trace_log2);
         fixed_native_butterflies += fixed * (n / 2) * u64::from(segment.trace_log2);
+        // Later stripes recover the shifted public coefficients in place.
+        // Count these real extra transforms separately from native interpolation.
+        fixed_recovery_iffts += fixed * (stripes - 1);
+        fixed_recovery_butterflies +=
+            fixed * (stripes - 1) * (stripe_rows / 2) * u64::from(stripe_rows.ilog2());
     }
     assert_eq!(SECURITY_LANES, 1);
     assert_eq!(layout.registered_segments.len(), 49);
-    assert_eq!(columns, 5_623);
-    assert_eq!(native_cells, 2_018_157_056);
-    assert_eq!(masked_cells, 2_028_368_424);
+    assert_eq!(columns, 5_811);
+    assert_eq!(native_cells, 2_116_723_200);
+    assert_eq!(masked_cells, 2_127_275_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(residues, 28_038_635_520);
+    assert_eq!(residues, 28_990_742_528);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
-    assert_eq!(buffers.maximum_live_buffers, 3_694_852_800);
-    assert_eq!(buffers.remaining_source_and_runtime_envelope, 9_190_049_088);
-    assert_eq!(cached_columns, 2_893);
-    assert_eq!(quotient_native_iffts, 8_281);
-    assert_eq!(quotient_native_butterflies, 32_319_713_792);
-    assert_eq!(quotient_forward_butterflies, 134_276_390_912);
+    assert_eq!(buffers.maximum_live_buffers, 3_697_993_152);
+    assert_eq!(buffers.remaining_source_and_runtime_envelope, 9_186_908_736);
+    assert_eq!(cached_columns, 3_436);
+    assert_eq!(quotient_native_iffts, 7_404);
+    assert_eq!(quotient_native_butterflies, 27_951_608_320);
+    assert_eq!(quotient_forward_butterflies, 138_440_286_208);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
-    assert_eq!(other_native_butterflies, 76_323_670_016);
-    assert_eq!(fixed_native_butterflies, 8_118_573_504);
+    assert_eq!(other_native_butterflies, 80_069_183_488);
+    assert_eq!(fixed_native_butterflies, 8_223_168_960);
+    assert_eq!(fixed_recovery_iffts, 6_535);
+    assert_eq!(fixed_recovery_butterflies, 32_549_109_760);
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
-    assert_eq!(commitment_forward_butterflies, 518_860_570_624);
+    assert_eq!(commitment_forward_butterflies, 536_208_211_968);
     eprintln!(
-        "MAIN complete work inventory: quotient_rows={quotient_rows}, AIR_residues={residues}, quotient_native_IFFTs={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_Fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, commitment_forward_butterflies={commitment_forward_butterflies}, masked_coefficient_cells={masked_cells}; public operation counts only, no timing or maximum-proof qualification"
+        "MAIN complete work inventory: quotient_rows={quotient_rows}, AIR_residues={residues}, quotient_native_IFFTs={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_Fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_IFFTs={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}, commitment_forward_butterflies={commitment_forward_butterflies}, masked_coefficient_cells={masked_cells}; public operation counts only, no timing or maximum-proof qualification"
     );
 }
 
@@ -557,7 +620,10 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
         assert!(owners <= plan.replay_batch);
     }
     assert_eq!(plan.replay_batch, 310_494_720);
-    assert_eq!(original_division_steps, 4_056_725_602);
+    // Each of the two evaluations divides every masked polynomial once;
+    // synthetic division uses one fewer recurrence step than coefficients.
+    assert_eq!(original_division_steps, 2 * (2_127_275_976 - 5_811));
+    assert_eq!(original_division_steps, 4_254_540_330);
     assert_eq!(grouped_division_steps, 1_791_828);
     assert_eq!(
         4 * ((1 << 19) + MASK_DEGREE + 1) * core::mem::size_of::<E>()

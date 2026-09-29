@@ -2102,7 +2102,7 @@ fn axt_proof_blob_for_with_profile(
         Some(expiry_slot),
     )
     .expect("bind AXT state test batch");
-    let_row! { proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER) .expect("FASTPQ prover") .prove_axt_bound(&batch, &binding) .expect("FASTPQ proof") };
+    let_row! { proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding) .expect("FASTPQ proof") };
     let_row! { fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload") };
     let mut envelope = AxtProofEnvelope {
         dsid,
@@ -26105,7 +26105,7 @@ pub(crate) fn prove_finalized_lane_relay_for_registration(
         Some(expiry_slot),
     )
     .expect("bind lane relay AXT batch");
-    let_row! { proof = fastpq_prover::Prover::canonical_with_modes( fastpq_prover::AXT_DEFAULT_PARAMETER, fastpq_prover::ExecutionMode::Cpu, fastpq_prover::PoseidonExecutionMode::Cpu, ) .expect("construct lane relay FastPQ prover") .prove_axt_bound(&batch, &binding) .expect("prove lane relay statement") };
+    let_row! { proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding) .expect("prove lane relay statement") };
     let_row! { proof_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof) .expect("encode lane relay FastPQ payload") };
     let_row! { proof_envelope = AxtProofEnvelope { dsid: envelope.dataspace_id, manifest_root, da_commitment, proof: proof_payload, fastpq_binding: Some(binding), committed_amount: None, amount_commitment: None, } };
     let_row! { proof_blob = ProofBlob { payload: norito::to_bytes(&proof_envelope).expect("encode lane relay proof envelope"), expiry_slot: Some(expiry_slot), } };
@@ -35866,7 +35866,6 @@ state_test! { sync sccp_policy_hash_v1_binds_the_compiled_light_client_profiles
     assert_eq!(sccp_policy_hash_v1(), expected);
     assert_eq!(sccp_policy_hash_v1(), sccp_policy_hash_v1());
     assert_ne!(sccp_policy_hash_v1(), [0; 32]);
-    assert_eq!(blank_state().sccp_policy_hash_snapshot(), sccp_policy_hash_v1());
 }
 state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
     let base = default_zk();
@@ -38078,11 +38077,6 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
     assert_eq!(restored.network_id, network_id);
     assert_eq!(restored.committed_height(), 1);
     assert_eq!(restored.latest_block_hash_fast(), Some(committed_hash));
-    assert_eq!(
-        restored.sccp_policy_hash_snapshot(),
-        sccp_policy_hash_v1(),
-        "Fast restore uses the fixed SCCP v1 policy input"
-    );
     assert!(restored.world.accounts.view().iter().next().is_none());
     assert!(
         !restored.nexus_runtime_restored_from_snapshot(),

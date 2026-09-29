@@ -628,7 +628,7 @@
     }
   ],
   "schema": "iroha.sccp.commitment-tree.v1",
-  "spec": "specs/sccp.md §3.3, §3.4 (revision 3)",
+  "spec": "specs/sccp.md §3.3, §3.4 (revision 4)",
   "taira_network_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
   "trees": [
     {

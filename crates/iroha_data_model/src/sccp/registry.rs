@@ -41,14 +41,6 @@ pub const SCCP_ROUTE_NETWORKS_V1: [SccpNetworkV1; 4] = [
     SccpNetworkV1::TonMainnet,
 ];
 
-/// Return the external network whose route id is exactly `route_id`.
-#[must_use]
-pub fn network_for_route_id(route_id: &str) -> Option<SccpNetworkV1> {
-    SCCP_ROUTE_NETWORKS_V1
-        .into_iter()
-        .find(|network| route_id_for(*network) == Some(route_id))
-}
-
 /// Activation state of one route revision (§4.14.2).
 #[derive(
     Debug,
@@ -95,18 +87,6 @@ pub enum SccpRouteActivationV1 {
 }
 
 impl SccpRouteActivationV1 {
-    /// Return whether `RecordSccpMessage` may record on this revision.
-    #[must_use]
-    pub const fn accepts_record(self) -> bool {
-        matches!(self, Self::Bidirectional)
-    }
-
-    /// Return whether inbound and void proofs are accepted (every state but `Staged`).
-    #[must_use]
-    pub const fn accepts_proofs(self) -> bool {
-        !matches!(self, Self::Staged)
-    }
-
     /// Return whether inbound settlement and outbound refunds proceed (else held `Pending`).
     #[must_use]
     pub const fn settles(self) -> bool {
@@ -294,14 +274,6 @@ impl SccpRouteV1 {
         self.live_revision()
             .filter(|revision| revision.activation == SccpRouteActivationV1::Bidirectional)
     }
-
-    /// Return `Σ liability(r)` over every revision (saturating).
-    #[must_use]
-    pub fn total_liability(&self) -> u128 {
-        self.revisions.values().fold(0_u128, |sum, revision| {
-            sum.saturating_add(revision.liability)
-        })
-    }
 }
 
 #[cfg(test)]
@@ -368,17 +340,6 @@ mod tests {
             route_id_for(SccpNetworkV1::TonMainnet),
             Some("taira_ton_xor")
         );
-        for id in [
-            SCCP_ROUTE_ID_TAIRA_ETH_XOR_V1,
-            SCCP_ROUTE_ID_TAIRA_BSC_XOR_V1,
-            SCCP_ROUTE_ID_TAIRA_TRON_XOR_V1,
-            SCCP_ROUTE_ID_TAIRA_TON_XOR_V1,
-        ] {
-            let network = network_for_route_id(id).expect("known route id");
-            assert_eq!(route_id_for(network), Some(id));
-        }
-        assert_eq!(network_for_route_id("TAIRA_ETH_XOR"), None);
-        assert_eq!(network_for_route_id(""), None);
         assert!(
             SCCP_ROUTE_NETWORKS_V1
                 .iter()
@@ -388,17 +349,15 @@ mod tests {
 
     #[test]
     fn activation_table_matches_the_spec() {
-        // (state, record, proofs, settles, live)
+        // (state, settles, live)
         let table = [
-            (SccpRouteActivationV1::Staged, false, false, false, false),
-            (SccpRouteActivationV1::Bidirectional, true, true, true, true),
-            (SccpRouteActivationV1::Paused, false, true, false, true),
-            (SccpRouteActivationV1::InboundOnly, false, true, true, false),
-            (SccpRouteActivationV1::Retired, false, true, false, false),
+            (SccpRouteActivationV1::Staged, false, false),
+            (SccpRouteActivationV1::Bidirectional, true, true),
+            (SccpRouteActivationV1::Paused, false, true),
+            (SccpRouteActivationV1::InboundOnly, true, false),
+            (SccpRouteActivationV1::Retired, false, false),
         ];
-        for (state, record, proofs, settles, live) in table {
-            assert_eq!(state.accepts_record(), record, "{state:?}");
-            assert_eq!(state.accepts_proofs(), proofs, "{state:?}");
+        for (state, settles, live) in table {
             assert_eq!(state.settles(), settles, "{state:?}");
             assert_eq!(state.is_live(), live, "{state:?}");
         }
@@ -476,7 +435,6 @@ mod tests {
         route.revisions.get_mut(&2).expect("revision 2").activation =
             SccpRouteActivationV1::Bidirectional;
         assert_eq!(route.bidirectional_revision().map(|r| r.revision), Some(2));
-        assert_eq!(route.total_liability(), 600);
     }
 
     #[test]

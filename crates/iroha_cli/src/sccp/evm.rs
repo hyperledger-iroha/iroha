@@ -70,7 +70,7 @@ impl EvmDestination {
     pub(super) fn now_ms(&self) -> Result<u64> {
         let block = self
             .client
-            .block_by_number(BlockTag::Latest, false)
+            .block_by_number(BlockTag::Latest)
             .map_err(|error| eyre!("latest block: {error}"))?
             .ok_or_else(|| eyre!("the RPC endpoint has no latest block"))?;
         block
@@ -181,7 +181,7 @@ pub(super) fn send_transaction(
         .to_u128()
         .ok_or_else(|| eyre!("priority fee overflows"))?;
     let base_fee = client
-        .block_by_number(BlockTag::Latest, false)
+        .block_by_number(BlockTag::Latest)
         .map_err(|error| eyre!("latest block: {error}"))?
         .and_then(|block| block.header.base_fee_per_gas)
         .and_then(iroha_sccp_rpc::evm::U256::to_u128)

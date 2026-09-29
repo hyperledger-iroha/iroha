@@ -5487,9 +5487,7 @@ dependencies = [
 name = "iroha_sccp"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "blake3",
  "blstrs",
- "bs58",
  "group",
  "halo2curves",
  "iroha_crypto",
@@ -5511,14 +5509,12 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "iroha_config",
- "iroha_crypto",
  "iroha_data_model",
  "iroha_sccp",
  "norito",
  "rand 0.9.4",
  "reqwest",
  "sha2",
- "tiny-keccak",
  "x25519-dalek",
  "zeroize",
 ]
@@ -5536,12 +5532,10 @@ dependencies = [
  "iroha_sccp",
  "iroha_sccp_rpc",
  "iroha_wallet",
- "k256",
  "norito",
  "rustix 1.1.4",
  "sha2",
  "tempfile",
- "tiny-keccak",
  "zeroize",
 ]
 
@@ -5751,7 +5745,6 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
- "iroha_sccp",
  "iroha_schema",
  "iroha_schema_gen",
  "iroha_service_model",

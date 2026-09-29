@@ -24,21 +24,18 @@ use super::{
     deep_proof::MAX_FRAME_BYTES,
     deep_prover::{ConstructionLimits, ProducerPlan},
     deep_relation::DeepRelation,
+    deep_trace_source::OwnedTraceSource,
     offline_compact::{
         ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits,
         QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND, VerificationLimits,
         quantity_artifact_resources,
     },
-    secret_polynomial::SecretPolynomial,
 };
 use crate::{
     Error, ProofSemantics, Result,
     axt_binding::{validate_axt_public_metadata, validate_axt_public_transfer_facts},
     gadgets::{
-        compact_smt_air::{
-            COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, PublicStatement, SmtWitness,
-        },
-        compact_trace_columns::smt_row_cells,
+        compact_smt_air::{PATH_LEVELS, PublicStatement, SmtWitness},
         public_transfer_statement::PreparedPublicTransfers,
     },
 };
@@ -215,7 +212,7 @@ fn encode_artifact<T: NoritoSerialize>(value: &T, limits: VerificationLimits) ->
 fn columns(
     statement: &PublicStatement,
     pair: &[TransferSmtWitness; 2],
-) -> Result<Vec<SecretPolynomial<u64>>> {
+) -> Result<OwnedTraceSource> {
     for (update, witness) in statement.updates.iter().zip(pair) {
         if witness.path_bits != update.path.to_le_bytes() || witness.siblings.len() != PATH_LEVELS {
             return Err(invalid(
@@ -236,15 +233,7 @@ fn columns(
         .ok_or_else(|| {
             invalid("quantity producer private witness does not satisfy its public ports")
         })?;
-    let mut columns = (0..COLUMN_COUNT)
-        .map(|_| SecretPolynomial::zeroed(PHYSICAL_ROW_COUNT))
-        .collect::<Result<Vec<_>>>()?;
-    for (index, row) in witness.rows().iter().enumerate() {
-        for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-            column[index] = value;
-        }
-    }
-    Ok(columns)
+    OwnedTraceSource::from_rows(witness.rows())
 }
 
 fn construction_limits(
@@ -288,11 +277,8 @@ fn segments<R: DeepRelation>(
     for (ordinal, (statement, private)) in statements.iter().zip(private).enumerate() {
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
-        let borrowed = columns.iter().map(|column| &column[..]).collect::<Vec<_>>();
         let proof = ProducerPlan::new(&relation, construction_limits(proving, verification))?
-            .build(&borrowed, &mut rand::rngs::OsRng)?;
-        drop(borrowed);
-        drop(columns);
+            .build(columns, &mut rand::rngs::OsRng)?;
         let length = proof.len();
         check(
             "max_proof_bytes",

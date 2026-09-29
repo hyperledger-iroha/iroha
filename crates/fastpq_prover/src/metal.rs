@@ -137,8 +137,7 @@ const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 1_024;
-const MAX_BUFFER_POOL_CACHED_PAGES: usize =
-    crate::goldilocks_transform::EXACT_ROOT_METAL_POOL_CACHED_PAGES_V1;
+const MAX_BUFFER_POOL_CACHED_PAGES: usize = crate::gpu_memory::METAL_POOL_MAX_CACHED_PAGES;
 const MAX_RETAINED_DISPATCH_TICKETS: usize = 16;
 const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
 #[cfg(test)]
@@ -148,7 +147,7 @@ const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize =
 // Metal's bytes-no-copy API requires both ends of the wrapped region to be
 // page-aligned. A 16 KiB region satisfies both 4 KiB Intel and 16 KiB Apple
 // Silicon macOS page sizes.
-const METAL_BUFFER_PAGE_BYTES: usize = crate::goldilocks_transform::EXACT_ROOT_METAL_PAGE_BYTES_V1;
+const METAL_BUFFER_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 const METAL_BUFFER_PAGE_WORDS: usize = METAL_BUFFER_PAGE_BYTES / mem::size_of::<u64>();
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
@@ -7069,6 +7068,48 @@ mod tests {
         assert!(buffer.capacity() >= 1);
         assert_eq!(pool.len_for_tests(), 0);
     }
+    #[test]
+    fn digest384_admission_covers_retained_pool_and_oversized_staging_reuse() {
+        let mut pool = BufferPool::default();
+        let pages_per_entry = MAX_BUFFER_POOL_CACHED_PAGES / MAX_BUFFER_POOL_BUFFERS;
+        for _ in 0..MAX_BUFFER_POOL_BUFFERS {
+            let mut pages = Vec::new();
+            pages.try_reserve_exact(pages_per_entry).unwrap();
+            pool.recycle(pages);
+        }
+        let cached_before = pool.spare.iter().map(Vec::capacity).sum::<usize>();
+        assert_eq!(cached_before, MAX_BUFFER_POOL_CACHED_PAGES);
+        let jobs: usize = 1024;
+        let payload = jobs * 2408;
+        let sizes = [192 * jobs, 16 * jobs, payload, 48 * jobs];
+        let mut live = Vec::new();
+        for bytes in sizes {
+            let requested_pages = bytes.div_ceil(METAL_BUFFER_PAGE_BYTES);
+            let allocation = pool.take(requested_pages).unwrap();
+            assert!(allocation.capacity() > requested_pages);
+            live.push(allocation);
+        }
+        let live_and_idle_pages = live
+            .iter()
+            .chain(&pool.spare)
+            .map(Vec::capacity)
+            .sum::<usize>();
+        assert_eq!(live_and_idle_pages, cached_before);
+        let charged = crate::digest384_batch::last_fields_payload_charge(jobs, payload).unwrap();
+        assert!(charged >= live_and_idle_pages * METAL_BUFFER_PAGE_BYTES + jobs * 48);
+        assert!(
+            charged - crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+                < live_and_idle_pages * METAL_BUFFER_PAGE_BYTES,
+            "requested staging alone does not charge retained oversized pages"
+        );
+        for allocation in live {
+            pool.recycle(allocation);
+        }
+        assert!(
+            pool.spare.iter().map(Vec::capacity).sum::<usize>() <= MAX_BUFFER_POOL_CACHED_PAGES
+        );
+    }
+
     #[test]
     fn buffer_pool_rejects_oversized_cached_allocations() {
         assert!(buffer_pool_capacity_is_cacheable(1));

@@ -18,9 +18,6 @@
 //! `(s − g − 1) mod epoch_length = 0`, where `g` is the genesis height, and the genesis block
 //! belongs to epoch 0. A committee can change at any height there, not only at epoch starts,
 //! so `roster` is the committee of `h` itself and `next_roster` the committee of `h + 1`.
-//! TODO(ws30): §4.3.2 assumes NPoS epochs with `next_epoch_snapshot`; the spec owner must
-//! confirm the Sumeragi-core mapping above (and the `ctx.mode = Npos` requirement of §4.1)
-//! before the roster rule relies on it.
 
 use crate::state::WorldReadOnly;
 use iroha_data_model::{block::consensus_v2::HeightContext, parameter::system::ConsensusMode};

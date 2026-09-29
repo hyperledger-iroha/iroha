@@ -219,7 +219,7 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     KIND_BY_NAME as TRANSPARENCY_KIND_BY_NAME,
     SOURCE_BOUND_KINDS as TRANSPARENCY_SOURCE_BOUND_KINDS,
 )
-from sccp_release_common import verify_ed25519  # noqa: E402
+from release_evidence_crypto import verify_ed25519  # noqa: E402
 from sorafs_topology_qualification import (  # noqa: E402
     add_signed_topology_qualification_arguments,
     load_signed_topology_qualification_from_args,

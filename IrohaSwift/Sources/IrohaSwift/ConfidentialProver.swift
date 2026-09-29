@@ -319,6 +319,9 @@ private final class ConfidentialNativeJob: @unchecked Sendable {
     func prove() throws -> Data {
         let consumed = handle
         handle = 0
+        // The native call normally consumes the job. A driver can fail before
+        // entering it, so also close on return; already-consumed handles are harmless.
+        defer { driver.closeJob(consumed) }
         return try driver.prove(consumed)
     }
 }

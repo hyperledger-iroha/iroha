@@ -27,6 +27,47 @@ This crate hosts cross-component tests for Iroha.
   result and persisted state on all four peers, then repeats both reads through
   a cold-restarted validator.
   The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
+- Generic ZK record/event scenarios use genuine canonical IVM replay-binding keys and
+  proofs; they verify commitment binding, without authorizing execution or value movement.
+  The focused filters are `proofs::submit_proof_and_query_record` in
+  `queries_and_proofs`, `events::proof::proof_event_scenarios` in
+  `events_and_triggers`, and `queries::proof::proof_query_scenarios` in
+  `queries_and_proofs`. The mixed-backend query scenario requires `--features zk-stark`
+  and a daemon built with `zk-stark`; its negative STARK fixture corrupts an actual
+  current-profile Binding proof while retaining valid framing and key material.
+  All three networks have exactly four validators and retain production proof limits
+  and verification deadlines. Require `IROHA_TEST_REQUIRE_NETWORK=1` and
+  `IROHA_TEST_SERIALIZE_NETWORKS=1`; prebuild the same-candidate `iroha3d` and `iroha`,
+  set their absolute `TEST_NETWORK_BIN_IROHAD` / `TEST_NETWORK_BIN_IROHA` paths, and
+  set `IROHA_TEST_SKIP_BUILD=1`. Retain source, lockfile and artifact hashes; explicit
+  binary paths alone do not attest candidate identity.
+- The explicit full-capacity wallet regression is
+  `cargo test --locked -p integration_tests --test queries_and_proofs proofs::full_tree_wallet::four_validator_full_tree_wallet_proof_records_reject_corruption_and_relabelling -- --exact --ignored --nocapture --test-threads=1`
+  with the same mandatory-network and same-candidate artifact environment. It builds
+  all 65,536 nonzero leaves, proves one actual note through the public
+  `ConfidentialProver` API with one membership path, and requires the exact Verified
+  record on all four validators. Native proof corruption and relabelling to a distinct
+  canonical replay-binding key must produce Rejected records on every validator.
+  The synthetic root is only a local proof statement: this test submits `VerifyProof`,
+  authenticates no ledger asset root, and moves no confidential value. Native proving
+  and network execution are expensive, so the scenario is explicitly ignored by default.
+- The separate IVM replay-binding admission gate is
+  `cargo test --locked -p integration_tests --test core_api contracts::ivm_proved::four_validator_ivm_proved_rejects_alias_role_corruption_and_forged_binding -- --exact --ignored --nocapture --test-threads=1`
+  with the same mandatory-network and same-candidate artifact environment. It deploys
+  a real zero-argument Kotodama counter, uses the authenticated SDK derive endpoint
+  and canonical native Halo2 prover, then requires one proved increment to become
+  Applied with the same counter value on all four validators. Submission through
+  every peer must reject retired/bare circuit labels, a backend alias, a different
+  canonical relation key, native proof corruption, a stale-state replay, and a
+  cryptographically valid binding proof for a forged overlay. Exact native rejection
+  reasons, a separately Applied barrier and unchanged counter state distinguish
+  rejection from transport failure or a stalled network. Calls use the normal signed
+  fee-quote path; finalized rejections require authenticated details bound to the
+  exact original transaction. This tests mandatory VM replay; routing may forward
+  admission, so per-peer submission does not identify the local executor. The Halo2
+  circuit itself only binds commitments. Production proof caps,
+  verifier deadlines and gas policy remain unchanged. The earlier unavailable
+  governance-STARK scenario is not a substitute for this gate.
 - Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Norito FEC parity, missing-chunk recovery and corruption tests run in the ordinary `nexus_and_streaming` harness using its local GF(256) helpers; no optional external Reed–Solomon dependency is needed.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.

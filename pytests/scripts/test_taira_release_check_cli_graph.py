@@ -149,7 +149,22 @@ class CliCopyLifetimeTests(unittest.TestCase):
         original_node = self.artifact("iroha3d", b"shipping node retained")[0]
         order = []
         runs = []
+        preflight_inventories = []
         real_run_stages = gate.run_stages
+        fixture_preflight = gate.preflight_native_test_inventories
+
+        def preflight(*args, **kwargs):
+            self.assertEqual(order, ["combined-build"])
+            self.assertIs(args[0], copies)
+            inventory = fixture_preflight(*args, **kwargs)
+            expected = {str(copy): "cli_fixture: test\n"}
+            if network:
+                expected[copies["network"]] = "".join(
+                    name + ": test\n" for _, names in gate.NETWORK_STAGES for name in names
+                )
+            self.assertEqual(inventory, expected)
+            preflight_inventories.append(inventory)
+            return inventory
 
         def run_cli(harness, *args, **kwargs):
             self.assertEqual(harness, str(copy))
@@ -162,7 +177,9 @@ class CliCopyLifetimeTests(unittest.TestCase):
             # Source Cargo outputs may already have changed; use only the copy.
             raw_cli.write_bytes(b"replacement from unrelated later Cargo graph")
             runs.append(harness)
-            self.assertEqual(kwargs, {"batch": True})
+            self.assertEqual(len(preflight_inventories), 1)
+            self.assertEqual(kwargs, {"batch": True, "inventories": preflight_inventories[0]})
+            self.assertIs(kwargs["inventories"], preflight_inventories[0])
             return real_run_stages(harness, *args, **kwargs)
 
         def build(*args, **kwargs):
@@ -172,7 +189,9 @@ class CliCopyLifetimeTests(unittest.TestCase):
             return copies
 
         def four_peer(*args, **kwargs):
-            self.assertEqual(kwargs, {"harness": copies["network"], "stages": gate.NETWORK_STAGES})
+            self.assertEqual(kwargs, {"harness": copies["network"], "stages": gate.NETWORK_STAGES,
+                                      "inventories": preflight_inventories[0]})
+            self.assertIs(kwargs["inventories"], preflight_inventories[0])
             order.append("production-build-and-four-peer")
             self.assertFalse(copy.exists(), "release completed CLI copy before production graph")
             self.assertTrue(executed.exists())
@@ -194,11 +213,15 @@ class CliCopyLifetimeTests(unittest.TestCase):
             batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", side_effect=build))
             later_compile = stack.enter_context(patch.object(gate, "compile_harness", side_effect=AssertionError("no separate CLI compilation")))
             peers = stack.enter_context(patch.object(gate, "run_network_checks", side_effect=four_peer))
+            inventory_check = stack.enter_context(patch.object(gate, "preflight_native_test_inventories", side_effect=preflight))
+            relist = stack.enter_context(patch.object(gate, "native_test_listing", side_effect=AssertionError("reuse the exact preflight inventory")))
             stack.enter_context(patch.object(gate, "run_stages", side_effect=run_cli))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             stack.enter_context(self.assertRaises(gate.CheckError) if failure else contextlib.nullcontext())
             gate.run_checks(self.source, qualification_scope="full", environment=self.env | {"CARGO_HOME": "/isolated"}, source_commit="a" * 40, lock_fds=locks)
         self.assertEqual(batch.call_count, 1)
+        self.assertEqual(inventory_check.call_count, 1)
+        relist.assert_not_called()
         later_compile.assert_not_called()
         self.assertEqual(peers.call_count, int(network and failure != "cli"))
         self.assertEqual(runs, [str(copy)])

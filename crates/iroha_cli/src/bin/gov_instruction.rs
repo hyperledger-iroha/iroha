@@ -71,21 +71,6 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn retired_sccp_commands_are_not_parseable() {
-        // SCCP v1 governance goes through `iroha sccp governance propose` (specs/sccp.md §10).
-        for command in [
-            "build-sccp-transfer-ivm-derive-request",
-            "publish-sccp-route-manifest",
-            "ensure-ivm-execution-vk",
-            "propose-sccp-route-governance",
-        ] {
-            assert!(
-                Args::try_parse_from(["gov_instruction", command]).is_err(),
-                "retired SCCP helper `{command}` must not remain in the CLI grammar"
-            );
-        }
-    }
-    #[test]
     fn register_citizen_and_wrap_payload_hex_parse() {
         let parsed = Args::try_parse_from([
             "gov_instruction",

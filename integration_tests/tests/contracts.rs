@@ -1,5 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
+#[path = "contracts/ivm_proved.rs"]
+mod ivm_proved;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};

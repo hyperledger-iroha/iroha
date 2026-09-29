@@ -2250,6 +2250,177 @@ fn mk_ivm_prove_app_state_for_tests() -> SharedAppState {
     let authority = sample_ivm_prove_authority();
     mk_app_state_for_tests_with_world(world_with_account(&authority))
 }
+/// Own the production supervisor for a route fixture and join it explicitly.
+/// Unwinding still sends shutdown so no fixture leaves accepting work behind.
+struct IvmProveSupervisorFixture {
+    app: SharedAppState,
+    task: Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>>,
+}
+impl IvmProveSupervisorFixture {
+    fn start(app: &SharedAppState) -> Self {
+        zk_ivm_prove_ensure_supervisor(app);
+        Self {
+            app: app.clone(),
+            task: Some(zk_ivm_prove_take_supervisor(app).expect("retain route fixture supervisor")),
+        }
+    }
+    async fn shutdown(mut self) {
+        self.app.shutdown_signal.send();
+        let task = self.task.take().expect("supervisor is joined exactly once");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(300), task)
+                .await
+                .expect("route fixture supervisor shuts down")
+                .expect("route fixture supervisor joins"),
+            ToriiCriticalWorkerExit::StoppedByShutdown,
+        );
+        assert!(self.app.zk_ivm_prove_jobs.is_empty());
+        assert_eq!(self.app.zk_ivm_prove_job_budget.used_bytes(), 0);
+        assert_eq!(
+            self.app.zk_ivm_prove_slots.available_permits(),
+            self.app.zk_ivm_prove_slots_total
+        );
+        assert_eq!(
+            self.app.zk_ivm_prove_inflight.available_permits(),
+            self.app.zk_ivm_prove_inflight_total
+        );
+    }
+}
+impl Drop for IvmProveSupervisorFixture {
+    fn drop(&mut self) {
+        self.app.shutdown_signal.send();
+    }
+}
+/// Install a signed, self-describing contract and its active instance through the
+/// production registration/activation instructions in the VK's committed block.
+fn install_ivm_prove_contract_fixture(
+    app: &SharedAppState,
+    authority_keypair: &KeyPair,
+    vk_id: &VerifyingKeyId,
+    vk_record: VerifyingKeyRecord,
+) -> (IvmBytecode, iroha_model_base::metadata::Metadata) {
+    use iroha_core::smartcontracts::code::{
+        activate_instance, register_code_bytes, register_manifest,
+    };
+    use iroha_executor_data_model::permission::{
+        governance::CanEnactGovernance, smart_contract::CanManageSmartContractCode,
+    };
+
+    let authority = AccountId::new(authority_keypair.public_key().clone());
+    let (artifact, manifest) =
+        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+            force_zk: true,
+            max_cycles: 4_096,
+            ..Default::default()
+        })
+        .compile_source_with_manifest(
+            r#"seiyaku ProveRouteFixture {
+            kotoage fn main() authorize("CanEnactGovernance") {}
+        }"#,
+        )
+        .expect("compile registered ZK contract fixture");
+    let verified = ivm::verify_contract_artifact(&artifact).expect("verify contract fixture");
+    assert_eq!(
+        manifest.signature_payload(),
+        verified.manifest.signature_payload()
+    );
+    let code_hash = verified.code_hash;
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        app.state.network_id_ref(),
+        &authority,
+        91,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive fixture contract address");
+    let height = next_block_height(app);
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut stx =
+        block.transaction_for_fastpq_testing(Hash::new(b"Torii registered prove fixture"));
+    for permission in [
+        Permission::from(CanManageSmartContractCode),
+        Permission::from(CanEnactGovernance),
+    ] {
+        stx.world_mut_for_testing()
+            .add_account_permission(&authority, permission);
+    }
+    assert_eq!(
+        register_code_bytes(&authority, artifact.clone(), &mut stx)
+            .expect("production bytecode registration"),
+        code_hash,
+    );
+    register_manifest(&authority, manifest.signed(authority_keypair), &mut stx)
+        .expect("production signed-manifest registration");
+    stx.world_mut_for_testing()
+        .bind_inactive_contract_subject_for_testing(address.clone(), authority.clone());
+    activate_instance(&authority, address.clone(), 1, code_hash, &mut stx)
+        .expect("production contract activation");
+    stx.world
+        .verifying_keys_by_circuit_mut_for_testing()
+        .insert(
+            (vk_record.circuit_id.clone(), vk_record.version),
+            vk_id.clone(),
+        );
+    stx.world
+        .verifying_keys_mut_for_testing()
+        .insert(vk_id.clone(), vk_record);
+    stx.apply();
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit registered contract and VK fixture at the explicit empty-block height");
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
+    for (name, value) in [
+        ("contract_address", address.to_string()),
+        ("contract_code_hash", code_hash.to_string()),
+        ("contract_entrypoint", "main".to_owned()),
+    ] {
+        metadata.insert(
+            name.parse().expect("contract metadata key"),
+            iroha_primitives::json::Json::new(value),
+        );
+    }
+    (IvmBytecode::from_compiled(artifact), metadata)
+}
+/// Validate the actual returned proof, its payload commitments, role and mandatory
+/// VM replay with the same state used by the registered route fixture.
+fn assert_ivm_prove_response_replays(
+    app: &SharedAppState,
+    request: &ZkIvmProveRequestDto,
+    response: &ZkIvmProveJobDto,
+    signer: &KeyPair,
+) {
+    let proved = response
+        .proved
+        .clone()
+        .expect("done response has proved payload");
+    assert_eq!(proved.bytecode, request.bytecode);
+    assert_eq!(
+        request.authority,
+        AccountId::new(signer.public_key().clone())
+    );
+    let attachment = response
+        .attachment
+        .clone()
+        .expect("done response has proof");
+    let transaction = TransactionBuilder::new(
+        *app.state.network_id_ref(),
+        request.authority.clone(),
+        request.fee_payment.clone(),
+    )
+    .with_metadata(request.metadata.clone())
+    .with_executable(iroha_data_model::transaction::Executable::IvmProved(proved))
+    .with_attachments(
+        iroha_data_model::proof::ProofAttachmentList::try_from(vec![attachment])
+            .expect("one bounded proof attachment"),
+    )
+    .try_sign(signer.private_key())
+    .expect("sign the exact returned proved transaction");
+    iroha_core::pipeline::overlay::build_overlay_for_transaction(
+        &transaction,
+        &app.state.query_view(),
+    )
+    .expect("returned proof must bind the returned payload and pass mandatory VM replay");
+}
 fn signed_ivm_prove_headers(
     method: &axum::http::Method,
     uri: &axum::http::Uri,

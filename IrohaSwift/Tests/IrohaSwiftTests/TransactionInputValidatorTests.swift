@@ -291,10 +291,10 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidatePreservesTairaAuthorityAndDestinationDiscriminants() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0xB1))
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
         let destination = try AccountAddress
             .fromAccount(publicKey: validEd25519PublicKey(seed: 0xB2))
-            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
 
         let ids = try TransactionInputValidator.validate(
             networkId: TestNetworkIds.canonical,
@@ -307,7 +307,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(ids.accountIds["destination"], destination)
         XCTAssertEqual(
             try AccountAddress.inspectI105NetworkPrefix(ids.authorityId).chainDiscriminant,
-            SccpV1.tairaI105DiscriminantV1
+            TairaTestnetProfile.i105Discriminant
         )
     }
 
@@ -316,7 +316,7 @@ final class TransactionInputValidatorTests: XCTestCase {
             publicKey: validEd25519PublicKey(seed: 0xB3)
         )
         let taira = try address.toI105(
-            networkPrefix: SccpV1.tairaI105DiscriminantV1
+            networkPrefix: TairaTestnetProfile.i105Discriminant
         )
         let defaultNetwork = try address.toI105(
             networkPrefix: AccountId.defaultNetworkPrefix

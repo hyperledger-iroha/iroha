@@ -22,12 +22,13 @@ use crate::{DigestExecutionV1, gpu::GpuError};
 /// Maximum final byte payload admitted to one continuation dispatch.
 pub(crate) const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
-pub(crate) const STAGING_PAGE_BYTES: usize = 16 * 1024;
+pub(crate) const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 /// Eight CPU/device known answers and one CPU/device public probe.
 /// The enclosing prover charges this cold bound even for CPU or warm execution.
 pub(crate) const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
 
-/// Bound the four shared backing buffers, returned digests and fixed readiness payload.
+/// Bound shared backing buffers, retained/oversized pool pages, returned digests
+/// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
 pub(crate) fn last_fields_payload_charge(
@@ -76,7 +77,12 @@ fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError>
     // Two extra pages cover cached public lane constants/MDS, the bounded KAT
     // payload/jobs/oracle vectors and staging ownership descriptors. These are
     // counted even on CPU so admission is independent of hardware or warm state.
-    Ok(total.max(4 * STAGING_PAGE_BYTES + 8 * 48) + 2 * STAGING_PAGE_BYTES)
+    // Pool::take can reuse a larger capacity than this request. The complete
+    // retained-pool allowance covers those borrowed excess pages plus all idle
+    // entries; it is added once, independently of the four active requests.
+    Ok(total.max(4 * STAGING_PAGE_BYTES + 8 * 48)
+        + 2 * STAGING_PAGE_BYTES
+        + crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)
 }
 
 #[cfg(any(test, feature = "fastpq-gpu"))]
@@ -491,6 +497,7 @@ mod tests {
     #[test]
     fn exact_batch_charge_includes_page_rounding_and_public_readiness() {
         let context = 2 * STAGING_PAGE_BYTES;
+        let retained_pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
         assert!(
             (6 * 65 * 3 + 9) * 8
                 + 256
@@ -502,14 +509,15 @@ mod tests {
         assert!(last_fields_payload_charge(0, 1).is_err());
         assert_eq!(
             last_fields_payload_charge(1, 0).unwrap(),
-            4 * STAGING_PAGE_BYTES + 8 * 48 + context
+            4 * STAGING_PAGE_BYTES + 8 * 48 + context + retained_pool
         );
         for (jobs, bytes) in [(1, 7), (256, 256 * 2408), (65536, MAX_LAST_FIELD_BYTES)] {
             let page = |size: usize| size.max(1).div_ceil(STAGING_PAGE_BYTES) * STAGING_PAGE_BYTES;
             let expected =
                 (page(192 * jobs) + page(16 * jobs) + page(bytes) + page(48 * jobs) + 48 * jobs)
                     .max(4 * STAGING_PAGE_BYTES + 8 * 48)
-                    + context;
+                    + context
+                    + retained_pool;
             assert_eq!(last_fields_payload_charge(jobs, bytes).unwrap(), expected);
         }
         for (jobs, bytes) in [

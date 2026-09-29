@@ -493,7 +493,4 @@ pub(crate) fn populate_every_sccp_map(block: &mut WorldBlock<'_>, seed: u8) {
     block
         .sccp_light_client_stride_index
         .insert((network, height / 8_192), height);
-    block
-        .sccp_light_client_checkpoint_expiry
-        .insert((height * 4_000, network, height), ());
 }

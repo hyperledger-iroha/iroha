@@ -49,6 +49,9 @@ object IdentifierJsonParser {
                         item["phone_retail_attestor_public_key"],
                         "identifier policy list.items[$i].phone_retail_attestor_public_key",
                     ),
+                    ramFheProfile = RamFheProfileJsonParser.parseOptional(
+                        item["ram_fhe_profile"], "identifier policy list.items[$i].ram_fhe_profile",
+                    ),
                 )
             )
         }

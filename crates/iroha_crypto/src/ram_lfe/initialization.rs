@@ -1,0 +1,94 @@
+//! The sole bounded first-release programmed-memory initializer.
+//!
+//! The fixed-width reduction has at most `2^-247` bias per lane for an ideal
+//! uniform stream (RFC 9380 section 5's reduction bound). The actual stream is a
+//! keyed BLAKE3 XOF: security additionally depends on the primitive and the secret's
+//! entropy. This is not an implementation of RFC 9380 `hash_to_field`.
+
+use super::{Hash, RAM_LFE_SECRET_MAX_BYTES, RamLfeError, validate_secret};
+use norito::codec::Encode;
+use subtle::{Choice, ConditionallySelectable};
+use zeroize::Zeroizing;
+
+pub(super) const LANES: usize = 32;
+const BYTES_PER_LANE: usize = 32;
+const CONTEXT: &str = "iroha.ram_lfe.bfv_program.initial_state.v1";
+
+/// Maximum associated-data length for programmed RAM-LFE evaluation.
+pub const RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES: usize = 512;
+
+/// Exact first-release initializer and secret-commitment contract.
+pub const BFV_PROGRAM_INITIALIZER_DESCRIPTOR: &[u8] = b"iroha.ram_lfe.bfv_program.initializer.v1;policy-secret=blake3-derive-key(context=iroha.ram_lfe.policy_secret.v1,schema=iroha_crypto::ram_lfe::PolicySecretInputV1,canonical-norito-v1-flags2(backend,secret),raw32);hidden-program=Hash(iroha.ram_lfe.bfv_program.digest.v1||blake3-derive-key(context=iroha.ram_lfe.bfv_program.secret_tape.v1,canonical-norito-v1-flags2(schema=iroha_crypto::ram_lfe::HiddenRamFheProgram),raw32));initializer=blake3-derive-key-xof;context=iroha.ram_lfe.bfv_program.initial_state.v1;frame=canonical-norito-v1-flags2;schema=iroha_crypto::ram_lfe::ProgramInitializationInputV1;fields=initializer_descriptor_hash,policy_hash,secret,associated_data;secret-bytes=1..4096;associated-data-bytes=0..512;stream-bytes=1024;lanes=32;bytes-per-lane=32;lane-order=ascending-contiguous;integer=unsigned-big-endian;modulus=257;reduction=32-fixed-byte-folds(x=byte+257-r,conditional-subtract257);ciphertext-ring-degree=64;state-c0-first=residue;state-other-coefficients=0;registers=4-zero-ciphertexts";
+
+/// Return the digest of the compiled initializer contract published in every profile.
+#[must_use]
+pub fn bfv_program_initializer_descriptor_hash() -> Hash {
+    Hash::new(BFV_PROGRAM_INITIALIZER_DESCRIPTOR)
+}
+
+// Borrowed fields stream directly to the hasher; no secret preimage Vec is created.
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::ram_lfe::ProgramInitializationInputV1")]
+struct ProgramInitializationInputV1<'a> {
+    initializer_descriptor_hash: Hash,
+    policy_hash: Hash,
+    secret: &'a [u8],
+    associated_data: &'a [u8],
+}
+
+pub(super) fn validate_associated_data(bytes: &[u8]) -> Result<(), RamLfeError> {
+    if bytes.len() > RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES {
+        return Err(RamLfeError::Bfv(format!(
+            "programmed BFV associated data exceeds {RAM_LFE_PROGRAM_ASSOCIATED_DATA_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn derive_residues(
+    secret: &[u8],
+    policy_hash: Hash,
+    associated_data: &[u8],
+) -> Result<Zeroizing<[u64; LANES]>, RamLfeError> {
+    validate_secret(secret)?;
+    validate_associated_data(associated_data)?;
+    debug_assert!(secret.len() <= RAM_LFE_SECRET_MAX_BYTES);
+    let input = ProgramInitializationInputV1 {
+        initializer_descriptor_hash: bfv_program_initializer_descriptor_hash(),
+        policy_hash,
+        secret,
+        associated_data,
+    };
+    let mut hasher = Zeroizing::new(blake3::Hasher::new_derive_key(CONTEXT));
+    norito::core::write_canonical_to_writer(&input, &mut *hasher)
+        .map_err(|error| RamLfeError::TranscriptEncoding(error.to_string()))?;
+    let mut reader = Zeroizing::new(hasher.finalize_xof());
+    let mut bytes = Zeroizing::new([0_u8; LANES * BYTES_PER_LANE]);
+    reader.fill(bytes.as_mut());
+    let mut residues = Zeroizing::new([0_u64; LANES]);
+    for (result, lane) in residues.iter_mut().zip(bytes.chunks_exact(BYTES_PER_LANE)) {
+        *result = u64::from(reduce_lane(lane));
+    }
+    Ok(residues)
+}
+
+fn reduce_byte(residue: u16, byte: u8) -> u16 {
+    // 256 == -1 (mod 257). For residue<=256, x is in 1..=512.
+    let x = u16::from(byte) + 257 - residue;
+    let difference = x.wrapping_sub(257);
+    // Under the stated bounds, the high bit is exactly the subtraction borrow.
+    let subtract = Choice::from(1 ^ (difference.to_be_bytes()[0] >> 7));
+    u16::conditional_select(&x, &difference, subtract)
+}
+
+fn reduce_lane(bytes: &[u8]) -> u16 {
+    let mut residue = Zeroizing::new(0_u16);
+    for &byte in bytes {
+        *residue = reduce_byte(*residue, byte);
+    }
+    *residue
+}
+
+#[cfg(test)]
+#[path = "initialization_tests.rs"]
+mod tests;

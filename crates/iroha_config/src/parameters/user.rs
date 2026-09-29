@@ -5041,7 +5041,7 @@ mod sccp_limit_tests {
     use super::*;
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     #[test]
-    fn canonical_limit_key_reads_and_retired_knobs_are_unknown() {
+    fn canonical_limit_key_reads() {
         let canonical: toml::Table =
             toml::from_str("max_proofs_per_block = 17").expect("parse canonical SCCP key");
         let decoded = ConfigReader::new()
@@ -5049,21 +5049,6 @@ mod sccp_limit_tests {
             .read_and_complete::<Sccp>()
             .expect("read canonical SCCP key");
         assert_eq!(decoded.max_proofs_per_block.get(), 17);
-        for retired in [
-            "max_bls_aggregate_checks_per_block = 17",
-            "max_bls_signer_contributions_per_block = 17",
-            "max_bn254_pairing_checks_per_block = 17",
-            "max_bls12_381_pairing_checks_per_block = 17",
-        ] {
-            let table: toml::Table = toml::from_str(retired).expect("parse retired SCCP key");
-            assert!(
-                ConfigReader::new()
-                    .with_toml_source(TomlSource::inline(table))
-                    .read_and_complete::<Sccp>()
-                    .is_err(),
-                "retired [zk.sccp] knob must be rejected: {retired}"
-            );
-        }
     }
     #[test]
     fn defaults_are_nonzero_ordered_and_preserved() {

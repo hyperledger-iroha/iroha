@@ -749,15 +749,6 @@ pub fn activation_offset(
     miner_history_check_len(previous_validators, previous_turn_length)
 }
 
-/// Decode a stored BSC set.
-///
-/// # Errors
-///
-/// Returns [`BscLcError::MalformedStoredSet`] unless the record is a BSC set with its id.
-pub fn stored_set(set: &SccpLcConsensusSetV1) -> Result<BscValidatorSetV1, SccpLcError> {
-    decode_set(set)
-}
-
 /// Parlia `VoteData`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VoteDataV1 {

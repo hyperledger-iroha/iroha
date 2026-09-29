@@ -810,6 +810,9 @@ mod capture;
 #[path = "support/offline_compact_single.rs"]
 mod single;
 
+#[path = "support/offline_compact_two.rs"]
+mod two;
+
 #[test]
 #[ignore = "requires fresh FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
 fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() {
@@ -878,4 +881,26 @@ fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() 
             ));
         }
     }
+}
+
+#[test]
+fn canonical_axt_batch_producer_preflights_without_a_replay_prover() {
+    let binding = binding();
+    let mut batch = fastpq_prover::TransitionBatch::new("unknown-profile", PublicInputs::default());
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        Err(Error::ParameterMismatch { expected, actual })
+            if expected == AXT_DEFAULT_PARAMETER && actual == "unknown-profile"
+    ));
+    batch.parameter = AXT_DEFAULT_PARAMETER.into();
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        Err(Error::InvalidProofSemantics { .. })
+    ));
+    let mut noncanonical = binding;
+    noncanonical.parameter = format!(" {AXT_DEFAULT_PARAMETER} ");
+    assert!(matches!(
+        fastpq_prover::prove_axt_bound_batch(&batch, &noncanonical),
+        Err(Error::InvalidAxtBinding { .. })
+    ));
 }

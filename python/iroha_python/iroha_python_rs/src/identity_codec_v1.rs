@@ -20,7 +20,6 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_account_address_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_account_address_v1, module)?)?;
     module.add_function(wrap_pyfunction!(render_account_address_v1, module)?)?;
-    module.add_function(wrap_pyfunction!(validate_sccp_account_id_v1, module)?)?;
     Ok(())
 }
 
@@ -74,31 +73,6 @@ fn render_account_address_v1(bytes: &[u8], discriminant: u16) -> PyResult<String
     canonical_address(bytes)?
         .to_i105_for_discriminant(discriminant)
         .map_err(|error| PyValueError::new_err(format!("invalid account address: {error}")))
-}
-
-/// Admit the SCCP V1 bare AccountId layout: exactly COMPACT_LEN and a u16 byte ceiling.
-#[pyo3::pyfunction]
-#[pyo3(name = "_validate_sccp_account_id_v1")]
-fn validate_sccp_account_id_v1(payload: &[u8]) -> PyResult<()> {
-    if payload.is_empty() || payload.len() > usize::from(u16::MAX) {
-        return Err(PyValueError::new_err(
-            "SCCP AccountId must contain 1..65535 bytes",
-        ));
-    }
-    let frame = norito::core::frame_bare_with_header_flags::<iroha_data_model::account::AccountId>(
-        payload, 0x02,
-    )
-    .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
-    let account: iroha_data_model::account::AccountId = norito::decode_canonical(&frame)
-        .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
-    let encoded = norito::encode_canonical(&account)
-        .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
-    if encoded != frame {
-        return Err(PyValueError::new_err(
-            "SCCP AccountId must use exact canonical COMPACT_LEN bytes",
-        ));
-    }
-    Ok(())
 }
 
 fn framed<T: norito::NoritoSerialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyBytes>> {
@@ -210,7 +184,6 @@ mod tests {
             assert!(module.hasattr("_validate_account_address_v1").unwrap());
             assert!(module.hasattr("_parse_account_address_v1").unwrap());
             assert!(module.hasattr("_render_account_address_v1").unwrap());
-            assert!(module.hasattr("_validate_sccp_account_id_v1").unwrap());
 
             let members = (1..=2)
                 .map(|seed| {
@@ -241,14 +214,6 @@ mod tests {
             assert!(parse_account_address_v1(py, &rendered, Some(1)).is_err());
             assert!(super::super::PyAccountId::new(&rendered).is_ok());
             assert!(super::super::PyAccountId::new(&format!("{rendered} ")).is_err());
-            let _layout = norito::core::DecodeFlagsGuard::enter(0x02);
-            let (bare, flags) = norito::codec::encode_with_header_flags(&account);
-            assert_eq!(flags, 0x02);
-            validate_sccp_account_id_v1(&bare).unwrap();
-            assert!(validate_sccp_account_id_v1(b"x").is_err());
-            let mut trailing = bare;
-            trailing.push(0);
-            assert!(validate_sccp_account_id_v1(&trailing).is_err());
             let identity = [vec![2, 0, 1, 32, 1], vec![0; 31]].concat();
             assert!(validate_account_address_v1(&identity).is_err());
             assert!(render_account_address_v1(&identity, 753).is_err());

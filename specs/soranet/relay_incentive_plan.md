@@ -133,7 +133,8 @@ the roadmap milestone.
   the spool and highlight epochs missing either the uptime or measurement
   snapshots before shipping logs to treasury tooling.
 - CLI tooling under `iroha_cli app sorafs incentives` now covers reward evaluation (`compute`),
-  dispute authoring (`open-dispute`), and offline dashboard summaries so operators can reconcile
+  dispute authoring (`open-dispute`, using the original instruction and submitter;
+  no treasury account is needed), and offline dashboard summaries so operators can reconcile
   payouts before the treasury daemon lands.【crates/iroha_cli/src/commands/sorafs.rs:929】
 - Operators can pin the production Grafana dashboard shipped in
   `dashboards/grafana/soranet_incentives.json` to visualise uptime, bandwidth, measurement proofs,

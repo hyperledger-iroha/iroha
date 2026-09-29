@@ -16,21 +16,26 @@ public sealed class ConfidentialProverTests
         internal readonly ManualResetEventSlim Entered = new(false), Continue = new(false);
         internal byte[]? Key, Rho, Diversifier, Tree;
         internal int Jobs, Closed, JobClosed, Proved;
-        internal bool FailInput, FailProof;
+        internal bool FailInput, FailProof, FailDispatch;
         internal UInt128 InputAmount;
         internal ulong Handle;
+        internal byte Operation;
         public ulong Create(byte[] network, byte[] asset, byte[] key) { Key = key; Assert.Equal(32, network.Length); return 9; }
         public void Close(ulong handle) { Assert.Equal(9UL, handle); Closed++; }
-        public ulong Job(ulong handle, byte operation, byte[] root, UInt128 amount) { Jobs++; Handle = handle; return 10; }
+        public ulong Job(ulong handle, byte operation, byte[] root, UInt128 amount) { Jobs++; Handle = handle; Operation = operation; return 10; }
         public void Input(ulong job, UInt128 amount, byte[] rho, byte[] diversifier, int index) { Rho = rho; Diversifier = diversifier; InputAmount = amount; if (FailInput) throw new ConfidentialProverException(-16); }
         public void Output(ulong job, UInt128 amount, byte[] rho, byte[] owner) { }
         public void Commitments(ulong job, byte[] leaves) => Tree = leaves;
         public void Paths(ulong job, byte[] siblings, byte[] directions) => Tree = siblings;
         public byte[] Prove(ulong job)
         {
-            Entered.Set(); Continue.Wait(); Proved++;
+            Entered.Set(); Continue.Wait();
+            if (FailDispatch) throw new EntryPointNotFoundException("Injected dispatch failure before native consumption.");
+            Proved++;
             if (FailProof) throw new ConfidentialProverException(-24);
-            return Encoding.UTF8.GetBytes("{\"relation\":\"confidential_full_unshield\",\"backend\":\"halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3\",\"proof_hex\":\"01\",\"root_hex\":\"" + new string('1', 64) + "\",\"nullifiers_hex\":[\"" + new string('2', 64) + "\"],\"output_commitments_hex\":[]}");
+            var json = "{\"relation\":\"confidential_full_unshield\",\"backend\":\"halo2/ipa\",\"proof_hex\":\"01\",\"root_hex\":\"" + new string('1', 64) + "\",\"nullifiers_hex\":[\"" + new string('2', 64) + "\"],\"output_commitments_hex\":[]}";
+            if (Operation == 0) json = json.Replace("confidential_full_unshield", "confidential_transfer").Replace("\"output_commitments_hex\":[]", "\"output_commitments_hex\":[\"" + new string('3', 64) + "\"]");
+            return Encoding.UTF8.GetBytes(json);
         }
         public void CloseJob(ulong job) => JobClosed++;
     }
@@ -57,7 +62,7 @@ public sealed class ConfidentialProverTests
         }
         finally { driver.Continue.Set(); }
         var proof = await pending; Assert.Equal(ConfidentialProofRelation.FullRedemption, proof.Relation); Assert.Equal(1, driver.Proved);
-        Assert.Equal(0, driver.JobClosed); Assert.All(callerRho, value => Assert.Equal((byte)8, value));
+        Assert.Equal(1, driver.JobClosed); Assert.All(callerRho, value => Assert.Equal((byte)8, value));
         var root = proof.Root; root[0] ^= 1; Assert.Equal((byte)0x11, proof.Root[0]);
     }
 
@@ -71,7 +76,21 @@ public sealed class ConfidentialProverTests
         driver.FailInput = false; driver.FailProof = true; driver.Continue.Set();
         var next = new ConfidentialInputNote(7, Word(8), Word(3), 0);
         var pending = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(Word(0x11), [Word(2)]), [next], 7);
-        Assert.Equal(-24, (await Assert.ThrowsAsync<ConfidentialProverException>(() => pending)).Code); Assert.True(next.ClearedForTest); Assert.Equal(1, driver.JobClosed);
+        Assert.Equal(-24, (await Assert.ThrowsAsync<ConfidentialProverException>(() => pending)).Code); Assert.True(next.ClearedForTest); Assert.Equal(2, driver.JobClosed);
+    }
+
+    [Fact]
+    public async Task DispatchFailureBeforeNativeConsumptionStillClosesAcceptedJob()
+    {
+        var driver = new Driver { FailDispatch = true };
+        driver.Continue.Set();
+        using var prover = new ConfidentialProver(Network, Asset, Word(9), driver);
+        using var input = new ConfidentialInputNote(7, Word(8), Word(3), 0);
+        var pending = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(Word(0x11), [Word(2)]), [input], 7);
+        await Assert.ThrowsAsync<EntryPointNotFoundException>(() => pending);
+        Assert.Equal(0, driver.Proved);
+        Assert.Equal(1, driver.JobClosed);
+        Assert.True(input.ClearedForTest);
     }
 
     [Fact]
@@ -94,11 +113,48 @@ public sealed class ConfidentialProverTests
         Assert.Equal(0, driver.Jobs);
     }
 
+    private sealed class ChangingCountList<T>(params T[] values) : IReadOnlyList<T>
+    {
+        internal int CountReads;
+        public int Count => ++CountReads == 1 ? values.Length : int.MaxValue;
+        public T this[int index] => values[index];
+        public IEnumerator<T> GetEnumerator() => ((IEnumerable<T>)values).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Fact]
+    public async Task MutableCollectionCountsCannotExpandAdmittedAllocationBounds()
+    {
+        var driver = new Driver(); driver.Continue.Set();
+        using var prover = new ConfidentialProver(Network, Asset, Word(9), driver);
+        var leaves = new ChangingCountList<byte[]>(Word(2));
+        using var tree = ConfidentialTreeEvidence.Commitments(Word(0x11), leaves);
+        Assert.Equal(1, leaves.CountReads);
+        using var note = new ConfidentialInputNote(7, Word(8), Word(3), 0);
+        var inputs = new ChangingCountList<ConfidentialInputNote>(note);
+        await prover.ProveRedemptionAsync(tree, inputs, 7);
+        Assert.Equal(1, inputs.CountReads);
+
+        using var path = new ConfidentialMerklePath(Word(0x11), 0,
+            Enumerable.Range(0, 16).Select(_ => Word(2)).ToArray(), new byte[16]);
+        var paths = new ChangingCountList<ConfidentialMerklePath>(path);
+        using var pathTree = ConfidentialTreeEvidence.Paths(Word(0x11), paths);
+        Assert.Equal(1, paths.CountReads);
+        using var transferInput = new ConfidentialInputNote(7, Word(8), Word(3), 0);
+        using var transferOutput = new ConfidentialOutputNote(7, Word(9), Word(4));
+        var outputs = new ChangingCountList<ConfidentialOutputNote>(transferOutput);
+        var proof = await prover.ProveTransferAsync(pathTree, [transferInput], outputs);
+        Assert.Equal(1, outputs.CountReads);
+        Assert.Equal(ConfidentialProofRelation.Transfer, proof.Relation);
+        Assert.Single(proof.OutputCommitments);
+        Assert.True(transferInput.ClearedForTest); Assert.True(transferOutput.ClearedForTest);
+    }
+
     [Fact]
     public void PublicResultRejectsWrongRelationRootCardinalityBackendAndDuplicateFields()
     {
-        var correct = "{\"relation\":\"confidential_full_unshield\",\"backend\":\"halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3\",\"proof_hex\":\"01\",\"root_hex\":\"" + new string('1',64) + "\",\"nullifiers_hex\":[\"" + new string('2',64) + "\"],\"output_commitments_hex\":[]}";
-        foreach (var changed in new[] { correct.Replace("confidential_full_unshield", "confidential_transfer"), correct.Replace(new string('1',64), new string('3',64)), correct.Replace("\"01\"", "\"\""), correct.Replace("pasta/confidential", "pasta/retired"), correct.Replace("\"proof_hex\":\"01\"", "\"proof_hex\":\"01\",\"proof_hex\":\"02\"") })
+        var correct = "{\"relation\":\"confidential_full_unshield\",\"backend\":\"halo2/ipa\",\"proof_hex\":\"01\",\"root_hex\":\"" + new string('1',64) + "\",\"nullifiers_hex\":[\"" + new string('2',64) + "\"],\"output_commitments_hex\":[]}";
+        foreach (var changed in new[] { correct.Replace("confidential_full_unshield", "confidential_transfer"), correct.Replace(new string('1',64), new string('3',64)), correct.Replace("\"01\"", "\"\""), correct.Replace("halo2/ipa", "halo2"), correct.Replace("halo2/ipa", "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3"), correct.Replace("\"proof_hex\":\"01\"", "\"proof_hex\":\"01\",\"proof_hex\":\"02\"") })
             Assert.Throws<ConfidentialProverException>(() => ConfidentialProof.Decode(Encoding.UTF8.GetBytes(changed), ConfidentialProofRelation.FullRedemption, Word(0x11), 1, 0));
         Assert.Throws<ConfidentialProverException>(() => ConfidentialProof.Decode(Encoding.UTF8.GetBytes(correct), ConfidentialProofRelation.FullRedemption, Word(0x11), 2, 0));
     }

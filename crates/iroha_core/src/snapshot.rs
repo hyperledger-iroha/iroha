@@ -3013,7 +3013,7 @@ where
         || fast_manifest.network_id != *state.network_id_ref()
         || fast_manifest.committed_height != snapshot_height_u64
         || fast_manifest.tip_hash != snapshot_hashes.last().copied()
-        || fast_manifest.sccp_policy_hash != state.sccp_policy_hash_snapshot()
+        || fast_manifest.sccp_policy_hash != crate::state::sccp_policy_hash_v1()
         || fast_manifest.has_snapshot_bootstrap_lineage != has_bootstrap_lineage
     {
         return Err(TryReadError::SnapshotGenerationInvalid {

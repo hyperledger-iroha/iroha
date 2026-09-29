@@ -5,6 +5,8 @@
 //! then operation rank; equal key/rank pairs retain their supplied order through
 //! the stable sort. Columns are padded to the next power-of-two trace length and
 //! exposed as Goldilocks field elements.
+#[cfg(any(test, feature = "dev-tools"))]
+use crate::fft::Planner;
 #[cfg(test)]
 use crate::gadgets::transfer_integer_air::TransferIntegerWitness;
 #[cfg(all(test, feature = "fastpq-gpu"))]
@@ -12,7 +14,6 @@ use crate::gpu;
 use crate::{
     Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
-    fft::Planner,
     gadgets::{transfer, transfer_integer_air, transfer_row_binding},
     pack_bytes, poseidon,
 };
@@ -116,6 +117,7 @@ impl PoseidonPipelinePolicy {
     pub const fn resolved(self) -> ExecutionMode {
         self.resolved
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     fn cpu_label(self) -> &'static str {
         if matches!(self.requested, PoseidonExecutionMode::Cpu) {
             "cpu_forced"
@@ -163,6 +165,7 @@ fn replace_observer<T: ?Sized>(
         );
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn clone_observer<T: ?Sized>(
     slot: &RwLock<Option<Arc<T>>>,
     observer_name: &'static str,
@@ -182,6 +185,7 @@ fn clone_observer<T: ?Sized>(
     }
 }
 // Native V1 CPU proving also reports its resolved Poseidon execution policy.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
@@ -216,6 +220,7 @@ pub(crate) fn notify_poseidon_pipeline_observer(
 /// This notification describes the CPU proving stage that calls it. Separate
 /// complete six-lane primitive GPU measurements do not change that stage's
 /// execution policy or qualify a complete accelerated proof.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
     let actual_policy = PoseidonPipelinePolicy {
         requested: policy.requested(),
@@ -973,6 +978,7 @@ pub(crate) fn ensure_trace_schema_limit(
 ///
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
 /// `FastpqBalanceKeyV1` Norito frame.
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
@@ -1705,6 +1711,7 @@ fn field_from_i128(value: i128) -> u64 {
     }
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn trace_coefficients(
     trace: &Trace,
     planner: &Planner,
@@ -1741,11 +1748,13 @@ pub(crate) fn trace_coefficients(
         }
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) struct TracePolynomialData {
     pub coefficients: Vec<Vec<u64>>,
     lde_columns: Vec<Vec<u64>>,
     transfer_plan: transfer::TransferGadgetPlan,
 }
+#[cfg(any(test, feature = "dev-tools"))]
 impl TracePolynomialData {
     #[cfg(test)]
     pub(crate) fn lde_columns(&self) -> &[Vec<u64>] {
@@ -1758,6 +1767,7 @@ impl TracePolynomialData {
         &self.transfer_plan
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(crate) fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
     let coefficients = trace_coefficients(trace, planner, ExecutionMode::Cpu);
     let lde_columns = if coefficients.is_empty() {

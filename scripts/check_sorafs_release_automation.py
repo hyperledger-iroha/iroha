@@ -771,7 +771,7 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "scripts/check_sorafs_l1_resilience_qualification.py",
         "scripts/check_sorafs_release_automation.py",
         "scripts/check_sorafs_release_version_map.py",
-        "scripts/sccp_release_common.py",
+        "scripts/release_evidence_crypto.py",
         "scripts/sorafs_checker_preflight.py",
         "scripts/sorafs_evidence_fingerprint.py",
         "scripts/sorafs_evidence_json.py",

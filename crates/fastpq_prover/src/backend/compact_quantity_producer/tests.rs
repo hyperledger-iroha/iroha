@@ -10,7 +10,10 @@ use crate::{
         compact_prover_resources::segment_charge,
         compact_quantity_tests::{QuantityCase, QuantityFixture},
     },
-    gadgets::public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
+    gadgets::{
+        compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT},
+        public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
+    },
     offline_compact::{
         BundleVerificationLimits, prove_quantity_axt_artifact, prove_quantity_ordinary_artifact,
         verify_quantity_axt_artifact, verify_quantity_ordinary_artifact,

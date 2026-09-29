@@ -3198,7 +3198,7 @@ impl Iroha {
                 Some(iroha_config::parameters::defaults::confidential::RULES_VERSION),
                 Some(iroha_core::state::combine_zk_and_sccp_policy_hashes(
                     iroha_core::state::compute_zk_consensus_policy_hash(&zk),
-                    state.sccp_policy_hash_snapshot(),
+                    iroha_core::state::sccp_policy_hash_v1(),
                 )),
             )
         } else {
@@ -10460,11 +10460,7 @@ mod tests {
             .split_once("} else {")
             .expect("Strict confidential-feature branch");
         assert!(confidential_setup.0.contains("state.zk_snapshot()"));
-        assert!(
-            confidential_setup
-                .0
-                .contains("state.sccp_policy_hash_snapshot()")
-        );
+        assert!(confidential_setup.0.contains("sccp_policy_hash_v1()"));
         assert!(!confidential_setup.0.contains("state.view()"));
         assert!(confidential_setup.1.contains("let view = state.view()"));
         assert!(

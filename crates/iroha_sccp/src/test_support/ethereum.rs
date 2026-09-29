@@ -503,33 +503,6 @@ impl SyntheticBeaconChainV1 {
         })
     }
 
-    /// An advance of one update finalizing `execution` and carrying the next committee:
-    /// attested at `signature_slot - 1` and finalized in the same period.
-    ///
-    /// `execution.timestamp` must not lie after the start of `signature_slot`
-    /// ([`Self::signature_slot_for`]).
-    #[must_use]
-    pub fn advance_for(
-        &self,
-        execution: SyntheticExecutionHeaderV1,
-        signature_slot: u64,
-    ) -> SccpLcAdvanceV1 {
-        let attested_slot = signature_slot - 1;
-        let period_start = sync_committee_period_at_slot(attested_slot) * SLOTS_PER_PERIOD;
-        SccpLcAdvanceV1::Ethereum(EthereumLcAdvanceV1 {
-            updates: vec![self.update(&SyntheticUpdateSpecV1 {
-                attested_slot,
-                finalized_slot: attested_slot.saturating_sub(64).max(period_start),
-                finalized_execution: execution,
-                signature_slot,
-                include_next_committee: true,
-                participants: SYNC_COMMITTEE_SIZE,
-                signing_period: None,
-                next_committee_period: None,
-            })],
-        })
-    }
-
     /// An update inside `period` (signed by its committee) that teaches the committee of
     /// `period + 1`, finalizing [`Self::synthetic_execution`] of its finalized slot.
     #[must_use]

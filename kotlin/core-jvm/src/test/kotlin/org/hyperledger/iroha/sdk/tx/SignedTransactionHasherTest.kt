@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.TairaTestnetProfile
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
@@ -21,14 +22,13 @@ import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
-import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 class SignedTransactionHasherTest {
-    private val adapter = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+    private val adapter = NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT)
 
     @Test
     fun `authorization proof changes do not change transaction identity`() {
@@ -233,7 +233,7 @@ class SignedTransactionHasherTest {
         networkId = TestNetworkIds.canonical(),
         authority = AccountAddress
             .fromAccount(TestEd25519Keys.publicKey(0x2C), "ed25519")
-            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),
+            .toI105(TairaTestnetProfile.I105_DISCRIMINANT),
         creationTimeMs = 1_735_369_000_000L,
         executable = Executable.ivm(byteArrayOf(0x01, 0x02)),
         feePayment = FeePaymentIntent.authority(emptyList(), 1L),

@@ -1,7 +1,6 @@
 use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, TransitionBatch,
-    gadgets::transfer::decode_transcripts,
-    proof::{Prover, enforce_default_verify_batch_limits},
+    gadgets::transfer::decode_transcripts, proof::enforce_default_verify_batch_limits,
     validate_batch_semantics,
 };
 use iroha_crypto::Hash;
@@ -183,29 +182,23 @@ pub fn set_axt_remote_spend_claims(
     Ok(())
 }
 
-impl Prover {
-    /// Produce a proof for a batch bound to a canonical outer AXT statement.
-    ///
-    /// The explicit binding argument is the trusted selector for AXT proof
-    /// semantics. Batch metadata cannot opt a generic state proof into opaque
-    /// effect semantics. Transfer claims require only transfer rows and their
-    /// canonical witnesses. Metadata-only authorization/compliance carriers have
-    /// no transfer relation and are rejected before construction.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `binding` is not canonical, the proof-bound batch
-    /// does not exactly match it, the batch shape is invalid for the selected
-    /// AXT claim, the batch or generated proof exceeds the paired AXT verifier's
-    /// default resource limits, or proof generation fails.
-    pub fn prove_axt_bound(
-        &self,
-        batch: &TransitionBatch,
-        binding: &AxtFastpqBinding,
-    ) -> Result<Vec<u8>> {
-        compact::prove(batch, binding)
-    }
-
+/// Produce the canonical masked artifact for an explicitly bound AXT batch.
+///
+/// The binding independently selects the transfer claim. Metadata-only carriers
+/// are rejected before private construction. This entry point uses the default
+/// CPU proving and verification limits and self-verifies before returning.
+/// Use [`crate::offline_compact::prove_quantity_axt_artifact`] with an independently
+/// authenticated public statement/context for explicit work or device policies.
+/// Successful consistency verification does not grant source finality or spend authority.
+///
+/// # Errors
+/// Rejects batch/resource limits, noncanonical or mismatched bindings, unsupported
+/// claims, invalid witnesses, concurrent production or failed proof verification.
+pub fn prove_axt_bound_batch(
+    batch: &TransitionBatch,
+    binding: &AxtFastpqBinding,
+) -> Result<Vec<u8>> {
+    compact::prove(batch, binding)
 }
 
 /// Require a canonical AXT binding to select the witnessed transfer profile.
@@ -236,7 +229,7 @@ pub fn validate_axt_transfer_claim_binding(binding: &AxtFastpqBinding) -> Result
 ///
 /// The explicit binding is the trusted semantics selector. It must exactly
 /// match the proof-bound batch metadata; metadata by itself never enables AXT
-/// semantics through the generic [`crate::verify`] entry point.
+/// semantics through an unbound or artifact-selected claim.
 ///
 /// # Errors
 ///
@@ -425,6 +418,7 @@ pub fn bind_axt_batch_with_proof_metadata(
     require_execution_header(&batch.parameter, batch.public_inputs.dsid, &canonical)?;
     require_concrete_execution_batch(batch, &context)?;
     validate_batch_semantics(batch, axt_proof_semantics(&canonical)?)?;
+    require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
     batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
     batch
         .metadata
@@ -1652,7 +1646,9 @@ fn decode_canonical_binding(encoded: &[u8]) -> Result<AxtFastpqBinding> {
     require_canonical_binding(&binding)
 }
 #[cfg(test)]
-fn decode_axt_fastpq_payload(encoded: &[u8]) -> Result<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1> {
+fn decode_axt_fastpq_payload(
+    encoded: &[u8],
+) -> Result<iroha_data_model::fastpq::FastpqAxtCompactArtifactV1> {
     compact::decode(encoded)
 }
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {

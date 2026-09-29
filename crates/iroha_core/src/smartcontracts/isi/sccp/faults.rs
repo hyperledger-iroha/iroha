@@ -55,7 +55,7 @@ fn check(
     let peer = store::bridge_key_owners::get(world, &address)
         .cloned()
         .ok_or_else(|| "fault signer is not a registered bridge key".to_owned())?;
-    // Every height below the executing height is durably final and committed, so its canonical
+    // Every height below the executing height is certified and can never revert, so its canonical
     // statement digest exists iff a subject exists there.
     let faulty = statement.height >= current_height
         || digests

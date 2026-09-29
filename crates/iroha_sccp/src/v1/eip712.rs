@@ -29,10 +29,6 @@ unit_error! {
 }
 
 /// The ten fields of the `SccpAttestation` struct (§3.6.1), in type-string order.
-///
-/// TODO(ws15): add conversions to and from
-/// `iroha_data_model::sccp::attestation::SccpAttestationStatementV1` once that type is final;
-/// the core and attestor waves then sign and verify the data-model statement through this type.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AttestationFieldsV1 {
     /// Taira block height `h`.

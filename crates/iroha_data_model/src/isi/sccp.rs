@@ -3,8 +3,6 @@
 //! These are the wire structs of the ten SCCP v1 instructions. Core enforces every SCCP rule;
 //! the default executor only allows visitors through. Per-chain proofs, advances and evidence
 //! are the bounded opaque wrappers of [`crate::sccp`], decoded by `iroha_sccp::light_client`.
-// TODO(ws20): register these instructions (wire ids, record inventory, instruction-enum and
-// executor visitors, universal-dataspace routing).
 
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId,
@@ -704,7 +702,10 @@ mod tests {
     fn binding_is_rebuilt_from_the_instruction_and_verifies() {
         let instruction = set_bridge_key(Some([2; 33]));
         let binding = instruction.binding(network_id(7));
-        assert!(binding.has_canonical_domain());
+        assert_eq!(
+            binding.domain(),
+            crate::sccp::keys::SCCP_BRIDGE_KEY_BINDING_DOMAIN_V1
+        );
         assert_eq!(binding.peer, instruction.peer);
         assert_eq!(binding.public_key, Some([2; 33]));
         assert_eq!(binding.activation_epoch, 3);

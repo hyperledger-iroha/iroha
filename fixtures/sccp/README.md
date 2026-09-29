@@ -1,6 +1,6 @@
 # SCCP fixtures
 
-Shared SCCP v1 vectors (`specs/sccp.md` revision 3, §11). They are generated
+Shared SCCP v1 vectors (`specs/sccp.md` revision 4, §11). They are generated
 by Rust or by the contracts themselves and consumed by the contract suites
 (EDR, Acton), the node and the SDKs.
 
@@ -43,6 +43,11 @@ scripts/cargo_fast.sh --target-slot sccp --stable-local-metadata --incremental -
   test -p iroha_sccp --test v1_vectors -- --ignored regenerate_v1_vectors
 ```
 
+`native_transfer_event_v1.json` holds the `SccpTransferToTaira` and
+`SccpVoided` event vectors of the Ethereum light client.
+`crates/iroha_sccp/tests/ethereum_light_client.rs` regenerates it with
+`--ignored regenerate_native_transfer_event_v1`.
+
 `governance_v1.json` and `ton_bodies_v1.json` of the §11 table are added with
 the governance payload and TON message-body code that generate them.
 
@@ -58,10 +63,3 @@ the code cell hashes and depths. The Rust `iroha_sccp::v1::ton_cell` and
 ## Captured RPC responses
 
 `rpc/` holds captured public-RPC responses; see `rpc/transport/README.md`.
-
-## Retired layouts
-
-`native_transfer_event_v1.json`, `replay_forest_v1.json` and
-`ton_stateinit_golden_v1.json` describe the retired SCCP layouts (Groth16
-proofs, the replay archive and the previous TON contracts). They are removed
-or regenerated together with the code that still reads them (§10, §11).

@@ -743,7 +743,6 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             "future_snapshot_field",
             "state.future_snapshot_field",
         ),
-        ("world", "sccp_registry", "world.sccp_registry"),
         ("world", "commit_qcs", "world.commit_qcs"),
     ] {
         let tmp_root = tempdir().expect("temporary snapshot root");
@@ -1304,7 +1303,7 @@ async fn signed_snapshot_roundtrip_preserves_every_sccp_map() {
     assert_eq!(world.sccp_bridge_keys().len(), 2);
     assert_eq!(world.sccp_rosters().len(), 2);
     assert_eq!(world.sccp_block_leaves().len(), 2);
-    assert_eq!(world.sccp_light_client_checkpoint_expiry().len(), 2);
+    assert_eq!(world.sccp_light_client_checkpoints().len(), 2);
     assert_eq!(*world.sccp_roster_current(), 2);
     assert!(world.sccp_parameters().is_some());
 }

@@ -104,16 +104,6 @@ pub fn check_member_order(members: &[[u8; 20]]) -> Result<(), RosterError> {
     Ok(())
 }
 
-/// Sort `members` into the canonical order (big-endian byte order is 160-bit integer order).
-///
-/// # Errors
-///
-/// Returns [`RosterError::BadOrder`] when a nonzero member repeats.
-pub fn sort_members(members: &mut [[u8; 20]]) -> Result<(), RosterError> {
-    members.sort_unstable();
-    check_member_order(members)
-}
-
 /// One roster generation as the destinations see it (`RosterV1` of §5.2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RosterV1 {
@@ -519,11 +509,6 @@ mod tests {
             check_member_order(&[member(2), member(1), member(3), member(4)]),
             Err(RosterError::BadOrder)
         );
-        let mut members = vec![member(9), [0; 20], member(3), member(5)];
-        sort_members(&mut members).unwrap();
-        assert_eq!(members, vec![[0; 20], member(3), member(5), member(9)]);
-        let mut duplicate = vec![member(9), member(9), member(3), member(5)];
-        assert_eq!(sort_members(&mut duplicate), Err(RosterError::BadOrder));
         // Byte order is 160-bit integer order.
         let mut low = [0_u8; 20];
         low[19] = 0xff;

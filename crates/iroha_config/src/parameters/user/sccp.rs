@@ -163,8 +163,8 @@ pub struct SccpLightClientKeeper {
     /// `10000`, nonzero).
     #[config(default = "ms(defaults::sccp::light_client_keeper::REQUEST_TIMEOUT_MS)")]
     pub request_timeout_ms: DurationMs,
-    /// Largest encoded advance the keeper builds (default `262144`, nonzero); it never exceeds
-    /// the on-chain per-instruction bounds, which the node enforces at runtime.
+    /// Largest encoded advance the keeper submits (default `262144`, nonzero); a larger built
+    /// advance is dropped with a warning. The on-chain per-instruction bounds still apply.
     #[config(default = "defaults::sccp::light_client_keeper::MAX_ADVANCE_BYTES")]
     pub max_advance_bytes: usize,
     /// `[sccp.light_client_keeper.endpoints]`: RPC endpoint lists per chain.

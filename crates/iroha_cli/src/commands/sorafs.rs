@@ -5526,9 +5526,6 @@ pub struct IncentivesOpenDisputeArgs {
     /// Norito-encoded reward instruction (`RelayRewardInstructionV1`).
     #[arg(long = "instruction", value_name = "PATH")]
     pub instruction: PathBuf,
-    /// Treasury account initiating the dispute.
-    #[arg(long = "treasury-account", value_name = "ACCOUNT_ID")]
-    pub treasury_account: String,
     /// Account ID submitting the dispute.
     #[arg(long = "submitted-by", value_name = "ACCOUNT_ID")]
     pub submitted_by: String,
@@ -5553,12 +5550,10 @@ pub struct IncentivesOpenDisputeArgs {
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
-        let treasury = parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
-        let ledger = RelayPayoutLedger::new(treasury);
-        let dispute = ledger.open_dispute(
+        let dispute = RelayPayoutLedger::open_dispute(
             instruction,
             requested_amount,
             submitted_by,
@@ -5568,6 +5563,9 @@ impl Run for IncentivesOpenDisputeArgs {
         if let Some(path) = &self.norito_out {
             write_norito_payload(path, &dispute)?;
         }
+        if context.output_format() == crate::CliOutputFormat::Json {
+            return context.print_data(&dispute);
+        }
         let json_bytes = if self.pretty {
             norito::json::to_vec_pretty(&dispute)?
         } else {
@@ -5575,7 +5573,7 @@ impl Run for IncentivesOpenDisputeArgs {
         };
         let output = String::from_utf8(json_bytes)
             .map_err(|err| eyre!("dispute JSON is not valid UTF-8: {err}"))?;
-        context.println(output)
+        context.println_data(output)
     }
 }
 #[derive(clap::Args, Debug)]

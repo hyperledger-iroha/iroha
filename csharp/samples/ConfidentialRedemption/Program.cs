@@ -5,12 +5,16 @@ using System.Security.Cryptography;
 using Hyperledger.Iroha;
 using Hyperledger.Iroha.Privacy;
 
-var key = RandomNumberGenerator.GetBytes(32);
-var inputRho = RandomNumberGenerator.GetBytes(32);
-var changeRho = RandomNumberGenerator.GetBytes(32);
-var seed = RandomNumberGenerator.GetBytes(32);
+var key = new byte[32];
+var inputRho = new byte[32];
+var changeRho = new byte[32];
+var seed = new byte[32];
 try
 {
+    RandomNumberGenerator.Fill(key);
+    RandomNumberGenerator.Fill(inputRho);
+    RandomNumberGenerator.Fill(changeRho);
+    RandomNumberGenerator.Fill(seed);
     var networkBytes = RandomNumberGenerator.GetBytes(32);
     networkBytes[31] |= 1;
     var network = NetworkId.FromBytes(networkBytes);

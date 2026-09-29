@@ -9,13 +9,11 @@ import {
   buildRegisterPinManifestInstruction,
   buildRegisterPinManifestTransaction,
   submitIvmProvedContractCall,
-  buildApplySccpRouteGovernanceInstruction,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
   buildTransferAssetTransaction,
   buildTransferRwaTransaction,
-  buildProposeSccpRouteGovernanceTransaction,
   hashSignedTransaction,
   hashSignedTransactionPayload,
   hashInstructionBatch,
@@ -29,7 +27,6 @@ import {
   buildRegisterDomainInstruction,
   buildSetAccountKeyValueInstruction,
   buildTransferAssetInstruction,
-  buildProposeSccpRouteGovernanceInstruction,
 } from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
 import { ToriiClient } from "../src/toriiClient.js";
@@ -210,21 +207,6 @@ function mutateFirstSignedTransactionSignatureByte(signedTransaction) {
   assert.equal(firstSignatureByte.value, 1, "signature byte field must contain one byte");
   bytes[firstSignatureByte.next] ^= 0x80;
   return bytes;
-}
-
-function buildSampleSccpRemoveAction() {
-  return {
-    action: "Remove",
-    route: {
-      lane_id: {
-        source: { network: "bsc_mainnet", profile: null },
-        target: { network: "sora_taira", profile: null },
-      },
-      route_id: "taira_bsc_xor",
-      asset_key: "xor",
-      revision: 1,
-    },
-  };
 }
 
 function toByteArray(bytes) {
@@ -1010,89 +992,6 @@ test("buildTransaction requires an explicit fee payment intent", () => {
       );
     },
   );
-});
-
-test("buildApplySccpRouteGovernanceInstruction wraps one exact closed action", () => {
-  const action = buildSampleSccpRemoveAction();
-  assert.deepEqual(
-    buildApplySccpRouteGovernanceInstruction(action),
-    { ApplySccpRouteGovernance: { action } },
-  );
-});
-
-test("SCCP route governance action rejects aliases and retired manifests", () => {
-  for (const action of [
-    { ...buildSampleSccpRemoveAction(), manifest: {} },
-    { action: "Remove", route: { ...buildSampleSccpRemoveAction().route, routeId: "alias" } },
-    { action: "UpsertManifest", route: {} },
-  ]) {
-    assert.throws(() => buildApplySccpRouteGovernanceInstruction(action));
-  }
-});
-
-test("SCCP route governance transaction submits one typed atomic action", () => {
-  const action = buildSampleSccpRemoveAction();
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x10, 0x20]),
-    hash: Buffer.alloc(32, 0xb1),
-  };
-
-  withTransactionApi(
-    {
-      buildTransaction: (
-        networkId,
-        authority,
-        instructions,
-        feePaymentJson,
-        metadataPayload,
-        creationTimeMs,
-        ttlMs,
-        nonce,
-        secret,
-      ) => {
-        captures.push({
-          networkId,
-          authority,
-          instructions: instructions.map((payload) => JSON.parse(payload)),
-          feePaymentJson,
-          metadataPayload,
-          creationTimeMs,
-          ttlMs,
-          nonce,
-          secret,
-        });
-        return fakeResult;
-      },
-    },
-    (transaction) => {
-      const built = transaction.buildApplySccpRouteGovernanceTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        action,
-        metadata: { op: "apply-sccp-route-governance" },
-        creationTimeMs: 1_700_000_000_000,
-        ttlMs: 5_000,
-        nonce: 7,
-        privateKey: PRIVATE_KEY,
-      });
-      assert.deepEqual(built.hash, Buffer.from(fakeResult.hash));
-    },
-  );
-
-  assert.equal(captures.length, 1);
-  assert.deepEqual(captures[0].instructions, [
-    { ApplySccpRouteGovernance: { action } },
-  ]);
-  assert.equal(JSON.parse(captures[0].feePaymentJson).payer, "authority");
-  assert.deepEqual(JSON.parse(captures[0].metadataPayload), {
-    op: "apply-sccp-route-governance",
-  });
-  assert.equal(captures[0].creationTimeMs, 1_700_000_000_000);
-  assert.equal(captures[0].ttlMs, 5_000);
-  assert.equal(captures[0].nonce, 7);
-  assert.equal(captures[0].secret.equals(PRIVATE_KEY), true);
 });
 
 test("transaction helper wrappers forward privateKeyAlgorithm", () => {
@@ -3208,61 +3107,6 @@ baseTest("buildProposeDeployContractTransaction rejects the retired operator fie
     /proposalOperator/u,
   );
   assert.equal(nativeCalls, 0);
-});
-
-baseTest("buildProposeSccpRouteGovernanceTransaction binds the exact network anchor", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x10]),
-    hash: Buffer.alloc(32, 0x10),
-  };
-  const action = buildSampleSccpRemoveAction();
-  withTransactionApi(
-    {
-      buildTransaction: (_network, _authority, instructions) => {
-        captures.push(JSON.parse(instructions[0]));
-        return fakeResult;
-      },
-    },
-    (transaction) => transaction.buildProposeSccpRouteGovernanceTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      action,
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.deepEqual(captures, [{
-    ProposeSccpRouteGovernance: {
-      anchor: {
-        network_id: NETWORK_ID.toString(),
-        action,
-      },
-    },
-  }]);
-  for (const field of ["window", "mode", "anchor"]) {
-    assert.throws(
-      () => buildProposeSccpRouteGovernanceInstruction({
-        networkId: NETWORK_ID,
-        action,
-        [field]: null,
-      }),
-      new RegExp(field, "u"),
-    );
-  }
-  for (const field of ["proposal", "window", "mode", "anchor"]) {
-    assert.throws(
-      () => buildProposeSccpRouteGovernanceTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        action,
-        privateKey: PRIVATE_KEY,
-        [field]: null,
-      }),
-      new RegExp(field, "u"),
-    );
-  }
 });
 
 baseTest("buildCastZkBallotTransaction encodes ballot", () => {

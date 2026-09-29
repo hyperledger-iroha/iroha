@@ -356,26 +356,15 @@ const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
 const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
-// SCCP response limits are part of the client-side resource boundary. They
-// apply to bytes emitted by the decoded response stream, not just advertised
+// Bounded JSON response limits are part of the client-side resource boundary.
+// They apply to bytes emitted by the decoded response stream, not just advertised
 // Content-Length values, so compressed or chunked responses cannot bypass them.
-const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
-const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
-const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const ELECTION_TALLY_JSON_RESPONSE_MAX_BYTES = 8 * 1024;
 const SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES = 1024;
 // The maximum 1,000-record fixed evidence envelope remains below this ceiling,
 // including full-width u64 integers and terminal penalty details.
 const SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES = 1024 * 1024;
-const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES =
-  SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024;
-const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
-  "iroha_sccp::TairaSccpMessageProofV1";
-const SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES = Object.freeze([
-  "iroha_sccp::SccpGroth16Bn254ProofRequestV1",
-  "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1",
-]);
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -3368,7 +3357,7 @@ export class ToriiClient {
       const error = new TypeError(
         "successful Hijiri validation-fee quote carried a rejection code",
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const contentType = this._getHeader(response, "content-type") ?? "";
@@ -3376,7 +3365,7 @@ export class ToriiClient {
       const error = new TypeError(
         "Hijiri validation-fee quote response must use exact application/x-norito",
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const contentEncoding = this._getHeader(response, "content-encoding");
@@ -3387,7 +3376,7 @@ export class ToriiClient {
       const error = new TypeError(
         "Hijiri validation-fee quote response Content-Encoding must be identity",
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const cacheControlDirectives = splitCacheControlDirectives(
@@ -3410,7 +3399,7 @@ export class ToriiClient {
       const error = new TypeError(
         "Hijiri validation-fee quote response must remain private and no-store and must not be public",
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const { bytes: responseBytes } = await this._readBoundedResponseBytes(
@@ -3484,11 +3473,11 @@ export class ToriiClient {
       const error = new TypeError(
         "validation-fee proof response must use application/x-norito",
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const proofNorito = Buffer.from(
-      await readBoundedSccpResponseBytes(
+      await readBoundedResponseBody(
         response,
         VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
         "validation-fee proof",
@@ -3898,7 +3887,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "sorafs alias list response",
       { signal },
     );
@@ -3941,7 +3930,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs pin list response", { signal },
+      response, JSON_RESPONSE_MAX_BYTES, "sorafs pin list response", { signal },
     );
     if (!payload) {
       rejectError("sorafs pin list endpoint returned no payload");
@@ -4051,7 +4040,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs replication list response", { signal },
+      response, JSON_RESPONSE_MAX_BYTES, "sorafs replication list response", { signal },
     );
     if (!payload) {
       rejectError("sorafs replication list endpoint returned no payload");
@@ -5042,7 +5031,7 @@ export class ToriiClient {
       return discardResponseBody(response, "sorafs pin manifest was not found", signal);
     }
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs pin manifest response",
+      response, JSON_RESPONSE_MAX_BYTES, "sorafs pin manifest response",
       { signal, floatingPointPaths: [["manifest", "metadata"]] },
     );
     sorafsPinDetail.normalize(payload, expected);
@@ -6428,7 +6417,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], { signal });
     const payload = await this._maybeBoundedJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "pipeline preflight response",
       { signal },
     );
@@ -6682,7 +6671,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], { signal });
     const payload = await this._maybeBoundedJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "network time status response",
       { signal },
     );
@@ -6774,241 +6763,6 @@ export class ToriiClient {
       expectedNetworkId: Uint8Array.from(expectedNetworkId),
       origin: origin.origin,
     });
-  }
-
-  /**
-   * Fetch SCCP capability discovery (`GET /v1/sccp/capabilities`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpCapabilities(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpCapabilities");
-    const response = await this._request("GET", "/v1/sccp/capabilities", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP capabilities",
-      signal,
-    });
-    const { normalizeSccpCapabilities } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      normalizeSccpCapabilities,
-      "SCCP capabilities",
-      SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
-    );
-  }
-
-  /**
-   * Fetch the authoritative typed SCCP registry (`GET /v1/sccp/registry`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpRegistry(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpRegistry");
-    const response = await this._request("GET", "/v1/sccp/registry", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP registry",
-      signal,
-    });
-    const { normalizeSccpRegistry } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      normalizeSccpRegistry,
-      "SCCP registry",
-      SCCP_JSON_RESPONSE_MAX_BYTES,
-    );
-  }
-
-  /**
-   * Fetch the governance-derived SORA-side IVM material for one exact enabled
-   * route. The response is cryptographically bound to its artifact SHA-256 and
-   * to the requested route key; callers cannot select bytecode, VK, or gas.
-   * @param {{sourceProfile: string, routeId: string, assetKey: string, revision: number}} route
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpSoraOutboundMaterial(route, options = {}) {
-    const exactRoute = normalizeSccpSoraOutboundMaterialRoute(
-      route,
-      "getSccpSoraOutboundMaterial.route",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "getSccpSoraOutboundMaterial");
-    const response = await this._request(
-      "GET",
-      `/v1/sccp/routes/${encodeURIComponent(exactRoute.sourceProfile)}/${encodeURIComponent(exactRoute.routeId)}/${encodeURIComponent(exactRoute.assetKey)}/${exactRoute.revision}/sora-outbound-material`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
-    );
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP SORA outbound material",
-      signal,
-    });
-    const { normalizeSccpSoraOutboundMaterial } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      (payload) => normalizeSccpSoraOutboundMaterial(payload, exactRoute),
-      "SCCP SORA outbound material",
-      SCCP_JSON_RESPONSE_MAX_BYTES,
-    );
-  }
-
-  /**
-   * Fetch one state-derived message/finality bundle by canonical message id.
-   * Native responses are preflighted as canonical uncompressed Norito frames
-   * bound to `TairaSccpMessageProofV1`. This lightweight client returns the
-   * opaque frame and does not decode its embedded message id; callers that need
-   * independent path-to-payload binding must decode the returned typed value.
-   * @param {string} messageId
-   * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
-   * @returns {Promise<object | Uint8Array>}
-   */
-  async getSccpMessageBundle(messageId, options = {}) {
-    const id = normalizeSccpMessageIdPath(messageId, "getSccpMessageBundle.messageId");
-    const { format, signal } = normalizeSccpTypedReadOptions(
-      options,
-      "getSccpMessageBundle",
-    );
-    const response = await this._request("GET", `/v1/sccp/proofs/message/${id}`, {
-      headers: { Accept: sccpAcceptHeader(format) },
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes:
-        format === "norito"
-          ? SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
-          : SCCP_JSON_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP message bundle",
-      signal,
-    });
-    if (format === "norito") {
-      return readSccpNoritoResponse(
-        response,
-        "SCCP message bundle",
-        SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
-        SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
-      );
-    }
-    const { normalizeSccpMessageBundle } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      normalizeSccpMessageBundle,
-      "SCCP message bundle",
-      SCCP_JSON_RESPONSE_MAX_BYTES,
-    );
-  }
-
-  /**
-   * Fetch one query-free, state-derived Groth16 prover request by message id.
-   * Native responses are preflighted as canonical uncompressed concrete Norito
-   * frames bound to either `SccpGroth16Bn254ProofRequestV1` or
-   * `SccpTonGroth16Bls12381ProofRequestV1`. This lightweight client returns the
-   * opaque frame and does not decode its embedded message id; callers that need
-   * independent path-to-payload binding must decode the returned typed value.
-   * @param {string} messageId
-   * @param {{format?: "json" | "norito", signal?: AbortSignal}} [options]
-   * @returns {Promise<object | Uint8Array>}
-   */
-  async getSccpProofRequest(messageId, options = {}) {
-    const id = normalizeSccpMessageIdPath(messageId, "getSccpProofRequest.messageId");
-    const { format, signal } = normalizeSccpTypedReadOptions(
-      options,
-      "getSccpProofRequest",
-    );
-    const response = await this._request("GET", `/v1/sccp/proof-requests/${id}`, {
-      headers: { Accept: sccpAcceptHeader(format) },
-      signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes:
-        format === "norito"
-          ? SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES
-          : SCCP_JSON_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP proof request",
-      signal,
-    });
-    if (format === "norito") {
-      return readSccpNoritoResponse(
-        response,
-        "SCCP proof request",
-        SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
-        SCCP_PROOF_REQUEST_NORITO_TYPE_NAMES,
-      );
-    }
-    const { normalizeSccpProofRequest } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      normalizeSccpProofRequest,
-      "SCCP proof request",
-      SCCP_JSON_RESPONSE_MAX_BYTES,
-    );
-  }
-
-  /**
-   * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
-   * @param {{from?: number, after_index?: number, limit?: number, signal?: AbortSignal}} [options]
-   * @returns {Promise<object>}
-   */
-  async getSccpRecentMessages(options = {}) {
-    const record = requirePlainObjectOption(options, "getSccpRecentMessages.options", {
-      message: "must be a plain object",
-    });
-    const unknown = Object.keys(record).find(
-      (key) =>
-        key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
-    );
-    if (unknown !== undefined) {
-      rejectType(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
-    }
-    const params = {};
-    if (record.from !== undefined) {
-      if (!Number.isSafeInteger(record.from) || record.from < 1) {
-        rejectType("getSccpRecentMessages.options.from must be a positive safe integer");
-      }
-      params.from = String(record.from);
-    }
-    if (record.after_index !== undefined) {
-      if (record.from === undefined) {
-        rejectType("getSccpRecentMessages.options.after_index requires from");
-      }
-      if (
-        !Number.isSafeInteger(record.after_index) ||
-        record.after_index < 0 ||
-        record.after_index > 511
-      ) {
-        rejectType("getSccpRecentMessages.options.after_index must be an integer in 0..511");
-      }
-      params.after_index = String(record.after_index);
-    }
-    if (record.limit !== undefined) {
-      if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
-        rejectType("getSccpRecentMessages.options.limit must be an integer in 1..50");
-      }
-      params.limit = String(record.limit);
-    }
-    const response = await this._request("GET", "/v1/sccp/messages/recent", {
-      headers: { Accept: "application/json" },
-      params,
-      signal: record.signal,
-    });
-    await this._expectStatus(response, [200], {
-      maximumBodyBytes: SCCP_RECENT_RESPONSE_MAX_BYTES,
-      responseLabel: "SCCP recent messages",
-      signal: record.signal,
-    });
-    const { normalizeSccpRecentMessages } = await loadToriiOptionalModule();
-    return readSccpJsonResponse(
-      response,
-      normalizeSccpRecentMessages,
-      "SCCP recent messages",
-      SCCP_RECENT_RESPONSE_MAX_BYTES,
-    );
   }
 
   /**
@@ -7162,7 +6916,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], { signal });
     return this._maybeBoundedJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "peer list response",
       { signal },
     );
@@ -7547,7 +7301,7 @@ export class ToriiClient {
     }
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance referendum response", { signal },
+      response, JSON_RESPONSE_MAX_BYTES, "governance referendum response", { signal },
     );
     if (!payload) {
       rejectError("governance referendum endpoint returned no payload");
@@ -7619,7 +7373,7 @@ export class ToriiClient {
       return null;
     }
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance tally response", { signal },
+      response, JSON_RESPONSE_MAX_BYTES, "governance tally response", { signal },
     );
     if (!payload) {
       rejectError("governance tally endpoint returned no payload");
@@ -7664,7 +7418,7 @@ export class ToriiClient {
       return null;
     }
     const payload = await this._readBoundedLosslessIntegerJson(
-      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance locks response", { signal },
+      response, JSON_RESPONSE_MAX_BYTES, "governance locks response", { signal },
     );
     if (!payload) {
       rejectError("governance locks endpoint returned no payload");
@@ -8804,7 +8558,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "kaigi call endpoint",
       { signal },
     );
@@ -8850,7 +8604,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "kaigi call signals endpoint",
       { signal },
     );
@@ -8908,7 +8662,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "kaigi relay list endpoint",
       { signal },
     );
@@ -8939,7 +8693,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "kaigi relay detail endpoint",
       { signal },
     );
@@ -8961,7 +8715,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "kaigi relay health endpoint",
       { signal },
     );
@@ -10106,7 +9860,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], { signal });
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      SCCP_JSON_RESPONSE_MAX_BYTES,
+      JSON_RESPONSE_MAX_BYTES,
       "governance contract response",
       { signal },
     );
@@ -11913,7 +11667,7 @@ export class ToriiClient {
   async _maybeJson(
     response,
     {
-      maxBytes = SCCP_JSON_RESPONSE_MAX_BYTES,
+      maxBytes = JSON_RESPONSE_MAX_BYTES,
       context = "Torii JSON response",
       signal,
     } = {},
@@ -15351,7 +15105,7 @@ async function parseGovernanceProposalKind(payload, context) {
     case "SccpRouteGovernance":
       return {
         variant,
-        sccp_route_governance: await parseGovernanceSccpRouteGovernance(
+        sccp_route_governance: parseGovernanceSccpRouteGovernance(
           details,
           `${context}.payload`,
         ),
@@ -15576,24 +15330,39 @@ function parseGovernanceSbomDigests(payload, context) {
   });
 }
 
-async function parseGovernanceSccpRouteGovernance(payload, context) {
-  const record = requireExactGovernanceProposalRecord(payload, ["anchor"], context);
-  const anchorContext = `${context}.anchor`;
-  const anchor = requireExactGovernanceProposalRecord(
-    record.anchor,
-    ["network_id", "action"],
-    anchorContext,
+const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
+
+function parseGovernanceSccpRouteGovernance(payload, context) {
+  const record = requireExactGovernanceProposalRecord(payload, ["proposal"], context);
+  const proposalContext = `${context}.proposal`;
+  const proposal = requireExactGovernanceProposalRecord(
+    record.proposal,
+    ["network_id", "base_revisions", "actions"],
+    proposalContext,
   );
   const networkId = requireExactNonEmptyString(
-    anchor.network_id,
-    `${anchorContext}.network_id`,
+    proposal.network_id,
+    `${proposalContext}.network_id`,
   );
   NetworkId.parse(networkId);
-  const { normalizeSccpRouteGovernanceAction } = await loadToriiOptionalModule();
+  const baseRevisions = requireGovernanceArray(
+    proposal.base_revisions,
+    `${proposalContext}.base_revisions`,
+  );
+  const actions = requireGovernanceArray(proposal.actions, `${proposalContext}.actions`);
+  if (actions.length === 0 || actions.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+    rejectType(
+      `${proposalContext}.actions must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} actions`,
+    );
+  }
+  // TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
+  // entry statically (specs/sccp.md §4.14.3) once the SDK carries typed SCCP
+  // governance codecs; Torii and the node remain authoritative for them today.
   return {
-    anchor: {
+    proposal: {
       network_id: networkId,
-      action: normalizeSccpRouteGovernanceAction(anchor.action),
+      base_revisions: baseRevisions,
+      actions,
     },
   };
 }
@@ -25608,6 +25377,10 @@ function normalizeRamLfeProofVerifierMetadata(payload, context) {
 
 function normalizeRamLfeProgramProfile(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, new Set([
+    "initializer_descriptor_hash", "profile_version", "register_count", "memory_lane_count",
+    "ciphertext_mul_per_step", "encrypted_input_mode", "min_ciphertext_modulus",
+  ]), context);
   const encryptedInputMode = requireExactNonEmptyString(
     record.encrypted_input_mode,
     `${context}.encrypted_input_mode`,
@@ -25619,32 +25392,28 @@ function normalizeRamLfeProgramProfile(payload, context) {
       `${context}.encrypted_input_mode`,
     );
   }
+  const dimension = (field, maximum) => {
+    const name = `${context}.${field}`;
+    const value = requireBfvUint(record[field], name, { allowZero: false });
+    if (value > maximum) {
+      throw createValidationError(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must be at most ${maximum}`,
+        name,
+      );
+    }
+    return value <= MAX_SAFE_INTEGER_BIGINT ? Number(value) : value;
+  };
   return {
-    profile_version: normalizeIdentifierBfvUint(
-      record.profile_version,
-      `${context}.profile_version`,
-      { allowZero: false, safe: true },
-    ),
-    register_count: normalizeIdentifierBfvUint(
-      record.register_count,
-      `${context}.register_count`,
-      { allowZero: false, safe: true },
-    ),
-    memory_lane_count: normalizeIdentifierBfvUint(
-      record.memory_lane_count,
-      `${context}.memory_lane_count`,
-      { allowZero: false, safe: true },
-    ),
-    ciphertext_mul_per_step: normalizeIdentifierBfvUint(
-      record.ciphertext_mul_per_step,
-      `${context}.ciphertext_mul_per_step`,
-      { allowZero: false, safe: true },
-    ),
+    profile_version: dimension("profile_version", 255n),
+    register_count: dimension("register_count", 65535n),
+    memory_lane_count: dimension("memory_lane_count", 65535n),
+    ciphertext_mul_per_step: dimension("ciphertext_mul_per_step", 255n),
     encrypted_input_mode: encryptedInputMode,
-    min_ciphertext_modulus: normalizeIdentifierBfvUint(
-      record.min_ciphertext_modulus,
-      `${context}.min_ciphertext_modulus`,
-      { allowZero: false },
+    min_ciphertext_modulus: dimension("min_ciphertext_modulus", (1n << 64n) - 1n),
+    initializer_descriptor_hash: normalizeIrohaHashHex32(
+      requireExactReceiptHash(record.initializer_descriptor_hash, `${context}.initializer_descriptor_hash`),
+      `${context}.initializer_descriptor_hash`,
     ),
   };
 }
@@ -30882,139 +30651,7 @@ function normalizeSignalOnlyOption(options, context) {
   return { signal };
 }
 
-function normalizeSccpMessageIdPath(value, context) {
-  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
-    rejectType(`${context} must be canonical lowercase nonzero 32-byte hex`);
-  }
-  return value;
-}
-
-const SCCP_EXTERNAL_ROUTE_PROFILES = new Set([
-  "ethereum-mainnet",
-  "bsc-mainnet",
-  "tron-mainnet",
-  "ton-mainnet",
-]);
-const SCCP_ROUTE_KEY_SEGMENT = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
-
-function normalizeSccpSoraOutboundMaterialRoute(value, context) {
-  const record = requirePlainObjectOption(value, context, {
-    message: "must be a plain object",
-  });
-  const expectedFields = ["sourceProfile", "routeId", "assetKey", "revision"];
-  const unknown = Object.keys(record).find((field) => !expectedFields.includes(field));
-  if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field \`${unknown}\``);
-  }
-  for (const field of expectedFields) {
-    if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      rejectType(`${context} is missing required field \`${field}\``);
-    }
-  }
-  if (!SCCP_EXTERNAL_ROUTE_PROFILES.has(record.sourceProfile)) {
-    rejectType(`${context}.sourceProfile is not one exact external SCCP profile`);
-  }
-  for (const field of ["routeId", "assetKey"]) {
-    if (typeof record[field] !== JS_TYPE_STRING || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
-      rejectType(`${context}.${field} must be canonical lowercase route text`);
-    }
-  }
-  if (
-    !Number.isSafeInteger(record.revision) ||
-    record.revision < 1 ||
-    record.revision > 0xffff_ffff
-  ) {
-    rejectType(`${context}.revision must be a nonzero uint32`);
-  }
-  return Object.freeze({
-    sourceProfile: record.sourceProfile,
-    routeId: record.routeId,
-    assetKey: record.assetKey,
-    revision: record.revision,
-  });
-}
-
-function normalizeSccpTypedReadOptions(options, context) {
-  const record = requirePlainObjectOption(options, `${context}.options`, {
-    message: "must be a plain object",
-  });
-  const unknown = Object.keys(record).find((key) => key !== "format" && key !== "signal");
-  if (unknown !== undefined) {
-    rejectType(`${context}.options contains unknown field \`${unknown}\``);
-  }
-  const format = record.format ?? "json";
-  if (format !== "json" && format !== "norito") {
-    rejectType(`${context}.options.format must be exactly \`json\` or \`norito\``);
-  }
-  return { format, signal: record.signal };
-}
-
-function sccpAcceptHeader(format) {
-  return format === "norito" ? "application/x-norito" : "application/json";
-}
-
-async function readSccpJsonResponse(response, normalize, label, maximumBodyBytes) {
-  const contentType = response.headers?.get?.("content-type") ?? "";
-  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) {
-    const error = new TypeError(`${label} response must use application/json content type`);
-    await cancelSccpResponseBody(response, error);
-    throw error;
-  }
-  const bytes = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
-  const { parseSccpJsonObject } = await loadToriiOptionalModule();
-  const payload = parseSccpJsonObject(decodeSccpUtf8(bytes, label), label);
-  return normalize(payload);
-}
-
-async function readSccpNoritoResponse(
-  response,
-  label,
-  maximumBodyBytes,
-  expectedTypeNames,
-) {
-  const contentType = response.headers?.get?.("content-type") ?? "";
-  if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
-    const error = new TypeError(
-      `${label} response must use application/x-norito content type`,
-    );
-    await cancelSccpResponseBody(response, error);
-    throw error;
-  }
-  const body = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
-  const closedTypeNames = typeof expectedTypeNames === JS_TYPE_STRING
-    ? [expectedTypeNames]
-    : expectedTypeNames;
-  if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
-    rejectType(`${label} response must declare a closed Norito type set`);
-  }
-  const { validateNoritoFrame } = await loadToriiOptionalModule();
-  let matchedClosedType = false;
-  for (const typeName of closedTypeNames) {
-    try {
-      validateNoritoFrame(body, {
-        context: `${label} response`,
-        expectedTypeName: typeName,
-        expectedPaddingLength: 0,
-        requireNonEmptyPayload: true,
-      });
-      matchedClosedType = true;
-      break;
-    } catch {
-      // Validate framing once below before reporting a closed-set mismatch.
-    }
-  }
-  if (!matchedClosedType) {
-    validateNoritoFrame(body, {
-      context: `${label} response`,
-      expectedPaddingLength: 0,
-      requireNonEmptyPayload: true,
-    });
-    rejectError(`${label} response schema hash did not match the closed type set`);
-  }
-  return body;
-}
-
-async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
+async function readBoundedResponseBody(response, maximumBodyBytes, label) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     rejectType(`${label} response byte-size bound is invalid`);
   }
@@ -31028,7 +30665,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
       const error = new TypeError(
         `${label} response Content-Length must be a canonical unsigned decimal integer`,
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
     const declaredLength = Number(rawContentLength);
@@ -31036,7 +30673,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
       const error = new TypeError(
         `${label} response exceeds its ${maximumBodyBytes}-byte size bound`,
       );
-      await cancelSccpResponseBody(response, error);
+      await cancelResponseBody(response, error);
       throw error;
     }
   }
@@ -31048,7 +30685,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
     const error = new TypeError(
       `${label} response body is not readable as a byte stream`,
     );
-    await cancelSccpResponseBody(response, error);
+    await cancelResponseBody(response, error);
     throw error;
   }
 
@@ -31111,7 +30748,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
   return body;
 }
 
-async function cancelSccpResponseBody(response, reason) {
+async function cancelResponseBody(response, reason) {
   const body = response?.body;
   if (!body || body.locked || typeof body.cancel !== JS_TYPE_FUNCTION) {
     return;
@@ -31120,14 +30757,6 @@ async function cancelSccpResponseBody(response, reason) {
     await body.cancel(reason);
   } catch {
     // A rejected cancellation must not mask the fail-closed validation error.
-  }
-}
-
-function decodeSccpUtf8(bytes, label) {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch (error) {
-    rejectType(`${label} response body must be strict UTF-8`, { cause: error });
   }
 }
 

@@ -20,7 +20,10 @@ require the packaged ABI-24 Rust bridge for the current runtime identifier. Priv
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
-The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+The IVM replay-binding backend label is `halo2/pasta/ivm-replay-binding-v1`;
+its canonical circuit ID is `halo2/pasta/ipa/ivm-replay-binding-v1`. These
+are distinct registry fields. The proof binds public commitments; validators
+establish execution validity through authenticated VM replay.
 
 Privacy archive queries and validation run on the caller's ordinary stack. They
 do not create enlarged-stack threads. Native result bounds, owned input snapshots
@@ -180,8 +183,8 @@ Major first-release areas include:
 - signed iterable queries and canonical transaction submission;
 - fee quotes and sponsor programs;
 - pipeline, data, proof, and explorer event streams;
-- contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, SCCP, VPN, and
-  SoraFS routes.
+- contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, VPN, and SoraFS
+  routes.
 
 For an existing public standalone ballot, use
 `TransactionBuilder.UpdatePlainConviction(referendumId, newTotalBond, durationBlocks)`.
@@ -295,9 +298,7 @@ every public address constructor and parser additionally requires the ABI-24
 Rust address owner for complete key and policy admission. Missing native
 validation raises `NativeBridgeUnavailable`; structural checks cannot admit an
 account by themselves. Canonical I105 parsing rejects surrounding Unicode
-whitespace. SCCP preserves extended single-key envelopes and full multisig
-AccountId bytes within its 65,535-byte principal limit. Signature verification
-remains a separate operation.
+whitespace. Signature verification remains a separate operation.
 The C# SDK does not yet generate Kaigi proofs or expose a native Kaigi prover.
 
 The five transparent instructions and complex private-create bytes are pinned
@@ -312,3 +313,40 @@ participation ledger checked against its roster; SHA-256 is
 `0e54e88cd17476645d0bc88d307e49dc3237d0adda5c652357759ce66b65667d`.
 These are model fixtures with synthetic artifacts, not proof-generation,
 four-validator, hardware or release-qualification evidence.
+
+## Local confidential wallet proofs
+
+`Hyperledger.Iroha.Privacy.ConfidentialProver` owns a clearing native spend key,
+accepts an exact `NetworkId` and `ConfidentialAssetId`, and selects the canonical
+relation and proving key. Use `using` or `Dispose()`. `ProveTransferAsync` and
+`ProveRedemptionAsync` prepare a bounded native job synchronously, consume and clear
+the supplied note/tree owners, and run proving on the ordinary thread pool.
+Disposing the prover rejects future jobs while an accepted job can finish.
+Validation failures before accepting bounded inputs leave those caller owners
+available for explicit disposal. Original caller arrays remain caller-owned.
+
+Supply one or two actual `ConfidentialInputNote` values. Choose
+`ConfidentialTreeEvidence.Commitments(root, leaves)` or
+`ConfidentialTreeEvidence.Paths(root, paths)`; the latter needs exactly one
+16-level path per real input, with no dummy path. The native result is
+self-verified and checked against the requested root, relation and cardinalities.
+
+Persist the private change amount and rho securely **before** proving consumes a
+`ConfidentialChangeNote`. After its leaf index and root are independently
+authenticated, reconstruct the change owner and call `ToInput(leafIndex)`.
+This uses Core's default change diversifier; reusing a nondefault input diversifier
+would produce another owner. `ConfidentialNotes` supplies native-backed default
+diversifier, owner, commitment, root and path helpers without managed cryptography.
+
+Run the two-proof disposable example with the normal ABI-24 runtime library
+available to the .NET loader:
+
+```sh
+dotnet run --project samples/ConfidentialRedemption
+```
+
+It uses OS randomness, proves a partial redemption, restores its change opening,
+then proves full redemption after disposing the parent prover. These are local
+proof artifacts. Roots must come from authenticated protocol state, and a proof
+does not submit a transaction or establish ledger authorization. Host execution
+does not qualify all five NuGet runtime assets.

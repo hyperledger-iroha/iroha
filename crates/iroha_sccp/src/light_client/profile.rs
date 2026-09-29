@@ -447,8 +447,8 @@ pub struct TonChainProfileV1 {
     pub supported_until_ms: u64,
 }
 
-/// TON mainnet profile compiled into this release (global id −239, zero state and TL-B layouts
-/// are fixed by `ton_native`).
+/// TON mainnet profile compiled into this release (global id −239 and the TL-B layouts are fixed
+/// by `ton_native`).
 pub const TON_MAINNET: TonChainProfileV1 = TonChainProfileV1 {
     freshness_margin_ms: TON_FRESHNESS_MARGIN_MS,
     supported_until_ms: TON_MAINNET_SUPPORTED_UNTIL_MS,

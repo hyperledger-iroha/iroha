@@ -283,7 +283,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:ca-complete-fp4-air1379-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:rfc5280-calendar-and-numeric=base285-aux280-fixed102-constraints1681-degree4-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-30relation-bound:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:ca-complete-fp4-air1379-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -2286,6 +2286,16 @@ pub(crate) fn validate_zk_x509_main_registration_shape_v1()
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
     Ok(shape)
+}
+/// Expected successful MAIN common-domain FFT column count for diagnostic coverage.
+#[cfg(test)]
+pub(super) fn main_diagnostic_transform_columns_v1() -> Result<usize, ZkX509StarkErrorV1> {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    Ok(2 * layout
+        .trace_groups
+        .iter()
+        .map(|group| group.base_width + group.aux_width)
+        .sum::<usize>())
 }
 /// Complete verifier-owned first-release MAIN profile.
 ///
@@ -4325,9 +4335,23 @@ impl Drop for ZeroizingExtensionColumnV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl zeroize::Zeroize for ZeroizingExtensionColumnV1 {
     fn zeroize(&mut self) {
-        for value in &mut self.0 {
-            value.zeroize_v1();
-        }
+        super::private_table::zeroize_words_v1(&mut self.0);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+type ZeroizingExtensionChunksV1 = super::private_table::PrivateTableV1<Vec<E>>;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+type ZeroizingExtensionLanesV1 = super::private_table::PrivateTableV1<Vec<Vec<E>>>;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_extension_chunks_v1(columns: &mut [Vec<E>]) {
+    for column in columns {
+        super::private_table::zeroize_words_v1(column);
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn zeroize_extension_lanes_v1(lanes: &mut [Vec<Vec<E>>]) {
+    for lane in lanes {
+        zeroize_extension_chunks_v1(lane);
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -4451,7 +4475,7 @@ fn composition_coefficient_chunks_v1(
     let chunk_size = shared_layout
         .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
         .map_err(map_aggregate_error_v1)?;
-    let mut chunks = Vec::new();
+    let mut chunks = ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
     chunks
         .try_reserve_exact(COMPOSITION_DEGREE_CHUNKS)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
@@ -4485,7 +4509,7 @@ fn composition_coefficient_chunks_v1(
         );
         chunks.push(coefficients);
     }
-    Ok(chunks)
+    Ok(chunks.into_vec())
 }
 #[cfg(test)]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -7062,9 +7086,7 @@ impl ZeroizingMainTraceColumnV1 {
         core::mem::take(&mut self.0)
     }
     fn zeroize_private_v1(&mut self) {
-        for value in &mut self.0 {
-            value.zeroize_v1();
-        }
+        super::private_table::zeroize_fields_v1(&mut self.0);
         self.0.clear();
     }
 }
@@ -7338,11 +7360,11 @@ fn canonical_p256_main_log16_bindings_v1(
 const P256_MAIN_LOG19_REGISTRATION_COUNT_V1: usize = 15;
 const MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1: usize = 6;
 const MAIN_LOG19_REGISTRATION_COUNT_V1: usize = 21;
-const MAIN_LOG19_BASE_WIDTH_V1: usize = 1_940;
-const MAIN_LOG19_AUX_WIDTH_V1: usize = 1_772;
+const MAIN_LOG19_BASE_WIDTH_V1: usize = 2_112;
+const MAIN_LOG19_AUX_WIDTH_V1: usize = 1_788;
 const MAIN_LOG19_PHYSICAL_CHUNKS_V1: usize = 52;
-const P256_MAIN_LOG19_BASE_START_V1: usize = 545;
-const P256_MAIN_LOG19_AUX_START_V1: usize = 772;
+const P256_MAIN_LOG19_BASE_START_V1: usize = 717;
+const P256_MAIN_LOG19_AUX_START_V1: usize = 788;
 const P256_MAIN_LOG19_BASE_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
     * (P256_ARITHMETIC_BASE_WIDTH_V1 + 2 * P256_VALUE_BUS_STARK_BASE_WIDTH_V1);
 const P256_MAIN_LOG19_AUX_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
@@ -7353,19 +7375,20 @@ const P256_MAIN_LOG19_PHYSICAL_CHUNKS_V1: usize = 35;
 const P256_MAIN_LOG19_NEXT_STRIDE_V1: usize =
     1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1);
 const P256_MAIN_LOG19_BASE_STARTS_V1: [usize; P256_MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    545, 756, 967, 1_178, 1_389, 1_600, 1_634, 1_668, 1_702, 1_736, 1_770, 1_804, 1_838, 1_872,
-    1_906,
+    717, 928, 1_139, 1_350, 1_561, 1_772, 1_806, 1_840, 1_874, 1_908, 1_942, 1_976, 2_010, 2_044,
+    2_078,
 ];
 const P256_MAIN_LOG19_AUX_STARTS_V1: [usize; P256_MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    772, 844, 916, 988, 1_060, 1_132, 1_248, 1_260, 1_376, 1_388, 1_504, 1_516, 1_632, 1_644, 1_760,
+    788, 860, 932, 1_004, 1_076, 1_148, 1_264, 1_276, 1_392, 1_404, 1_520, 1_532, 1_648, 1_660,
+    1_776,
 ];
 const MAIN_LOG19_BASE_STARTS_V1: [usize; MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    0, 76, 189, 278, 367, 456, 545, 756, 967, 1_178, 1_389, 1_600, 1_634, 1_668, 1_702, 1_736,
-    1_770, 1_804, 1_838, 1_872, 1_906,
+    0, 76, 361, 450, 539, 628, 717, 928, 1_139, 1_350, 1_561, 1_772, 1_806, 1_840, 1_874, 1_908,
+    1_942, 1_976, 2_010, 2_044, 2_078,
 ];
 const MAIN_LOG19_AUX_STARTS_V1: [usize; MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    0, 196, 460, 538, 616, 694, 772, 844, 916, 988, 1_060, 1_132, 1_248, 1_260, 1_376, 1_388,
-    1_504, 1_516, 1_632, 1_644, 1_760,
+    0, 196, 476, 554, 632, 710, 788, 860, 932, 1_004, 1_076, 1_148, 1_264, 1_276, 1_392, 1_404,
+    1_520, 1_532, 1_648, 1_660, 1_776,
 ];
 const MAIN_LOG19_NON_P256_KEYS_V1: [(SegmentAdapterIdV1, u16);
     MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1] = [
@@ -7382,8 +7405,8 @@ const _: () = assert!(
     MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1 + P256_MAIN_LOG19_REGISTRATION_COUNT_V1
         == MAIN_LOG19_REGISTRATION_COUNT_V1
 );
-const _: () = assert!(P256_MAIN_LOG19_BASE_START_V1 + P256_MAIN_LOG19_BASE_WIDTH_V1 == 1_940);
-const _: () = assert!(P256_MAIN_LOG19_AUX_START_V1 + P256_MAIN_LOG19_AUX_WIDTH_V1 == 1_772);
+const _: () = assert!(P256_MAIN_LOG19_BASE_START_V1 + P256_MAIN_LOG19_BASE_WIDTH_V1 == 2_112);
+const _: () = assert!(P256_MAIN_LOG19_AUX_START_V1 + P256_MAIN_LOG19_AUX_WIDTH_V1 == 1_788);
 const _: () = assert!(
     P256_MAIN_LOG19_NEXT_STRIDE_V1
         == 1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
@@ -8730,9 +8753,19 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             .map_err(|_: Vec<ZkX509ShaBatchSegmentAuxSourceV1<'a>>| {
                 ZkX509StarkErrorV1::InternalInvariant
             })?;
+        #[cfg(test)]
+        let der_timer = super::prover_observation::PhaseTimerV1::start_v1(
+            super::prover_observation::PhaseV1::DerBinding,
+        );
         let mut der = ZeroizingMainDerTraceGuardV1::new_v1(
             build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), post_base.der())
                 .map_err(ZkX509StarkErrorV1::from)?,
+        );
+        #[cfg(test)]
+        der_timer.complete_v1();
+        #[cfg(test)]
+        let rfc_timer = super::prover_observation::PhaseTimerV1::start_v1(
+            super::prover_observation::PhaseV1::RfcBinding,
         );
         let rfc = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
             &assembly.rfc_base,
@@ -8740,6 +8773,8 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             post_base.rfc5280(),
         )
         .map_err(map_main_rfc_source_error_v1)?;
+        #[cfg(test)]
+        rfc_timer.complete_v1();
         let mut sha_segments = Vec::new();
         let mut ca_calls = Vec::new();
         sha_segments
@@ -9226,7 +9261,7 @@ const MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1: usize = ZK_X509_RFC5280_STARK_FIXED_WIDT
 const MAIN_LOG19_AFFINE_SEGMENT_GROWTH_V1: usize = 4_096;
 const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_START_V1 == 91);
 const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1 == 27);
-const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 == 189);
+const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 == 210);
 const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 <= u8::MAX as usize);
 const _: () = assert!(
     P256_MAIN_LOG19_NEXT_STRIDE_V1

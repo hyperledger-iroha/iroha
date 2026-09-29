@@ -1,6 +1,5 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Torii;
@@ -13,8 +12,6 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(FeeSponsorProgramId))]
 [JsonSerializable(typeof(FeePaymentIntent))]
 [JsonSerializable(typeof(TransactionAdmissionIntent))]
-[JsonSerializable(typeof(SccpBridgeProofSubmitRequest))]
-[JsonSerializable(typeof(SccpBridgeMessageSubmitRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupRequest))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupItem))]
 [JsonSerializable(typeof(ToriiAccountAliasLookupResponse))]

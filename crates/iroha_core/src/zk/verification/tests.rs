@@ -250,6 +250,107 @@ fn native_proof_verifies_only_as_replay_binding_and_rejects_tampering() {
             actual: ProofRelation::IvmReplayBinding,
         })
     );
+    // These supported-relation controls replace the retired RAM-LFE generic
+    // verifier's metadata and resource assertions. Start with an actual valid
+    // proof so a malformed native fixture cannot make every negative pass.
+    let original: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).expect("envelope");
+    let metadata_cases: [(&str, fn(&mut OpenVerifyEnvelope), ProofVerificationError); 5] = [
+        (
+            "backend tag",
+            |e| e.backend = BackendTag::Stark,
+            ProofVerificationError::MalformedEnvelope,
+        ),
+        (
+            "auxiliary bytes",
+            |e| e.aux = b"unbound-metadata".to_vec(),
+            ProofVerificationError::InvalidProof,
+        ),
+        (
+            "zero key hash",
+            |e| e.vk_hash = [0; 32],
+            ProofVerificationError::VerifyingKeyMismatch,
+        ),
+        (
+            "wrong key hash",
+            |e| e.vk_hash = [0xa5; 32],
+            ProofVerificationError::VerifyingKeyMismatch,
+        ),
+        (
+            "schema drift",
+            |e| e.public_inputs.extend_from_slice(b":drift"),
+            ProofVerificationError::InvalidProof,
+        ),
+    ];
+    for (label, mutate, expected) in metadata_cases {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        let changed = ProofBox::new(
+            proof.backend.clone(),
+            norito::encode_canonical(&changed).expect("mutated envelope"),
+        );
+        assert_eq!(
+            verify_for_relation(ProofRelation::IvmReplayBinding, &changed, &key, policy()),
+            Err(expected),
+            "{label}"
+        );
+    }
+    for backend in [
+        "halo2/ipa:debug",
+        "halo2/ipa:trusted-setup",
+        "halo2/ipa:production-ready",
+    ] {
+        let changed = ProofBox::new(backend.to_owned(), proof.bytes.clone());
+        assert_eq!(
+            verify_for_relation(ProofRelation::IvmReplayBinding, &changed, &key, policy()),
+            Err(ProofVerificationError::UnsupportedBackend),
+            "{backend}"
+        );
+    }
+    let alternate_flags =
+        norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let alternate = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(&original).expect("alternate layout")
+    };
+    assert_ne!(alternate, proof.bytes);
+    assert_eq!(
+        verify_for_relation(
+            ProofRelation::IvmReplayBinding,
+            &ProofBox::new(proof.backend.clone(), alternate),
+            &key,
+            policy(),
+        ),
+        Err(ProofVerificationError::MalformedEnvelope)
+    );
+    let mut disabled = policy();
+    disabled.halo2_enabled = false;
+    assert_eq!(
+        verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, disabled),
+        Err(ProofVerificationError::BackendDisabled)
+    );
+    let mut envelope_limited = policy();
+    envelope_limited.halo2_max_envelope_bytes = proof.bytes.len() - 1;
+    assert_eq!(
+        verify_for_relation(
+            ProofRelation::IvmReplayBinding,
+            &proof,
+            &key,
+            envelope_limited
+        ),
+        Err(ProofVerificationError::EnvelopeTooLarge {
+            actual: proof.bytes.len(),
+            maximum: proof.bytes.len() - 1,
+        })
+    );
+    let mut proof_limited = policy();
+    proof_limited.halo2_max_proof_bytes = original.proof_bytes.len() - 1;
+    assert_eq!(
+        verify_for_relation(ProofRelation::IvmReplayBinding, &proof, &key, proof_limited),
+        Err(ProofVerificationError::ProofTooLarge {
+            actual: original.proof_bytes.len(),
+            maximum: original.proof_bytes.len() - 1,
+        })
+    );
     let mut decoded: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).expect("envelope");
     *decoded.proof_bytes.last_mut().expect("native proof bytes") ^= 1;
     let tampered = ProofBox::new(
