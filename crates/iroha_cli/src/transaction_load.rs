@@ -1,9 +1,10 @@
 //! Bounded persistent open-loop transaction collection for the first-release scaling gate.
 //!
-//! This command writes account metadata and verifies every planned effect; deployment, routing,
-//! and the five-pair statistical gate retain their existing owners. Failed collection never
-//! publishes a passing trace or replays an ambiguous submission. Every request must also reach
-//! StateApplied on the required local observer, at the global height, within the same drain clock.
+//! This command writes account metadata and verifies every planned effect. The localnet
+//! deployment, the lane policy and account routes, and the five-pair verdict belong to
+//! `scripts/sumeragi_scaling_gate.py`. Failed collection never publishes a passing trace or
+//! replays an ambiguous submission. Every request must also reach StateApplied on the required
+//! local observer, at the global height, within the same drain clock.
 
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -46,7 +47,7 @@ const MAX_ROWS: usize = 1_000_000;
 const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 16 * 1024;
 const MAX_ACCOUNTS: usize = 64;
-const TRACE_SCHEMA: &str = "iroha.sumeragi.multilane_scaling.trace.v1";
+const TRACE_SCHEMA: &str = "iroha.sumeragi.scaling.trace.v1";
 const LOGICAL_DERIVATION: &str = "sha256(seed + ':' + cohort + ':' + decimal_sequence)";
 
 type TransactionHash = HashOf<SignedTransaction>;
@@ -633,10 +634,10 @@ impl Backend for SdkBackend {
         async move {
             let account = self.accounts[plan.account_index].clone();
             let mut metadata = self.metadata.clone();
-            let logical_key = "gscale_logical_id".parse::<Name>()?;
+            let logical_key = "scaling_logical_id".parse::<Name>()?;
             if metadata.contains(&logical_key) {
                 bail!(
-                    "transaction metadata reserves gscale_logical_id for exact workload identity"
+                    "transaction metadata reserves scaling_logical_id for exact workload identity"
                 );
             }
             metadata.insert(logical_key, plan.logical_id.as_str());
@@ -1592,7 +1593,7 @@ impl Run for Args {
             journal: journal.sender.clone(),
             warmup_count,
         });
-        journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi.multilane_scaling.collector_journal.v1",
+        journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi.scaling.collector_journal.v1",
             "pair_index": (self.pair_index), "variant": (self.variant.text()), "seed": (self.seed),
             "accounts": public_accounts, "account_selection": (workload::ACCOUNT_SELECTION),
             "local_applied_required": true,

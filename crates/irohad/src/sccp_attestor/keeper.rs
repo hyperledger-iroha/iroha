@@ -35,8 +35,36 @@ pub(super) struct Keeper {
 }
 
 impl Keeper {
+    /// Build the keeper from `config` on a blocking worker of the current Tokio runtime.
+    ///
+    /// The HTTP transports own blocking `reqwest` clients. Building one starts the client's
+    /// internal runtime thread and blocks until it runs, which must never happen on an async
+    /// worker thread: debug builds panic there and release builds stall the worker. A panic
+    /// while building leaves the keeper idle, because the node never aborts over SCCP.
+    pub(super) async fn build(config: SccpLightClientKeeper) -> Self {
+        let idle = SccpLightClientKeeper {
+            enabled: false,
+            ..config.clone()
+        };
+        match crate::panic_recovery::join_recoverable(
+            crate::panic_recovery::spawn_blocking_recoverable(move || Self::new(config)),
+        )
+        .await
+        {
+            Ok(keeper) => keeper,
+            Err(_panic) => {
+                iroha_logger::error!(
+                    "SCCP keeper: building the endpoint clients panicked; the keeper stays idle"
+                );
+                Self::new(idle)
+            }
+        }
+    }
+
     /// Build the keeper from `config`; a disabled keeper or unusable endpoints leave it idle.
-    pub(super) fn new(config: SccpLightClientKeeper) -> Self {
+    ///
+    /// Blocks while the HTTP clients start, so async callers use [`Self::build`].
+    fn new(config: SccpLightClientKeeper) -> Self {
         let seed = u64::from(std::process::id());
         let ethereum = if config.enabled {
             let beacon =
@@ -275,5 +303,39 @@ mod tests {
         let mut keeper = Keeper::new(config);
         assert!(!keeper.due());
         assert!(keeper.advances(&[light_client(0)], u64::MAX).is_empty());
+    }
+
+    /// Every chain of the default configuration has a builder, and the first poll is due.
+    fn assert_default_keeper_serves_every_chain(keeper: &mut Keeper) {
+        assert!(keeper.ethereum.is_some(), "Ethereum builder");
+        assert!(keeper.bsc.is_some(), "BSC builder");
+        assert!(keeper.tron.is_some(), "TRON builder");
+        assert!(keeper.ton.is_some(), "TON builder");
+        assert!(keeper.due());
+        assert!(!keeper.due(), "a poll is due at most once per poll_interval");
+    }
+
+    #[tokio::test]
+    async fn the_default_keeper_builds_inside_a_current_thread_runtime() {
+        let mut keeper = Keeper::build(SccpLightClientKeeper::default()).await;
+        assert_default_keeper_serves_every_chain(&mut keeper);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_default_keeper_builds_inside_a_multi_thread_runtime() {
+        let mut keeper = Keeper::build(SccpLightClientKeeper::default()).await;
+        assert_default_keeper_serves_every_chain(&mut keeper);
+        // The keeper, like the attestor that owns it, is dropped on an async worker.
+        drop(keeper);
+    }
+
+    #[tokio::test]
+    async fn a_disabled_keeper_builds_idle_inside_a_runtime() {
+        let mut config = SccpLightClientKeeper::default();
+        config.enabled = false;
+        let mut keeper = Keeper::build(config).await;
+        assert!(keeper.ethereum.is_none() && keeper.bsc.is_none());
+        assert!(keeper.tron.is_none() && keeper.ton.is_none());
+        assert!(!keeper.due());
     }
 }

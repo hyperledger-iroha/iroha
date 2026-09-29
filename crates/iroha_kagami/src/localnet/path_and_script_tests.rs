@@ -484,6 +484,92 @@ finally:
 
 #[cfg(unix)]
 #[test]
+fn ordinary_localnet_mint_seed_launcher_removes_the_one_shot_path_only_once_it_is_empty() {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    let root = tempfile::tempdir().expect("private localnet root");
+    let signer_dir = root.path().join("runtime/mint-finality-signers");
+    fs::create_dir_all(&signer_dir).expect("create private seed directory");
+    for directory in [root.path().join("runtime"), signer_dir.clone()] {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .expect("protect seed directories");
+    }
+    let mut retained = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(signer_dir.join("peer0.seed"))
+        .expect("create retained seed");
+    retained.write_all(&[0x65; 32]).expect("write retained seed");
+    retained.sync_all().expect("sync retained seed");
+    drop(retained);
+
+    // The child follows the daemon's consumption order. The one-shot path must keep its single
+    // link until the child empties the file; the launcher then removes it while the child still
+    // holds the descriptor, possibly before the daemon's post-consumption identity check.
+    let mut python = ORDINARY_MINT_FINALITY_LAUNCH_PY.to_owned();
+    python.push_str(
+        r#"
+import sys
+env = os.environ.copy()
+consume = """
+import os, sys, time
+before = os.fstat(199)
+if before.st_nlink != 1 or before.st_size != 32:
+    sys.exit("the launcher changed the one-shot path before consumption")
+if len(os.read(199, 32)) != 32:
+    sys.exit("short one-shot seed")
+os.lseek(199, 0, 0)
+if os.write(199, bytes(32)) != 32:
+    sys.exit("short erasure")
+os.fsync(199)
+if os.fstat(199).st_nlink != 1:
+    sys.exit("the launcher removed the one-shot path before the file was empty")
+os.ftruncate(199, 0)
+os.fsync(199)
+deadline = time.monotonic() + 20.0
+while os.fstat(199).st_nlink != 0:
+    if time.monotonic() >= deadline:
+        sys.exit("the launcher kept the emptied one-shot path")
+    time.sleep(0.01)
+after = os.fstat(199)
+if (after.st_dev, after.st_ino, after.st_size) != (before.st_dev, before.st_ino, 0):
+    sys.exit("the consumed descriptor changed identity")
+print("removed-after-consumption", flush=True)
+"""
+process = launch_ordinary_validator_with_mint_seed([sys.executable, "-c", consume], env)
+if process.wait(timeout=30) != 0:
+    raise RuntimeError("the launcher did not remove the path in consumption order")
+"#,
+    );
+    let log = root.path().join("peer0.log");
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(python)
+        .env("IROHA_NETWORK_DIR", root.path())
+        .env("IROHA_PEER_INDEX", "0")
+        .env("IROHA_PEER_LOG", &log)
+        .output()
+        .expect("run stock ordinary descriptor launcher");
+    assert!(
+        output.status.success(),
+        "launcher order check failed: {}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert_eq!(
+        fs::read_to_string(&log).expect("read child log").trim(),
+        "removed-after-consumption"
+    );
+    assert!(!signer_dir.join("peer0.fd199").exists());
+    assert_eq!(
+        fs::read(signer_dir.join("peer0.seed")).expect("retained seed"),
+        [0x65; 32]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
     let temp = tempfile::tempdir().expect("tmp dir");
     write_scripts(

@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+use iroha_schema::IntoSchema;
+use norito::{Decode, Encode, NoritoSchema};
+
 use crate::{
     crypto::Crypto,
     preimage,
@@ -32,9 +35,7 @@ pub use attestation::{
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Vote / certificate kind (§3.3).
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, norito::Encode, norito::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub enum VoteKind {
     /// First phase; its certificate is the `PrepareQC` (lock).
     Prepare,
@@ -53,7 +54,7 @@ impl VoteKind {
 }
 
 /// Block header (§3.2). Its hash is [`preimage::block_hash`].
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::BlockHeader")]
 pub struct BlockHeader {
     /// Instance id `I`.
@@ -96,7 +97,7 @@ impl BlockHeader {
 }
 
 /// Complete original author evidence, independent of actual received row custody.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::PayloadManifest")]
 pub struct PayloadManifest {
     /// Original signed header whose hash binds the complete ordered row commitments.
@@ -112,7 +113,7 @@ impl PayloadManifest {
 }
 
 /// A leader's proposal for round `(height, view)` (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Proposal")]
 pub struct Proposal {
     /// Instance id.
@@ -133,7 +134,7 @@ pub struct Proposal {
 
 /// Sole proposal wire carrier: signed metadata plus mandatory original availability evidence.
 /// Independent equivocation/header evidence carries only the actual signed `Proposal`.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::ProposalMessage")]
 pub struct ProposalMessage {
     /// Original signed round statement.
@@ -266,7 +267,7 @@ impl Proposal {
 }
 
 /// A Prepare or Commit vote (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Vote")]
 pub struct Vote {
     /// Prepare or Commit.
@@ -342,7 +343,7 @@ macro_rules! vote_content {
 vote_content! { Vote => needs_attestation; Qc => needs_attestations; }
 
 /// A timeout vote (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::TimeoutVote")]
 pub struct TimeoutVote {
     /// Instance id.
@@ -380,7 +381,7 @@ impl TimeoutVote {
 }
 
 /// A quorum certificate: `PrepareQC` if `kind == Prepare`, `CommitQC` if `kind == Commit` (§3.4).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Qc")]
 pub struct Qc {
     /// Prepare or Commit.
@@ -433,7 +434,7 @@ impl Qc {
 }
 
 /// One signer of a [`TimeoutCert`] with the view of the `PrepareQC` it carried (`hq`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct TcEntry {
     /// Canonical index of the signer.
     pub signer: ValidatorIndex,
@@ -442,7 +443,7 @@ pub struct TcEntry {
 }
 
 /// A timeout certificate for `(height, view)` (§3.4).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::TimeoutCert")]
 pub struct TimeoutCert {
     /// Instance id.
@@ -476,9 +477,7 @@ impl TimeoutCert {
 /// Periodic "state, not custody" summary (§3.5, §6.11). While awaiting (§6.8) a node reports
 /// `height = tip.height + 1`, view 0, `committed_qc = tip.commit_qc`, no lock, TC or proposal hash
 /// and `want_proposal = false`.
-#[derive(
-    Clone, PartialEq, Eq, Debug, Default, norito::Encode, norito::Decode, norito::NoritoSchema,
-)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Status")]
 pub struct Status {
     /// Instance id.
@@ -506,7 +505,7 @@ pub struct Status {
 
 /// A signed answer to a probe (§3.5, §7.4 R2): `sig` by `key` over
 /// `echo_preimage(nonce, Status.height)`.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Echo")]
 pub struct Echo {
     /// Authenticated epoch authorizing the replier's reported height.
@@ -520,7 +519,7 @@ pub struct Echo {
 }
 
 /// Request for committed blocks starting at `from_height` (§6.9).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncRequest {
     /// Instance id.
     pub instance: Hash32,
@@ -533,7 +532,7 @@ pub struct SyncRequest {
 }
 
 /// One committed block with its `CommitQC`.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncEntry {
     /// Committed original evidence; actual bodies are acquired from authenticated rows.
     pub manifest: PayloadManifest,
@@ -543,7 +542,7 @@ pub struct SyncEntry {
 
 /// Committed blocks at consecutive heights starting at the requested height (§3.5). An empty
 /// response means "I hold nothing at `from_height`".
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncResponse {
     /// Instance id.
     pub instance: Hash32,
@@ -552,7 +551,7 @@ pub struct SyncResponse {
 }
 
 /// Request for one block body (§6.9).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct PayloadRequest {
     /// Instance id.
     pub instance: Hash32,
@@ -563,7 +562,7 @@ pub struct PayloadRequest {
 }
 
 /// One actual RS16 row. Its original signature is retained in the mandatory manifest table.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::PayloadChunk")]
 pub struct PayloadChunk {
     /// Consensus instance.
@@ -580,7 +579,7 @@ pub struct PayloadChunk {
 
 /// One bounded application partial tied to an exact applied parent and scheduling context.
 /// The application authenticates its contents and the P2P sender before changing producer state.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct ApplicationControl {
     /// Complete view-independent source of this partial.
     pub context: crate::api::ApplicationControlContext,
@@ -589,7 +588,7 @@ pub struct ApplicationControl {
 }
 
 /// Everything that travels between nodes (§3.5).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::WireMessage")]
 pub enum WireMessage {
     /// Round message: a proposal.
@@ -1006,7 +1005,7 @@ impl std::error::Error for CodecError {}
 
 /// What was wrong with a signed proposal (§6.2 steps 3, 5, 6). Only signed-content defects
 /// produce evidence; an `Invalid` execution never does (§3.6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode)]
 pub enum Defect {
     /// `view == 0` but `justify` is present.
     UnexpectedJustify,
@@ -1047,7 +1046,7 @@ pub enum Defect {
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
 #[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {

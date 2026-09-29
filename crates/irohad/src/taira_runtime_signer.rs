@@ -356,9 +356,21 @@ impl DescriptorIdentityV1 {
     }
 }
 
+/// Erase the loaded record from its one-shot file, then confirm that the descriptor still
+/// identifies the checked file.
 fn consume_trusted_key_file(
     file: &mut File,
     identity: &DescriptorIdentityV1,
+    zeroed_key_record: &[u8],
+) -> Result<(), TairaRuntimeSignerErrorV1> {
+    erase_trusted_key_file(file, zeroed_key_record)?;
+    verify_consumed_key_file(file, identity)
+}
+
+/// Overwrite the record with zeroes and truncate the file. Launchers treat the empty file as
+/// consumed and may remove its one-shot pathname from then on.
+fn erase_trusted_key_file(
+    file: &mut File,
     zeroed_key_record: &[u8],
 ) -> Result<(), TairaRuntimeSignerErrorV1> {
     file.seek(std::io::SeekFrom::Start(0))
@@ -370,7 +382,14 @@ fn consume_trusted_key_file(
     file.set_len(0)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
     file.sync_data()
-        .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
+        .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)
+}
+
+/// Confirm that the erased descriptor still identifies the checked, now empty file.
+fn verify_consumed_key_file(
+    file: &File,
+    identity: &DescriptorIdentityV1,
+) -> Result<(), TairaRuntimeSignerErrorV1> {
     let consumed = file
         .metadata()
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
@@ -1499,6 +1518,107 @@ mod tests {
             load_key_pair_from_file(open_consumable_key_file(&path)),
             Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
         ));
+    }
+
+    /// A consumable owner-only launch copy of `key_pair`'s record beside its retained source.
+    fn staged_launch_key(
+        key_pair: &KeyPair,
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let (directory, source) = key_file(key_pair);
+        let launch = directory.path().join(name);
+        fs::copy(&source, &launch).expect("stage consumable launch key");
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o600))
+            .expect("protect launch key");
+        (directory, launch)
+    }
+
+    #[test]
+    fn consumption_accepts_the_launcher_removing_its_path_before_or_after_the_final_check() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+        // The launcher removes the one-shot pathname after the daemon's final check.
+        let (_directory, launch) = staged_launch_key(&key_pair, "after.fd198");
+        let loaded = load_key_pair_from_file(open_consumable_key_file(&launch))
+            .expect("consume while the launch path exists");
+        assert_eq!(loaded.public_key(), key_pair.public_key());
+        assert_eq!(fs::metadata(&launch).expect("consumed launch").len(), 0);
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+
+        // The launcher removes it as soon as it sees the empty file, before the final check.
+        let (_directory, launch) = staged_launch_key(&key_pair, "before.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+        assert_eq!(file.metadata().expect("unlinked metadata").nlink(), 0);
+        verify_consumed_key_file(&file, &identity)
+            .expect("an erased file keeps its identity after its path is removed");
+    }
+
+    #[test]
+    fn consumption_rejects_a_link_or_mode_change_after_erasure() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x38; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+        let (directory, launch) = staged_launch_key(&key_pair, "linked.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::hard_link(&launch, directory.path().join("alias.fd198")).expect("add a link");
+        assert_eq!(
+            verify_consumed_key_file(&file, &identity),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        );
+
+        let (_directory, launch) = staged_launch_key(&key_pair, "chmod.fd198");
+        let mut file = open_consumable_key_file(&launch);
+        let identity =
+            DescriptorIdentityV1::from_metadata(&file.metadata().expect("launch metadata"));
+        erase_trusted_key_file(&mut file, &[0; 71]).expect("erase launch record");
+        fs::set_permissions(&launch, fs::Permissions::from_mode(0o644)).expect("weaken mode");
+        fs::remove_file(&launch).expect("launcher removes the consumed path");
+        assert_eq!(
+            verify_consumed_key_file(&file, &identity),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        );
+    }
+
+    #[test]
+    fn mint_seed_consumption_races_a_launcher_that_removes_the_emptied_path() {
+        // Like the localnet launcher, this launcher watches its own descriptor of the one-shot
+        // file and removes the pathname as soon as the daemon's truncation empties it, racing
+        // the daemon's post-consumption check.
+        for round in 0..16 {
+            let (directory, source) = mint_seed_file(&[0x64; 32]);
+            let launch = directory.path().join(format!("launch-{round}.fd199"));
+            fs::copy(&source, &launch).expect("stage seed");
+            fs::set_permissions(&launch, fs::Permissions::from_mode(0o600))
+                .expect("protect staged seed");
+            let observer = File::open(&launch).expect("launcher descriptor");
+            let path = launch.clone();
+            let launcher = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                while observer.metadata().expect("launcher fstat").len() != 0 {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the daemon never consumed the launch file"
+                    );
+                    std::thread::yield_now();
+                }
+                fs::remove_file(&path).expect("launcher removes the consumed path");
+            });
+            let seed = load_mint_finality_seed_from_file(open_consumable_key_file(&launch));
+            launcher.join().expect("launcher thread");
+            assert_eq!(
+                *seed.expect("consumption tolerates the removed launch path"),
+                [0x64; 32]
+            );
+            assert!(!launch.exists());
+        }
     }
 
     #[test]

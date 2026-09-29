@@ -34,7 +34,8 @@ def test_canonical_full_inputs_roundtrip_select_every_pair_and_variant():
         value = budget.run_budget_inputs(allocation)
         assert set(value) == {"experiment", "pair_index", "variant"}
         assert set(value["experiment"]) == {"capture_policy", "runs", "static_files", "manifest", "report", "other_control"}
-        assert type(value["experiment"]["runs"][0]["support"]) is list
+        assert set(value["experiment"]["runs"][0]) == {"pair_index", "variant", "geometry",
+                                                       *budget.RUN_FILE_FIELDS}
         assert budget.parse_run_budget(value) == allocation
         assert budget.parse_run_budget(json.loads(json.dumps(value))) == allocation
     assert len(json.dumps(value).encode()) < budget.MIB
@@ -78,7 +79,8 @@ def test_bypassed_constructor_is_rejected_before_geometry_division_or_limits():
 
 @pytest.mark.parametrize("path", [(), ("experiment",), ("experiment", "capture_policy"),
     ("experiment", "runs", 0), ("experiment", "runs", 0, "geometry"),
-    ("experiment", "runs", 0, "collector_journal"), ("experiment", "static_files", 0),
+    ("experiment", "runs", 0, "collector_journal"), ("experiment", "runs", 0, "run_receipt"),
+    ("experiment", "static_files", 0),
     ("experiment", "manifest"), ("experiment", "report")])
 @pytest.mark.parametrize("change", ["missing", "extra", "non_object"])
 def test_every_public_input_object_has_exact_mandatory_fields(path, change):
@@ -96,8 +98,7 @@ def test_every_public_input_object_has_exact_mandatory_fields(path, change):
 
 
 @pytest.mark.parametrize("path,maximum", [(('experiment', 'runs'), 10),
-    (('experiment', 'static_files'), 256), (('experiment', 'other_control'), 256),
-    (('experiment', 'runs', 0, 'support'), 256)])
+    (('experiment', 'static_files'), 256), (('experiment', 'other_control'), 256)])
 @pytest.mark.parametrize("change", ["tuple", "none", "oversize"])
 def test_lists_are_bounded_before_member_processing(path, maximum, change):
     value = budget.run_budget_inputs(selected())

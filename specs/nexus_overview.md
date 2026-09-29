@@ -9,7 +9,7 @@
 **Audience:** Program managers, operations engineers, and partner teams that
 need a single-page summary of the Sora Nexus (Iroha 3) architecture before
 diving into the detailed specifications (`specs/nexus.md`,
-`specs/nexus_lanes.md`, `specs/nexus_transition_notes.md`).
+`specs/nexus_lanes.md`, `specs/sumeragi_lanes.md`).
 
 ## 1. Release Product & Tooling
 
@@ -28,12 +28,12 @@ diving into the detailed specifications (`specs/nexus.md`,
 
 | Component | Description | Key references |
 |-----------|-------------|----------------|
-| **Data Space (DS)** | Governance-scoped execution domain that defines validator membership, privacy class, fee policy, and data-availability profile. Each DS owns one or more *lanes*. | `specs/nexus.md`, `specs/nexus_transition_notes.md` |
-| **Lane** | Deterministic logical shard of execution and state inside one data space. Lane manifests declare workload, settlement, telemetry, and routing policy; the V1 layout projects the owning data space's validator/DA policy and every lane in that data space must agree. The global consensus ring orders lane commitments. | `specs/nexus_lanes.md` |
+| **Data Space (DS)** | Governance-scoped execution domain that defines validator membership, privacy class, fee policy, and data-availability profile. Each DS owns one or more *lanes*. | `specs/nexus.md`, `specs/sumeragi.md` §11 |
+| **Lane** | Deterministic logical shard of execution and state inside one data space. Lane manifests declare workload, settlement, telemetry, and routing policy; the V1 layout projects the owning data space's validator/DA policy and every lane in that data space must agree. Each lane is a Sumeragi instance whose certified blocks the global chain merges. | `specs/nexus_lanes.md`, `specs/sumeragi_lanes.md` |
 | **Space Directory** | Registry contract (and CLI helpers) that stores DS manifests, validator rotations, and capability grants. Keeps historical manifests signed so auditors can reconstruct state. | `specs/nexus.md#space-directory` |
 | **Lane Catalog** | Configuration section (`[nexus]` in `config.toml`) that maps lane IDs to aliases, routing policies, and retention knobs. Operators can introspect the effective catalog via `iroha3d --sora --config … --trace-config`. | `specs/sora_nexus_operator_onboarding.md` |
 | **Settlement Router** | Routes XOR movements between lanes (e.g., private CBDC lanes ↔ public liquidity lanes). Policy defaults live in `specs/cbdc_lane_playbook.md`. | `specs/cbdc_lane_playbook.md` |
-| **Telemetry & SLOs** | Dashboards and alert rules under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. The remediation plan is tracked in `specs/nexus_telemetry_remediation_plan.md`. | `dashboards/grafana/nexus_lanes.json`, `dashboards/alerts/nexus_audit_rules.yml` |
+| **Telemetry & SLOs** | Dashboards and alert rules under `dashboards/grafana/nexus_*.json` capture lane finality, oracle and settlement-buffer signals; `/v1/sumeragi/lanes` reports lane status. | `dashboards/grafana/nexus_lanes.json`, `dashboards/alerts/nexus_audit_rules.yml` |
 
 ### Lane & Data-Space Classes
 
@@ -71,16 +71,15 @@ Each lane declares:
 | Manifest tracking | Watch Space Directory updates and refresh local caches/allowlists. | Signed manifest bundle stored with onboarding ticket. |
 | Telemetry coverage | Ensure dashboards listed in Section 2 are reachable, alerts wired into PagerDuty, and quarterly reviews logged. | On-call review minutes + Alertmanager export. |
 | Incident reporting | Follow the severity matrix defined in `specs/nexus_operations.md` and file post-incident reports within five business days. | Post-incident template archived per incident ID. |
-| Governance readiness | Participate in Nexus council votes when lane policy changes affect your deployment; rehearse rollback instructions quarterly. | Council attendance + rehearsal checklist stored under `specs/project_tracker/nexus_config_deltas/`. |
+| Governance readiness | Participate in Nexus council votes when lane policy changes affect your deployment; rehearse rollback instructions quarterly. | Council attendance + rehearsal checklist stored with the governance ticket. |
 
 ## 5. Related Documentation Map
 
 - **Deep dive specification:** `specs/nexus.md`
 - **Lane geometry & storage layout:** `specs/nexus_lanes.md`
-- **Transition plan & lifecycle routing:** `specs/nexus_transition_notes.md`
+- **Lane instances, merge and autoscale:** `specs/sumeragi_lanes.md`
 - **Operator onboarding walkthrough:** `specs/sora_nexus_operator_onboarding.md`
 - **CBDC lane policy & settlement plan:** `specs/cbdc_lane_playbook.md`
-- **Telemetry remediation & dashboard map:** `specs/nexus_telemetry_remediation_plan.md`
 - **Runbook / incident process:** `specs/nexus_operations.md`
 
 Keep this overview in sync with roadmap item NX-14 whenever substantial changes

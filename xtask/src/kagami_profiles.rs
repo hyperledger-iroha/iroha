@@ -1386,7 +1386,7 @@ Files:
 fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
     if !is_valid_committee_size(spec.min_peers) {
         return Err(format!(
-            "profile {} peer count {} is not an exact revision-4 `3f + 1` committee",
+            "profile {} peer count {} is not an exact Sumeragi `3f + 1` committee",
             spec.slug, spec.min_peers
         )
         .into());
@@ -1778,7 +1778,7 @@ mod tests {
             };
             let error = build_peers(&spec).expect_err("non-committee profile must fail");
             assert!(
-                error.to_string().contains("exact revision-4 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }
