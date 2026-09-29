@@ -20,6 +20,7 @@ class TransportSecurityLocalDevelopmentHttpTest {
     @ParameterizedTest
     @ValueSource(strings = ["http://127.0.0.1:29080", "http://10.0.2.2:29080", "http://localhost:29080"])
     fun localDevelopmentHttpIsRefusedWithoutOptIn(baseUri: String) {
+        assertFalse(TransportSecurity.isHttpEndpointAllowed(URI.create(baseUri)))
         val error = assertFailsWith<IllegalArgumentException> {
             requireAllowed(baseUri, "$baseUri/v1/fees/quote", allowLocalDevelopmentHttp = false)
         }
@@ -44,6 +45,7 @@ class TransportSecurityLocalDevelopmentHttpTest {
         ],
     )
     fun localDevelopmentHttpIsAllowedWithOptIn(baseUri: String) {
+        assertTrue(TransportSecurity.isHttpEndpointAllowed(URI.create(baseUri), true))
         requireAllowed(baseUri, "$baseUri/v1/fees/quote", allowLocalDevelopmentHttp = true)
     }
 
@@ -59,9 +61,13 @@ class TransportSecurityLocalDevelopmentHttpTest {
             "http://128.0.0.1:29080",
             "http://127.0.0.1.example.com:29080",
             "http://localhost.example.com:29080",
+            "http://[2001:db8::1]:29080",
+            "http://[fd00::1]:29080",
+            "http://[fe80::1]:29080",
         ],
     )
     fun remoteHttpIsRefusedEvenWithOptIn(baseUri: String) {
+        assertFalse(TransportSecurity.isHttpEndpointAllowed(URI.create(baseUri), true))
         val error = assertFailsWith<IllegalArgumentException> {
             requireAllowed(baseUri, "$baseUri/v1/fees/quote", allowLocalDevelopmentHttp = true)
         }
@@ -94,6 +100,7 @@ class TransportSecurityLocalDevelopmentHttpTest {
     @ParameterizedTest
     @ValueSource(booleans = [false, true])
     fun httpsIsUnaffectedByOptIn(allowLocalDevelopmentHttp: Boolean) {
+        assertTrue(TransportSecurity.isHttpEndpointAllowed(URI.create("https://torii.example"), allowLocalDevelopmentHttp))
         requireAllowed(
             "https://torii.example",
             "https://torii.example/v1/fees/quote",
@@ -105,6 +112,23 @@ class TransportSecurityLocalDevelopmentHttpTest {
                 "https://evil.example/v1/fees/quote",
                 allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
             )
+        }
+    }
+
+    @Test
+    fun optInRequiresTheSameHostAndRecognizesTheDefaultHttpPort() {
+        assertFailsWith<IllegalArgumentException> {
+            requireAllowed("http://127.0.0.1", "http://127.0.0.2/v1/fees/quote", true)
+        }
+        requireAllowed("http://localhost", "http://localhost:80/v1/fees/quote", true)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["ws://localhost", "ftp://127.0.0.1", "file:///tmp/node"])
+    fun optInDoesNotAllowOtherSchemes(baseUri: String) {
+        assertFalse(TransportSecurity.isHttpEndpointAllowed(URI.create(baseUri), true))
+        assertFailsWith<IllegalArgumentException> {
+            requireAllowed(baseUri, baseUri, true)
         }
     }
 

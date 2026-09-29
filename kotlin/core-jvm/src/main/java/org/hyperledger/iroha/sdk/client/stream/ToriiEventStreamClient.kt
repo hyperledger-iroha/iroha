@@ -50,6 +50,7 @@ class ToriiEventStreamClient private constructor(
     private val localSigningContext: LocalSigningContext? = null,
     private val canonicalRequestAuth: ToriiCanonicalRequestAuth? = null,
     readerExecutor: Executor? = null,
+    private val allowLocalDevelopmentHttp: Boolean = false,
 ) : AutoCloseable {
     private val transport = HttpTransportScope.create(transport)
     private val ownsReaderExecutor = readerExecutor == null
@@ -168,6 +169,7 @@ class ToriiEventStreamClient private constructor(
             target,
             headers,
             null,
+            allowLocalDevelopmentHttp = allowLocalDevelopmentHttp,
         )
         val builder = TransportRequest.builder().setUri(target).setMethod("GET")
         val timeout = options.timeout
@@ -665,9 +667,20 @@ class ToriiEventStreamClient private constructor(
         private var localSigningContext: LocalSigningContext? = null
         private var canonicalRequestAuth: ToriiCanonicalRequestAuth? = null
         private var readerExecutor: Executor? = null
+        private var allowLocalDevelopmentHttp: Boolean = false
 
         fun setBaseUri(baseUri: URI): Builder {
             this.baseUri = baseUri
+            return this
+        }
+
+        /**
+         * Allows credentialed HTTP streams to the configured localhost, loopback IP, or private
+         * IPv4 address (10/8, 172.16/12, or 192.168/16). Disabled by default; the request must
+         * retain the configured host and port. Use only with trusted local development nodes.
+         */
+        fun setAllowLocalDevelopmentHttp(allow: Boolean): Builder {
+            allowLocalDevelopmentHttp = allow
             return this
         }
 
@@ -723,6 +736,7 @@ class ToriiEventStreamClient private constructor(
                 localSigningContext,
                 canonicalRequestAuth,
                 readerExecutor,
+                allowLocalDevelopmentHttp,
             )
         }
     }

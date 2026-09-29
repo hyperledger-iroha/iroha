@@ -76,7 +76,7 @@ class ClientConfig private constructor(builder: Builder) {
     fun defaultHeaders(): Map<String, String> = defaultHeaders
     /** Wire-format preference used for dual-format Torii routes. */
     fun wireFormatPreference(): WireFormatPreference = wireFormatPreference
-    /** Whether signed requests may use plain http to loopback hosts and the Android emulator host alias. */
+    /** Whether Torii HTTP requests may use the local transport exception described by [Builder.setAllowLocalDevelopmentHttp]. */
     fun allowLocalDevelopmentHttp(): Boolean = allowLocalDevelopmentHttp
     /** Registered observers that receive request lifecycle callbacks. */
     fun observers(): List<ClientObserver> = observers
@@ -128,17 +128,22 @@ class ClientConfig private constructor(builder: Builder) {
             .observers(observers).setTelemetryOptions(telemetryOptions).setTelemetrySink(telemetrySink)
             .setNetworkContextProvider(networkContextProvider).setDeviceProfileProvider(deviceProfileProvider)
             .setFlowController(noritoRpcFlowController).setWireFormatPreference(wireFormatPreference)
+            .setAllowLocalDevelopmentHttp(allowLocalDevelopmentHttp)
 
     fun toConfidentialAssetToriiClient(executor: HttpTransportExecutor): ConfidentialAssetToriiClient =
         ConfidentialAssetToriiClient.builder().executor(executor).baseUri(baseUri)
             .localSigningContext(requireLocalSigningContext()).timeout(requestTimeout)
-            .defaultHeaders(defaultHeaders).observers(observers).build()
+            .defaultHeaders(defaultHeaders).observers(observers)
+            .setAllowLocalDevelopmentHttp(allowLocalDevelopmentHttp).build()
 
     fun toSubscriptionToriiClient(executor: HttpTransportExecutor): SubscriptionToriiClient =
-        SubscriptionToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
+        SubscriptionToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout)
+            .defaultHeaders(defaultHeaders).observers(observers)
+            .setAllowLocalDevelopmentHttp(allowLocalDevelopmentHttp).build()
 
     fun toSubscriptionToriiClient(): SubscriptionToriiClient = SubscriptionToriiClient.builder()
-        .baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
+        .baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers)
+        .setAllowLocalDevelopmentHttp(allowLocalDevelopmentHttp).build()
 
     private fun maybeInstallCrashTelemetryHandler(builder: Builder, sink: TelemetrySink?): CrashTelemetryHandler? {
         if (!builder.crashTelemetryEnabled) return null
@@ -186,9 +191,13 @@ class ClientConfig private constructor(builder: Builder) {
         fun setDefaultHeaders(headers: Map<String, String>?): Builder { clearDefaultHeaders(); headers?.forEach { (k, v) -> putDefaultHeader(k, v) }; return this }
         fun setWireFormatPreference(preference: WireFormatPreference): Builder { this.wireFormatPreference = preference; return this }
         /**
-         * Allows [HttpClientTransport] signed requests over plain http only when the base URL host is
-         * loopback (`127.0.0.0/8`, `::1`, `localhost`) or the Android emulator host alias `10.0.2.2`.
-         * Remote http hosts stay refused. Intended for local development nodes; off by default.
+         * Allows Torii HTTP requests carrying signatures or credentials over plain HTTP to
+         * `localhost`, loopback literals (`127.0.0.0/8`, `::1`), and private IPv4 literals
+         * (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, including emulator host `10.0.2.2`).
+         * The request must retain the configured HTTP scheme, host, and effective port.
+         * Enable only in development builds. This option is off by default and inherited by HTTP clients from this config
+         * or [HttpClientTransport], including event streams. WebSockets and SoraFS gateways keep
+         * their separate secure-transport requirements.
          */
         fun setAllowLocalDevelopmentHttp(allow: Boolean): Builder { this.allowLocalDevelopmentHttp = allow; return this }
         fun addObserver(observer: ClientObserver): Builder { observers.add(observer); return this }

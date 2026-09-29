@@ -18,6 +18,7 @@ internal object TransportSecurity {
         "x-iroha-timestamp-ms",
         "x-iroha-nonce",
         "x-iroha-witness",
+        "x-iroha-onboarding-token",
         "x-iroha-operator-public-key",
         "x-iroha-operator-timestamp-ms",
         "x-iroha-operator-nonce",
@@ -78,6 +79,11 @@ internal object TransportSecurity {
 
     fun headersContainCredentials(headers: Map<String, String>?): Boolean =
         headers?.keys?.any { credentialHeaders.contains(it.lowercase(Locale.ROOT)) } == true
+
+    /** Endpoint policy for Torii routes that enforce HTTPS independently of header inspection. */
+    fun isHttpEndpointAllowed(baseUri: URI, allowLocalDevelopmentHttp: Boolean = false): Boolean =
+        normalize(baseUri.scheme) == "https" ||
+            (allowLocalDevelopmentHttp && isLocalDevelopmentHttp(baseUri, baseUri))
 
     private fun isSensitive(headers: Map<String, String>?, body: ByteArray?): Boolean =
         headersContainCredentials(headers) || bodyContainsSensitiveMaterial(body)
