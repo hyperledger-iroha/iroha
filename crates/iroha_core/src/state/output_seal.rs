@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::queue::RoutingDecision;
-use iroha_data_model::nexus::LaneFinalityStatement;
 
 /// Block validation supplies its checked settlement projection before attachment.
 /// Rows, sources, receipts, transcripts and applying policy remain State-owned.

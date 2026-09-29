@@ -18,15 +18,7 @@ use crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityCheckpointV1;
 use crate::{
     block::CommittedBlock,
     queue::{
-        AutonomousLaneCanonicalQueueTerminalEvidence, AutonomousLaneKuraActivationAuthorization,
-        AutonomousLaneReleaseQueueTerminalEvidence, AutonomousLaneReplicaQueueDisposition,
-        AutonomousLaneReplicaQueueDispositionAuthorization,
-        DurableLaneQueueReleaseBarrierAuthorization, LaneQueueReservationGroupBindingV1,
-        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV1,
-        LaneQueueReservationReconciliationGroupV1, LaneQueueReservationReleaseBarrierV1,
-        RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
-        lane_queue_reservation_group_binding_from_ordered_keys,
-    },
+        RoutingPlan, },
     secure_file_metadata::{self, SecureMetadata},
     sumeragi::{
         lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
@@ -82,22 +74,11 @@ use iroha_config::{
     parameters::{
         actual::{
             Fastpq as FastpqConfig, Kura as Config, LaneConfig, SnapshotBootstrapPolicy,
-            SumeragiV2RuntimeLimits, kura_replica_advert_registry_key_capacity,
-        },
+            },
         defaults::{
             kura::{
-                BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS, FSYNC_INTERVAL,
-                LANE_HISTORY_RETENTION, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-                REPLICA_ADVERT_EVICTABLE_WINDOW, REPLICA_ADVERT_REFRESH_INTERVAL,
-                REPLICA_ADVERT_TTL,
-            },
-            sumeragi::{
-                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
-                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES,
-                V2_PENDING_CONTROL_SIDECAR_BYTES_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
-                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
-                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
-            },
+                BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+                MAX_DISK_USAGE_BYTES, },
             zk::fastpq as FASTPQ_DEFAULTS,
         },
     },
@@ -108,20 +89,16 @@ use iroha_crypto::{
 };
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
-use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
-use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
     AccountId, NetworkId,
     block::{
-        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        BlockHeader, SignedBlock,
         consensus::{
-            CertPhase, ExecWitness, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
-            LanePayloadAvailabilityBodyV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
-        },
+            ExecWitness, },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
             HeightContext, HeightContextId, MAX_EXECUTED_BLOCK_WIRE_BYTES,
-            NativeAmxApplicationManifestLeafV1, QuorumCertificate, QuorumCertificateRef,
+            QuorumCertificate, QuorumCertificateRef,
             SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord, ValidatorPower,
             finality::{
                 V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
@@ -138,7 +115,7 @@ use iroha_data_model::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
-    nexus::{LaneCatalog, LaneLifecycleParameterV1},
+    nexus::LaneCatalog,
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
         ParliamentTimedOvnCastingContextMembershipProofV1,
@@ -156,13 +133,10 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-pub use lane_geometry::RawGeometryWait;
 pub(crate) use lane_geometry::{
     RawGeometryAttempt, RawGeometryPhase, ReplayGeometryBindingRequest,
     StartupReplayGeometryTransition,
 };
-use lane_storage::LaneStorageEntry;
-pub use lane_storage::LaneStorageIdentity;
 pub(crate) use membership_storage::MEMBERSHIP_RECORD_BYTES;
 pub use membership_storage::{
     MembershipAppendCleanup, MembershipAppendRange, MembershipStorageError,
@@ -301,7 +275,6 @@ mod physical_resource_accounting_tests;
 mod physical_resource_initialization_tests;
 
 use crate::publication_lock::{PublicationGuard, PublicationMutex};
-pub(crate) use carrier_checkpoint::KuraWsvCheckpointReceipt;
 pub(crate) use publication_lease::{
     KuraPublicationCleanup, KuraPublicationLease, KuraPublicationPreparationError,
 };
@@ -3014,37 +2987,6 @@ impl Kura {
     pub(crate) fn blocks_in_memory(&self) -> NonZeroUsize {
         self.blocks_in_memory
     }
-    /// Validate the exact framed Native AMX evidence pair for every route
-    /// without locks, filesystem access, inventory reads, or telemetry.
-    ///
-    /// Candidate validation supplies `None`, which selects a typed fixed-width
-    /// finality placeholder. Decided-block validation supplies the actual
-    /// durable finality hash and rechecks the same byte geometry before any
-    /// staging or persistence begins.
-    pub(crate) fn validate_native_amx_participant_application_evidence_byte_budget(
-        &self,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality_artifact_hash: Option<HashOf<V2FinalityArtifact>>,
-    ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
-        let finality_artifact_hash = finality_artifact_hash
-            .unwrap_or_else(native_amx_participant_application_finality_placeholder_hash);
-        let artifacts =
-            native_amx_participant_application_artifacts(manifest, finality_artifact_hash).ok_or(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction,
-            )?;
-        for (manifest, receipt) in artifacts {
-            let (manifest_bytes, receipt_bytes) =
-                native_amx_participant_application_pair_framed_bytes(&manifest, &receipt).map_err(
-                    NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming,
-                )?;
-            self.validate_native_amx_participant_application_pair_byte_lengths(
-                manifest_bytes.len(),
-                receipt_bytes.len(),
-                STRICT_INIT_MAX_BLOCK_BYTES,
-            )?;
-        }
-        Ok(())
-    }
     #[cfg(unix)]
     fn sidecar_metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
@@ -4439,148 +4381,6 @@ impl Kura {
         )
     }
 
-    fn persist_pending_queue_plan_admission_certificate_inner(
-        &self,
-        canonical_certificate_bytes: &[u8],
-    ) -> Result<Hash> {
-        self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        if canonical_certificate_bytes.is_empty()
-            || canonical_certificate_bytes.len()
-                > MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES
-        {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                self.pending_queue_plan_admission_dir(),
-                "pending QueuePlan admission certificate violates its hard byte limit",
-            ));
-        }
-        let hash = Hash::new(canonical_certificate_bytes);
-        let path = self.pending_queue_plan_admission_path(hash);
-        let temp_path = path.with_extension("norito.tmp");
-        let directory = self.pending_queue_plan_admission_dir();
-        let _guard = self.sidecar_lock.lock();
-        self.ensure_pending_queue_plan_admission_dir_unlocked()?;
-        self.reconcile_pending_merge_temp_files_unlocked()?;
-        self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
-        let accounting_mutation = self
-            .begin_total_disk_usage_mutation()
-            .with_resource_paths(vec![path.clone(), path.with_extension("norito.tmp")]);
-        if let Some((_, existing)) =
-            self.read_pending_queue_plan_admission_path(&path, Some(hash))?
-        {
-            if existing == canonical_certificate_bytes {
-                accounting_mutation.finish();
-                return Ok(hash);
-            }
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                path,
-                "hash-addressed QueuePlan admission sidecar conflicts with existing bytes",
-            ));
-        }
-        let (paths, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
-        if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                directory,
-                "pending QueuePlan admission certificate count exceeds the hard limit",
-            ));
-        }
-        let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
-        if admission_bytes
-            .checked_add(canonical_certificate_bytes.len())
-            .is_none_or(|total| {
-                !self
-                    .pending_control_sidecar_limits
-                    .combined_bytes_within_limit(merge_bytes, total)
-            })
-        {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                directory,
-                "pending merge and QueuePlan admission bytes exceed their shared hard limit",
-            ));
-        }
-        let mut temp = self.create_exclusive_pending_queue_plan_admission_temp(&temp_path)?;
-        temp.write_all(canonical_certificate_bytes)
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        temp.flush()
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        temp.sync_all()
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let opened_after_write = secure_file_metadata::from_file(&temp)
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let path_after_write = secure_file_metadata::from_path(&temp_path)
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        if !opened_after_write.is_file()
-            || path_after_write.file_type().is_symlink()
-            || !path_after_write.file_type().is_file()
-            || !Self::sidecar_is_single_link(&opened_after_write)
-            || !Self::sidecar_is_single_link(&path_after_write)
-            || !Self::sidecar_metadata_same_object(&opened_after_write, &path_after_write)
-            || opened_after_write.len() != u64::try_from(canonical_certificate_bytes.len())?
-        {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                temp_path,
-                "pending QueuePlan admission temporary changed while writing",
-            ));
-        }
-        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
-        if let Err(error) = std::fs::hard_link(&temp_path, &path) {
-            let remove_result = std::fs::remove_file(&temp_path);
-            let sync_result = sync_dir(&directory);
-            if let Err(remove_error) = remove_result {
-                return Err(Error::IO(remove_error, temp_path));
-            }
-            if let Err(sync_error) = sync_result {
-                return Err(Error::IO(sync_error, directory));
-            }
-            return Err(Error::IO(error, path));
-        }
-        let target_metadata = secure_file_metadata::from_path(&path)
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        if target_metadata.file_type().is_symlink()
-            || !target_metadata.file_type().is_file()
-            || !Self::sidecar_metadata_same_object(&opened_after_write, &target_metadata)
-            || !Self::sidecar_has_link_count(&target_metadata, 2)
-        {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                path,
-                "published QueuePlan admission target does not bind its durable temporary",
-            ));
-        }
-        let target = std::fs::File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let opened_target = secure_file_metadata::from_file(&target)
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        if !Self::sidecar_metadata_same_object(&target_metadata, &opened_target)
-            || !Self::sidecar_has_link_count(&opened_target, 2)
-        {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                path,
-                "published QueuePlan admission target changed while opening",
-            ));
-        }
-        target
-            .sync_all()
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
-        std::fs::remove_file(&temp_path).map_err(|error| Error::IO(error, temp_path.clone()))?;
-        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
-        let (_, persisted) = self
-            .read_pending_queue_plan_admission_path(&path, Some(hash))?
-            .ok_or_else(|| {
-                Self::invalid_pending_queue_plan_admission_error(
-                    path.clone(),
-                    "published QueuePlan admission certificate disappeared",
-                )
-            })?;
-        if persisted != canonical_certificate_bytes {
-            return Err(Self::invalid_pending_queue_plan_admission_error(
-                path,
-                "published QueuePlan admission certificate differs from its durable input",
-            ));
-        }
-        self.add_disk_usage_bytes(u64::try_from(canonical_certificate_bytes.len())?);
-        accounting_mutation.finish();
-        Ok(hash)
-    }
     /// Return at most `limit` pending QueuePlan admission certificates in
     /// deterministic byte-hash order.
     pub(crate) fn pending_queue_plan_admission_certificates_bounded(
@@ -6959,133 +6759,6 @@ impl Kura {
         }
         Ok(())
     }
-    fn recover_native_amx_evidence_publication_temp_kind_locked(
-        &self,
-        resources: &mut TotalDiskUsageMutation<'_>,
-        entry: &LaneStorageEntry,
-        namespace: &BoundProgressNamespace,
-        inventory: &NativeAmxEvidenceInventory,
-        kind: NativeAmxEvidenceKind,
-    ) -> Result<bool> {
-        let Some(temporary) = inventory.temporary(kind) else {
-            resources.resource_batch(0).finish();
-            return Ok(false);
-        };
-        match kind {
-            NativeAmxEvidenceKind::Manifest => {
-                let manifest =
-                    self.decode_native_amx_manifest_file_locked(entry, namespace, temporary)?;
-                if !self
-                    .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
-                        &manifest,
-                    )
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        temporary.path.clone(),
-                        "Native AMX manifest temporary is not authenticated by available finality",
-                    ));
-                }
-            }
-            NativeAmxEvidenceKind::Receipt => {
-                let manifest = inventory
-                    .manifests
-                    .get(&temporary.participant_height)
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            temporary.path.clone(),
-                            "Native AMX receipt temporary is deferred until its exact stable manifest exists",
-                        )
-                    })?;
-                let manifest =
-                    self.decode_native_amx_manifest_file_locked(entry, namespace, manifest)?;
-                let receipt =
-                    self.decode_native_amx_receipt_file_locked(entry, namespace, temporary)?;
-                if receipt.manifest_artifact_hash != HashOf::new(&manifest)
-                    || receipt.finality_artifact_hash != manifest.finality_artifact_hash
-                    || !Self::native_amx_participant_receipt_matches_manifest_leaf(
-                        &receipt,
-                        &manifest.leaf,
-                    )
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        temporary.path.clone(),
-                        "Native AMX receipt temporary does not match its exact stable manifest",
-                    ));
-                }
-                if !self
-                    .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
-                        &manifest,
-                    )
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        temporary.path.clone(),
-                        "Native AMX receipt temporary is not authenticated by available finality",
-                    ));
-                }
-            }
-        }
-        let final_path = temporary
-            .path
-            .parent()
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    temporary.path.clone(),
-                    "Native AMX evidence temporary has no directory",
-                )
-            })?
-            .join(Self::native_amx_evidence_file_name(
-                temporary.kind,
-                temporary.participant_height,
-            ));
-        let resource_child =
-            resources.resource_child(vec![temporary.path.clone(), final_path.clone()]);
-        if let Some(stable) = inventory
-            .stable(temporary.kind)
-            .get(&temporary.participant_height)
-        {
-            self.validate_native_amx_evidence_file_locked(entry, namespace, stable)?;
-            let temporary_bytes =
-                self.read_native_amx_evidence_file_bytes_locked(namespace, temporary)?;
-            let stable_bytes =
-                self.read_native_amx_evidence_file_bytes_locked(namespace, stable)?;
-            if temporary_bytes != stable_bytes {
-                return Err(Self::invalid_lane_artifact_error(
-                    temporary.path.clone(),
-                    format!(
-                        "{} temporary conflicts with its durable same-height artifact",
-                        temporary.kind.label()
-                    ),
-                ));
-            }
-            Self::remove_bound_progress_temp_if_present(namespace, &temporary.path)
-                .map_err(|error| Error::IO(error, temporary.path.clone()))?;
-            self.sync_native_amx_evidence_namespace(namespace, temporary.kind.label())?;
-        } else {
-            let temporary_file =
-                Self::open_bound_progress_file(namespace, &temporary.path, &temporary.metadata)?;
-            Self::promote_bound_progress_temp_noreplace(
-                namespace,
-                &temporary.path,
-                &final_path,
-                &temporary_file,
-            )
-            .map_err(|error| Error::IO(error.source, final_path.clone()))?;
-            self.sync_native_amx_evidence_namespace(namespace, temporary.kind.label())?;
-        }
-        let recovered = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
-        if recovered.temporary(kind).is_some()
-            || !recovered
-                .stable(temporary.kind)
-                .contains_key(&temporary.participant_height)
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                final_path,
-                "Native AMX evidence temporary recovery did not publish exactly one stable artifact",
-            ));
-        }
-        resource_child.finish();
-        Ok(true)
-    }
     fn read_bound_regular_file_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -8080,8 +7753,6 @@ include!("kura/native_execution_reads.rs");
 pub(crate) use lane_admission_source::{
     canonical_admission_read_decode_limits, canonical_admission_read_working_set_bytes,
 };
-pub(crate) use native_lane_batch_source::FinalizedNativeLaneBatchV1;
-pub(crate) use native_lane_batch_source::NativeLaneBatchCarrierReadV1;
 include!("kura/indexed_sidecar_rewrite.rs");
 impl BlockStore {
     /// Create a new block store in `path`.

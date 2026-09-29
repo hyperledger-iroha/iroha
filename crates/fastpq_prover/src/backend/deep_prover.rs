@@ -111,7 +111,8 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
         let fri: [CoefficientReplayPlan; 5] = (0..5)
             .map(|round| CoefficientReplayPlan::fri(round, coefficient_limits))
             .collect::<Result<Vec<_>>>()?
-            .try_into().expect("five fixed coefficient layers");
+            .try_into()
+            .expect("five fixed coefficient layers");
         let terminal = CoefficientReplayPlan::terminal(coefficient_limits)?;
         let AttemptCharges {
             payload_bytes,
@@ -204,8 +205,14 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             stream,
             &mut transcript,
         )?;
-        let (ood, composition) =
-            commit_ood_composition(relation, &geometry, &replay, chunks, &alphas, &mut transcript)?;
+        let (ood, composition) = commit_ood_composition(
+            relation,
+            &geometry,
+            &replay,
+            chunks,
+            &alphas,
+            &mut transcript,
+        )?;
         let fri_layers = commit_fri_layers(
             &binding,
             &fri,

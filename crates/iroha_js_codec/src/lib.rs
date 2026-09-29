@@ -3633,6 +3633,17 @@ fn render_as<T: 'static>(
     instruction.as_any().downcast_ref::<T>().map(render)
 }
 
+/// Render `instruction` with the infallible `render` when it is a `T`.
+fn render_infallible_as<T: 'static>(
+    instruction: &dyn InstructionTrait,
+    render: fn(&T) -> json::Value,
+) -> Option<CodecResult<json::Value>> {
+    instruction
+        .as_any()
+        .downcast_ref::<T>()
+        .map(|typed| Ok(render(typed)))
+}
+
 /// Render `instruction` with `render` when it is a `T` in a variant `render` covers.
 fn render_variants_as<T: 'static>(
     instruction: &dyn InstructionTrait,
@@ -3672,7 +3683,7 @@ fn ledger_instruction_to_json(
         .or_else(|| render_variants_as(instruction, burn_box_to_json))
         .or_else(|| render_variants_as(instruction, grant_box_to_json))
         .or_else(|| render_variants_as(instruction, set_key_value_box_to_json))
-        .or_else(|| render_as(instruction, set_asset_definition_alias_to_json))
+        .or_else(|| render_infallible_as(instruction, set_asset_definition_alias_to_json))
         .or_else(|| render_as(instruction, execute_trigger_to_json))
 }
 
@@ -3683,11 +3694,11 @@ fn rwa_instruction_to_json(instruction: &dyn InstructionTrait) -> Option<CodecRe
         .or_else(|| render_as(instruction, register_rwa_to_json))
         .or_else(|| render_as(instruction, transfer_rwa_to_json))
         .or_else(|| render_as(instruction, merge_rwas_to_json))
-        .or_else(|| render_as(instruction, redeem_rwa_to_json))
-        .or_else(|| render_as(instruction, freeze_rwa_to_json))
-        .or_else(|| render_as(instruction, unfreeze_rwa_to_json))
-        .or_else(|| render_as(instruction, hold_rwa_to_json))
-        .or_else(|| render_as(instruction, release_rwa_to_json))
+        .or_else(|| render_infallible_as(instruction, redeem_rwa_to_json))
+        .or_else(|| render_infallible_as(instruction, freeze_rwa_to_json))
+        .or_else(|| render_infallible_as(instruction, unfreeze_rwa_to_json))
+        .or_else(|| render_infallible_as(instruction, hold_rwa_to_json))
+        .or_else(|| render_infallible_as(instruction, release_rwa_to_json))
         .or_else(|| render_as(instruction, force_transfer_rwa_to_json))
         .or_else(|| render_as(instruction, set_rwa_controls_to_json))
 }
@@ -3696,10 +3707,10 @@ fn rwa_instruction_to_json(instruction: &dyn InstructionTrait) -> Option<CodecRe
 fn governance_instruction_to_json(
     instruction: &dyn InstructionTrait,
 ) -> Option<CodecResult<json::Value>> {
-    render_as(instruction, submit_agenda_proposal_to_json)
+    render_infallible_as(instruction, submit_agenda_proposal_to_json)
         .or_else(|| render_as(instruction, propose_validation_fee_policy_to_json))
         .or_else(|| render_as(instruction, propose_deploy_contract_to_json))
-        .or_else(|| render_as(instruction, cast_zk_ballot_to_json))
+        .or_else(|| render_infallible_as(instruction, cast_zk_ballot_to_json))
         .or_else(|| render_as(instruction, register_citizen_to_json))
         .or_else(|| render_as(instruction, register_zk_asset_to_json))
         .or_else(|| render_as(instruction, schedule_confidential_policy_transition_to_json))
@@ -4277,7 +4288,7 @@ fn set_key_value_box_to_json(set_key_value: &SetKeyValueBox) -> CodecResult<Opti
 }
 
 /// Render `SetAssetDefinitionAlias` through its strict JSON contract.
-fn set_asset_definition_alias_to_json(alias: &SetAssetDefinitionAlias) -> CodecResult<json::Value> {
+fn set_asset_definition_alias_to_json(alias: &SetAssetDefinitionAlias) -> json::Value {
     let mut fields = json::Map::new();
     fields.insert(
         "asset_definition_id".to_owned(),
@@ -4303,7 +4314,7 @@ fn set_asset_definition_alias_to_json(alias: &SetAssetDefinitionAlias) -> CodecR
         "SetAssetDefinitionAlias".to_owned(),
         json::Value::Object(fields),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `ExecuteTrigger` through its strict JSON contract.
@@ -4473,7 +4484,7 @@ fn merge_rwas_payload(merge: &MergeRwas) -> CodecResult<json::Value> {
 }
 
 /// Render `RedeemRwa` through its strict JSON contract.
-fn redeem_rwa_to_json(redeem: &RedeemRwa) -> CodecResult<json::Value> {
+fn redeem_rwa_to_json(redeem: &RedeemRwa) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "RedeemRwa".to_owned(),
@@ -4482,31 +4493,31 @@ fn redeem_rwa_to_json(redeem: &RedeemRwa) -> CodecResult<json::Value> {
             "quantity": redeem.quantity(),
         }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `FreezeRwa` through its strict JSON contract.
-fn freeze_rwa_to_json(freeze: &FreezeRwa) -> CodecResult<json::Value> {
+fn freeze_rwa_to_json(freeze: &FreezeRwa) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "FreezeRwa".to_owned(),
         norito_json!({ "rwa": freeze.rwa().to_string() }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `UnfreezeRwa` through its strict JSON contract.
-fn unfreeze_rwa_to_json(unfreeze: &UnfreezeRwa) -> CodecResult<json::Value> {
+fn unfreeze_rwa_to_json(unfreeze: &UnfreezeRwa) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "UnfreezeRwa".to_owned(),
         norito_json!({ "rwa": unfreeze.rwa().to_string() }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `HoldRwa` through its strict JSON contract.
-fn hold_rwa_to_json(hold: &HoldRwa) -> CodecResult<json::Value> {
+fn hold_rwa_to_json(hold: &HoldRwa) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "HoldRwa".to_owned(),
@@ -4515,11 +4526,11 @@ fn hold_rwa_to_json(hold: &HoldRwa) -> CodecResult<json::Value> {
             "quantity": hold.quantity(),
         }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `ReleaseRwa` through its strict JSON contract.
-fn release_rwa_to_json(release: &ReleaseRwa) -> CodecResult<json::Value> {
+fn release_rwa_to_json(release: &ReleaseRwa) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "ReleaseRwa".to_owned(),
@@ -4528,7 +4539,7 @@ fn release_rwa_to_json(release: &ReleaseRwa) -> CodecResult<json::Value> {
             "quantity": release.quantity(),
         }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `ForceTransferRwa` through its strict JSON contract.
@@ -4559,7 +4570,7 @@ fn set_rwa_controls_to_json(set_controls: &SetRwaControls) -> CodecResult<json::
 }
 
 /// Render `SubmitAgendaProposal` through its strict JSON contract.
-fn submit_agenda_proposal_to_json(submit: &SubmitAgendaProposal) -> CodecResult<json::Value> {
+fn submit_agenda_proposal_to_json(submit: &SubmitAgendaProposal) -> json::Value {
     let mut outer = json::Map::new();
     outer.insert(
         "SubmitAgendaProposal".to_owned(),
@@ -4567,7 +4578,7 @@ fn submit_agenda_proposal_to_json(submit: &SubmitAgendaProposal) -> CodecResult<
             "proposal": submit.proposal,
         }),
     );
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `ProposeValidationFeePolicy` through its strict JSON contract.
@@ -4625,7 +4636,7 @@ fn propose_deploy_contract_to_json(propose: &ProposeDeployContract) -> CodecResu
 }
 
 /// Render `CastZkBallot` through its strict JSON contract.
-fn cast_zk_ballot_to_json(ballot: &CastZkBallot) -> CodecResult<json::Value> {
+fn cast_zk_ballot_to_json(ballot: &CastZkBallot) -> json::Value {
     let mut inner = json::Map::new();
     inner.insert(
         "election_id".to_owned(),
@@ -4641,7 +4652,7 @@ fn cast_zk_ballot_to_json(ballot: &CastZkBallot) -> CodecResult<json::Value> {
     );
     let mut outer = json::Map::new();
     outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-    Ok(json::Value::Object(outer))
+    json::Value::Object(outer)
 }
 
 /// Render `RegisterCitizen` through its strict JSON contract.

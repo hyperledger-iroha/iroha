@@ -17,7 +17,7 @@ use iroha_data_model::block::consensus::{
     ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
 };
 pub use iroha_data_model::block::consensus::{
-    Evidence, ExecKv, ExecWitness, LaneBlockProposalV1, ValidatorIndex,
+    ExecKv, ExecWitness, ValidatorIndex,
 };
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;

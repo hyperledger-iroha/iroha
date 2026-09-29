@@ -312,7 +312,11 @@ fn all_fixed_oracle_shapes_and_full_terminal_are_checked() {
         let leaf = context
             .hash_leaf(oracle, test_u32(leaves - 1), &payload)
             .unwrap();
-        assert!(context.hash_leaf(oracle, test_u32(leaves), &payload).is_err());
+        assert!(
+            context
+                .hash_leaf(oracle, test_u32(leaves), &payload)
+                .is_err()
+        );
         assert!(context.hash_leaf(oracle, 0, &payload[..bytes - 8]).is_err());
         let mut bad = payload;
         bad[bytes - 8..].copy_from_slice(&MODULUS.to_le_bytes());

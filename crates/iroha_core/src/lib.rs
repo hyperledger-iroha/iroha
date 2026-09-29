@@ -213,23 +213,9 @@ use std::sync::Arc;
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-use crate::{
-    merge_sidecar::CertifiedMergeSidecarMessage,
-    peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, BlockMessageWire},
-};
-use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
+use crate::peers_gossiper::{PeerTrustGossip, PeersGossip};
 use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
-const _: () = assert!(
-    MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES < MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES
-);
-const _: () = assert!(
-    iroha_data_model::block::consensus_v2::MAX_DA_PAYLOAD_SIZE_BYTES as usize
-        + SUMERAGI_V2_HASH_SEQUENCE_MAX_WIRE_BYTES
-        + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES
-        <= MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES
-);
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
 const NETWORK_MESSAGE_SUMERAGI_TAG: u32 = 18;
@@ -364,24 +350,6 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 #[norito_schema(name = "iroha_core::NetworkMessage")]
 #[norito(decode_from_slice)]
 pub enum NetworkMessage {
-    /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
-    #[codec(index = 0)]
-    SumeragiBlock(Arc<BlockMessageWire>),
-    /// Lane settlement relay envelope (NX-4).
-    #[codec(index = 1)]
-    LaneRelay(Box<LaneRelayEnvelope>),
-    /// Merge committee signature share for merge-ledger quorum certificates.
-    #[codec(index = 2)]
-    MergeCommitteeSignature(Arc<MergeCommitteeSignature>),
-    /// Lane-committee signature share for an automatic drain certificate.
-    #[codec(index = 3)]
-    LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
-    /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
-    #[codec(index = 4)]
-    CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),
-    /// Native AMX participant attestation control-plane message.
-    #[codec(index = 5)]
-    NativeAmx(Arc<native_amx::NativeAmxMessage>),
     /// Transaction gossiper message.
     #[codec(index = 6)]
     TransactionGossiper(Arc<TransactionGossip>),
@@ -412,12 +380,6 @@ pub enum NetworkMessage {
     /// Norito Streaming control-plane frame.
     #[codec(index = 15)]
     StreamingControl(Box<ControlFrame>),
-    /// Certified QueuePlan admission disseminated to every live authoritative validator.
-    #[codec(index = 16)]
-    QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
-    /// Exact Kura-durable QueuePlan admission certificate handed to the global leader.
-    #[codec(index = 17)]
-    QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
     /// One Sumeragi consensus frame: the exact `iroha_sumeragi` `WireMessage` encoding and its
     /// instance id. Only the consensus driver decodes it (`sumeragi::net`).
     #[codec(index = 18)]
@@ -428,12 +390,7 @@ impl NetworkMessage {
     /// subscribers instead of the generic `irohad` relay path.
     #[must_use]
     pub const fn is_torii_proxy_control_message(&self) -> bool {
-        matches!(
-            self,
-            Self::ToriiProxyRequest(_)
-                | Self::ToriiProxyResponse(_)
-                | Self::QueuePlanAdmissionPublication(_)
-        )
+        matches!(self, Self::ToriiProxyRequest(_) | Self::ToriiProxyResponse(_))
     }
 }
 // Encode/Decode are derived above for `NetworkMessage`.
@@ -443,71 +400,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         use iroha_p2p::network::message::Topic as T;
         match self {
-            NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
-                BlockMessage::V2(message) => {
-                    use iroha_data_model::block::consensus_v2::{
-                        ConsensusMessageV2Payload, PROTOCOL_VERSION,
-                    };
-                    if message.protocol_version != PROTOCOL_VERSION {
-                        T::Other
-                    } else {
-                        match &message.payload {
-                            ConsensusMessageV2Payload::PayloadChunk(_) => T::ConsensusChunk,
-                            ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
-                                T::ConsensusPayload
-                            }
-                            ConsensusMessageV2Payload::Proposal(_)
-                            | ConsensusMessageV2Payload::Vote(_)
-                            | ConsensusMessageV2Payload::QuorumCertificate(_)
-                            | ConsensusMessageV2Payload::TimeoutVote(_)
-                            | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                            | ConsensusMessageV2Payload::CommitCertificateResponse(_)
-                            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
-                                T::ConsensusSafety
-                            }
-                            ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-                            | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
-                                T::Consensus
-                            }
-                        }
-                    }
-                }
-                BlockMessage::NativeLane(envelope) => {
-                    if envelope.version
-                        == iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1
-                    {
-                        T::Consensus
-                    } else {
-                        T::Other
-                    }
-                }
-                BlockMessage::NativeLaneDecision(_) => T::Consensus,
-                BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneHistoricalRecoveryResponse(_) => T::ConsensusPayload,
-                BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneBlockNewViewVote(_)
-                | BlockMessage::LaneBlockNewViewCertificate(_)
-                | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::LaneBlockCertificate(_)
-                | BlockMessage::LaneHistoricalRecoveryRequest(_) => T::Consensus,
-                BlockMessage::KuraReplicaAdvert(_) => T::Consensus,
-            },
-            NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                CertifiedMergeSidecarMessage::Request(_)
-                | CertifiedMergeSidecarMessage::Close(_)
-                | CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_) => T::Consensus,
-                CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
-            },
-            NetworkMessage::LaneRelay(_)
-            | NetworkMessage::MergeCommitteeSignature(_)
-            | NetworkMessage::LaneDrainVote(_)
-            | NetworkMessage::NativeAmx(_)
-            | NetworkMessage::QueuePlanAdmissionCertificate(_) => T::Consensus,
             NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
-            | NetworkMessage::QueuePlanAdmissionPublication(_)
             | NetworkMessage::StreamingControl(_) => T::Control,
             NetworkMessage::TransactionGossiper(gossip) => match gossip.plane {
                 gossiper::GossipPlane::Public => T::TxGossip,
@@ -525,9 +419,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn subscriber_route(&self) -> iroha_p2p::network::message::SubscriberRoute {
         use iroha_p2p::network::message::SubscriberRoute;
         match self {
-            Self::ToriiProxyRequest(_)
-            | Self::ToriiProxyResponse(_)
-            | Self::QueuePlanAdmissionPublication(_) => SubscriberRoute::ToriiProxy,
+            Self::ToriiProxyRequest(_) | Self::ToriiProxyResponse(_) => SubscriberRoute::ToriiProxy,
             Self::Connect(_) => SubscriberRoute::Connect,
             Self::Sumeragi(_) => SubscriberRoute::Sumeragi,
             _ => SubscriberRoute::General,
@@ -536,23 +428,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn progress_reconstruction(&self) -> iroha_p2p::network::message::ProgressReconstruction {
         use iroha_p2p::network::message::ProgressReconstruction;
         match self {
-            // Sumeragi and certified-sidecar workers retain exact pending work
-            // and retry it through their bounded schedulers.
-            Self::SumeragiBlock(_) | Self::CertifiedMergeSidecar(_) => {
-                ProgressReconstruction::Retransmit
-            }
             // The Sumeragi core retransmits its state ("state, not custody", spec §6.11).
             Self::Sumeragi(_) => ProgressReconstruction::Retransmit,
-            // Lane/merge producers rebuild their bounded handoff after
-            // temporary actor pressure. Transport must keep the accepted
-            // exact occurrence until writer flush; none of these payloads may
-            // be retired merely because state synchronization might later
-            // subsume it.
-            Self::LaneRelay(_)
-            | Self::MergeCommitteeSignature(_)
-            | Self::LaneDrainVote(_)
-            | Self::NativeAmx(_)
-            | Self::QueuePlanAdmissionCertificate(_) => ProgressReconstruction::Retransmit,
             _ => ProgressReconstruction::Exact,
         }
     }
@@ -568,25 +445,18 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 0 | 4 | 6 | 16 | NETWORK_MESSAGE_SUMERAGI_TAG) {
+        let field = if matches!(tag, 6 | NETWORK_MESSAGE_SUMERAGI_TAG) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
         };
         let topic = match tag {
-            0 => inbound_sumeragi_topic(field)?,
-            NETWORK_MESSAGE_LANE_RELAY_TAG
-            | 2
-            | NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG
-            | NETWORK_MESSAGE_NATIVE_AMX_TAG
-            | NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => Topic::Consensus,
-            4 => inbound_certified_merge_sidecar_topic(field, flags)?,
             6 => inbound_transaction_gossip_topic(field, flags)?,
             7 => Topic::PeerGossip,
             8 => Topic::TrustGossip,
             10..=11 => Topic::Health,
             12 => Topic::Connect,
-            13..=16 => Topic::Control,
+            13..=15 => Topic::Control,
             NETWORK_MESSAGE_SUMERAGI_TAG => sumeragi::net::inbound_frame_topic(field, flags)?,
             _ => {
                 return Err(norito::core::Error::Message(
@@ -607,60 +477,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
         discriminant_bytes.copy_from_slice(discriminant);
         match u32::from_le_bytes(discriminant_bytes) {
-            0 => {
-                let (_, remaining) = inbound_enum_parts(payload)?;
-                let framed = inbound_owned_enum_field(remaining, flags)?;
-                let (block_tag, block, block_flags) = inbound_sumeragi_enum_field(framed)?;
-                if block_tag == 10 {
-                    return inbound_consensus_v2_decode_limits(block, framed_len, block_flags);
-                }
-                if matches!(block_tag, 11 | 12) {
-                    if block_tag == 11
-                        && inbound_native_lane_topic(block, block_flags)?
-                            == iroha_p2p::network::message::Topic::Other
-                    {
-                        return Ok(None);
-                    }
-                    return inbound_native_lane_decode_limits(framed_len);
-                }
-                if block_tag == 0 {
-                    if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
-                        return Err(norito::core::Error::ArchiveLengthExceeded {
-                            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                            limit: u64::try_from(MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
-                                .unwrap_or(u64::MAX),
-                        });
-                    }
-                    return Ok(Some(norito::DecodeLimits::new(
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        4 * MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                        64,
-                    )));
-                }
-                Ok(None)
-            }
-            NETWORK_MESSAGE_LANE_RELAY_TAG | NETWORK_MESSAGE_NATIVE_AMX_TAG => {
-                // These recursive consensus carriers intentionally rely on
-                // Norito's unconditional payload-derived global budget.
-                Ok(None)
-            }
-            NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG => {
-                if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_LANE_DRAIN_VOTE_WIRE_BYTES).unwrap_or(u64::MAX),
-                    });
-                }
-                Ok(Some(norito::DecodeLimits::new(
-                    lane_consensus::MAX_LANE_BLOCK_VALIDATORS,
-                    MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-                    MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS,
-                    MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
-                    MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
-                )))
-            }
             NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG => {
                 use torii_proxy::{
                     TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
@@ -701,54 +517,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     64,
                 )))
             }
-            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG => {
-                const WIRE_OVERHEAD_BYTES: usize = 64 * 1024;
-                const MAX_CERTIFICATE_BYTES: usize =
-                    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-                const MAX_WIRE_BYTES: usize = MAX_CERTIFICATE_BYTES + WIRE_OVERHEAD_BYTES;
-                // Relay, NetworkMessage, Arc, publication, and the owned
-                // complete-input field share one cumulative decode budget.
-                // Their nested copies need twelve bounded wire sizes; the
-                // independent frame and field caps still reject oversized input.
-                const MAX_DECODE_ALLOCATED_BYTES: usize = 12 * MAX_WIRE_BYTES;
-                if framed_len > MAX_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_WIRE_BYTES).unwrap_or(u64::MAX),
-                    });
-                }
-                let (_, remaining) = inbound_enum_parts(payload)?;
-                let publication = inbound_owned_enum_field(remaining, flags)?;
-                let (_, encoded_complete_input) =
-                    inbound_two_field_struct(publication, flags, core::mem::size_of::<u16>())?;
-                // `certificate` is a raw-byte sequence, not another sized
-                // struct field. Its fixed-width count precedes the bytes.
-                enforce_inbound_byte_sequence_limit(encoded_complete_input, MAX_CERTIFICATE_BYTES)?;
-                Ok(Some(norito::DecodeLimits::new(
-                    MAX_WIRE_BYTES,
-                    MAX_WIRE_BYTES,
-                    MAX_WIRE_BYTES,
-                    MAX_DECODE_ALLOCATED_BYTES,
-                    16,
-                )))
-            }
-            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => {
-                let max_body = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-                if framed_len > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES)
-                            .unwrap_or(u64::MAX),
-                    });
-                }
-                Ok(Some(norito::DecodeLimits::new(
-                    max_body,
-                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    8 * MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
-                    64,
-                )))
-            }
             NETWORK_MESSAGE_SUMERAGI_TAG => {
                 let (_, remaining) = inbound_enum_parts(payload)?;
                 let field = inbound_owned_enum_field(remaining, flags)?;
@@ -759,9 +527,6 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     }
     fn is_outbound_allowed(&self) -> bool {
         match self {
-            Self::SumeragiBlock(message) => {
-                message.as_ref().as_message().ensure_live_outbound().is_ok()
-            }
             // Never send a frame the receivers could not classify.
             Self::Sumeragi(frame) => frame.class().is_some(),
             _ => true,

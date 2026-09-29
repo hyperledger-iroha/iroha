@@ -796,7 +796,7 @@ fn verify_successor_bridge_finality_proof(
 mod tests {
     use super::*;
     use crate::block::consensus_v2 as wire;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;

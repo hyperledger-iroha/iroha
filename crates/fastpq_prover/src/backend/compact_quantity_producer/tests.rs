@@ -18,7 +18,8 @@ use crate::{
 };
 use iroha_data_model::fastpq::{
     FastpqArtifactIdentityDescriptionV1, FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1,
-    FastpqCommitmentDescriptionV1, FastpqCompactArtifactDecodeLimits, FastpqProofKindV1,
+    FastpqCommitmentDescriptionV1, FastpqCompactArtifactDecodeLimits, FastpqCompactProfileIdV1,
+    FastpqProofKindV1,
 };
 use norito::core::DecodeLimits;
 use sha2::{Digest as _, Sha256};
@@ -820,7 +821,6 @@ impl CapturedArtifact<'_> {
             verify_quantity_ordinary_artifact(raw, self.expected, *limits)
         }
     }
-
 }
 
 /// Decode the outer artifact and its inner bundle under the fixed transport policy.
@@ -983,8 +983,14 @@ fn assert_captured_child_work(
     assert_eq!(observed_roots, verified.air_row_roots());
     assert_eq!(verified.work().fri_leaves, fri_leaves);
     assert_eq!(verified.work().parent_hashes, parent_hashes);
-    assert_ne!(wire.intermediate_roots[0], captured.expected.inputs.old_root);
-    assert_ne!(wire.intermediate_roots[0], captured.expected.inputs.new_root);
+    assert_ne!(
+        wire.intermediate_roots[0],
+        captured.expected.inputs.old_root
+    );
+    assert_ne!(
+        wire.intermediate_roots[0],
+        captured.expected.inputs.new_root
+    );
     assert_valid_public_context(
         captured.statement,
         captured.expected,
@@ -1000,9 +1006,10 @@ fn assert_captured_decode_scopes(
     verified: &crate::offline_compact::VerifiedArtifact,
 ) {
     let bytes = &captured.bytes;
-    let (measured, usage) = norito::core::with_decode_limits_measured(policy().total_decode, || {
-        captured.verify_limits(bytes, &policy())
-    });
+    let (measured, usage) =
+        norito::core::with_decode_limits_measured(policy().total_decode, || {
+            captured.verify_limits(bytes, &policy())
+        });
     assert_eq!(&measured.unwrap(), verified);
     assert!(usage.total_allocated_bytes() > captured.frame.len());
     let mut exact = policy();
@@ -1102,7 +1109,10 @@ fn assert_captured_raw_bundle(
     );
     let mut exact_bundle = policy();
     exact_bundle.bundle.max_total_decode_allocation_charges = bundle_usage.total_allocated_bytes();
-    assert_eq!(&captured.verify_limits(bytes, &exact_bundle).unwrap(), verified);
+    assert_eq!(
+        &captured.verify_limits(bytes, &exact_bundle).unwrap(),
+        verified
+    );
     exact_bundle.bundle.max_total_decode_allocation_charges -= 1;
     assert!(captured.verify_limits(bytes, &exact_bundle).is_err());
 }
@@ -1133,11 +1143,7 @@ fn assert_captured_bundle_boundaries(
     }
     let mut no_child_allocation = policy();
     no_child_allocation.max_segment_decode_allocation_charges = 0;
-    assert!(
-        captured
-            .verify_limits(bytes, &no_child_allocation)
-            .is_err()
-    );
+    assert!(captured.verify_limits(bytes, &no_child_allocation).is_err());
     let mut one_child = policy();
     one_child.bundle.max_segments = 1;
     assert!(captured.verify_limits(bytes, &one_child).is_err());
@@ -1229,9 +1235,12 @@ fn assert_captured_changed_statements_rejected(captured: &CapturedArtifact<'_>) 
             captured.is_axt.then_some(captured.context),
             &captured.wire.intermediate_roots,
         );
-        let changed = Artifact::new(&changed_statement, captured.is_axt.then_some(captured.context))
-            .finish(captured.frame.clone(), policy())
-            .unwrap();
+        let changed = Artifact::new(
+            &changed_statement,
+            captured.is_axt.then_some(captured.context),
+        )
+        .finish(captured.frame.clone(), policy())
+        .unwrap();
         assert_deep_context_rejected(&captured.verify(&changed, changed_expected).unwrap_err());
     }
 }
@@ -1362,7 +1371,9 @@ fn assert_captured_retag_rejected(captured: &CapturedArtifact<'_>) {
     if captured.is_axt {
         assert!(verify_quantity_ordinary_artifact(&captured.bytes, expected, policy()).is_err());
     } else {
-        assert!(verify_quantity_axt_artifact(&captured.bytes, expected, context, policy()).is_err());
+        assert!(
+            verify_quantity_axt_artifact(&captured.bytes, expected, context, policy()).is_err()
+        );
     }
 }
 
@@ -1433,7 +1444,12 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
             captured.bytes.len(),
             Sha256::digest(&captured.bytes),
             captured.frame.len(),
-            captured.wire.segments.iter().map(Vec::len).collect::<Vec<_>>(),
+            captured
+                .wire
+                .segments
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
             verified.work()
         );
     }

@@ -90,6 +90,7 @@ mod vpn;
 use ledger_state_finality::StateFinalityResponse;
 use ledger_state_finality::{handler_ledger_state_proof, handler_ledger_state_root};
 use staking_preparation::handler_staking_preparation;
+mod validator_committee;
 use validator_committee::handler_validator_committee_status;
 pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.

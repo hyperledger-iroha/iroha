@@ -110,11 +110,7 @@ where
     row
 }
 
-fn verified_instruction_records() -> [Value; 2] {
-    let mut relay = sample_lane_relay_instruction();
-    relay.envelope = sample_envelope(9);
-    relay.proof_blob = sample_proof_blob(0x41);
-    relay.proof_blob.expiry_slot = Some(110);
+fn verified_instruction_records() -> [Value; 1] {
     let mut allocation = sample_fee_budget_instruction();
     allocation.program_revision = 2;
     allocation.verified_allocation = "0.125".parse().expect("fractional allocation");
@@ -123,7 +119,6 @@ fn verified_instruction_records() -> [Value; 2] {
     allocation.proof_blob.expiry_slot = Some(110);
     [
         record([sample_fee_budget_instruction(), allocation]),
-        record([sample_lane_relay_instruction(), relay]),
     ]
 }
 
@@ -198,12 +193,12 @@ fn current_instruction_records() -> Value {
             .as_str()
             .cmp(&right.get("nominal").unwrap().as_str())
     });
-    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.len(), 11);
     assert_eq!(
         rows.iter()
             .map(|row| row.get("cases").unwrap().as_array().unwrap().len())
             .sum::<usize>(),
-        24
+        22
     );
     Value::Array(rows)
 }

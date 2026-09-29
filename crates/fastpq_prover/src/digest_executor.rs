@@ -314,7 +314,10 @@ mod tests {
         assert_eq!(sizes, [2, 2, 2, 1]);
         assert_eq!(
             actual,
-            frames.iter().map(fastpq_isi::GoldilocksDigest384FrameV1::hash).collect::<Vec<_>>()
+            frames
+                .iter()
+                .map(fastpq_isi::GoldilocksDigest384FrameV1::hash)
+                .collect::<Vec<_>>()
         );
         assert!(
             execute_bounded_digest384_frames_v1(

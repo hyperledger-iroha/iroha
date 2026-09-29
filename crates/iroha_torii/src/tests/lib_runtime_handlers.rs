@@ -13,5 +13,6 @@ pub(crate) mod tests_runtime_handlers {
     include!("lib_runtime_handlers/da_query_auth.rs");
     include!("lib_runtime_handlers/part_10.rs");
     include!("lib_runtime_handlers/part_11_canonical_history.rs");
+    include!("lib_runtime_handlers/validator_committee.rs");
     include!("lib_runtime_handlers/current_transaction_admission.rs");
 }

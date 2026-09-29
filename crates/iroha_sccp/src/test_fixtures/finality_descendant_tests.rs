@@ -29,7 +29,6 @@ fn block(height: u64, parent: Option<&SccpFinalizedBlockTestFixtureV1>) -> Signe
             Vec::new(),
             AxtPolicySnapshot::default(),
             BTreeSet::default(),
-            Vec::new(),
             &exact_fixture_output_limits(),
         )
         .expect("complete empty execution matches the fixture's zero inputs");

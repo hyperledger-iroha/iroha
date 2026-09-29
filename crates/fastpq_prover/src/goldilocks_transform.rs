@@ -88,6 +88,10 @@ pub(crate) const EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1: usize = 64;
 /// not replace a process reserve for allocator/driver/thread overhead or imply
 /// a measured RSS bound. CUDA has a different pool and is deliberately outside
 /// this Metal-specific accounting contract.
+///
+/// # Errors
+/// Returns [`GoldilocksTransformErrorV1::InvalidShape`] for an unsupported row
+/// or column count, or when the checked byte allowance overflows.
 pub fn metal_goldilocks_transform_extra_payload_v1(
     rows: usize,
     columns: usize,
@@ -179,6 +183,11 @@ impl std::error::Error for GoldilocksTransformErrorV1 {}
 /// fallback therefore transforms the original inputs after a
 /// fully drained failure. Uncertain completion is terminal, including in Auto
 /// mode, because switching arithmetic does not release device-owned storage.
+///
+/// # Errors
+/// Returns a shape, root or noncanonical-input error before any transform, a
+/// terminal uncertain-completion error, or, in required GPU mode, a device
+/// unavailability or failure error.
 pub fn transform_goldilocks_columns_v1(
     columns: &mut [Vec<u64>],
     root: u64,
@@ -336,12 +345,18 @@ fn power_v1(mut value: u64, mut exponent: u64) -> u64 {
     let mut result = 1;
     while exponent != 0 {
         if exponent & 1 != 0 {
-            result = ((u128::from(result) * u128::from(value)) % u128::from(FIELD_MODULUS)) as u64;
+            result = mul_mod_v1(result, value);
         }
-        value = ((u128::from(value) * u128::from(value)) % u128::from(FIELD_MODULUS)) as u64;
+        value = mul_mod_v1(value, value);
         exponent >>= 1;
     }
     result
+}
+
+/// Multiply two words modulo the Goldilocks prime with exact 128-bit arithmetic.
+fn mul_mod_v1(left: u64, right: u64) -> u64 {
+    let product = (u128::from(left) * u128::from(right)) % u128::from(FIELD_MODULUS);
+    u64::try_from(product).expect("a residue modulo the Goldilocks prime fits u64")
 }
 
 #[cfg(test)]
@@ -354,8 +369,11 @@ mod tests {
 
     fn horner_v1(coefficients: &[u64], point: u64) -> u64 {
         coefficients.iter().rev().fold(0, |value, coefficient| {
-            ((u128::from(value) * u128::from(point) + u128::from(*coefficient))
-                % u128::from(FIELD_MODULUS)) as u64
+            u64::try_from(
+                (u128::from(value) * u128::from(point) + u128::from(*coefficient))
+                    % u128::from(FIELD_MODULUS),
+            )
+            .unwrap()
         })
     }
 
@@ -413,10 +431,10 @@ mod tests {
         for log in 1..=5 {
             for odd in [1, 3, 5] {
                 let root = root_v1(log, odd);
-                let original = (0..3)
+                let original = (0_u64..3)
                     .map(|column| {
-                        (0..(1 << log))
-                            .map(|row| (row * 31 + column * 17 + 1) as u64)
+                        (0..(1_u64 << log))
+                            .map(|row| row * 31 + column * 17 + 1)
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();

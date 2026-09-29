@@ -593,8 +593,7 @@ impl CertifiedTestChain {
         use crate::beacon::{
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
-            prepared_session_and_signers_fixture_for_keys_v1,
-        };
+            };
         use iroha_data_model::consensus::{
             GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconChainAnchorV1,
             GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconPulseContextV1,

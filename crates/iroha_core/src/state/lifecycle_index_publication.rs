@@ -3,24 +3,6 @@
 use super::*;
 use crate::publication_rwlock::DeferredPublicationRwLock;
 
-/// Retains original index releases outside the calling operation's physical fences.
-/// Short read/write guards unlock normally; their notifications stay in this owner.
-pub(super) struct LaneLifecycleReleases<'state> {
-    pub(super) hashes: Option<concread::release::DeferredReleaseBatch>,
-    pub(super) membership: concread::release::DeferredReleaseBatch,
-    pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
-    pub(super) merge_admission: DeferredPublicationRwLock<'state, MergeAdmissionState>,
-    pub(super) relays: DeferredPublicationRwLock<'state, LaneRelayStore>,
-    pub(super) manifests: DeferredPublicationRwLock<'state, LaneManifestRegistryHandle>,
-    pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistryHandle>,
-    pub(super) commitments: DeferredPublicationRwLock<'state, DaCommitmentStore>,
-    pub(super) confidential_compute: DeferredPublicationRwLock<'state, ConfidentialComputeStore>,
-    pub(super) receipt_cursors: DeferredPublicationRwLock<'state, DaReceiptCursorIndex>,
-    pub(super) shard_cursors: DeferredPublicationRwLock<'state, DaShardCursorIndex>,
-    pub(super) pin_intents: DeferredPublicationRwLock<'state, DaPinStore>,
-    pub(super) hydrated:
-        DeferredPublicationRwLock<'state, Option<Result<(), DaIndexHydrationError>>>,
-}
 
 impl<'state> LaneLifecycleReleases<'state> {
     pub(super) fn new(state: &'state State) -> Self {

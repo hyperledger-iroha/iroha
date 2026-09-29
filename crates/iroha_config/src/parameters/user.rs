@@ -32,7 +32,6 @@ use iroha_data_model::{
     governance::types::{
         MAX_PARLIAMENT_BODY_TARGET_SEATS_V1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
     },
-    merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     soracloud::{
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
         SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
@@ -1324,7 +1323,7 @@ impl Root {
                 )),
             );
         }
-        if let Some(sumeragi) = sumeragi.as_ref() {
+        if sumeragi.is_some() {
             let lane_profile = network.lane_profile;
             let reply_source_capacity = network
                 .max_total_connections
@@ -1338,97 +1337,6 @@ impl Root {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                         "trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
-                    )),
-                );
-            }
-            if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.authenticated_non_validator_sources ({}) exceeds configured network authenticated-source capacity {reply_source_capacity}",
-                        sumeragi.queues.authenticated_non_validator_sources,
-                    )),
-                );
-            }
-            let effect_work_capacity = (sumeragi.queues.commands.get()
-                / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-                .max(1);
-            let validator_roster_len = trusted_peers.value().validator_roster_len();
-            let authenticated_non_validator_source_capacity =
-                sumeragi.queues.authenticated_non_validator_sources.get();
-            match actual::sumeragi_v2_body_ingress_required_message_capacity(
-                validator_roster_len,
-                authenticated_non_validator_source_capacity,
-            ) {
-                Some(required_bodies) if sumeragi.queues.bodies.get() < required_bodies => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 canonical outer-ingress message capacity {} is below the roster-aware minimum {required_bodies}; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
-                            sumeragi.queues.bodies,
-                        )),
-                    );
-                }
-                None => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 roster-aware canonical outer-ingress message minimum overflowed; configured validator roster is {validator_roster_len}, and authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}",
-                        )),
-                    );
-                }
-                Some(_) => {}
-            }
-            let body_source_bytes = sumeragi.queues.body_source_bytes.get();
-            match actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                validator_roster_len,
-                authenticated_non_validator_source_capacity,
-                body_source_bytes,
-            ) {
-                Some(required_body_bytes)
-                    if sumeragi.queues.body_bytes.get() < required_body_bytes =>
-                {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {} is below the roster-aware minimum {required_body_bytes}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
-                            sumeragi.queues.body_bytes,
-                        )),
-                    );
-                }
-                None => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                            "Sumeragi v2 roster-aware aggregate canonical outer-ingress wire-byte minimum overflowed; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {authenticated_non_validator_source_capacity}, and each source requires {body_source_bytes} bytes",
-                        )),
-                    );
-                }
-                Some(_) => {}
-            }
-            if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
-                validator_roster_len,
-                effect_work_capacity,
-                sumeragi.queues.bodies.get(),
-                sumeragi.queues.authenticated_non_validator_sources.get(),
-            ) {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
-                        sumeragi.queues.authenticated_non_validator_sources,
-                        sumeragi.queues.bodies,
-                    )),
-                );
-            }
-            let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-                effect_work_capacity,
-                sumeragi.queues.bodies.get(),
-            )
-            .and_then(|shared_capacity| {
-                actual::validate_sumeragi_v2_exact_output_geometry(
-                    shared_capacity,
-                    reply_source_capacity,
-                )
-            });
-            if let Err(error) = geometry {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured network reply-source capacity is {reply_source_capacity}"
                     )),
                 );
             }
@@ -6316,18 +6224,6 @@ pub struct Sumeragi {
     pub global_beacon_partial_signer_provider_revision: Option<u64>,
     /// Exact non-zero public-policy digest for the global beacon signer.
     pub global_beacon_partial_signer_provider_policy_digest_hex: Option<String>,
-    /// Finite candidate block limits.
-    #[config(nested)]
-    pub block: SumeragiBlock,
-    /// Bounded asynchronous adapter queues.
-    #[config(nested)]
-    pub queues: SumeragiQueues,
-    /// Shared finite lane, merge, recovery, and Native AMX service bounds.
-    #[config(nested)]
-    pub limits: SumeragiV2RuntimeLimits,
-    /// Node-local durable storage budgets.
-    #[config(nested)]
-    pub storage: SumeragiStorage,
     /// Consensus key-rotation and algorithm policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
@@ -6578,10 +6474,6 @@ impl Sumeragi {
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest_hex,
-            block,
-            queues,
-            limits,
-            storage,
             keys,
             view_timeout_base_ms,
             view_timeout_max_ms,
@@ -6680,119 +6572,6 @@ impl Sumeragi {
             );
             valid = false;
         }
-        if queues.commands.get() < defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "sumeragi.queues.commands must be at least {}",
-                    defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY,
-                )),
-            );
-            valid = false;
-        }
-        if storage.body_store_max_bytes_per_height.get()
-            < defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "sumeragi.storage.body_store_max_bytes_per_height must hold one maximum durable body frame (minimum {}, configured {})",
-                    defaults::sumeragi::BODY_STORE_MIN_BYTES_PER_HEIGHT,
-                    storage.body_store_max_bytes_per_height.get(),
-                )),
-            );
-            valid = false;
-        }
-        let envelope_headroom = defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES;
-        let manifest_wire_bytes =
-            defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES;
-        let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
-        let certified_fence_escape_reserve =
-            defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES;
-        let lane_progress_bytes = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
-        let lane_completion_bytes = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
-        let minimum_source_bytes = block
-            .max_payload_bytes
-            .get()
-            .checked_add(envelope_headroom)
-            .map(|ordinary| ordinary.max(lane_progress_bytes))
-            .and_then(|ordinary| {
-                block
-                    .max_payload_bytes
-                    .get()
-                    .checked_add(envelope_headroom)
-                    .and_then(|completion| completion.checked_add(manifest_wire_bytes))
-                    .map(|completion| completion.max(lane_completion_bytes))
-                    .and_then(|completion| ordinary.checked_add(completion))
-            })
-            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
-            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve));
-        match minimum_source_bytes {
-            Some(minimum) if queues.body_source_bytes.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
-                        queues.body_source_bytes,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
-                    )),
-                );
-                valid = false;
-            }
-        }
-        let minimum_body_sources = queues
-            .authenticated_non_validator_sources
-            .get()
-            .checked_add(1);
-        let minimum_body_messages = actual::sumeragi_v2_body_ingress_required_message_capacity(
-            1,
-            queues.authenticated_non_validator_sources.get(),
-        );
-        match minimum_body_messages {
-            Some(minimum) if queues.bodies.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum {minimum}, configured {})",
-                        queues.bodies,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "Sumeragi authenticated non-validator ingress message geometry exceeds the platform size representation",
-                ));
-                valid = false;
-            }
-        }
-        match minimum_body_sources
-            .and_then(|sources| queues.body_source_bytes.get().checked_mul(sources))
-        {
-            Some(minimum) if queues.body_bytes.get() < minimum => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum {minimum}, configured {})",
-                        queues.body_bytes,
-                    )),
-                );
-                valid = false;
-            }
-            Some(_) => {}
-            None => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig).attach(
-                        "Sumeragi authenticated-source ingress byte geometry exceeds the platform size representation",
-                    ),
-                );
-                valid = false;
-            }
-        }
         let key_algorithms: BTreeSet<Algorithm> = keys.allowed_algorithms.iter().copied().collect();
         if !key_algorithms.contains(&Algorithm::BlsNormal) {
             emitter.emit(
@@ -6818,62 +6597,6 @@ impl Sumeragi {
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest,
-            block: actual::SumeragiBlock {
-                max_transactions: block.max_transactions,
-                max_payload_bytes: block.max_payload_bytes,
-                proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,
-            },
-            queues: actual::SumeragiQueues {
-                commands: queues.commands,
-                authenticated_non_validator_sources: queues.authenticated_non_validator_sources,
-                bodies: queues.bodies,
-                body_bytes: queues.body_bytes,
-                body_source_bytes: queues.body_source_bytes,
-                chunks: queues.chunks,
-                ready_bodies: queues.ready_bodies,
-            },
-            limits: actual::SumeragiV2RuntimeLimits {
-                authenticated_merge_qc_capacity: limits.authenticated_merge_qc_capacity,
-                merge_leader_body_frame_headroom_bytes: limits
-                    .merge_leader_body_frame_headroom_bytes,
-                autonomous_carrier_headroom_bytes: limits.autonomous_carrier_headroom_bytes,
-                autonomous_producer_recheck: limits.autonomous_producer_recheck_ms.0,
-                historical_recovery_stuck_attempts: limits.historical_recovery_stuck_attempts,
-                historical_recovery_retry_tier_attempts: limits
-                    .historical_recovery_retry_tier_attempts,
-                historical_recovery_max_retry_tier: limits.historical_recovery_max_retry_tier,
-                sidecar_service_burst: limits.sidecar_service_burst,
-                merge_sidecar_inbound_session_capacity: limits
-                    .merge_sidecar_inbound_session_capacity,
-                merge_sidecar_inbound_sessions_per_peer: limits
-                    .merge_sidecar_inbound_sessions_per_peer,
-                merge_sidecar_inbound_assembly_bytes: limits.merge_sidecar_inbound_assembly_bytes,
-                merge_sidecar_inbound_assembly_bytes_per_peer: limits
-                    .merge_sidecar_inbound_assembly_bytes_per_peer,
-                merge_sidecar_deferred_block_capacity: limits.merge_sidecar_deferred_block_capacity,
-                merge_sidecar_future_block_distance: limits.merge_sidecar_future_block_distance,
-                merge_sidecar_request_timeout: limits.merge_sidecar_request_timeout_ms.0,
-                merge_sidecar_outbound_sessions_per_source: limits
-                    .merge_sidecar_outbound_sessions_per_source,
-                merge_sidecar_outbound_bytes_per_source: limits
-                    .merge_sidecar_outbound_bytes_per_source,
-                merge_sidecar_server_request_gates_per_source: limits
-                    .merge_sidecar_server_request_gates_per_source,
-                pending_certified_merge_entry_capacity: limits
-                    .pending_certified_merge_entry_capacity,
-                pending_queue_plan_admission_capacity: limits.pending_queue_plan_admission_capacity,
-                pending_control_sidecar_bytes: limits.pending_control_sidecar_bytes,
-                merge_signing_guard_record_capacity: limits.merge_signing_guard_record_capacity,
-                merge_signing_guard_record_bytes: limits.merge_signing_guard_record_bytes,
-                merge_signing_guard_total_bytes: limits.merge_signing_guard_total_bytes,
-                native_amx_signing_guard_record_capacity: limits
-                    .native_amx_signing_guard_record_capacity,
-                native_amx_signing_guard_record_bytes: limits.native_amx_signing_guard_record_bytes,
-                native_amx_signing_guard_anchor_bytes: limits.native_amx_signing_guard_anchor_bytes,
-            },
-            storage: actual::SumeragiStorage {
-                body_store_max_bytes_per_height: storage.body_store_max_bytes_per_height,
-            },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
                 overlap_grace_blocks: keys.overlap_grace_blocks,
@@ -12290,13 +12013,6 @@ impl Nexus {
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
-        if let Err(error) = iroha_data_model::merge::validate_merge_lane_authority_geometry(
-            &lane_catalog,
-            &dataspace_catalog,
-        ) {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(error.to_string()));
-            return None;
-        }
         let routing_policy =
             Self::build_routing_policy(routing_policy, &lane_catalog, &dataspace_catalog, emitter)?;
         let registry = registry.parse(emitter)?;

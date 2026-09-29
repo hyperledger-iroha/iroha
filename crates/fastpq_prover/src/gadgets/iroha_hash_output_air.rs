@@ -107,7 +107,8 @@ mod tests {
     fn bytes(output: &IrohaHashOutput) -> [u8; 32] {
         core::array::from_fn(|byte| {
             (0..8).fold(0_u8, |value, bit| {
-                value | ((output.words[byte / 8].bits[(byte % 8) * 8 + bit] as u8) << bit)
+                let cell = output.words[byte / 8].bits[(byte % 8) * 8 + bit];
+                value | (u8::try_from(cell).expect("bit cell") << bit)
             })
         })
     }

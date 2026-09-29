@@ -66,7 +66,6 @@ pub fn install_network(
         vec![],
         Default::default(),
         Default::default(),
-        vec![],
         &limits(),
     )
 }
@@ -122,7 +121,6 @@ pub fn install(
         vec![],
         Default::default(),
         Default::default(),
-        vec![],
         &limits(),
     )
 }

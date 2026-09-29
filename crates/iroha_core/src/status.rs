@@ -18,22 +18,9 @@ use iroha_crypto::{
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{
-            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
-            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, LaneBlockCommitment,
-            LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
-            SumeragiLanePayloadOwnership,
         },
-    },
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
-    nexus::{LaneRelayEnvelope, LaneRelayError},
-};
+    };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;

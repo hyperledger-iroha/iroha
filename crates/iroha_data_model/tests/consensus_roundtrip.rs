@@ -5,42 +5,23 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidencePenaltyStatus,
-            EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
-            LaneSettlementReceipt, NposGenesisParams, SumeragiV2EquivocationEvidence,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, ExecKv, ExecWitness,
+            ExecWitnessMsg, NposGenesisParams,
         },
         consensus_v2::{
-            BeaconHorizonStatusV1, BlockSubject, ConsensusMode, ConsensusRound,
-            DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext,
-            HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding,
-            QuorumCertificateRef, SumeragiV2BodyState, SumeragiV2Equivocation,
-            SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus,
-            SumeragiV2QcResponse, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutVote,
-            ValidationError, ValidatorPower,
+            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2GenesisContextParameters,
+            ValidatorPower,
         },
     },
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
 };
 use iroha_model_base::peer::PeerId;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use norito::{
-    DeserializePayload,
-    codec::{Decode, DecodeAll, Encode},
-};
-use std::{
-    convert::TryFrom,
-    fmt::Debug,
-    fs,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-};
-use tempfile::tempdir;
+use norito::codec::{Decode, Encode};
+use std::{convert::TryFrom, fmt::Debug, num::NonZeroU64};
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
     for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -74,28 +55,6 @@ fn mint_finality_authority(
     }
 }
 
-fn mint_finality_genesis_authorization(
-    authority: &KagemushaMintFinalityAuthorityGenerationV1,
-    last_height: u64,
-) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: authority.network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height,
-        authority_generation: authority.generation,
-        authority_id: authority.authority_id().expect("valid fixture authority"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(authority)
-        .expect("valid fixture genesis authorization");
-    authorization
-}
 
 
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
@@ -175,6 +134,9 @@ fn rng_hash(rng: &mut DeterministicRng) -> Hash {
 }
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
+}
+fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
 }
 fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisParams {
     let mode = if rng.next_bool() {
@@ -306,14 +268,6 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
 }
 #[test]
 fn consensus_persistence_norito_roundtrip() {
-    let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0002));
-    let evidence_record = EvidenceRecord {
-        evidence: evidence.clone(),
-        recorded_at_height: 44,
-        recorded_at_view: 8,
-        recorded_at_ms: 1_702_000_123,
-        penalty_status: EvidencePenaltyStatus::Cancelled { height: 45 },
-    };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {
             key: sample_bytes(0x20, 4),
@@ -333,20 +287,13 @@ fn consensus_persistence_norito_roundtrip() {
         epoch: 2,
         witness: exec_witness.clone(),
     };
-    assert_roundtrip(&evidence);
-    assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
 }
 #[test]
 fn consensus_roundtrip_deterministic_fuzz() {
     let mut rng = DeterministicRng::new(0xD4E5_F607_89AB_CDEF);
-    assert_roundtrip(&SumeragiV2QcResponse::default());
     for _ in 0..64 {
-        let status = rng_sumeragi_v2_status(&mut rng);
-        assert_roundtrip(&status);
-        let qc_response = rng_sumeragi_v2_qc_response(&mut rng);
-        assert_roundtrip(&qc_response);
         let genesis = rng_consensus_genesis_params(&mut rng);
         if let ConsensusGenesisModeParams::Npos(npos) = &genesis.mode {
             assert_roundtrip(npos);
@@ -371,14 +318,5 @@ fn consensus_roundtrip_deterministic_fuzz() {
         assert_roundtrip(&exec_witness);
         let exec_witness_msg = rng_exec_witness_msg(&mut rng);
         assert_roundtrip(&exec_witness_msg);
-        let evidence = rng_evidence(&mut rng);
-        assert_roundtrip(&evidence);
-        let evidence_record = rng_evidence_record(&mut rng, evidence);
-        assert_roundtrip(&evidence_record);
     }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LaneCommitmentFixtureMode {
-    Verify,
-    Regenerate,
 }

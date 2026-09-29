@@ -18,7 +18,6 @@
 //! sources as defaults, `static`, `derive(n)`, `policy`, role overlay, node file, and admits
 //! only [`PROFILE_NODE_KEYS`] (plus the profile's `node_tunable` keys) in the node file.
 
-use crate::parameters::{actual, user};
 use iroha_config_base::{ReadConfig, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus_v2::ConsensusMode;
@@ -31,10 +30,6 @@ pub mod canonical;
 pub use canonical::{
     CanonicalEntryV1, CanonicalLeafV1, CanonicalPathSegmentV1, CanonicalTableV1,
     CanonicalValueError,
-};
-pub use geometry::{
-    SumeragiV2GeometryError, SumeragiV2IngressGeometry, SumeragiV2IngressInputs,
-    sumeragi_v2_ingress_geometry,
 };
 
 const SORA_NEXUS_V1: &str = include_str!("../profiles/sora-nexus-v1.toml");
@@ -290,14 +285,14 @@ pub enum ProfileError {
         layer: String,
     },
     /// The roster cannot be admitted.
-    #[error("profile `{profile}` cannot derive a roster of {validators}: {source}")]
+    #[error("profile `{profile}` cannot derive a roster of {validators}: {reason}")]
     Geometry {
         /// Profile being derived.
         profile: ProfileId,
         /// Requested roster.
         validators: usize,
-        /// Geometry failure.
-        source: SumeragiV2GeometryError,
+        /// Why the roster is not admissible.
+        reason: &'static str,
     },
     /// The derived Sumeragi configuration is rejected by the node parser.
     #[error(
@@ -380,10 +375,6 @@ pub struct DeriveInputs {
     pub authenticated_non_validator_sources: u32,
     /// On-chain budget of external committee peers; `committee_sources = n + this`.
     pub max_external_committee_peers: u32,
-    /// Serialized reducer command FIFO capacity.
-    pub queue_commands: u32,
-    /// Outer-ingress message capacity.
-    pub queue_bodies: u32,
     /// Dataspace catalog template; [`Profile::derive`] adds each entry's `fault_tolerance`.
     pub dataspace_catalog: Vec<toml::Table>,
 }
@@ -416,21 +407,11 @@ pub struct DerivedGeometryV1 {
     pub committee_sources: u32,
     /// Authenticated non-validator ingress class capacity.
     pub authenticated_non_validator_sources: u32,
-    /// `sumeragi.queues.commands`.
-    pub queue_commands: u64,
-    /// `sumeragi.queues.bodies`.
-    pub queue_bodies: u64,
-    /// `sumeragi.queues.body_source_bytes` (from `[static]`).
-    pub body_source_bytes: u64,
-    /// `sumeragi.queues.body_bytes`.
-    pub body_bytes: u64,
     /// `network.max_total_connections`: every other validator, external committee peer and
     /// authenticated source.
     pub max_total_connections: u64,
     /// Genesis `NPoS` `max_validators`.
     pub npos_max_validators: u32,
-    /// Height-local lifecycle records the geometry reserves.
-    pub lifecycle_records: u64,
 }
 
 /// A 32-byte profile digest.
@@ -494,7 +475,6 @@ pub struct Profile {
     genesis_recipe: GenesisRecipeV1,
     static_config: toml::Table,
     derive: DeriveInputs,
-    body_source_bytes: u64,
     policy: toml::Table,
     host: HostPolicyV1,
     roles: BTreeMap<ProfileRole, toml::Table>,
@@ -535,8 +515,6 @@ struct GenesisRecipeFile {
 struct DeriveFile {
     authenticated_non_validator_sources: u32,
     max_external_committee_peers: u32,
-    queue_commands: u32,
-    queue_bodies: u32,
 }
 
 #[derive(ReadConfig)]
@@ -675,19 +653,6 @@ impl Profile {
                 file.genesis_recipe.consensus_mode
             )));
         }
-        let body_source_bytes = static_config
-            .get("sumeragi")
-            .and_then(|sumeragi| sumeragi.get("queues"))
-            .and_then(|queues| queues.get("body_source_bytes"))
-            .and_then(toml::Value::as_integer)
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .filter(|bytes| *bytes > 0)
-            .ok_or_else(|| {
-                malformed(
-                    "`static.sumeragi.queues.body_source_bytes` must be a positive integer"
-                        .to_owned(),
-                )
-            })?;
         let profile = Self {
             id,
             version: file.profile.version,
@@ -707,11 +672,8 @@ impl Profile {
                     .derive
                     .authenticated_non_validator_sources,
                 max_external_committee_peers: file.derive.max_external_committee_peers,
-                queue_commands: file.derive.queue_commands,
-                queue_bodies: file.derive.queue_bodies,
                 dataspace_catalog,
             },
-            body_source_bytes,
             policy,
             host: HostPolicyV1 {
                 systemd_memory_max: file.host.systemd_memory_max,
@@ -849,51 +811,34 @@ impl Profile {
     /// [`ProfileError::Geometry`] for a roster that is not `3f + 1` or does not fit, and
     /// [`ProfileError::Sumeragi`] when the node parser rejects the derived configuration.
     pub fn derive(&self, validators: usize) -> Result<DerivedGeometryV1, ProfileError> {
-        let geometry_error = |source| ProfileError::Geometry {
+        let reject = |reason| ProfileError::Geometry {
             profile: self.id,
             validators,
-            source,
+            reason,
         };
+        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(validators) {
+            return Err(reject(
+                "the global committee must have exactly 3f + 1 validators with 1 <= f <= 10",
+            ));
+        }
+        let overflow = || reject("the derived sizes overflow the platform representation");
         let authenticated = to_usize(self.derive.authenticated_non_validator_sources);
         let external = to_usize(self.derive.max_external_committee_peers);
-        let committee_sources = validators
+        let committee_sources = validators.checked_add(external).ok_or_else(overflow)?;
+        let max_total_connections = (validators - 1)
             .checked_add(external)
-            .ok_or_else(|| geometry_error(SumeragiV2GeometryError::Overflow))?;
-        let max_total_connections = validators
-            .checked_sub(1)
-            .and_then(|others| others.checked_add(external))
             .and_then(|peers| peers.checked_add(authenticated))
-            .unwrap_or(0);
-        let body_source_bytes = usize::try_from(self.body_source_bytes)
-            .map_err(|_| geometry_error(SumeragiV2GeometryError::Overflow))?;
-        let geometry = sumeragi_v2_ingress_geometry(SumeragiV2IngressInputs {
-            validators,
-            queue_commands: to_usize(self.derive.queue_commands),
-            queue_bodies: to_usize(self.derive.queue_bodies),
-            authenticated_non_validator_sources: authenticated,
-            committee_sources,
-            max_total_connections,
-            body_source_bytes,
-        })
-        .map_err(geometry_error)?;
-        let overflow = || geometry_error(SumeragiV2GeometryError::Overflow);
+            .ok_or_else(overflow)?;
         let fault_tolerance = u32::try_from((validators - 1) / 3).map_err(|_| overflow())?;
-        let derived = DerivedGeometryV1 {
+        Ok(DerivedGeometryV1 {
             validators: u32::try_from(validators).map_err(|_| overflow())?,
             fault_tolerance,
             commit_quorum: 2 * fault_tolerance + 1,
             committee_sources: u32::try_from(committee_sources).map_err(|_| overflow())?,
             authenticated_non_validator_sources: self.derive.authenticated_non_validator_sources,
-            queue_commands: u64::from(self.derive.queue_commands),
-            queue_bodies: u64::from(self.derive.queue_bodies),
-            body_source_bytes: self.body_source_bytes,
-            body_bytes: u64::try_from(geometry.body_bytes).map_err(|_| overflow())?,
             max_total_connections: u64::try_from(max_total_connections).map_err(|_| overflow())?,
             npos_max_validators: u32::try_from(validators).map_err(|_| overflow())?,
-            lifecycle_records: u64::try_from(geometry.lifecycle.total).map_err(|_| overflow())?,
-        };
-        self.check_sumeragi(&derived)?;
-        Ok(derived)
+        })
     }
 
 
@@ -901,23 +846,12 @@ impl Profile {
     #[must_use]
     pub fn derived_config(&self, geometry: &DerivedGeometryV1) -> toml::Table {
         let integer = |value: u64| toml::Value::Integer(i64::try_from(value).unwrap_or(i64::MAX));
-        let mut queues = toml::Table::new();
-        queues.insert("commands".into(), integer(geometry.queue_commands));
-        queues.insert("bodies".into(), integer(geometry.queue_bodies));
-        queues.insert(
-            "authenticated_non_validator_sources".into(),
-            integer(u64::from(geometry.authenticated_non_validator_sources)),
-        );
-        queues.insert("body_bytes".into(), integer(geometry.body_bytes));
-        let mut sumeragi = toml::Table::new();
-        sumeragi.insert("queues".into(), toml::Value::Table(queues));
         let mut network = toml::Table::new();
         network.insert(
             "max_total_connections".into(),
             integer(geometry.max_total_connections),
         );
         let mut fragment = toml::Table::new();
-        fragment.insert("sumeragi".into(), toml::Value::Table(sumeragi));
         fragment.insert("network".into(), toml::Value::Table(network));
         if !self.derive.dataspace_catalog.is_empty() {
             let catalog = self
@@ -948,13 +882,8 @@ impl Profile {
             commit_quorum: 3,
             committee_sources: 0,
             authenticated_non_validator_sources: 0,
-            queue_commands: 0,
-            queue_bodies: 0,
-            body_source_bytes: 0,
-            body_bytes: 0,
             max_total_connections: 0,
             npos_max_validators: 4,
-            lifecycle_records: 0,
         })
     }
 

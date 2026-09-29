@@ -203,7 +203,7 @@ pub mod validation_fee;
 pub mod validator;
 /// Verification helper traits and host bindings.
 pub mod verification;
-/// Compiled consensus and block wire-schema identity.
+/// Compiled block wire-schema identity.
 pub mod wire_schema;
 /// Zero-knowledge proof payload types.
 pub mod zk;

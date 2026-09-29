@@ -24,7 +24,9 @@ use super::{
     },
     read_optional, read_source, source_from_file, source_from_str,
 };
-use crate::verify::finality::MAX_COMMITTEE_MEMBERS;
+
+/// Largest dataspace committee the deployment tooling accepts (spec §10.7).
+const MAX_COMMITTEE_MEMBERS: usize = 128;
 
 /// `[dataspace]`: what to register and under which limits.
 #[derive(Debug, Clone, PartialEq, Eq, ReadConfig)]

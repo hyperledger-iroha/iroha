@@ -2567,7 +2567,9 @@ fn merkle_root_with_execution_v1(
     execution: crate::digest_executor::DigestExecutionV1,
 ) -> Result<GoldilocksDigest384V1> {
     let levels = build_merkle_levels_with_execution_v1(leaves, role, execution)?;
-    if let Some(root) = levels.last().and_then(|level| level.first()).copied() { Ok(root) } else {
+    if let Some(root) = levels.last().and_then(|level| level.first()).copied() {
+        Ok(root)
+    } else {
         let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
             digest_domain_v1(role.role(), MERKLE_EMPTY_PHASE_V1, 0, 0, role.counter())?,
             &[],

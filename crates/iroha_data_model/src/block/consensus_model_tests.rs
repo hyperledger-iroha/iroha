@@ -1,8 +1,6 @@
 //! Consensus model shape, ownership and exact codec contracts.
 
 use super::*;
-use crate::block::consensus_v2::PERMISSIONED_TAG;
-use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
@@ -48,15 +46,6 @@ struct ForgedNposGenesisParams {
     evidence_horizon_blocks: u64,
     activation_lag_blocks: u64,
     slashing_delay_blocks: u64,
-}
-#[derive(Encode)]
-struct ForgedLaneSettlementReceipt {
-    source_id: [u8; 32],
-    local_amount: Numeric,
-    xor_due: Numeric,
-    xor_after_haircut: Numeric,
-    xor_variance: Numeric,
-    timestamp_ms: u64,
 }
 fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
     NexusFeeReceipt {
@@ -240,42 +229,6 @@ fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
     assert!(
         NposGenesisParams::decode(&mut encoded.as_slice()).is_err(),
         "a negative signed payload must not decode as an NPoS minimum bond"
-    );
-}
-#[test]
-fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
-    let forged_receipt = ForgedLaneSettlementReceipt {
-        source_id: [0xA5; 32],
-        local_amount: Numeric::new(-1_i32, 0),
-        xor_due: Numeric::one(),
-        xor_after_haircut: Numeric::one(),
-        xor_variance: Numeric::zero(),
-        timestamp_ms: 1,
-    };
-    let encoded = forged_receipt.encode();
-    assert!(
-        LaneSettlementReceipt::decode(&mut encoded.as_slice()).is_err(),
-        "a negative signed payload must not decode as a lane receipt amount"
-    );
-    let forged_commitment = ForgedLaneBlockCommitment {
-        block_height: 1,
-        lane_id: LaneId::SINGLE,
-        lane_incarnation: Hash::new(b"negative lane quantity fixture"),
-        dataspace_id: DataSpaceId::UNIVERSAL,
-        tx_count: 0,
-        total_local_amount: Numeric::new(-1_i32, 0),
-        total_xor_due: Numeric::zero(),
-        total_xor_after_haircut: Numeric::zero(),
-        total_xor_variance: Numeric::zero(),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let encoded = forged_commitment.encode();
-    assert!(
-        LaneBlockCommitment::decode(&mut encoded.as_slice()).is_err(),
-        "a negative signed payload must not decode as a lane commitment total"
     );
 }
 

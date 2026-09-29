@@ -47,9 +47,8 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{
-            LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-        },
+            LaneSettlementReceipt,
+            },
         *,
     },
     confidential::ConfidentialFeatureDigest,
@@ -62,7 +61,7 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
         AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig,
-        LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
+        LaneSettlementBufferPolicy, ProofBlob,
     },
     transaction::{SignedTransaction, TransactionEntrypoint, error::TransactionLimitError},
 };
@@ -421,46 +420,6 @@ struct LaneSettlementBuilder {
     native_amx_receipts: Vec<NativeAmxReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
-}
-fn lane_relay_envelopes_for_block(
-    block_header: &BlockHeader,
-    da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
-    lane_settlement_commitments: &[LaneBlockCommitment],
-    lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-    lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
-) -> Result<Vec<LaneRelayEnvelope>, BlockValidationError> {
-    lane_settlement_commitments
-        .iter()
-        .map(|commitment| {
-            let rbc_bytes_total = lane_summaries
-                .get(&commitment.lane_id)
-                .map_or(0, |summary| summary.rbc_bytes_total);
-            let coordinate = lane_payload_coordinates
-                .get(&(commitment.lane_id, commitment.dataspace_id))
-                .ok_or_else(|| {
-                    BlockValidationError::ExecutionContextInvalid(format!(
-                        "settled lane {} dataspace {} has no exact lane payload ownership",
-                        commitment.lane_id.as_u32(),
-                        commitment.dataspace_id.as_u64()
-                    ))
-                })?;
-            LaneRelayEnvelope::new(
-                *block_header,
-                da_commitment_hash,
-                commitment.clone(),
-                rbc_bytes_total,
-            )
-            .map_err(|err| {
-                BlockValidationError::ExecutionContextInvalid(format!(
-                    "settled lane relay envelope is invalid: {err}"
-                ))
-            })
-            .map(|envelope| {
-                envelope
-                    .with_lane_block_descriptor_hash(Some(coordinate.lane_block_descriptor_hash))
-            })
-        })
-        .collect()
 }
 fn attach_manifest_roots_to_relays(
     envelopes: &mut [LaneRelayEnvelope],
@@ -1902,7 +1861,6 @@ pub enum BlockValidationError {
 impl BlockValidationError {
     /// Keep local autoscale observations out of deterministic block rejection.
     pub(crate) fn from_autoscale_lifecycle_error(error: crate::state::LaneLifecycleError) -> Self {
-        use crate::state::LaneLifecycleError;
         let reason = format!("failed to evaluate Nexus autoscale: {error}");
         match error {
             LaneLifecycleError::DrainObservation(_)
@@ -6644,54 +6602,6 @@ pub(crate) mod valid {
             )
         }
 
-        fn finalize_lane_settlement_commitments(
-            block: &SignedBlock,
-            state_block: &StateBlock<'_>,
-            lane_settlement_commitments: &[LaneBlockCommitment],
-            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-            lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
-        ) -> Result<Vec<iroha_data_model::nexus::LaneFinalityStatement>, BlockValidationError>
-        {
-            if lane_settlement_commitments.is_empty() {
-                return Ok(Vec::new());
-            }
-            let block_header = block.header();
-            let manifest_roots = state_block
-                .axt_policy_snapshot()
-                .entries
-                .iter()
-                .filter_map(|entry| {
-                    (!entry.policy.manifest_root.iter().all(|byte| *byte == 0))
-                        .then_some((entry.dsid, entry.policy.manifest_root))
-                })
-                .collect::<BTreeMap<_, _>>();
-            let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
-                &block_header,
-                block_header.da_commitments_hash(),
-                &lane_settlement_commitments,
-                lane_summaries,
-                &lane_payload_coordinates,
-            )?;
-            attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-            let mut lane_finality_statements = lane_relay_envelopes
-                .iter()
-                .map(LaneRelayEnvelope::lane_finality_statement)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
-                        "settled lane finality statement is incomplete: {error}"
-                    ))
-                })?;
-            lane_finality_statements.sort_unstable_by_key(|statement| {
-                (
-                    statement.lane_id,
-                    statement.dataspace_id,
-                    statement.lane_incarnation,
-                    statement.block_height,
-                )
-            });
-            Ok(lane_finality_statements)
-        }
 
         fn validated_committed_fragment_count(
             state_block: &StateBlock<'_>,

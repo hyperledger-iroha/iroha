@@ -292,17 +292,6 @@ fn derive_lifecycle_lane_incarnation_activation_heights(
     validate_lane_incarnation_activation_heights(updated_catalog, &updated)?;
     Ok(updated)
 }
-fn lane_lifecycle_incarnation_root(
-    catalog: &LaneCatalog,
-    incarnations: &BTreeMap<LaneId, Hash>,
-) -> Result<Hash, LaneLifecycleError> {
-    let entries = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
-        catalog,
-        incarnations,
-    )
-    .map_err(|err| LaneLifecycleError::LaneIncarnationState(err.to_string()))?;
-    Ok(iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&entries))
-}
 fn derive_lifecycle_lane_incarnations(
     network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
@@ -402,46 +391,6 @@ impl DaPinIntentIndexPruneKeys {
             && self.aliases.is_empty()
             && self.manifests.is_empty()
             && self.lane_epochs.is_empty()
-    }
-}
-#[derive(Clone)]
-struct PendingAutoscaleLaneLifecycle {
-    catalog_update: LaneLifecycleCatalogUpdate,
-    updated_lane_manifests: LaneManifestRegistryHandle,
-    plan: iroha_data_model::nexus::LaneLifecyclePlan,
-    transition: PendingAutoscaleTransition,
-    transition_height: u64,
-    expected_incarnation_root: Hash,
-    runtime_catalog: Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>,
-}
-impl PendingAutoscaleLaneLifecycle {
-    fn exact_scale_in_binding(
-        &self,
-    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
-        let PendingAutoscaleTransition::ScaleIn { lane, .. } = &self.transition else {
-            return Ok(None);
-        };
-        ensure_autoscale_transition_matches_plan(&self.plan, &self.transition)?;
-        let previous_lane = self
-            .catalog_update
-            .previous_catalog
-            .lanes()
-            .iter()
-            .find(|candidate| candidate.id == *lane)
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane in the previous catalog",
-            })?;
-        let incarnation = self
-            .catalog_update
-            .previous_lane_incarnations
-            .get(lane)
-            .copied()
-            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
-                lane: *lane,
-                reason: "final Queue veto cannot resolve the retiring lane incarnation",
-            })?;
-        Ok(Some((*lane, previous_lane.dataspace_id, incarnation)))
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -769,21 +718,3 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
     Ok(())
 }
 
-fn ensure_pending_autoscale_lifecycle_staking_is_safe(
-    world: &impl WorldReadOnly,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    pending: &PendingAutoscaleLaneLifecycle,
-    block_height: u64,
-) -> Result<(), LaneLifecycleError> {
-    let mut prospective_nexus = nexus.clone();
-    prospective_nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
-    prospective_nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
-    prospective_nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
-    ensure_live_shared_dataspace_staking_owner_is_not_reset(
-        world,
-        nexus,
-        &prospective_nexus,
-        &pending.catalog_update.lanes_to_reset,
-        block_height,
-    )
-}

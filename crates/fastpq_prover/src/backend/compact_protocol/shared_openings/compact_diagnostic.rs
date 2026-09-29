@@ -100,7 +100,10 @@ fn transfer_rows_and_transcript() -> (Vec<StateTransition>, Vec<TransferTranscri
 }
 
 /// Physical compact SMT trace columns for the transfer's two witnessed updates.
-fn transfer_smt_columns(delta: &TransferDeltaTranscript, statement: &PublicStatement) -> Vec<Vec<u64>> {
+fn transfer_smt_columns(
+    delta: &TransferDeltaTranscript,
+    statement: &PublicStatement,
+) -> Vec<Vec<u64>> {
     let paths = [&delta.from_smt_witness, &delta.to_smt_witness];
     for (path, update) in paths.iter().zip(statement.updates) {
         assert_eq!(path.path_bits.as_slice(), update.path.to_le_bytes());
@@ -252,18 +255,12 @@ fn assert_decode_budget_and_limits(
             Err(norito::Error::SchemaMismatch)
         ));
         assert!(
-            codec::decode_and_verify_with_allocation(
-                verifier,
-                &retired,
-                limits,
-                128 * 1024 * 1024
-            )
-            .is_err()
+            codec::decode_and_verify_with_allocation(verifier, &retired, limits, 128 * 1024 * 1024)
+                .is_err()
         );
     }
     assert_eq!(
-        norito::encode_canonical(&norito::decode_canonical::<SharedProof>(bytes).unwrap())
-            .unwrap(),
+        norito::encode_canonical(&norito::decode_canonical::<SharedProof>(bytes).unwrap()).unwrap(),
         bytes
     );
     let mut trailing = bytes.to_vec();
@@ -274,7 +271,11 @@ fn assert_decode_budget_and_limits(
 }
 
 /// Every tampered row, root, oracle, FRI group, terminal value or index rejects.
-fn assert_tampered_openings_rejected(verifier: &VerifyOnly<'_>, bytes: &[u8], limits: VerifyLimits) {
+fn assert_tampered_openings_rejected(
+    verifier: &VerifyOnly<'_>,
+    bytes: &[u8],
+    limits: VerifyLimits,
+) {
     let candidate: SharedProof = norito::decode_canonical(bytes).unwrap();
     for kind in 0..7 {
         let mut bad = candidate.clone();

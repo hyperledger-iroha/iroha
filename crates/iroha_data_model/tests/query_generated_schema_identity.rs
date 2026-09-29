@@ -7,7 +7,7 @@ use iroha_data_model::{
     account::{AccountAlias, AccountAliasDomain, address::ChainDiscriminantGuard},
     da::types::StorageTicketId,
     escrow::{AssetEscrowStatus, EscrowId},
-    nexus::{FeeSponsorProgramId, LaneRelayEnvelopeRef, UniversalAccountId},
+    nexus::{FeeSponsorProgramId, UniversalAccountId},
     oracle::{
         DefiOracleAttestationKey, FeedId, KeyedHash, OracleChangeId, OracleDisputeId,
         OracleProviderKey,
@@ -241,14 +241,6 @@ fn generated_queries() -> Vec<Value> {
     rows.push(record([
         query::nexus::FindFeeSponsorProgramsBySponsor::new(account()),
     ]));
-    rows.push(record([query::nexus::FindLaneRelayEnvelopeByRef::new(
-        LaneRelayEnvelopeRef {
-            dataspace_id: DataSpaceId::new(11),
-            lane_id: LaneId::new(3),
-            lane_incarnation: Hash::new(b"query lane incarnation"),
-            block_height: 42,
-        },
-    )]));
     rows.push(record([query::nft::FindNftById::new(NftId::new(
         domain(),
         "collectible".parse().expect("NFT name"),
@@ -700,12 +692,12 @@ fn generated_queries() -> Vec<Value> {
 #[test]
 fn generated_queries_preserve_captured_frames() {
     let rows = generated_queries();
-    assert_eq!(rows.len(), 128);
+    assert_eq!(rows.len(), 127);
     assert_eq!(
         rows.iter()
             .map(|row| row.get("cases").unwrap().as_array().unwrap().len())
             .sum::<usize>(),
-        172,
+        171,
     );
     let captured: Value = json::from_str(include_str!(
         "fixtures/query_generated_identity_frames.json"

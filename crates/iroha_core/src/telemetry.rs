@@ -11,7 +11,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::{DurableV2FinalityTelemetrySummary, Kura},
+    kura::Kura,
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::Queue,
     state::{State, WorldReadOnly},

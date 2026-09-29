@@ -191,6 +191,11 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             )?;
             tree.push_batch(&[0], &mut leaves, batch_parent, parent)?;
         } else {
+            let packer = RowPacker {
+                oracle: self.oracle,
+                fields: self.fields,
+                queries: self.queries,
+            };
             replay.visit_all(|stripe| {
                 let rows = if self.oracle == Oracle::QuotientAndMask {
                     stripe.rows()
@@ -200,7 +205,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                 for start in (0..rows).step_by(capacity) {
                     let count = (rows - start).min(capacity);
                     let mut indices = [0; super::deep_leaf_batch::CAPACITY];
-                    self.pack_rows(
+                    packer.pack(
                         &stripe,
                         start,
                         &mut indices[..count],
@@ -236,12 +241,20 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             fields: self.fields,
         })
     }
+}
 
+/// Leaf layout of one nonterminal oracle, copied out of its consumed plan.
+struct RowPacker<'q> {
+    oracle: Oracle,
+    fields: usize,
+    queries: &'q [usize],
+}
+impl RowPacker<'_> {
     /// Pack one bounded batch of consecutive stripe rows starting at `start`.
     ///
     /// Writes each row's tree index into `indices`, its canonical leaf into the
     /// matching `bytes` prefix and every queried row's fields into `selected`.
-    fn pack_rows(
+    fn pack(
         &self,
         stripe: &CoefficientStripe<'_>,
         start: usize,

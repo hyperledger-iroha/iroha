@@ -63,8 +63,7 @@ type PoseidonPipelineObserver = dyn Fn(PoseidonPipelinePolicy, &'static str, Opt
 static POSEIDON_PIPELINE_OBSERVER: OnceLock<RwLock<Option<Arc<PoseidonPipelineObserver>>>> =
     OnceLock::new();
 #[cfg(test)]
-pub static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> =
-    std::sync::Mutex::new(());
+pub static POSEIDON_PIPELINE_OBSERVER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 type TraceMerkleModeObserver = dyn Fn(ExecutionMode) + Send + Sync + 'static;
 #[cfg(test)]
@@ -429,6 +428,10 @@ impl RowData {
     }
 }
 /// Row usage counts for the V1 selectors.
+#[allow(
+    clippy::struct_field_names,
+    reason = "public API: each field counts rows of one selector class, as its _rows suffix says"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RowUsage {
     /// Total number of real (non-padding) rows in the trace.
@@ -953,10 +956,7 @@ pub fn column_count_for_batch(batch: &TransitionBatch) -> Result<usize> {
     Ok(fixed_columns + widths.key + widths.old_value + widths.new_value + widths.asset)
 }
 /// Enforce a caller-selected trace schema width before materialising columns.
-pub fn ensure_trace_schema_limit(
-    batch: &TransitionBatch,
-    max_air_row_values: usize,
-) -> Result<()> {
+pub fn ensure_trace_schema_limit(batch: &TransitionBatch, max_air_row_values: usize) -> Result<()> {
     let actual = column_count_for_batch(batch)?;
     if actual > max_air_row_values {
         return Err(Error::VerifierLimitExceeded {
@@ -1095,11 +1095,7 @@ fn extract_transfer_witnesses(
 ///
 /// Returns [`Error::ValueWidth`] if the typed hash domain cannot be represented
 /// by the canonical field-packing format.
-pub fn permission_hash(
-    role_id: &[u8; 32],
-    permission_id: &[u8; 32],
-    epoch: u64,
-) -> Result<u64> {
+pub fn permission_hash(role_id: &[u8; 32], permission_id: &[u8; 32], epoch: u64) -> Result<u64> {
     let mut payload = Vec::with_capacity(32 + 32 + 8);
     payload.extend_from_slice(role_id);
     payload.extend_from_slice(permission_id);
@@ -1705,11 +1701,7 @@ fn field_from_i128(value: i128) -> u64 {
     }
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
-pub fn trace_coefficients(
-    trace: &Trace,
-    planner: &Planner,
-    mode: ExecutionMode,
-) -> Vec<Vec<u64>> {
+pub fn trace_coefficients(trace: &Trace, planner: &Planner, mode: ExecutionMode) -> Vec<Vec<u64>> {
     let columns: Vec<Vec<u64>> = trace
         .columns
         .iter()
@@ -2877,9 +2869,12 @@ mod tests {
     fn repeated_transfer_rows_consume_witnesses_in_transcript_order() {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
-        let witnesses =
-            transfer::transcripts_to_witnesses(&[transcript.clone()], &old_root, &new_root)
-                .expect("witness extraction");
+        let witnesses = transfer::transcripts_to_witnesses(
+            std::slice::from_ref(&transcript),
+            &old_root,
+            &new_root,
+        )
+        .expect("witness extraction");
         let first = witnesses[0].deltas[0].clone();
         let mut later = first.clone();
         later.smt_proof.from.siblings[0][0] ^= 0xA5;
@@ -3016,9 +3011,10 @@ mod tests {
                         .strip_prefix("value_old_limb_")
                         .or_else(|| column.name.strip_prefix("value_new_limb_"))
                         .and_then(|index| index.parse::<usize>().ok())
-                        && index >= 2 {
-                            assert_eq!(column.values[row], 0, "{} must be zero", column.name);
-                        }
+                        && index >= 2
+                    {
+                        assert_eq!(column.values[row], 0, "{} must be zero", column.name);
+                    }
                 }
             }
             if row >= trace.rows {

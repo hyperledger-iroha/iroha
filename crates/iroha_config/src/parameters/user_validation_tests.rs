@@ -14,7 +14,6 @@ mod duration_clamp_tests {
         user::{LaneValidatorModeConfig, SoracloudRuntime},
     };
     use iroha_config_base::{
-        env::MockEnv,
         read::ConfigReader,
         toml::TomlSource,
         util::{Bytes, DurationMs},

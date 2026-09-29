@@ -1,6 +1,5 @@
 mod lane_authority;
 mod router;
-use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
@@ -16,15 +15,6 @@ use crate::{
         LaneManifestSourceSnapshot, LaneManifestStatus,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
-    kura::{
-        AutonomousLaneQueueReleaseFinalizationAuthorization,
-        AutonomousLaneQueueReleasePreparationAuthorization,
-        AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLifecycleAttemptBindingV1,
-        AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
-        AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorRead,
-        AutonomousLifecycleCursorV1, AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
-        AutonomousNonQueueReplicaClaimReleaseAuthorization,
-    },
     nexus::space_directory::{
         LaneIdentityMetadataError,
         extract_authority_domains as extract_directory_authority_domains,
@@ -142,7 +132,6 @@ use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_torii_shared::status::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
-pub use journal::QUEUE_PLAN_JOURNAL_VERSION;
 #[cfg(test)]
 use journal::QueuePlanJournalTestFault;
 use journal::{
@@ -156,7 +145,6 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-pub(crate) use reservation_journal::LaneReservationSnapshotReplayReceipt;
 use reservation_journal::{
     LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal,
     LaneQueueReservationJournalLimits,
@@ -361,8 +349,7 @@ pub(crate) fn execution_context_for_routing_plan(
     )
 }
 pub use iroha_data_model::block::lane_admission::{
-    QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-    QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1, QueuePlanAdmissionContextV1,
+    QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1, QueuePlanAdmissionContextV1,
     QueuePlanGlobalAdmissionIdentityV1, QueuePlanRouteIncarnationV1,
 };
 const _: [(); QUEUE_PLAN_JOURNAL_VERSION as usize] =

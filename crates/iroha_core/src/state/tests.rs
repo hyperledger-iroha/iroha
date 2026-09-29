@@ -1564,50 +1564,6 @@ crate::state::AllocationBudget::new(iroha_config::parameters::defaults::pipeline
     );
 }
 #[test]
-fn production_state_apply_surface_requires_transient_v2_capability() {
-    let state_source = include_str!("../state.rs");
-    let block_source = include_str!("../block.rs");
-    let apply_source = include_str!("../sumeragi/v2_apply.rs");
-    for signature in [
-        "pub fn apply_without_execution(",
-        "pub fn apply_fixture_block(",
-    ] {
-        let offset = state_source
-            .find(signature)
-            .unwrap_or_else(|| panic!("fixture API `{signature}` must remain discoverable"));
-        let prefix = &state_source[offset.saturating_sub(600)..offset];
-        assert!(
-            prefix.contains("#[cfg(any(test, feature = \"iroha-core-tests\"))]"),
-            "fixture API `{signature}` must not compile into the production State surface"
-        );
-    }
-    let verified_start = state_source
-        .find("pub(crate) fn apply_without_execution_with_verified_v2_finality(")
-        .expect("production v2 State apply method");
-    let verified = &state_source[verified_start..verified_start + 750];
-    assert!(verified.contains("let topology = self.verified_v2_apply_topology(block)?;"));
-    assert!(verified.contains("self.finalize_authorized_execution_outputs(block,"));
-    assert!(
-        !verified.contains("topology: Vec<PeerId>"),
-        "production State apply must not accept caller-supplied topology"
-    );
-    assert!(block_source.contains("verified_v2_finality: Some(artifact.into_arc())"));
-    assert!(block_source.contains("VerifiedV2FinalityArtifact"));
-    assert!(block_source.contains("Aggregate signatures are not verified"));
-    assert!(block_source.contains("Ok(()) => Ok(CommittedBlock::with_verified_v2_finality("));
-    assert!(block_source.contains("WithEvents::new(CommittedBlock::without_v2_finality(self))"));
-    assert!(
-        apply_source
-            .contains(".apply_without_execution_with_verified_v2_finality(&committed_block)")
-    );
-    assert!(
-        !apply_source.contains(
-            "apply_without_execution_with_verified_v2_finality(\n                &committed_block,"
-        ),
-        "live v2 apply must not thread a separately fabricated topology"
-    );
-}
-#[test]
 fn queue_plan_carrier_validation_uses_one_generation_coherent_state_view() {
     let source = include_str!("../state.rs");
     let validation = source
@@ -44277,7 +44233,6 @@ fn global_beacon_fixture_installs_the_logical_slot_index() {
 }
 
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
-include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.
 include!("tests/queue_plan_and_merge_ledger_tests.rs");
 #[path = "tests/merge_fee_marker_completeness_tests.rs"]
 mod merge_fee_marker_completeness_tests;

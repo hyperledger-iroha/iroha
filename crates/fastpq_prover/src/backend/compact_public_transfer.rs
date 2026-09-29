@@ -711,10 +711,9 @@ mod tests {
         work: super::super::compact_protocol::VerificationWork,
     ) -> SharedDiagnostic {
         let shared_conversion_started = std::time::Instant::now();
-        let shared = super::super::compact_protocol::shared_openings::from_compact(
-            verifier, proof, limits,
-        )
-        .unwrap();
+        let shared =
+            super::super::compact_protocol::shared_openings::from_compact(verifier, proof, limits)
+                .unwrap();
         let shared_conversion = shared_conversion_started.elapsed();
         let shared_verifying_started = std::time::Instant::now();
         let shared_work = super::super::compact_protocol::shared_openings::verify_shared(
@@ -796,7 +795,12 @@ mod tests {
     ) {
         let mut changed_inputs = inputs;
         changed_inputs.perm_root[31] ^= 1 << 7;
-        let changed = prepare(rows, claims, changed_inputs, ProofSemantics::StateTransition);
+        let changed = prepare(
+            rows,
+            claims,
+            changed_inputs,
+            ProofSemantics::StateTransition,
+        );
         let changed_air = PublicTransferAir::new(&changed, &expected(&changed)).unwrap();
         assert!(super::super::compact_protocol::verify(&changed_air, proof, limits).is_err());
         assert!(

@@ -20,16 +20,9 @@ fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStat
         npos,
         lane_commitments: Vec::new(),
         dataspace_commitments: Vec::new(),
-        lane_settlement_commitments: Vec::new(),
-        lane_relay_envelopes: Vec::new(),
-        lane_payload_ownerships: Vec::new(),
-        committed_lane_blocks: Vec::new(),
-        lane_block_sessions: Vec::new(),
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: Vec::new(),
-        native_amx_participant_applications: Vec::new(),
-        autonomous_lane_executions: Vec::new(),
     }
 }
 #[test]
@@ -61,14 +54,4 @@ fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
         .expect("NPoS diagnostics object")
         .insert("unknown".to_owned(), norito::json::Value::from(true));
     assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
-    let mut missing_autonomous =
-        norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
-    missing_autonomous
-        .as_object_mut()
-        .expect("diagnostics object")
-        .remove("autonomous_lane_executions");
-    assert!(
-        norito::json::from_value::<SumeragiDiagnosticsStatus>(missing_autonomous).is_err(),
-        "the first-release autonomous diagnostics vector is required"
-    );
 }

@@ -51,7 +51,6 @@ use crate::{
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder},
-    nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
 };
 use base64::Engine as _;
 use bytes::Bytes;
@@ -60,8 +59,6 @@ use eyre::{Result, WrapErr, eyre};
 #[cfg(test)]
 use futures_util::{Stream, StreamExt};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
-/// Closed penalty lifecycle returned by the Sumeragi evidence audit API.
-pub use iroha_data_model::block::consensus::EvidencePenaltyStatus as SumeragiEvidencePenaltyStatus;
 #[cfg(test)]
 use iroha_data_model::events::pipeline::{
     BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
@@ -88,8 +85,7 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
-        AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, LaneLifecycleStatusV1,
-        UniversalAccountId,
+        AssetPermissionManifest, FeeSponsorProgram, FeeSponsorProgramId, UniversalAccountId,
     },
     privacy::PrivacyExact12CapabilityManifestV1,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
@@ -205,12 +201,6 @@ pub use iroha_torii_shared::kagemusha_api::{
     KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1, UnverifiedKagemushaOperationStatusV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
-pub use iroha_torii_shared::sumeragi_evidence_api::{
-    SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
-    SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
-    SUMERAGI_EVIDENCE_LIST_MAX_OFFSET, SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES,
-    SumeragiEvidenceCountResponse, SumeragiEvidenceListWireResponse,
-};
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1,
@@ -6986,313 +6976,25 @@ fn evaluate_node_compatibility(capabilities: &norito::json::Value) -> DataModelC
         Err(error) => DataModelCompatibility::SchemaIncompatible(error),
     }
 }
-/// Sole evidence kind exposed by the first-release Sumeragi audit API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SumeragiEvidenceKind {
-    /// Independently verifiable Sumeragi-v2 equivocation evidence.
-    SumeragiV2Equivocation,
-}
 
-impl SumeragiEvidenceKind {
-    /// Return the exact query and JSON literal used by Torii.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SumeragiV2Equivocation => "SumeragiV2Equivocation",
-        }
-    }
-}
 
-impl fmt::Display for SumeragiEvidenceKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
 
-impl norito::json::FastJsonWrite for SumeragiEvidenceKind {
-    fn write_json(&self, output: &mut String) {
-        norito::json::write_json_string(self.as_str(), output);
-    }
 
-    fn write_json_to(
-        &self,
-        output: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(self.as_str(), output)
-    }
-}
 
-impl norito::json::JsonDeserialize for SumeragiEvidenceKind {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        match parser.parse_string()?.as_str() {
-            "SumeragiV2Equivocation" => Ok(Self::SumeragiV2Equivocation),
-            other => Err(norito::json::Error::Message(format!(
-                "unknown Sumeragi evidence kind `{other}`"
-            ))),
-        }
-    }
-}
 
-/// Closed equivocation class exposed by the Sumeragi evidence audit API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SumeragiEvidenceClass {
-    /// Conflicting proposals signed by one proposer for the same round.
-    Proposal,
-    /// Conflicting phase votes signed by one validator for the same round.
-    PhaseVote,
-    /// Conflicting timeout votes signed by one validator for the same round.
-    TimeoutVote,
-}
 
-impl SumeragiEvidenceClass {
-    /// Return the exact JSON literal used by Torii.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Proposal => "proposal",
-            Self::PhaseVote => "phase_vote",
-            Self::TimeoutVote => "timeout_vote",
-        }
-    }
-}
 
-impl fmt::Display for SumeragiEvidenceClass {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
 
-impl norito::json::FastJsonWrite for SumeragiEvidenceClass {
-    fn write_json(&self, output: &mut String) {
-        norito::json::write_json_string(self.as_str(), output);
-    }
 
-    fn write_json_to(
-        &self,
-        output: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(self.as_str(), output)
-    }
-}
 
-impl norito::json::JsonDeserialize for SumeragiEvidenceClass {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        match parser.parse_string()?.as_str() {
-            "proposal" => Ok(Self::Proposal),
-            "phase_vote" => Ok(Self::PhaseVote),
-            "timeout_vote" => Ok(Self::TimeoutVote),
-            other => Err(norito::json::Error::Message(format!(
-                "unknown Sumeragi evidence class `{other}`"
-            ))),
-        }
-    }
-}
 
-/// Canonical raw lowercase 32-byte digest used by the evidence audit projection.
-///
-/// This API representation intentionally differs from the tagged, checksummed
-/// JSON spelling of [`Hash`]: Torii's evidence audit contract uses exactly 64
-/// lowercase hexadecimal characters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SumeragiEvidenceHash([u8; Hash::LENGTH]);
 
-impl SumeragiEvidenceHash {
-    /// Construct a digest from its exact 32 bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; Hash::LENGTH]) -> Self {
-        Self(bytes)
-    }
 
-    /// Borrow the exact digest bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; Hash::LENGTH] {
-        &self.0
-    }
-}
 
-impl fmt::Display for SumeragiEvidenceHash {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(formatter, "{byte:02x}")?;
-        }
-        Ok(())
-    }
-}
 
-impl norito::json::FastJsonWrite for SumeragiEvidenceHash {
-    fn write_json(&self, output: &mut String) {
-        norito::json::write_json_string(&self.to_string(), output);
-    }
 
-    fn write_json_to(
-        &self,
-        output: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(&self.to_string(), output)
-    }
-}
 
-impl norito::json::JsonDeserialize for SumeragiEvidenceHash {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        if value.len() != Hash::LENGTH * 2
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(norito::json::Error::Message(
-                "Sumeragi evidence hash must contain exactly 64 lowercase hexadecimal characters"
-                    .into(),
-            ));
-        }
-        let mut bytes = [0_u8; Hash::LENGTH];
-        hex::decode_to_slice(value.as_bytes(), &mut bytes).map_err(|error| {
-            norito::json::Error::Message(format!("invalid Sumeragi evidence hash: {error}"))
-        })?;
-        Ok(Self(bytes))
-    }
-}
 
-/// One strict JSON audit record returned by `/v1/sumeragi/evidence`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub struct SumeragiEvidenceAuditRecord {
-    /// Evidence kind; the first release exposes only Sumeragi-v2 equivocation.
-    pub kind: SumeragiEvidenceKind,
-    /// Exact equivocation artifact class.
-    pub class: SumeragiEvidenceClass,
-    /// Consensus height named by both conflicting artifacts.
-    pub height: u64,
-    /// Consensus view named by both conflicting artifacts.
-    pub view: u64,
-    /// Frozen epoch of the authenticated height context.
-    pub epoch: u64,
-    /// Validator index that signed both conflicting artifacts.
-    pub signer: u32,
-    /// Digest of the frozen height context.
-    pub context_id: SumeragiEvidenceHash,
-    /// Digest of the first conflicting artifact.
-    pub artifact_hash_1: SumeragiEvidenceHash,
-    /// Digest of the second conflicting artifact.
-    pub artifact_hash_2: SumeragiEvidenceHash,
-    /// Canonical block height at which the evidence record was committed.
-    pub recorded_height: u64,
-    /// View observed when the evidence record was committed.
-    pub recorded_view: u64,
-    /// Millisecond timestamp recorded with the committed evidence.
-    pub recorded_ms: u64,
-    /// Consensus height whose block first admitted the evidence.
-    pub consensus_admitted_height: u64,
-    /// Closed deterministic penalty lifecycle.
-    pub penalty_status: SumeragiEvidencePenaltyStatus,
-}
-
-/// Strict JSON response returned by `/v1/sumeragi/evidence`.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub struct SumeragiEvidenceListResponse {
-    /// Total number of matching committed evidence records before pagination.
-    pub total: u64,
-    /// Bounded page of committed evidence audit records.
-    pub items: Vec<SumeragiEvidenceAuditRecord>,
-}
-
-/// Filters for `/v1/sumeragi/evidence` listing endpoint.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct SumeragiEvidenceListFilter {
-    /// Maximum number of entries to return (`1..=1000`).
-    pub limit: Option<u32>,
-    /// Offset into the persisted evidence list (`0..=10000`).
-    pub offset: Option<u32>,
-    /// Optional filter by the sole first-release evidence kind.
-    pub kind: Option<SumeragiEvidenceKind>,
-}
-
-impl SumeragiEvidenceListFilter {
-    /// Validate the first-release bounded query contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `limit` is outside `1..=1000` or `offset` is
-    /// greater than `10000`.
-    pub fn validate(self) -> Result<()> {
-        if let Some(limit) = self.limit
-            && !(1..=SUMERAGI_EVIDENCE_LIST_MAX_LIMIT).contains(&limit)
-        {
-            return Err(eyre!(
-                "Sumeragi evidence limit must be in 1..={SUMERAGI_EVIDENCE_LIST_MAX_LIMIT}"
-            ));
-        }
-        if let Some(offset) = self.offset
-            && offset > SUMERAGI_EVIDENCE_LIST_MAX_OFFSET
-        {
-            return Err(eyre!(
-                "Sumeragi evidence offset must be in 0..={SUMERAGI_EVIDENCE_LIST_MAX_OFFSET}"
-            ));
-        }
-        Ok(())
-    }
-
-    fn apply_to_url(self, url: &mut Url) -> Result<()> {
-        let mut query = url.query_pairs_mut();
-        for (key, value) in self.param_entries()? {
-            query.append_pair(key, &value);
-        }
-        Ok(())
-    }
-
-    fn param_entries(self) -> Result<Vec<(&'static str, String)>> {
-        self.validate()?;
-        let mut out = Vec::with_capacity(3);
-        if let Some(limit) = self.limit {
-            out.push(("limit", limit.to_string()));
-        }
-        if let Some(offset) = self.offset {
-            out.push(("offset", offset.to_string()));
-        }
-        if let Some(kind) = self.kind {
-            out.push(("kind", kind.as_str().to_owned()));
-        }
-        Ok(out)
-    }
-}
-
-fn validate_sumeragi_evidence_page(
-    total: u64,
-    item_count: usize,
-    filter: SumeragiEvidenceListFilter,
-) -> Result<()> {
-    let page_limit = filter.limit.unwrap_or(SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT) as usize;
-    if item_count > page_limit {
-        return Err(eyre!(
-            "Sumeragi evidence response contains {item_count} items, exceeding the requested limit {page_limit}"
-        ));
-    }
-    let item_count = u64::try_from(item_count)
-        .map_err(|_| eyre!("Sumeragi evidence response item count is not representable as u64"))?;
-    if total < item_count {
-        return Err(eyre!(
-            "Sumeragi evidence response total {total} is smaller than its {item_count}-item page"
-        ));
-    }
-    if item_count != 0 {
-        let end = u64::from(filter.offset.unwrap_or(0))
-            .checked_add(item_count)
-            .ok_or_else(|| eyre!("Sumeragi evidence response page range overflowed u64"))?;
-        if total < end {
-            return Err(eyre!(
-                "Sumeragi evidence response total {total} is smaller than the non-empty page end {end}"
-            ));
-        }
-    }
-    Ok(())
-}
 fn exact_single_response_header_value<'a>(
     response: &'a Response<Vec<u8>>,
     name: &'static str,
@@ -8263,19 +7965,6 @@ impl Client {
             npos.validate()
                 .map_err(|reason| eyre!("Invalid NPoS diagnostics payload: {reason}"))?;
         }
-        wire.validate_native_amx_receipts()
-            .map_err(|reason| eyre!("Invalid Native AMX receipt diagnostics payload: {reason}"))?;
-        wire.validate_native_amx_participant_applications()
-            .map_err(|reason| {
-                eyre!("Invalid Native AMX participant diagnostics payload: {reason}")
-            })?;
-        wire.validate_autonomous_lane_executions()
-            .map_err(|reason| eyre!("Invalid autonomous lane diagnostics payload: {reason}"))?;
-        for envelope in &wire.lane_relay_envelopes {
-            envelope
-                .verify()
-                .map_err(|err| eyre!("Invalid lane relay envelope in status payload: {err}"))?;
-        }
         Ok(wire)
     }
     /// GET `/v1/nexus/public-lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
@@ -8381,105 +8070,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         decode_parameters_response(&resp)
-    }
-    /// GET `/v1/sumeragi/evidence/count` — total committed evidence entries.
-    ///
-    /// # Errors
-    /// Returns an error if the request fails or the response is non-OK or does
-    /// not match the strict first-release JSON contract.
-    pub fn get_sumeragi_evidence_count(&self) -> Result<SumeragiEvidenceCountResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence/count");
-        let response = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES),
-        )?;
-        Self::ensure_response_status(
-            &response,
-            StatusCode::OK,
-            "Failed to get sumeragi evidence count",
-            " ",
-        )?;
-        let content_type = Self::response_content_type(&response);
-        if !Self::is_exact_json_content_type(content_type) {
-            return Err(eyre!(
-                "Failed to get sumeragi evidence count: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
-            ));
-        }
-        Self::parse_typed_json_ok_response(&response, "Failed to get sumeragi evidence count")
-    }
-    /// GET `/v1/sumeragi/evidence` — list committed evidence audit entries.
-    ///
-    /// # Errors
-    /// Returns an error if the filter is out of range, the request fails, or the
-    /// response is non-OK or violates the strict first-release JSON contract.
-    pub fn get_sumeragi_evidence_list(
-        &self,
-        filter: SumeragiEvidenceListFilter,
-    ) -> Result<SumeragiEvidenceListResponse> {
-        let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        filter.apply_to_url(&mut url)?;
-        let req = self
-            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
-            .header("Accept", APPLICATION_JSON)
-            .max_response_bytes(SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES);
-        let response = self.send_builder(req)?;
-        Self::ensure_response_status(
-            &response,
-            StatusCode::OK,
-            "Failed to get sumeragi evidence list",
-            " ",
-        )?;
-        let content_type = Self::response_content_type(&response);
-        if !Self::is_exact_json_content_type(content_type) {
-            return Err(eyre!(
-                "Failed to get sumeragi evidence list: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
-            ));
-        }
-        let decoded: SumeragiEvidenceListResponse =
-            Self::parse_typed_json_ok_response(&response, "Failed to get sumeragi evidence list")?;
-        validate_sumeragi_evidence_page(decoded.total, decoded.items.len(), filter)
-            .wrap_err("Failed to get sumeragi evidence list")?;
-        Ok(decoded)
-    }
-    /// GET `/v1/sumeragi/evidence` — list committed evidence entries (Norito wire).
-    ///
-    /// Sets `Accept: application/x-norito` and decodes the typed response.
-    ///
-    /// # Errors
-    /// Returns an error if the filter is out of range, the request fails, the
-    /// response is non-OK, or the Norito payload is invalid or unbounded.
-    pub fn get_sumeragi_evidence_list_wire(
-        &self,
-        filter: SumeragiEvidenceListFilter,
-    ) -> Result<SumeragiEvidenceListWireResponse> {
-        let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        filter.apply_to_url(&mut url)?;
-        let req = self
-            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
-            .header("Accept", APPLICATION_NORITO)
-            .max_response_bytes(SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES);
-        let response = self.send_builder(req)?;
-        if response.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi evidence list: {} {}",
-                response.status(),
-                std::str::from_utf8(response.body()).unwrap_or("")
-            ));
-        }
-        let content_type = Self::response_content_type(&response);
-        if !Self::is_norito_content_type(content_type) {
-            return Err(eyre!(
-                "Failed to decode sumeragi evidence list: invalid content-type `{content_type}` (expected {APPLICATION_NORITO})"
-            ));
-        }
-        let decoded: SumeragiEvidenceListWireResponse = decode_from_bytes(response.body())
-            .map_err(|err| {
-                eyre!("Failed to decode sumeragi evidence list Norito payload: {err}")
-            })?;
-        validate_sumeragi_evidence_page(decoded.total, decoded.items.len(), filter)
-            .wrap_err("Failed to get sumeragi evidence list")?;
-        Ok(decoded)
     }
 }
 #[cfg(test)]
@@ -8871,230 +8461,7 @@ mod status_tests {
         assert!(error.to_string().contains("missing field `build`"));
     }
 }
-#[cfg(test)]
-mod evidence_filter_tests {
-    use super::*;
 
-    #[test]
-    fn evidence_filter_apply_sets_expected_params() {
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(25),
-            offset: Some(10),
-            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
-        };
-        let params = filter.param_entries().expect("valid bounded filter");
-        assert_eq!(
-            params,
-            vec![
-                ("limit", "25".to_string()),
-                ("offset", "10".to_string()),
-                ("kind", "SumeragiV2Equivocation".to_string())
-            ]
-        );
-    }
-    #[test]
-    fn evidence_filter_apply_no_params() {
-        let filter = SumeragiEvidenceListFilter::default();
-        let params = filter.param_entries().expect("default filter is valid");
-        assert!(params.is_empty());
-    }
-
-    #[test]
-    fn evidence_filter_rejects_out_of_range_pagination() {
-        for limit in [0, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT + 1, u32::MAX] {
-            let error = SumeragiEvidenceListFilter {
-                limit: Some(limit),
-                ..SumeragiEvidenceListFilter::default()
-            }
-            .validate()
-            .expect_err("out-of-range limit must fail locally");
-            assert!(error.to_string().contains("limit"));
-        }
-        for offset in [SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + 1, u32::MAX] {
-            let error = SumeragiEvidenceListFilter {
-                offset: Some(offset),
-                ..SumeragiEvidenceListFilter::default()
-            }
-            .validate()
-            .expect_err("out-of-range offset must fail locally");
-            assert!(error.to_string().contains("offset"));
-        }
-        SumeragiEvidenceListFilter {
-            limit: Some(SUMERAGI_EVIDENCE_LIST_MAX_LIMIT),
-            offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET),
-            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
-        }
-        .validate()
-        .expect("inclusive pagination boundaries must remain valid");
-    }
-
-    #[test]
-    fn evidence_page_validation_uses_exact_default_and_offset_bounds() {
-        validate_sumeragi_evidence_page(
-            50,
-            SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize,
-            SumeragiEvidenceListFilter::default(),
-        )
-        .expect("exact default page bound");
-        assert!(
-            validate_sumeragi_evidence_page(
-                51,
-                SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT as usize + 1,
-                SumeragiEvidenceListFilter::default(),
-            )
-            .is_err(),
-            "omitted limit must retain the server's 50-item default"
-        );
-        validate_sumeragi_evidence_page(
-            2,
-            0,
-            SumeragiEvidenceListFilter {
-                offset: Some(10),
-                ..SumeragiEvidenceListFilter::default()
-            },
-        )
-        .expect("an offset beyond total may produce an empty page");
-        assert!(
-            validate_sumeragi_evidence_page(
-                2,
-                1,
-                SumeragiEvidenceListFilter {
-                    offset: Some(2),
-                    ..SumeragiEvidenceListFilter::default()
-                },
-            )
-            .is_err(),
-            "non-empty page end must not exceed total"
-        );
-    }
-}
-
-#[cfg(test)]
-mod evidence_json_contract_tests {
-    use super::*;
-
-    fn valid_record_json() -> String {
-        let context = "01".repeat(Hash::LENGTH);
-        let first = "23".repeat(Hash::LENGTH);
-        let second = "ab".repeat(Hash::LENGTH);
-        format!(
-            r#"{{"kind":"SumeragiV2Equivocation","class":"phase_vote","height":42,"view":7,"epoch":3,"signer":2,"context_id":"{context}","artifact_hash_1":"{first}","artifact_hash_2":"{second}","recorded_height":43,"recorded_view":8,"recorded_ms":1234,"consensus_admitted_height":43,"penalty_status":{{"status":"pending","details":null}}}}"#
-        )
-    }
-
-    #[test]
-    fn evidence_json_dtos_accept_the_exact_contract() {
-        let record: SumeragiEvidenceAuditRecord =
-            norito::json::from_str(&valid_record_json()).expect("valid evidence audit record");
-        assert_eq!(record.kind, SumeragiEvidenceKind::SumeragiV2Equivocation);
-        assert_eq!(record.class, SumeragiEvidenceClass::PhaseVote);
-        assert_eq!(record.signer, 2);
-        assert_eq!(
-            record.penalty_status,
-            SumeragiEvidencePenaltyStatus::Pending
-        );
-        assert_eq!(record.context_id.to_string(), "01".repeat(Hash::LENGTH));
-
-        let list_json = format!(r#"{{"total":1,"items":[{}]}}"#, valid_record_json());
-        let list: SumeragiEvidenceListResponse =
-            norito::json::from_str(&list_json).expect("valid evidence list response");
-        assert_eq!(list.total, 1);
-        assert_eq!(list.items, vec![record]);
-        let encoded = norito::json::to_json(&list).expect("encode typed evidence list response");
-        let value: norito::json::Value =
-            norito::json::from_str(&encoded).expect("decode rendered response value");
-        let item = value["items"][0]
-            .as_object()
-            .expect("rendered evidence record object");
-        assert_eq!(item.len(), 14);
-    }
-
-    #[test]
-    fn evidence_record_rejects_missing_extra_and_wrong_typed_fields() {
-        let missing = valid_record_json().replace(r#","consensus_admitted_height":43"#, "");
-        assert!(
-            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&missing).is_err(),
-            "consensus admission height is required"
-        );
-
-        let mut extra = valid_record_json();
-        assert_eq!(extra.pop(), Some('}'));
-        extra.push_str(r#","retired":true}"#);
-        assert!(
-            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&extra).is_err(),
-            "unknown evidence record fields must fail"
-        );
-
-        let wrong_type = valid_record_json().replace(r#""height":42"#, r#""height":"42""#);
-        assert!(
-            norito::json::from_str::<SumeragiEvidenceAuditRecord>(&wrong_type).is_err(),
-            "numeric fields must reject strings"
-        );
-    }
-
-    #[test]
-    fn evidence_record_rejects_unknown_literals_and_noncanonical_hashes() {
-        for invalid in [
-            valid_record_json().replace("SumeragiV2Equivocation", "SumeragiV1Equivocation"),
-            valid_record_json().replace("phase_vote", "double_prepare"),
-            valid_record_json().replace(&"01".repeat(Hash::LENGTH), &"0A".repeat(Hash::LENGTH)),
-            valid_record_json().replace(&"01".repeat(Hash::LENGTH), "01"),
-        ] {
-            assert!(
-                norito::json::from_str::<SumeragiEvidenceAuditRecord>(&invalid).is_err(),
-                "invalid literal or hash must fail: {invalid}"
-            );
-        }
-    }
-
-    #[test]
-    fn evidence_penalty_status_is_closed_and_requires_exact_details() {
-        for status in [
-            r#"{"status":"pending","details":null}"#,
-            r#"{"status":"applied","details":{"height":44}}"#,
-            r#"{"status":"cancelled","details":{"height":45}}"#,
-        ] {
-            norito::json::from_str::<SumeragiEvidencePenaltyStatus>(status)
-                .expect("valid evidence penalty status");
-        }
-        for invalid in [
-            r#"{"status":"pending","details":{"height":44}}"#,
-            r#"{"status":"applied","details":null}"#,
-            r#"{"status":"cancelled","details":{}}"#,
-            r#"{"status":"unknown","details":null}"#,
-            r#"{"status":"applied","details":{"height":44,"extra":1}}"#,
-            r#"{"status":"pending","details":null,"extra":1}"#,
-        ] {
-            assert!(
-                norito::json::from_str::<SumeragiEvidencePenaltyStatus>(invalid).is_err(),
-                "invalid penalty status must fail: {invalid}"
-            );
-        }
-    }
-
-    #[test]
-    fn evidence_response_envelopes_are_exact() {
-        let count: SumeragiEvidenceCountResponse =
-            norito::json::from_str(r#"{"count":7}"#).expect("exact count response");
-        assert_eq!(count.count, 7);
-        for invalid in [r"{}", r#"{"count":"7"}"#, r#"{"count":7,"extra":0}"#] {
-            assert!(
-                norito::json::from_str::<SumeragiEvidenceCountResponse>(invalid).is_err(),
-                "invalid count envelope must fail: {invalid}"
-            );
-        }
-        for invalid in [
-            r#"{"items":[]}"#,
-            r#"{"total":0}"#,
-            r#"{"total":0,"items":[],"extra":0}"#,
-        ] {
-            assert!(
-                norito::json::from_str::<SumeragiEvidenceListResponse>(invalid).is_err(),
-                "invalid list envelope must fail: {invalid}"
-            );
-        }
-    }
-}
 #[cfg(test)]
 mod evidence_response_tests {
     use super::*;
@@ -9253,7 +8620,6 @@ fn attach_client_fixture_outputs(
             Vec::new(),
             Default::default(),
             Default::default(),
-            Vec::new(),
             &client_fixture_output_limits(),
         )
         .expect("attach bounded canonical client fixture outputs");
@@ -9332,16 +8698,6 @@ mod evidence_http_tests {
     };
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
-    use iroha_data_model::block::{
-        consensus::{
-            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            QuorumCertificate, SumeragiV2Equivocation, ValidatorPower, Vote,
-        },
-    };
     use iroha_test_samples::gen_account_in;
     use norito::json::Value;
     use sorafs_manifest::{
@@ -11828,467 +11184,6 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build")
     }
-    fn captured_evidence_list(
-        filter: SumeragiEvidenceListFilter,
-    ) -> (Result<SumeragiEvidenceListResponse>, RequestSnapshot) {
-        capture_request(
-            json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
-            |mock_transport| {
-                client_with_base_url(base_url())
-                    .with_test_http_transport(mock_transport.clone())
-                    .get_sumeragi_evidence_list(filter)
-            },
-        )
-    }
-    #[test]
-    fn get_evidence_count_fetches_typed_json() {
-        let client = client_with_base_url(base_url());
-        let (response, snapshot) = capture_request(
-            json_response(StatusCode::OK, r#"{"count":7}"#),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.get_sumeragi_evidence_count()
-            },
-        );
-        assert_eq!(response.expect("count request").count, 7);
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
-        assert_eq!(
-            snapshot.max_response_bytes,
-            SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                    && value == APPLICATION_JSON),
-            "typed evidence count helper must request JSON"
-        );
-        super::tests::assert_operator_signature_headers(&snapshot);
-    }
-    #[test]
-    fn get_evidence_list_fetches_typed_json_with_bounded_query() {
-        let filter = SumeragiEvidenceListFilter {
-            limit: Some(5),
-            offset: Some(2),
-            kind: Some(SumeragiEvidenceKind::SumeragiV2Equivocation),
-        };
-        let (response, snapshot) = captured_evidence_list(filter);
-        assert_eq!(
-            response.expect("list request"),
-            SumeragiEvidenceListResponse {
-                total: 0,
-                items: Vec::new(),
-            }
-        );
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
-        assert_eq!(
-            snapshot.max_response_bytes,
-            SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
-                    && value == APPLICATION_JSON),
-            "typed evidence list helper must request JSON"
-        );
-        let params: HashMap<_, _> = snapshot
-            .url
-            .query_pairs()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        assert_eq!(params.get("limit"), Some(&"5".to_string()));
-        assert_eq!(params.get("offset"), Some(&"2".to_string()));
-        assert_eq!(
-            params.get("kind"),
-            Some(&"SumeragiV2Equivocation".to_string())
-        );
-    }
-    #[test]
-    fn get_evidence_list_rejects_invalid_pagination_before_transport() {
-        let client = client_with_base_url(base_url());
-        let error = client
-            .get_sumeragi_evidence_list(SumeragiEvidenceListFilter {
-                limit: Some(0),
-                ..SumeragiEvidenceListFilter::default()
-            })
-            .expect_err("zero limit must fail before transport");
-        assert!(error.to_string().contains("limit"));
-
-        let error = client
-            .get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter {
-                offset: Some(SUMERAGI_EVIDENCE_LIST_MAX_OFFSET + 1),
-                ..SumeragiEvidenceListFilter::default()
-            })
-            .expect_err("oversized offset must fail before transport");
-        assert!(error.to_string().contains("offset"));
-    }
-    #[test]
-    fn get_evidence_count_rejects_malformed_success_payload() {
-        let client = client_with_base_url(base_url());
-        let err = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                json_response(StatusCode::OK, r#"{"count":"#),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_evidence_count()
-            },
-        )
-        .expect_err("malformed successful count response should fail");
-        let message = err.to_string();
-        assert!(
-            message.contains("Failed to get sumeragi evidence count"),
-            "missing endpoint context: {message}"
-        );
-        assert!(
-            message.contains("failed to decode JSON payload"),
-            "unexpected error: {message}"
-        );
-    }
-    #[test]
-    fn evidence_json_reads_reject_missing_or_unnegotiated_media_types() {
-        for content_type in [None, Some("application/problem+json")] {
-            let client = client_with_base_url(base_url());
-            let count_error = with_mock_http(
-                respond_with(
-                    &Arc::new(Mutex::new(Vec::new())),
-                    mk_response(StatusCode::OK, br#"{"count":0}"#.to_vec(), content_type),
-                ),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    client.get_sumeragi_evidence_count()
-                },
-            )
-            .expect_err("count response must use the negotiated JSON media type");
-            assert!(
-                count_error.to_string().contains("invalid content-type"),
-                "unexpected count error: {count_error}"
-            );
-
-            let list_error = with_mock_http(
-                respond_with(
-                    &Arc::new(Mutex::new(Vec::new())),
-                    mk_response(
-                        StatusCode::OK,
-                        br#"{"total":0,"items":[]}"#.to_vec(),
-                        content_type,
-                    ),
-                ),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
-                },
-            )
-            .expect_err("list response must use the negotiated JSON media type");
-            assert!(
-                list_error.to_string().contains("invalid content-type"),
-                "unexpected list error: {list_error}"
-            );
-        }
-    }
-    #[test]
-    fn get_evidence_list_rejects_duplicate_key_success_payload() {
-        let client = client_with_base_url(base_url());
-        let err = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                json_response(StatusCode::OK, r#"{"total":0,"items":[],"items":[]}"#),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
-            },
-        )
-        .expect_err("duplicate-key successful list response should fail");
-        let message = err.to_string();
-        assert!(
-            message.contains("Failed to get sumeragi evidence list"),
-            "missing endpoint context: {message}"
-        );
-        assert!(
-            message.contains("failed to decode JSON payload"),
-            "unexpected error: {message}"
-        );
-    }
-    #[test]
-    fn get_evidence_count_propagates_error() {
-        let client = client_with_base_url(base_url());
-        let err = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":1}"#),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_evidence_count()
-            },
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Failed to get sumeragi evidence count"),
-            "unexpected error: {err}"
-        );
-    }
-    fn mint_finality_authority_fixture(
-        roster: &[ValidatorPower],
-    ) -> (
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-    ) {
-        use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-            KagemushaMintFinalityValidatorKeysV1,
-        };
-
-        // Public test-only Pallas/Vesta generator multiples 1..=4, matching
-        // iroha_genesis::deterministic_test_kagemusha_mint_finality_genesis_parameters_for
-        // and the scalar construction in iroha_sccp::test_fixtures. These are
-        // independently provisioned fixture keys, never derived from BLS keys.
-        const EQ_PROOF_PUBLIC_KEYS: [&str; 4] = [
-            "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
-            "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
-            "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
-            "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
-        ];
-        const EP_PROOF_PUBLIC_KEYS: [&str; 4] = [
-            "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
-            "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
-            "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
-            "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
-        ];
-        assert_eq!(roster.len(), 4, "fixture has exactly four validators");
-        let epoch_roster = KagemushaMintFinalityAuthorityGenerationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id: test_network_id(),
-            generation: 0,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| {
-                    let mut pallas_key = [0; 32];
-                    hex::decode_to_slice(EQ_PROOF_PUBLIC_KEYS[index], &mut pallas_key)
-                        .expect("valid fixed Pallas fixture key");
-                    let mut vesta_key = [0; 32];
-                    hex::decode_to_slice(EP_PROOF_PUBLIC_KEYS[index], &mut vesta_key)
-                        .expect("valid fixed Vesta fixture key");
-                    KagemushaMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: pallas_key,
-                        ep_proof_public_key: vesta_key,
-                    }
-                })
-                .collect(),
-        };
-        let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&epoch_roster, 10)
-            .expect("valid exact mint-finality genesis authorization");
-        (authorization, epoch_roster)
-    }
-    fn sample_record() -> EvidenceRecord {
-        let mut roster = (0..4)
-            .map(|_| ValidatorPower {
-                validator: iroha_model_base::peer::PeerId::new(
-                    checked_random_keypair().public_key().clone(),
-                ),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            mint_finality_authority_fixture(&roster);
-        let context = HeightContext {
-            network_id: test_network_id(),
-            protocol_version: PROTOCOL_VERSION,
-            height: 10,
-            epoch: 0,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            epoch_end_height: 10,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"client evidence nexus context"),
-            execution_policy_hash: Hash::new(b"client evidence execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 4,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1024,
-                max_chunk_count: 512,
-            },
-            leader_seed: [0x53; Hash::LENGTH],
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 3,
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"client evidence parent state"),
-            Hash::new(b"client evidence post state"),
-            Hash::new(b"client evidence ordinary writes"),
-            1,
-            Hash::new(b"client evidence block"),
-        );
-        let vote = |seed: u8| Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
-                payload_hash: Hash::new([seed]),
-            },
-            execution_commitment,
-            signer: 0,
-            signature: vec![seed; 96],
-        };
-        EvidenceRecord {
-            evidence: Evidence {
-                equivocation: SumeragiV2EquivocationEvidence {
-                    context,
-                    proofs_of_possession: vec![vec![0x52; 96]],
-                    conflict: SumeragiV2Equivocation::PhaseVote {
-                        first: vote(0x55),
-                        second: vote(0x66),
-                    },
-                },
-            },
-            recorded_at_height: 42,
-            recorded_at_view: 5,
-            recorded_at_ms: 123_456,
-            penalty_status: EvidencePenaltyStatus::Pending,
-        }
-    }
-    #[test]
-    fn get_evidence_list_wire_decodes_shared_server_payload() {
-        use iroha_torii_shared::sumeragi_evidence_api::SumeragiEvidenceListWireResponse as SharedSumeragiEvidenceListWireResponse;
-
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
-        let sample = sample_record();
-        let payload = SharedSumeragiEvidenceListWireResponse {
-            total: 7,
-            items: vec![sample.clone()],
-        };
-        assert_eq!(
-            norito::schema::identity::frame_hash::<SharedSumeragiEvidenceListWireResponse>(),
-            norito::schema::identity::frame_hash::<SumeragiEvidenceListWireResponse>(),
-            "the server and client must negotiate one named Norito schema",
-        );
-        let response = with_mock_http(
-            respond_with(&snapshots, norito_response(StatusCode::OK, &payload)),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
-            },
-        )
-        .expect("wire request");
-        assert_eq!(response.total, 7);
-        assert_eq!(response.items, vec![sample]);
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
-        assert_eq!(
-            snapshot.max_response_bytes,
-            SUMERAGI_EVIDENCE_LIST_NORITO_RESPONSE_MAX_BYTES
-        );
-        let headers: HashMap<_, _> = snapshot
-            .headers
-            .iter()
-            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-            .collect();
-        assert_eq!(
-            headers.get("accept").map(String::as_str),
-            Some(APPLICATION_NORITO)
-        );
-    }
-    #[test]
-    fn get_evidence_list_wire_propagates_errors() {
-        let client = client_with_base_url(base_url());
-        let err = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                norito_response(
-                    StatusCode::BAD_REQUEST,
-                    &SumeragiEvidenceListWireResponse {
-                        total: 0,
-                        items: Vec::new(),
-                    },
-                ),
-            ),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
-            },
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Failed to get sumeragi evidence list"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
-    fn get_evidence_list_wire_rejects_missing_or_unnegotiated_media_type() {
-        let client = client_with_base_url(base_url());
-        let payload = SumeragiEvidenceListWireResponse {
-            total: 0,
-            items: Vec::new(),
-        };
-        let body = norito::to_bytes(&payload).expect("encode shared evidence response");
-        for content_type in [Some(APPLICATION_JSON), None] {
-            let err = with_mock_http(
-                respond_with(
-                    &Arc::new(Mutex::new(Vec::new())),
-                    mk_response(StatusCode::OK, body.clone(), content_type),
-                ),
-                |mock_transport| {
-                    let client = client
-                        .clone()
-                        .with_test_http_transport(mock_transport.clone());
-                    client.get_sumeragi_evidence_list_wire(SumeragiEvidenceListFilter::default())
-                },
-            )
-            .expect_err("wire response must declare the negotiated Norito media type");
-            assert!(
-                err.to_string().contains("invalid content-type"),
-                "unexpected error for content type {content_type:?}: {err}"
-            );
-        }
-    }
     include!("client/activation_evidence_tests.rs");
     include!("client/validator_committee_tests.rs");
     include!("client/activation_attestation_tests.rs");
@@ -13625,26 +12520,6 @@ mod evidence_http_tests {
             result.expect(expectation);
             assert_json_accept(&snapshot, path);
         }
-        let (result, snapshot) = capture_request(
-            json_response(StatusCode::OK, r#"{"count":0}"#),
-            |mock_transport| {
-                client_with_base_url(base_url())
-                    .with_test_http_transport(mock_transport.clone())
-                    .get_sumeragi_evidence_count()
-            },
-        );
-        result.expect("typed Sumeragi evidence count");
-        assert_json_accept(&snapshot, "/v1/sumeragi/evidence/count");
-        let (result, snapshot) = capture_request(
-            json_response(StatusCode::OK, r#"{"total":0,"items":[]}"#),
-            |mock_transport| {
-                client_with_base_url(base_url())
-                    .with_test_http_transport(mock_transport.clone())
-                    .get_sumeragi_evidence_list(SumeragiEvidenceListFilter::default())
-            },
-        );
-        result.expect("typed Sumeragi evidence list");
-        assert_json_accept(&snapshot, "/v1/sumeragi/evidence");
     }
     fn assert_connection_refused_confirmation(seed: u8) {
         use std::io::{Error, ErrorKind};
@@ -21789,9 +20664,6 @@ where
                         PipelineEventBox::Warning(_w) => {
                             // Ignore warnings for tx confirmation flow
                         }
-                        PipelineEventBox::Merge(_merge_event) => {
-                            // Merge-ledger commits are orthogonal to transaction confirmation flow
-                        }
                         PipelineEventBox::Witness(_witness) => {
                             // Witness events do not influence transaction confirmation flow.
                         }
@@ -23327,19 +22199,13 @@ mod tests {
         asset::AssetDefinitionId,
         block::{
             BlockHeader,
-            consensus::{
-                LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-                LaneVolatilityClass, NativeAmxReceipt, SumeragiAutonomousLaneExecution,
-                SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
-                SumeragiPipelineExecutionStatus,
-            },
+            consensus::SumeragiPipelineExecutionStatus,
         },
         da::{
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, ExtraMetadata, StorageTicketId},
         },
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
-        nexus::{LaneCatalog, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
         privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
@@ -28671,49 +27537,8 @@ mod tests {
             .expect("transaction preparation should not read RNG when nonce is disabled");
         assert_eq!(transaction.nonce, None);
     }
-    fn sample_sumeragi_status_with_relay() -> (SumeragiDiagnosticsStatus, LaneRelayEnvelope) {
-        let settlement = LaneBlockCommitment {
-            block_height: 12,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(7),
-            lane_incarnation: Hash::new(b"client-lane-payload-incarnation"),
-            tx_count: 1,
-            total_local_amount: "0.5".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.25".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0.01".parse().expect("valid settlement quantity"),
-            swap_metadata: Some(LaneSwapMetadata {
-                epsilon_bps: 35,
-                twap_window_seconds: 120,
-                liquidity_profile: LaneLiquidityProfile::Tier2,
-                twap_local_per_xor: "123.456".parse().expect("canonical TWAP"),
-                volatility_class: LaneVolatilityClass::Elevated,
-            }),
-            receipts: vec![LaneSettlementReceipt {
-                source_id: [0x11; 32],
-                local_amount: "0.5".parse().expect("valid settlement quantity"),
-                xor_due: "0.25".parse().expect("valid settlement quantity"),
-                xor_after_haircut: "0.24".parse().expect("valid settlement quantity"),
-                xor_variance: "0.01".parse().expect("valid settlement quantity"),
-                timestamp_ms: 1_724_000_000_000,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let da_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0xDD; Hash::LENGTH],
-        )));
-        let mut block_header = BlockHeader::new(
-            NonZeroU64::new(12).expect("nonzero height"),
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        block_header.set_da_commitments_hash(da_hash);
-        let relay_envelope = LaneRelayEnvelope::new(block_header, da_hash, settlement.clone(), 256)
-            .expect("construct lane relay envelope");
-        let status = SumeragiDiagnosticsStatus {
+    fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
+        SumeragiDiagnosticsStatus {
             pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
@@ -28727,18 +27552,10 @@ mod tests {
             npos: None,
             lane_commitments: Vec::new(),
             dataspace_commitments: Vec::new(),
-            lane_settlement_commitments: vec![settlement],
-            lane_relay_envelopes: vec![relay_envelope.clone()],
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
-            native_amx_participant_applications: Vec::new(),
-            autonomous_lane_executions: Vec::new(),
-        };
-        (status, relay_envelope)
+        }
     }
     fn encoded_sumeragi_diagnostics_response(
         status: &SumeragiDiagnosticsStatus,
@@ -32723,7 +31540,7 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_rejects_unknown_json_fields() {
         let client = client_with_base_url(base_url());
-        let (status, _) = sample_sumeragi_status_with_relay();
+        let status = sample_sumeragi_diagnostics();
         let mut value = norito::json::to_value(&status).expect("serialize diagnostics fixture");
         value
             .pointer_mut("/lane_relay_envelopes/0/settlement_commitment")
@@ -32747,7 +31564,7 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {
-        let (mut status, _) = sample_sumeragi_status_with_relay();
+        let mut status = sample_sumeragi_diagnostics();
         status.npos = Some(
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
@@ -32765,7 +31582,7 @@ mod tests {
     #[test]
     fn get_sumeragi_diagnostics_requires_declared_current_media_type() {
         let client = client_with_base_url(base_url());
-        let (status, relay_envelope) = sample_sumeragi_status_with_relay();
+        let status = sample_sumeragi_diagnostics();
         let body = norito::json::to_vec(&status).expect("encode status payload as json");
         let (decoded, _) = capture_request(
             mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
@@ -32777,7 +31594,7 @@ mod tests {
             },
         );
         let decoded = decoded.expect("decode declared current diagnostics JSON");
-        assert_eq!(decoded.lane_relay_envelopes, vec![relay_envelope]);
+        assert_eq!(decoded, status);
         for content_type in [
             None,
             Some("application/octet-stream"),
@@ -32801,44 +31618,6 @@ mod tests {
                 "{error}"
             );
         }
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_rejects_duplicate_keys() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        status.lane_relay_envelopes = vec![relay_envelope.clone(), relay_envelope];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect_err("duplicates should be rejected");
-        assert!(
-            err.to_string().contains("duplicate relay envelope"),
-            "expected duplicate detection error, got {err:?}"
-        );
-    }
-    #[test]
-    fn get_cross_lane_transfer_proofs_reports_invalid_relay_before_duplicate_error() {
-        let (mut status, relay_envelope) = sample_sumeragi_status_with_relay();
-        let mut tampered_duplicate = relay_envelope.clone();
-        tampered_duplicate.settlement_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        status.lane_relay_envelopes = vec![relay_envelope, tampered_duplicate];
-        let err = request_cross_lane_transfer_proofs(
-            &status,
-            APPLICATION_NORITO,
-            "encode status payload",
-        )
-        .expect_err("invalid relay must be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains("Invalid lane relay envelope in status payload"),
-            "unexpected error message: {message}"
-        );
-        assert!(
-            !message.contains("duplicate relay envelope"),
-            "duplicate detection should not run before relay verification: {message}"
-        );
     }
     #[test]
     fn sorafs_pin_filter_sets_query_params() {

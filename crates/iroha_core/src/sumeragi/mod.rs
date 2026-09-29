@@ -8,18 +8,13 @@ use crate::{
 use eyre::Result;
 use iroha_config::parameters::{
     actual::{Common as CommonConfig, Sumeragi as SumeragiConfig},
-    defaults::sumeragi::{
-        BODY_ENVELOPE_HEADROOM_BYTES, CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-        TIMEOUT_VOTE_RESERVE_BYTES,
-    },
-};
+    defaults::};
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
     NetworkId,
     block::{
-        consensus::Evidence,
         consensus_v2::{
-            BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
+            BlockSubject, ConsensusMode,
             ConsensusRound,
         },
     },
@@ -27,8 +22,7 @@ use iroha_data_model::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
         MergeCommitteeSignature,
     },
-    nexus::LaneRelayEnvelope,
-};
+    };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use iroha_model_base::peer::PeerId;
@@ -102,6 +96,8 @@ pub mod startup;
 /// A certified test chain: real genesis, execution and BLS-certified Kura frames.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub mod test_chain;
+/// Genesis-bound consensus metadata derived from the staged genesis state.
+pub mod genesis_meta;
 pub use genesis_meta::{
     staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash,
 };
@@ -131,8 +127,6 @@ pub use v2_recovery::{
     authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
     plan_v2_startup_replay,
 };
-pub use v2_evidence::EvidenceValidationContext;
-pub use v2_evidence::evidence_subject_height_view;
 #[cfg(not(test))]
 use self::output_guard::process_consensus_output_guard;
 use self::{message::*, output_guard::ConsensusOutputGuard};
@@ -328,7 +322,6 @@ use crate::snapshot::{StartupRecovery, StartupRecoveryPublisher, startup_recover
 pub use admission_capacity::{
     AdmissionCapacityUnavailableV1, AuthenticatedAdmissionCapacityV1, Rs16PayloadGeometryV1,
 };
-pub use admission_input::QueuePlanInputCapacityErrorV1;
 
 impl SumeragiHandle {
     fn new(

@@ -9,6 +9,10 @@ fn manifest_chain_discriminant_value() -> norito::json::Value {
     norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
         .expect("serialize chain discriminant")
 }
+fn manifest_v2_context_value() -> norito::json::Value {
+    norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+        .expect("serialize v2 genesis context")
+}
 fn manifest_kagemusha_mint_finality_value() -> norito::json::Value {
     norito::json::value::to_value(&deterministic_test_kagemusha_mint_finality_genesis_parameters())
         .expect("serialize KAGEMUSHA mint-finality genesis parameters")

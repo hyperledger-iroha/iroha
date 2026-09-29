@@ -51,31 +51,19 @@ fn multiproof(leaves: usize, indices: &[usize]) -> MultiproofPlan {
     .unwrap()
 }
 
-#[test]
-fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
-    let binding = Context::new(b"streamed final FRI frontier integrity").unwrap();
-    let oracle = Oracle::Fri(4);
-    let replay = CoefficientReplayPlan::fri(4, coefficient_limits()).unwrap();
-    let coefficients = (0..replay.degree())
-        .map(|i| dense(i as u64))
-        .collect::<Vec<_>>();
-    let indices = [0, 1, 31, 64, 127];
-    let actual = commit(
-        replay,
-        &binding,
-        oracle,
-        &indices,
-        &[&coefficients],
-        stream_limits(),
-    )
-    .unwrap();
-    let plan = multiproof(128, &indices);
+/// Independently hash all 128 final-round FRI fibers and every Merkle level above them.
+fn independent_fri_levels(
+    binding: &Context,
+    oracle: Oracle,
+    domain: crate::backend::FriDomain,
+    coefficients: &[F],
+) -> Vec<Vec<Digest>> {
     let mut levels = vec![
         (0..128)
             .map(|index| {
                 let payload = (0..4)
                     .flat_map(|position| {
-                        let x = replay.domain().point(index + position * 128);
+                        let x = domain.point(index + position * 128);
                         coefficients
                             .iter()
                             .rev()
@@ -110,6 +98,29 @@ fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
             .collect();
         levels.push(next);
     }
+    levels
+}
+
+#[test]
+fn streamed_fri_frontier_rejects_changed_leaves_siblings_context_and_oracle() {
+    let binding = Context::new(b"streamed final FRI frontier integrity").unwrap();
+    let oracle = Oracle::Fri(4);
+    let replay = CoefficientReplayPlan::fri(4, coefficient_limits()).unwrap();
+    let coefficients = (0..replay.degree())
+        .map(|i| dense(i as u64))
+        .collect::<Vec<_>>();
+    let indices = [0, 1, 31, 64, 127];
+    let actual = commit(
+        replay,
+        &binding,
+        oracle,
+        &indices,
+        &[&coefficients],
+        stream_limits(),
+    )
+    .unwrap();
+    let plan = multiproof(128, &indices);
+    let levels = independent_fri_levels(&binding, oracle, replay.domain(), &coefficients);
     assert_eq!(
         levels.iter().map(Vec::len).collect::<Vec<_>>(),
         [128, 64, 32, 16, 8, 4, 2, 1]

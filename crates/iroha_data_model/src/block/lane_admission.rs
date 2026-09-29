@@ -451,7 +451,3 @@ fn validate_route_incarnation(
 fn hash_is_zero(hash: Hash) -> bool {
     hash == Hash::prehashed([0; Hash::LENGTH])
 }
-
-#[cfg(test)]
-#[path = "lane_admission_tests.rs"]
-mod tests;

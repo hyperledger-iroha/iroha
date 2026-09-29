@@ -1158,7 +1158,8 @@ mod tests {
         assert!(MaskedQuotientPlan::new(air, prepared, 131_072, offset, 131_072, limits).is_err());
         assert!(MaskedQuotientPlan::new(air, prepared, 262_144, F::ONE, 131_072, limits).is_err());
         assert!(MaskedQuotientPlan::new(air, prepared, 262_144, offset, 1, limits).is_err());
-        let plan = MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
+        let plan =
+            MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
         let bytes = plan.payload_bytes();
         let work = plan.work_units();
         assert!(
@@ -1190,7 +1191,8 @@ mod tests {
             .is_err()
         );
         assert!(plan.build(&vec![F::ONE; 922]).is_err());
-        let plan = MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
+        let plan =
+            MaskedQuotientPlan::new(air, prepared, 262_144, offset, 131_072, limits).unwrap();
         let mut alpha = vec![F::ONE; CONSTRAINT_COUNT];
         alpha[922] = F::from_coefficients_unchecked_for_test([0, 0, GOLDILOCKS_MODULUS, 0]);
         assert!(plan.build(&alpha).is_err());

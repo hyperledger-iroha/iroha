@@ -45,10 +45,13 @@ pub trait IntegerAirField: Copy {
     /// Embed an unsigned 32-bit integer as a field constant.
     fn from_u32(value: u32) -> Self;
     /// Field addition.
+    #[must_use]
     fn add(self, other: Self) -> Self;
     /// Field subtraction.
+    #[must_use]
     fn sub(self, other: Self) -> Self;
     /// Field multiplication.
+    #[must_use]
     fn mul(self, other: Self) -> Self;
 }
 
@@ -557,12 +560,15 @@ mod tests {
             );
             constraint_residues(t.add(2), t.add(8), t.mul(3).add(8), &witness)
         };
-        let rows = [evaluate(0), evaluate(1), evaluate(2), evaluate(3)];
-        for index in 0..CONSTRAINT_COUNT {
-            let third_difference = rows[3][index]
-                .sub(rows[2][index].mul(3))
-                .add(rows[1][index].mul(3))
-                .sub(rows[0][index]);
+        let [first, second, third, fourth] = [evaluate(0), evaluate(1), evaluate(2), evaluate(3)];
+        for (index, (((&at_zero, &at_one), &at_two), &at_three)) in first
+            .iter()
+            .zip(&second)
+            .zip(&third)
+            .zip(&fourth)
+            .enumerate()
+        {
+            let third_difference = at_three.sub(at_two.mul(3)).add(at_one.mul(3)).sub(at_zero);
             assert_eq!(third_difference, 0, "constraint {index} exceeds degree two");
         }
     }

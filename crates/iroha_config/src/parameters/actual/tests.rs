@@ -1,8 +1,6 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus};
-    use iroha_model_base::metadata::Metadata;
 
     #[test]
     fn mcp_inflight_dispatch_limit_default_is_nonzero() {
@@ -145,11 +143,6 @@ mod tests {
             nexus_consensus_policy_digest(&expanded).expect("valid expanded runtime policy"),
             expected,
             "committed runtime geometry does not rewrite the immutable execution policy"
-        );
-        assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&expanded, &Pipeline::default(), &[], &[]),
-            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &[]),
-            "the effective dataspace addition remains bound to the per-height context"
         );
         expanded.configured_dataspace_catalog = expanded.dataspace_catalog.clone();
         assert_ne!(
@@ -359,8 +352,6 @@ mod tests {
         let baseline = Nexus::default();
         let baseline_policy =
             nexus_consensus_policy_digest(&baseline).expect("valid default Nexus policy");
-        let baseline_context =
-            sumeragi_v2_nexus_amx_context_hash(&baseline, &Pipeline::default(), &[], &[]);
 
         let mut share_bound_drift = baseline.clone();
         share_bound_drift.staking.max_stake_shares_per_validator = NonZeroU32::new(
@@ -389,11 +380,6 @@ mod tests {
                 nexus_consensus_policy_digest(&changed).expect("valid changed Nexus policy"),
                 baseline_policy,
                 "{label} must change the canonical Nexus policy digest"
-            );
-            assert_ne!(
-                sumeragi_v2_nexus_amx_context_hash(&changed, &Pipeline::default(), &[], &[],),
-                baseline_context,
-                "{label} must change the signed Nexus/AMX context"
             );
         }
     }

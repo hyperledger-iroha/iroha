@@ -40,14 +40,6 @@ pub const TORII_PROXY_RESPONSE_MAX_DECODE_ALLOCATED_BYTES_V1: usize =
     TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1;
 /// Schema version for peer-to-peer Torii proxy responses.
 pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
-pub use iroha_data_model::block::lane_admission::{
-    LaneAdmittedInputV1, QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
-    QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-    QueuePlanAdmissionAttestationV1, QueuePlanAdmissionBindingV1, QueuePlanAdmissionCertificateV1,
-    QueuePlanAdmissionRegistryKeyV1, QueuePlanAdmissionRegistryValueV1,
-    queue_plan_admission_network_id_digest, queue_plan_synced_request_id,
-    queue_plan_synced_request_id_from_network_digest,
-};
 
 
 

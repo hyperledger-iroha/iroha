@@ -931,9 +931,7 @@ pub mod oracle {
 pub mod kura {
     use crate::{
         kura::FsyncMode,
-        parameters::actual::{
-            KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy, KuraReplicaAdvertPolicy,
-        },
+        parameters::actual::{KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy},
     };
     use iroha_config_base::util::Bytes;
     use nonzero_ext::nonzero;
@@ -961,8 +959,6 @@ pub mod kura {
             max_bytes: MEMBERSHIP_STORAGE_MAX_BYTES,
             memory_bytes: MEMBERSHIP_STORAGE_MEMORY_BYTES,
         };
-    /// Number of recent lane-history entries retained alongside the block store.
-    pub const LANE_HISTORY_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Maximum complete stored FASTPQ artifact bytes, matching the proof-sidecar default.
     pub const FASTPQ_ARTIFACT_MAX_BYTES: NonZeroUsize =
         nonzero!(super::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.0 as usize);
@@ -4134,19 +4130,7 @@ pub mod zk {
 }
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use iroha_config_base::util::Bytes;
     use iroha_crypto::Algorithm;
-    use iroha_data_model::{
-        block::consensus_v2::{
-            MAX_DA_ENCODED_PAYLOAD_BYTES, MAX_EXECUTED_BLOCK_WIRE_BYTES, MAX_VALIDATORS_PER_HEIGHT,
-        },
-        merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
-    };
-    use nonzero_ext::nonzero;
-    use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        time::Duration,
-    };
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
     /// Fresh-network target block cadence selected by genesis.

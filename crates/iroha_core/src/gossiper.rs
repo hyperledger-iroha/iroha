@@ -3,11 +3,11 @@ use crate::retained_gossip::RetainedGossip;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{
-        GossipBatchEntry, Queue, QueuePlanGossipAdmission, RoutingDecision, RoutingPlan,
+        GossipBatchEntry, Queue, RoutingDecision, RoutingPlan,
         resolve_routing_decision, resolve_routing_plan_against_catalogs,
     },
     state::{
-        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome, State,
+        PendingQueuePlanAdmissionDisposition, State,
         StatelessValidationContext, TransactionsReadOnly,
     },
     tx::{

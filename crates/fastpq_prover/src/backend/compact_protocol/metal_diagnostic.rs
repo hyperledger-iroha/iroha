@@ -227,7 +227,11 @@ fn exercise(relation: &impl FixedAir) -> Capture {
 }
 
 /// Hash bounded leaf and parent positions of all 21 oracle trees; return their roots.
-fn hash_bounded_oracle_positions(geometry: &Geometry, binding: &Binding, row: &[u64]) -> Vec<Digest> {
+fn hash_bounded_oracle_positions(
+    geometry: &Geometry,
+    binding: &Binding,
+    row: &[u64],
+) -> Vec<Digest> {
     let mut leaf_count = 0;
     let mut parent_count = 0;
     let mut coverage = BTreeSet::new();

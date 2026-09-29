@@ -27399,7 +27399,7 @@ impl PeerReputationBook {
 // Low-priority helpers were accidentally emitted outside of the impl, which
 // causes free functions with a `self` parameter (invalid) and missing generics.
 // Wrap them into the NetworkBase impl where they belong.
-impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
+impl<T: Pload + message::ClassifyTopic + Sync, E: Enc> NetworkBase<T, E> {
     fn low_allow(&mut self, id: &PeerId) -> bool {
         let Some(rate) = self.low_rate_per_sec else {
             return true;

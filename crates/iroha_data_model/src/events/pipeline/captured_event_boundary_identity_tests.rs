@@ -29,11 +29,6 @@ fn captured_event_codec_schema_identities() {
         "a4e4c77ec8eb367ac481c3145afde46e",
         "a4e4c77ec8eb367ac481c3145afde46e",
     );
-    check::<super::MergeLedgerEvent>(
-        "iroha_data_model::events::pipeline::model::MergeLedgerEvent",
-        "c0bb9a1419f0adb16ac67b939b4e5d24",
-        "c0bb9a1419f0adb16ac67b939b4e5d24",
-    );
     check::<super::TransactionStatus>(
         "iroha_data_model::events::pipeline::model::TransactionStatus",
         "b2bcd2f6b717770ef66d21853ea83ff9",
@@ -53,11 +48,6 @@ fn captured_event_codec_schema_identities() {
         "iroha_data_model::events::pipeline::model::TransactionEventFilter",
         "e47bdf43a6e82056dd47fa2acb15fef4",
         "e47bdf43a6e82056dd47fa2acb15fef4",
-    );
-    check::<super::MergeLedgerEventFilter>(
-        "iroha_data_model::events::pipeline::model::MergeLedgerEventFilter",
-        "817822147004e4cd960143f739666255",
-        "817822147004e4cd960143f739666255",
     );
     check::<super::WitnessEventFilter>(
         "iroha_data_model::events::pipeline::model::WitnessEventFilter",

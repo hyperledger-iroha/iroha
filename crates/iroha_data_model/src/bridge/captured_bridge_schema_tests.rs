@@ -31,12 +31,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::BridgeFinalityProof>(
         "iroha_data_model::bridge::BridgeFinalityProof",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeFinalityAttestationBodyV1>(
-        "iroha_data_model::bridge::BridgeFinalityAttestationBodyV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::BridgeFinalityAttestationV1>(
-        "iroha_data_model::bridge::BridgeFinalityAttestationV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::BridgeCommitment>(
         "iroha_data_model::bridge::BridgeCommitment",
     ),

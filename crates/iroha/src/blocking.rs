@@ -22,9 +22,7 @@ use iroha_data_model::{
     Identifiable,
     account::AccountId,
     alias_setup::{AliasLifecycleTransactionPlanV1, AliasTransactionPlanV1},
-    isi::{InstructionBox, SetParameter, register::RegisterBox},
-    nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan},
-    parameter::Parameter,
+    isi::{InstructionBox, register::RegisterBox},
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{FeePaymentIntent, SignedTransaction},
 };
@@ -265,17 +263,6 @@ impl Client {
     ) -> Result<iroha_data_model::block::consensus::SumeragiDiagnosticsStatus> {
         self.runtime
             .block_on(self.inner.get_sumeragi_diagnostics())?
-    }
-
-    /// Read verified and deduplicated cross-lane transfer proofs.
-    ///
-    /// # Errors
-    /// Returns transport, proof-validation or [`BlockingCallError`] failures.
-    pub fn get_cross_lane_transfer_proofs(
-        &self,
-    ) -> Result<Vec<crate::nexus::CrossLaneTransferProof>> {
-        self.runtime
-            .block_on(self.inner.get_cross_lane_transfer_proofs())?
     }
 
     /// Submit one signed transaction and return after Torii accepts it.
@@ -1004,22 +991,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn blocking_diagnostics_and_proofs_reject_async_runtime_before_io() {
+    async fn blocking_diagnostics_reject_async_runtime_before_io() {
         let (client, sends, _) = accepting_client();
-        let diagnostics = client
+        let error = client
             .get_sumeragi_diagnostics()
             .expect_err("explicit blocking call must reject Tokio");
-        let proofs = client
-            .get_cross_lane_transfer_proofs()
-            .expect_err("explicit blocking proofs must reject Tokio");
-        for error in [diagnostics, proofs] {
-            assert!(matches!(
-                error.downcast_ref::<BlockingCallError>(),
-                Some(BlockingCallError::AsyncRuntime {
-                    flavor: AsyncRuntimeFlavor::MultiThread
-                })
-            ));
-        }
+        assert!(matches!(
+            error.downcast_ref::<BlockingCallError>(),
+            Some(BlockingCallError::AsyncRuntime {
+                flavor: AsyncRuntimeFlavor::MultiThread
+            })
+        ));
         assert_eq!(sends.load(Ordering::SeqCst), 0);
     }
 

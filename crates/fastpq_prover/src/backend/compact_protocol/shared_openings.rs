@@ -1225,8 +1225,8 @@ fn check_shared_fri_carries(
             .collect::<Result<Vec<_>>>()?;
         for (position, (index, value)) in carries.iter_mut().enumerate() {
             let group_index = *index % output_len;
-            let wire_index = u32::try_from(group_index)
-                .map_err(|_| shape("missing derived FRI group"))?;
+            let wire_index =
+                u32::try_from(group_index).map_err(|_| shape("missing derived FRI group"))?;
             let group = opening
                 .groups
                 .binary_search_by_key(&wire_index, |group| group.index)
@@ -2039,10 +2039,9 @@ mod tests {
                 assert!(next[1..].iter().all(|&value| value == 0));
                 let (left, right) = match self.mapping {
                     NextMapping::Correct => (current[0], next[0]),
-                    NextMapping::StrideOne => (
-                        current[0],
-                        self.values[(index + 1) % RECURRENCE_LDE_ROWS],
-                    ),
+                    NextMapping::StrideOne => {
+                        (current[0], self.values[(index + 1) % RECURRENCE_LDE_ROWS])
+                    }
                     NextMapping::Swapped => (next[0], current[0]),
                 };
                 Ok(recurrence_slots(

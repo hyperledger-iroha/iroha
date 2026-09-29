@@ -472,6 +472,11 @@ mod model {
             value.validate().ok()?;
             Some(value)
         }
+        /// Canonical XOR asset authenticated by genesis for this network.
+        #[must_use]
+        pub fn xor_asset_definition_id(&self) -> &crate::asset::AssetDefinitionId {
+            &self.xor_asset_definition_id
+        }
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         #[must_use]
         pub fn max_validators(&self) -> u32 {
@@ -3195,7 +3200,8 @@ mod tests {
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
             kagemusha_mint_finality:
                 crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
-            sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
+            sumeragi_v2:
+                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
         }
     }
 

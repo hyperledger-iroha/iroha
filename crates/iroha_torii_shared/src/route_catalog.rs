@@ -1780,6 +1780,18 @@ pub mod core {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     );
+    /// Read one frozen validator committee attempt and its finality attachments.
+    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
+        "nexus.validator_committee.read",
+        HttpMethod::Get,
+        "/v1/nexus/validator-committee",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Core information routes registered by `add_core_info_routes`.
     pub const INFO_ROUTES: &[RouteDescriptor] = &[
         API_VERSION,
@@ -1788,12 +1800,9 @@ pub mod core {
         LIVEZ,
         READYZ,
         CONFIGURATION_GET,
-        NEXUS_LIFECYCLE_GET,
         NEXUS_VALIDATOR_COMMITTEE_GET,
         NEXUS_STAKING_PREPARATION_POST,
         LEDGER_HEADERS,
-        LEDGER_STATE_ROOT,
-        LEDGER_STATE_PROOF,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         INTERNAL_PROXY,
@@ -2528,7 +2537,7 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-/// Consensus evidence, bridge finality, and Sumeragi introspection routes.
+/// Bridge finality and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
@@ -2628,8 +2637,6 @@ pub mod sumeragi {
         telemetry_operator_get("sumeragi.parameter.read", "/v1/sumeragi/params");
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
-        EVIDENCE_COUNT,
-        EVIDENCE_LIST,
         STATUS,
         DIAGNOSTICS,
         STATUS_SSE,

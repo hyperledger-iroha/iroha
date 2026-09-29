@@ -112,8 +112,9 @@ enum OperationClass {
 impl OperationClass {
     const fn accepts(self, operation: &OperationKind) -> bool {
         match self {
-            Self::RootBoundStateTransition => matches!(operation, OperationKind::Transfer),
-            Self::Transfer => matches!(operation, OperationKind::Transfer),
+            Self::RootBoundStateTransition | Self::Transfer => {
+                matches!(operation, OperationKind::Transfer)
+            }
             Self::MetaSet => matches!(operation, OperationKind::MetaSet),
         }
     }

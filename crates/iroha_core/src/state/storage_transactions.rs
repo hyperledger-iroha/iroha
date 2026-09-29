@@ -724,7 +724,6 @@ mod block {
     }
     impl From<crate::state::LaneLifecycleError> for TransactionsBlockError {
         fn from(error: crate::state::LaneLifecycleError) -> Self {
-            use crate::state::LaneLifecycleError;
             match error {
                 error @ (LaneLifecycleError::Storage(_)
                 | LaneLifecycleError::GeometryStorage(_)

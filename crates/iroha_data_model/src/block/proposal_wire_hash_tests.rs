@@ -166,12 +166,11 @@ fn complete_comparison_proposal() -> SignedBlock {
 
     let key = KeyPair::try_from_seed(vec![0x4c; 32], Algorithm::Ed25519).unwrap();
     let input = TransactionEntrypoint::from(comparison_transaction(&key));
-    let mut context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+    let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
         input.hash(),
         LaneId::new(7),
         DataSpaceId::new(2),
     )]);
-    context.queue_plan_admissions = vec![vec![1, 3, 7]];
     let mut proposal = plain_signed_block();
     proposal.payload.external_entrypoints = vec![input];
     proposal.payload.execution_context = Some(context);

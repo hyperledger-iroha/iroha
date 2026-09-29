@@ -1,6 +1,7 @@
 //! Tests for compiled profiles, `derive(n)` and the profile digests.
 
 use super::*;
+use crate::parameters::user;
 use crate::parameters::defaults;
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId};
 use iroha_model_base::{domain::DomainId, name::Name};
@@ -104,8 +105,6 @@ fn sora_nexus_v1_carries_the_deployed_taira_shape() {
     let derive = profile.derive_inputs();
     assert_eq!(derive.authenticated_non_validator_sources, 4);
     assert_eq!(derive.max_external_committee_peers, 12);
-    assert_eq!(derive.queue_commands, 4_096);
-    assert_eq!(derive.queue_bodies, 1_024);
     // Baseline catalog: core system lanes plus the public `nexus` lane, no customer dataspace.
     let lanes = value_at(profile.static_config(), "nexus.lane_catalog")
         .as_array()
@@ -443,20 +442,18 @@ fn derive_admits_three_f_plus_one_rosters() {
         assert_eq!(geometry.committee_sources, committee);
         assert_eq!(geometry.authenticated_non_validator_sources, 4);
         assert_eq!(
-            geometry.body_bytes,
-            u64::from(validators + committee + 4) * 35_651_584
-        );
-        assert_eq!(
             geometry.max_total_connections,
             u64::from(validators - 1 + 12 + 4)
         );
         let fragment = profile.derived_config(&geometry);
         assert_eq!(
-            integer_at(&fragment, "sumeragi.queues.body_bytes"),
-            i64::try_from(geometry.body_bytes).unwrap()
+            integer_at(&fragment, "network.max_total_connections"),
+            i64::try_from(geometry.max_total_connections).unwrap()
         );
-        assert_eq!(integer_at(&fragment, "sumeragi.queues.commands"), 4_096);
-        assert_eq!(integer_at(&fragment, "sumeragi.queues.bodies"), 1_024);
+        assert!(
+            fragment.get("sumeragi").is_none(),
+            "the roster derives no Sumeragi node configuration"
+        );
         for entry in value_at(&fragment, "nexus.dataspace_catalog")
             .as_array()
             .unwrap()
@@ -469,8 +466,6 @@ fn derive_admits_three_f_plus_one_rosters() {
             );
         }
     }
-    // Spec §3.8: (4 + 16 + 4) × 34 MiB ≈ 816 MiB for four validators.
-    assert_eq!(profile.derive(4).unwrap().body_bytes, 816 * 1024 * 1024);
     for id in [ProfileId::SoraNexusV1Qual, ProfileId::IrohaDevV1] {
         let profile = Profile::compiled(id).unwrap();
         for validators in [4, 7, 10] {
@@ -488,20 +483,14 @@ fn derive_rejects_rosters_that_are_not_three_f_plus_one() {
         assert!(
             matches!(
                 profile.derive(validators),
-                Err(ProfileError::Geometry {
-                    source: SumeragiV2GeometryError::NotExactCommittee { .. },
-                    ..
-                })
+                Err(ProfileError::Geometry { .. })
             ),
             "{validators}"
         );
     }
     assert!(matches!(
         profile.derive(34),
-        Err(ProfileError::Geometry {
-            source: SumeragiV2GeometryError::RosterAboveMaximum { .. },
-            ..
-        })
+        Err(ProfileError::Geometry { .. })
     ));
 }
 
@@ -576,7 +565,7 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
     );
 
     let mut changed = sora();
-    changed.derive.queue_commands = 8_192;
+    changed.derive.authenticated_non_validator_sources = 8;
     assert_ne!(
         changed.consensus_digest(4).unwrap(),
         consensus,

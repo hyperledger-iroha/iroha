@@ -428,7 +428,7 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
             profile_id_for::<V>(),
             limits.transport,
         )?;
-        validate_axt_advertisement(&artifact, context)?;
+        validate_axt_advertisement(&artifact, *context)?;
         let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
             &artifact.statement,
             expected,
@@ -466,9 +466,13 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
     })
 }
 
+#[allow(
+    clippy::large_types_passed_by_value,
+    reason = "keeps the by-value `Copy` context contract of its sibling test module"
+)]
 fn validate_axt_advertisement(
     artifact: &FastpqAxtCompactArtifactV1,
-    context: &AxtVerificationContext<'_>,
+    context: AxtVerificationContext<'_>,
 ) -> crate::Result<()> {
     let advertised = &artifact.metadata;
     let expected = context.metadata;

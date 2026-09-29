@@ -42,7 +42,6 @@ pub mod stream_token_custody;
 /// Read-only bounded role-16 native row and index decoder; admission remains closed.
 pub mod topology_authority;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};
-use iroha_data_model::block::consensus::EvidenceRecord;
 use mv::storage::StorageReadOnly;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use std::{

@@ -2,7 +2,6 @@
 mod canonical_output_inclusion_tests {
     use super::*;
     use crate::block::{SignedBlock, output_test_support as fixture};
-    use crate::transaction::TransactionEntrypoint;
     use iroha_crypto::{Hash, HashOf, MerkleProof};
     use norito::codec::DecodeAll as _;
     fn execution_fixture() -> (SignedBlock, CommittedTransaction) {
@@ -28,126 +27,6 @@ mod canonical_output_inclusion_tests {
         )
         .with_transaction_commitments_from_block(block)
         .unwrap()
-    }
-    #[test]
-    fn selective_inclusion_binds_both_qc_roots_counts_network_and_source_join() {
-        let (block, committed) = execution_fixture();
-        let expected = commitment(&block);
-        let TransactionEntrypoint::External(signed) = committed.entrypoint() else {
-            panic!("external fixture");
-        };
-        let network = signed.network_id().unwrap();
-        assert!(committed.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &expected
-        ));
-        let other_network = crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-            Hash::new(b"foreign network"),
-        ));
-        assert!(!committed.verify_selective_in_authenticated_execution(
-            &other_network,
-            &block.header(),
-            &expected
-        ));
-        for mutation in 0..4 {
-            let mut wrong = expected;
-            match mutation {
-                0 => wrong.transaction_input_commitment = None,
-                1 => wrong.transaction_output_commitment = None,
-                2 => {
-                    let previous = wrong.transaction_input_commitment.unwrap();
-                    wrong.transaction_input_commitment =
-                        Some(iroha_crypto::MerkleTreeCommitment::new(
-                            *previous.root(),
-                            core::num::NonZeroU64::new(previous.leaf_count().get() + 1).unwrap(),
-                        ));
-                }
-                _ => {
-                    let previous = wrong.transaction_output_commitment.unwrap();
-                    wrong.transaction_output_commitment =
-                        Some(iroha_crypto::MerkleTreeCommitment::new(
-                            HashOf::from_untyped_unchecked(Hash::new(b"altered output root")),
-                            previous.leaf_count(),
-                        ));
-                }
-            }
-            assert!(!committed.verify_selective_in_authenticated_execution(
-                network,
-                &block.header(),
-                &wrong
-            ));
-        }
-        let mut wrong = committed.clone();
-        wrong.output_hash = HashOf::from_untyped_unchecked(Hash::new(b"altered output"));
-        assert!(!wrong.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &expected
-        ));
-        let mut wrong = committed.clone();
-        wrong.entrypoint_proof = fixture::committed(&block, 1).entrypoint_proof().clone();
-        assert!(!wrong.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &expected
-        ));
-        let mut foreign_header = block.header();
-        foreign_header.creation_time_ms += 1;
-        assert!(!committed.verify_selective_in_authenticated_execution(
-            network,
-            &foreign_header,
-            &expected
-        ));
-        let mut merge = expected;
-        merge.merge_carrier = Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-            HashOf::from_untyped_unchecked(Hash::new(b"merge is not ordinary inclusion")),
-        ));
-        assert!(!committed.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &merge
-        ));
-        // Both substituted rows carry VALID proofs under the same output root.
-        // Row 1 is another input's Network output; row 2 is an internal output.
-        // Neither may be joined to this external signed input.
-        for index in [1_u32, 2] {
-            let mut wrong = committed.clone();
-            wrong.output = block.execution_outputs()[index as usize].clone();
-            wrong.output_hash = HashOf::new(&wrong.output);
-            wrong.output_proof = block.output_proof(index).unwrap();
-            assert!(!wrong.verify_selective_in_authenticated_execution(
-                network,
-                &block.header(),
-                &expected
-            ));
-        }
-        // Keep the header and source, but change the executable result and its
-        // self-consistent proof. Only the original QC-authenticated root wins.
-        let mut rewritten = block.clone();
-        let mut rows = rewritten.execution_outputs().to_vec();
-        rows[0] = fixture::network(
-            0,
-            Err(
-                crate::transaction::error::TransactionRejectionReason::Validation(
-                    crate::ValidationFail::NotPermitted("substituted result".into()),
-                ),
-            ),
-        );
-        fixture::install(&mut rewritten, rows, 3).unwrap();
-        let altered = fixture::committed(&rewritten, 0);
-        assert_eq!(rewritten.header(), block.header());
-        assert!(!altered.verify_selective_in_authenticated_execution(
-            network,
-            &block.header(),
-            &expected
-        ));
-        assert!(altered.verify_selective_in_authenticated_execution(
-            network,
-            &rewritten.header(),
-            &commitment(&rewritten)
-        ));
-        // Inclusion may prove rejection. Only the application checks success.
     }
 
     #[test]
@@ -210,29 +89,6 @@ mod canonical_output_inclusion_tests {
         header.creation_time_ms += 1;
         foreign.replace_header_for_testing(header);
         assert!(!committed.verify_inclusion_in_block(&foreign));
-    }
-    #[test]
-    fn authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority() {
-        let (block, committed) = execution_fixture();
-        let expected = commitment(&block);
-        assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
-        let decoded =
-            crate::block::decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
-        assert!(committed.verify_inclusion_in_authenticated_execution(&decoded, &expected));
-        for mutation in 0..3 {
-            let mut wrong = expected;
-            match mutation {
-                0 => wrong.executed_block_wire_len += 1,
-                1 => wrong.executed_block_wire_hash = Hash::new(b"foreign"),
-                _ => {
-                    wrong.merge_carrier =
-                        Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-                            HashOf::from_untyped_unchecked(Hash::new(b"old merge authority")),
-                        ))
-                }
-            }
-            assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong));
-        }
     }
     #[test]
     fn authenticated_execution_inclusion_rejects_unbound_wire_and_header_material() {

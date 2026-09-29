@@ -98,11 +98,11 @@ impl<'a> PublicTablePolynomial<'a> {
             && (positions.len() != rows.len()
                 || positions.iter().any(|&row| row >= trace_rows)
                 || positions.windows(2).any(|pair| pair[0] >= pair[1]))
-            {
-                return Err(shape_error(
-                    "public row positions must be exact, ordered and unique",
-                ));
-            }
+        {
+            return Err(shape_error(
+                "public row positions must be exact, ordered and unique",
+            ));
+        }
         for (row_index, row) in rows.iter().enumerate() {
             if row.len() != width {
                 return Err(shape_error(

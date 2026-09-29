@@ -995,3 +995,305 @@ fn instruction_network_context_is_thread_local() {
         .collect();
     assert_eq!(bytes[0], bytes[1]);
 }
+
+#[test]
+fn network_prefix_admission_accepts_only_exact_u16_integers() {
+    for (prefix, expected) in [(0.0, 0_u16), (-0.0, 0), (753.0, 753), (65_535.0, u16::MAX)] {
+        assert_eq!(checked_network_prefix(prefix).unwrap(), expected);
+    }
+    for invalid in [
+        -1.0,
+        0.5,
+        65_535.5,
+        65_536.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        assert_eq!(
+            checked_network_prefix(invalid).unwrap_err().kind(),
+            CodecErrorKind::InvalidArgument,
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn sole_instruction_payload_requires_a_single_envelope_field() {
+    let mut envelope = json::Map::new();
+    envelope.insert("Other".to_owned(), Value::Null);
+    assert!(sole_instruction_payload(&mut envelope, "Named").is_none());
+    assert_eq!(
+        envelope.len(),
+        1,
+        "an absent key leaves the envelope unchanged"
+    );
+
+    envelope.insert("Named".to_owned(), Value::Bool(true));
+    envelope.insert("Another".to_owned(), Value::Null);
+    let error = sole_instruction_payload(&mut envelope, "Named")
+        .expect("present key")
+        .unwrap_err();
+    assert_eq!(error.kind(), CodecErrorKind::InvalidArgument);
+    assert_eq!(
+        error.reason(),
+        "Named instruction envelope contains unexpected field(s): Another, Other"
+    );
+    assert!(
+        !envelope.contains_key("Named"),
+        "the probed key is consumed"
+    );
+
+    let mut sole = json::Map::new();
+    sole.insert("Named".to_owned(), Value::Bool(true));
+    assert_eq!(
+        sole_instruction_payload(&mut sole, "Named")
+            .expect("present key")
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(sole.is_empty());
+}
+
+fn register_code_payload() -> Value {
+    let manifest = ContractManifest {
+        seiyaku_name: None,
+        code_hash: Some(Hash::new(b"precedence-code")),
+        abi_hash: Some(Hash::new(b"precedence-abi")),
+        compiler_fingerprint: Some("codec-fixture".to_owned()),
+        features_bitmap: Some(0),
+        access_set_hints: None,
+        entrypoints: None,
+        states: None,
+        kotoba: None,
+        error_types: None,
+        provenance: None,
+    };
+    object([(
+        "manifest",
+        json::to_value(&manifest).expect("manifest JSON"),
+    )])
+}
+
+#[test]
+fn envelope_parsers_keep_key_precedence_and_consume_probed_keys() {
+    // An earlier strict key sees every later key as an unexpected envelope field.
+    let error = value_to_instruction(object([
+        ("CancelAssetLock", cancel_payload()),
+        ("Mint", Value::Null),
+    ]))
+    .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "CancelAssetLock instruction envelope contains unexpected field(s): Mint"
+    );
+    // A probed earlier key whose payload is not an object is consumed, so the
+    // later strict envelope check no longer sees it.
+    let instruction = value_to_instruction(object([
+        ("Mint", Value::Null),
+        ("RegisterSmartContractCode", register_code_payload()),
+    ]))
+    .expect("consumed non-object key");
+    assert!(instruction.as_any().is::<RegisterSmartContractCode>());
+    // An earlier object key wins even when a later key would be admitted.
+    let error = value_to_instruction(object([
+        ("Mint", object([])),
+        ("RegisterSmartContractCode", register_code_payload()),
+    ]))
+    .unwrap_err();
+    assert!(
+        error
+            .reason()
+            .starts_with("unsupported Mint instruction variant"),
+        "{error}"
+    );
+    // A later key that was never probed remains visible to the strict check.
+    let error = value_to_instruction(object([
+        ("RegisterSmartContractCode", register_code_payload()),
+        ("Zk", Value::Null),
+    ]))
+    .unwrap_err();
+    assert!(error.reason().contains("unexpected [Zk]"), "{error}");
+}
+
+#[test]
+fn grant_rendering_covers_only_account_permission_grants() {
+    let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
+    let permission: Permission = json::from_value(object([
+        ("name", Value::String("CanUnregisterDomain".to_owned())),
+        (
+            "payload",
+            object([("domain", Value::String("wonderland".to_owned()))]),
+        ),
+    ]))
+    .expect("permission");
+    let granted = InstructionBox::from(GrantBox::Permission(Grant::account_permission(
+        permission,
+        account(),
+    )));
+    let value = instruction_to_json_value(&granted).expect("permission grant JSON");
+    assert!(value["Grant"]["Permission"].is_object(), "{value:?}");
+    let restored = value_to_instruction(value.clone()).expect("permission grant");
+    assert_eq!(
+        norito::encode_canonical(&restored).unwrap(),
+        norito::encode_canonical(&granted).unwrap()
+    );
+    let role: RoleId = json::from_value(Value::String("auditor".to_owned())).expect("role id");
+    let role_grant = InstructionBox::from(GrantBox::Role(Grant::account_role(role, account())));
+    let error = instruction_to_json_value(&role_grant).unwrap_err();
+    assert_eq!(error.kind(), CodecErrorKind::Failure);
+    assert_eq!(
+        error.reason(),
+        "unsupported instruction variant; JSON conversion is not yet implemented for this instruction"
+    );
+}
+
+/// Render, re-admit and re-render a native instruction through its strict JSON contract.
+fn assert_native_json_roundtrip(instruction: &InstructionBox) -> Value {
+    let value = instruction_to_json_value(instruction).expect("strict JSON rendering");
+    let restored = value_to_instruction(value.clone()).expect("strict JSON admission");
+    assert_eq!(
+        norito::encode_canonical(&restored).expect("restored frame"),
+        norito::encode_canonical(instruction).expect("native frame"),
+        "{value:?}"
+    );
+    assert_eq!(
+        instruction_to_json_value(&restored).expect("re-rendered JSON"),
+        value
+    );
+    value
+}
+
+#[test]
+fn rwa_lot_instructions_roundtrip_through_boxed_and_concrete_renderers() {
+    let rwa = RwaId::new(
+        DomainId::try_new("commodities", "sora").expect("domain"),
+        Hash::new(b"codec-rwa"),
+    );
+    let lot = Value::String(rwa.to_string());
+    let quantity = Quantity::from(3_u32);
+    let cases: Vec<(RwaInstructionBox, InstructionBox, Value)> = vec![
+        (
+            FreezeRwa { rwa: rwa.clone() }.into(),
+            Box::new(FreezeRwa { rwa: rwa.clone() }).into_instruction_box(),
+            object([("FreezeRwa", object([("rwa", lot.clone())]))]),
+        ),
+        (
+            UnfreezeRwa { rwa: rwa.clone() }.into(),
+            Box::new(UnfreezeRwa { rwa: rwa.clone() }).into_instruction_box(),
+            object([("UnfreezeRwa", object([("rwa", lot.clone())]))]),
+        ),
+        (
+            RedeemRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            }
+            .into(),
+            Box::new(RedeemRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            })
+            .into_instruction_box(),
+            object([(
+                "RedeemRwa",
+                object([
+                    ("rwa", lot.clone()),
+                    ("quantity", json::to_value(&quantity).unwrap()),
+                ]),
+            )]),
+        ),
+        (
+            HoldRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            }
+            .into(),
+            Box::new(HoldRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            })
+            .into_instruction_box(),
+            object([(
+                "HoldRwa",
+                object([
+                    ("rwa", lot.clone()),
+                    ("quantity", json::to_value(&quantity).unwrap()),
+                ]),
+            )]),
+        ),
+        (
+            ReleaseRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            }
+            .into(),
+            Box::new(ReleaseRwa {
+                rwa: rwa.clone(),
+                quantity: quantity.clone(),
+            })
+            .into_instruction_box(),
+            object([(
+                "ReleaseRwa",
+                object([
+                    ("rwa", lot.clone()),
+                    ("quantity", json::to_value(&quantity).unwrap()),
+                ]),
+            )]),
+        ),
+    ];
+    for (boxed, concrete, expected) in cases {
+        let boxed = InstructionBox::from(boxed);
+        assert_eq!(assert_native_json_roundtrip(&boxed), expected);
+        assert_eq!(instruction_to_json_value(&concrete).unwrap(), expected);
+    }
+    let merge = MergeRwas {
+        parents: vec![RwaParentRef::new(rwa.clone(), Quantity::from(1_u32))],
+        primary_reference: "blend-cert-007".to_owned(),
+        status: Some("blended".parse().expect("status")),
+        metadata: Metadata::default(),
+    };
+    let boxed = InstructionBox::from(RwaInstructionBox::from(merge.clone()));
+    let value = assert_native_json_roundtrip(&boxed);
+    assert_eq!(
+        value["MergeRwas"]["parents"][0]["rwa"],
+        Value::String(rwa.to_string())
+    );
+    assert_eq!(
+        instruction_to_json_value(&Box::new(merge).into_instruction_box()).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn alias_and_zk_ballot_instructions_roundtrip_through_infallible_renderers() {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("staking", "universal").expect("domain"),
+        "coin".parse().expect("asset name"),
+    );
+    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
+    for instruction in [
+        SetAssetDefinitionAlias::bind(definition.clone(), alias, Some(u64::MAX)),
+        SetAssetDefinitionAlias::clear(definition),
+    ] {
+        let value = assert_native_json_roundtrip(&InstructionBox::from(instruction));
+        assert!(value["SetAssetDefinitionAlias"].is_object(), "{value:?}");
+    }
+    let ballot = Box::new(CastZkBallot {
+        election_id: "election-1".to_owned(),
+        proof_b64: "AAAA".to_owned(),
+        public_inputs_json: "{}".to_owned(),
+    })
+    .into_instruction_box();
+    let value = assert_native_json_roundtrip(&ballot);
+    assert_eq!(
+        value,
+        object([(
+            "CastZkBallot",
+            object([
+                ("election_id", Value::String("election-1".to_owned())),
+                ("proof_b64", Value::String("AAAA".to_owned())),
+                ("public_inputs_json", Value::String("{}".to_owned())),
+            ]),
+        )])
+    );
+}

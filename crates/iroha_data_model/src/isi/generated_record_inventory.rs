@@ -526,11 +526,6 @@ record!(
     "iroha_data_model::isi::musubi::SetMusubiReleaseYankV1"
 );
 record!(
-    nexus_set_lane_relay_emergency_validators,
-    crate::isi::nexus::SetLaneRelayEmergencyValidators,
-    "iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators"
-);
-record!(
     oracle_aggregate_oracle_feed,
     crate::isi::oracle::AggregateOracleFeed,
     "iroha_data_model::isi::oracle::AggregateOracleFeed"
