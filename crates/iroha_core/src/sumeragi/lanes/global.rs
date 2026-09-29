@@ -180,7 +180,7 @@ impl LaneTransactions for QueueLaneTransactions {
         let mut bytes = 0usize;
         for transaction in pending {
             if skip.contains(&transaction.hash_as_entrypoint())
-                || inputs.route(&transaction, height) != self.lane
+                || inputs.route(&transaction, height) != Some(self.lane)
             {
                 continue;
             }

@@ -1,0 +1,8 @@
+# Private DPN dataspace on Taira's existing validators.
+# Use iroha dataspace plan/apply/status with the independently retained --trust profile.
+[dataspace]
+name = "dpn"
+network = "https://taira.sora.org"
+owner_key = "~/.iroha/keys/dpn-owner.key"
+account_alias = "admin"
+max_fee = "0" # Set a deliberate spending cap before paid registration.

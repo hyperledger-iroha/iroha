@@ -1,4 +1,4 @@
-//! Generate the native Taira committee manifest from independently authenticated genesis.
+//! Generate the native committee manifest from independently authenticated genesis.
 
 use super::{MAX_BYTES, finality, require};
 use eyre::{Result, WrapErr};
@@ -86,7 +86,7 @@ where
         .collect::<BTreeMap<_, _>>();
     require(
         selected.len() == VALIDATORS && selected_by_peer.len() == VALIDATORS,
-        "native Taira manifest requires exactly four distinct trusted peers",
+        "native dataspace manifest currently requires exactly four distinct trusted peers",
     )?;
     let mut registrations = BTreeMap::<AccountId, PeerId>::new();
     let mut registered_peers = BTreeSet::new();
@@ -161,6 +161,8 @@ pub(super) fn test_trust() -> finality::TrustV1 {
     let (block, key) = crate::taira_public_reset::deployment_lane_genesis_fixture();
     let validators = iroha_genesis::signed_genesis_validator_pops(&block).unwrap();
     finality::TrustV1 {
+        chain: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+        account_chain_discriminant: 369,
         genesis_public_key: key.public_key().clone(),
         genesis_signed_wire_hex: hex::encode(block.encode_wire().unwrap()),
         peers: validators

@@ -255,7 +255,11 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
         for entrypoint in own {
             if let TransactionEntrypoint::External(tx) = entrypoint {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                let lane = inputs.route(&accepted, height);
+                let lane = inputs.route(&accepted, height).ok_or_else(|| {
+                    MergeError::Invalid(
+                        "concrete dataspace has no active native execution lane".into(),
+                    )
+                })?;
                 if lane != GLOBAL_LANE {
                     *step.rescued.entry(lane).or_default() += 1;
                 }
@@ -324,7 +328,7 @@ fn expand_from_view<'state, V: StateReadOnlyWithTransactions>(
     for (lane, tx) in candidates {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let hash = accepted.hash_as_entrypoint();
-        if inputs.route(&accepted, height) != lane
+        if inputs.route(&accepted, height) != Some(lane)
             || view.has_entrypoint(hash)
             || !seen.insert(hash)
             || !admission.admits(accepted.as_ref(), proposal)

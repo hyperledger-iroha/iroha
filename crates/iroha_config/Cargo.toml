@@ -26,6 +26,10 @@ name = "taira_config_contracts"
 path = "tests/taira_config_contracts.rs"
 
 [[test]]
+name = "compact_templates"
+path = "tests/compact_templates.rs"
+
+[[test]]
 name = "sccp_node_config"
 path = "tests/sccp_node_config.rs"
 

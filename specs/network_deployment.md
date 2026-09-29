@@ -2,6 +2,48 @@
 
 Status: approved design, being implemented on branch `network-deploy`. This is the implementation-coupled specification for `crates/iroha_deploy`, `iroha network` and `iroha dataspace`. Keep it accurate as the code lands.
 
+Current implementation on `optimizations`: `iroha dataspace plan|apply|status
+<definition> --trust <public-profile.json>` is the canonical existing-network
+path. It derives the owner from `owner_key`, selects an authenticated HTTPS
+parent, and constructs native manifests from the exact four-member NPoS
+validator/account bindings in the independently selected signed genesis.
+Before catalog signing it checks that those members have matching live
+Committee-role credentials; HTTP responses do not supply new account bindings.
+It retains immutable plans and once-only signed transactions beneath
+`~/.iroha-dataspaces` (or `--state`). An explicit operator signing credential is
+still required for authenticated reads. `max_fee` bounds the total operation.
+`plan` writes only local state, `apply` plans if needed, and `status` never
+submits. `dataspace export-profile` exports the independently retained public
+network/chain/discriminant/genesis/validator trust input once per parent.
+
+The same operation lock covers definition validation, preflight, planning and
+execution. A purpose-bound preflight child journal retains verified finality
+proofs even before a plan can be published. Batches of at most 128 new proofs
+continue automatically within the command timeout; retries reauthenticate the
+retained local prefix and fetch its missing successors. This cache cannot admit
+signed phases, dispatch claims or completion evidence when their plan is lost.
+An unsigned alias phase may refresh only its deadline under unchanged terms,
+policy and exact rent; every already signed transaction remains immutable.
+Before a plan or deployment evidence exists, explicit `plan` may correct only
+the total fee cap. The read-only proof cache survives that correction; spending
+continues to bind the exact current definition and subsequently retained plan.
+
+The catalog transition atomically adds the corresponding native fixed-lane
+policy. Ordinary finalization creates its record at carrier height `h`, active
+from `h + 2`; catalog, bootstrap and namespace acquisition remain global, and
+application transactions resolve the exact dataspace and wait for its native
+lane. Completion requires authenticated catalog/namespace state and every
+expected validator's matching, active native lane instance. A catalog row alone
+is insufficient. The retired manual `taira dataspace-deploy` command has no
+alias. Owner committees, SSH/edge provisioning and explicit `[monitor]` are not
+implemented by this runtime and are rejected. The in-process native test now
+passes paid catalog/bootstrap/namespace execution and a real three-of-four BLS
+private-lane certificate through production storage and global merge. The focused
+CLI dataspace suite passes 111 tests; the four-daemon deployment rehearsal
+remains a qualification gate. This source change performs no live deployment.
+The rest of this design includes planned network rendering, owner committees
+and teardown work.
+
 Approved decisions (2026-09-26):
 - The overall design is approved: `iroha network` and `iroha dataspace` run on one `crates/iroha_deploy` engine, network constants come from compiled profiles, and the old Taira toolchain is deleted.
 - One release. Every phase lands before anything is released, and Taira gets exactly one ledger replacement: the P9 restore, done with the new engine, whose genesis already carries the dataspace protocol and Inrou.
@@ -111,7 +153,7 @@ Deploys never build and never run tests. CI produces a signed release bundle, ga
   - `policy`: non-consensus deployment policy such as rate limits, storage budget, Soracloud capacities, systemd limits and snapshot interval;
   - role overlays.
 
-  `consensus_digest = H(static ‖ derive(n) ‖ genesis recipe)`. `policy_digest = H(policy ‖ roles)`. When a node config sets `profile`, only allowlisted per-node keys may appear in it.
+  `consensus_digest = H(static ‖ derive(n) ‖ genesis recipe)`. `policy_digest = H(policy ‖ roles)`. When a node config sets `profile`, only allowlisted per-node keys may appear in it. It requires `validators` and `data_dir`; `role` defaults to `validator`. The profile owns the discriminant and the role owns the Sumeragi role.
 - **Release bundle.** A signed tar of content-addressed blobs plus a `ReleaseManifestV1`. It is the only thing that changes code on hosts.
 - **Node card.** The public output of on-host key generation: peer id, PoP, account key, transport and streaming public keys, mint-finality public material, gateway certificate, addresses.
 - **Generation.** One ledger lifetime, identified by its NetworkId. It is recorded in `GENERATION` next to each node's state, outside the Kura store root.
@@ -212,8 +254,8 @@ Parse-time and plan-time validation:
   account_alias      optional (creates <alias>@<name>).
   lease_years        1..10, default 1. apply renews when < 60 days remain.
   max_fee            decimal in the parent's fee asset; hard cap across all registration writes.
-  operators          optional [public key] for the owner's own nodes.
-[committee]  source   "network" | "owner".
+  operators          optional [public key], only for source = "owner" nodes.
+[committee]  source   "network" (default; entire section may be omitted) | "owner".
 [ssh]                            as above; allowed iff source = "owner" with remote hosts.
 [edge]                           optional, source = "owner" only: host, host_key, domain,
                                  tls_certificate, tls_private_key, upstream. When present every member's
@@ -326,20 +368,29 @@ No node has a host, so the local driver runs it:
 
 `networks/ci.toml` is identical apart from its name. `networks/perf-10k.toml` adds `[scaling] lanes = 8`, `accounts = 10000` and sets `profile = "sora-nexus-v1-qual"`.
 
-### 3.6 `dataspaces/acme-on-taira.toml` (S2a: committee = Taira validators)
+### 3.6 `dataspaces/dpn.toml` (S2a: committee = Taira validators)
+
+The checked-in [DPN definition](../dataspaces/dpn.toml) has five inputs:
 
 ```toml
 [dataspace]
-name = "acme"
+name = "dpn"
 network = "https://taira.sora.org"
-visibility = "restricted"
-owner_key = "~/.iroha/keys/acme-owner.key"
-account_alias = "treasury"
-max_fee = "20"
-
-[committee]
-source = "network"
+owner_key = "~/.iroha/keys/dpn-owner.key"
+account_alias = "admin"
+max_fee = "0"
 ```
+
+Restricted visibility, a one-year lease and the parent network's committee are
+inherited defaults. The zero cap authorizes no spending; set an explicit cap
+for paid registration. Network services, global governance, validator keys,
+consensus tuning and unrelated lanes are not dataspace inputs and are rejected.
+`iroha dataspace plan|apply|status` consumes this definition with an independently
+selected `--trust` profile and a separate operator read credential. It derives
+the native lane and manifests and retains one durable operation. The current
+path supports the existing four-validator parent committee; owner provisioning
+and the broader P6 lifecycle remain open. See the
+[implementation contract](../docs/source/taira_dataspace_deploy.md).
 
 ### 3.7 `dataspaces/acme.toml` (S2b: owner-brought validators)
 
@@ -395,10 +446,8 @@ For a local rehearsal, set `network = "../networks/dev.toml"` and remove the `ho
 ```toml
 # Generated by `iroha network apply` (op 01JAX...). Do not edit.
 profile = "sora-nexus-v1"
-role_overlay = "validator"
-profile_roster_size = 4                           # input to derive(n); owner nodes copy the parent's
+validators = 4                                  # network roster, not the seed-peer count
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
-chain_discriminant = 369
 data_dir = "/var/lib/iroha/taira/v1"              # state/ and secrets/ are fixed subpaths
 public_key = "ea0130..."                           # BLS; private part in secrets/validator.key
 trusted_peers = ["ea0130...@taira-v1.sora.org:1337", "ea0130...@taira-v2.sora.org:1337",
@@ -425,9 +474,6 @@ id = "inori-app"
 scope = { dataspace = "universal" }               # user.rs:18243-18251 table form
 token_hash = "blake3:<hex>"
 
-[sumeragi]
-role = "validator"
-
 [genesis]
 public_key = "ed0120<genesis key>"
 expected_hash = "hash:<64 hex>#<crc>"
@@ -446,7 +492,10 @@ enabled = false        # when true: portable_vm_uid/gid = 70000(+k) and trusted_
                        # node's ISA; never otherwise (actual.rs:373-379 rejects a disabled table carrying them)
 ```
 
+Optional top-level `role` defaults to `validator`; use `observer` or `lane_validator` explicitly. See the parser-tested [validator template](../configs/validator.example.toml).
+
 A few values are derived at load time and never written:
+- the profile network discriminant and the selected Sumeragi role;
 - secret file paths, including the onboarding and faucet authority key files;
 - every state path;
 - the transport and streaming public keys;
@@ -793,7 +842,7 @@ $ iroha dataspace apply dataspaces/acme.toml
 1. **Card** as in S2a. The release is the card's release, and its bundle is verified against the compiled signers. The budget check requires `external committee peers + 4 ≤ nexus.max_external_committee_peers`.
 2. **Owner hosts** are converged by the same engine with the `lane_validator` overlay:
    - Keys generated on each host: BLS+PoP, transport, streaming, account key, gateway certificate. No mint-finality seed, beacon credential, Soracloud production mode or Inrou.
-   - `profile_roster_size`, profile and chain values copied from the card. Handshake constants must match byte-for-byte (`peer.rs:11929-11965`).
+   - `validators`, profile and chain values copied from the card. Handshake constants must match byte-for-byte (`peer.rs:11929-11965`).
    - `trusted_peers` = the Taira roster plus sibling owner nodes with PoPs.
    - `genesis.file` = the verified card genesis. `expected_hash` = the pinned NetworkId.
    - Operator allowlist = the owner's keys.
@@ -1185,14 +1234,13 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
 
 1. **Compiled profiles** (`iroha_config::profile`, new).
    - Files: `crates/iroha_config/profiles/{sora-nexus-v1,sora-nexus-v1-qual,iroha-dev-v1}.toml`, each with `static`, `derive`, `policy` and `role.*` sections.
-   - A node file that sets `profile`, `role_overlay` and `profile_roster_size` makes irohad build `ConfigReader` sources in this order: defaults, then `static`, then `derive(n)`, then `policy`, then the role overlay, then the node file (`iroha_config_base/src/read.rs:527-560`).
+   - A node file that sets `profile` and `validators` (with optional `role`, default `validator`) makes irohad build `ConfigReader` sources in this order: defaults, then `static`, then `derive(n)`, then `policy`, then the role overlay, then the node file (`iroha_config_base/src/read.rs:527-560`).
    - The node file may contain only the per-node allowlist:
-     - `chain`, `chain_discriminant`, `data_dir`, `public_key`, `trusted_peers`, `trusted_peers_pop`;
+     - `chain`, `data_dir`, `public_key`, `trusted_peers`, `trusted_peers_pop`;
      - `network.{address,public_address}`;
      - `torii.{address,transport.trusted_proxy_cidrs,operator_signatures.allowed_public_keys,account_onboarding.{authority,credentials}}`;
      - the faucet authority id;
      - the KAGEMUSHA V1 redemption authority id (`torii.kagemusha_v1_commands.redemption_authority`);
-     - `sumeragi.role`;
      - `genesis.*`;
      - `soracloud_runtime.submission.signer` (public binding);
      - `soracloud_runtime.inrou.{enabled,portable_vm_uid,portable_vm_gid,trusted_guest_manifest_digest_hex,trusted_guest_content_cid}`;
@@ -1320,7 +1368,7 @@ It also has:
 - Portable verifier fixtures cover genuine BLS signatures and valid Pasta public points over synthetic execution results, including 4→7→4 proof chains. They do not qualify World execution, XOR custody, beacon DKG, Pasta application seals, or live multi-peer transitions. Verifying native lane evidence against its authenticated owner remains part of the lane route gate (P6).
 - Drops the node, build and config fingerprint pins and the per-height proof journal.
 
-**D-8. Owner nodes** run stock `iroha3d` with the `lane_validator` overlay and `sumeragi.role = "validator"`.
+**D-8. Owner nodes** run stock `iroha3d` with `role = "lane_validator"`, which derives `sumeragi.role = "validator"`.
 
 ### 11.3 Deferred TODOs, in priority order
 

@@ -71,6 +71,11 @@ fn read_four_peers<T: Sync, R: Send>(
 }
 
 fn peer_clients<C: RunContext>(context: &C, trust: &TrustV1) -> Result<Vec<Client>> {
+    require(
+        context.config().chain == trust.chain
+            && context.config().account_chain_discriminant == trust.account_chain_discriminant,
+        "runtime chain identity differs from the selected public trust profile",
+    )?;
     trust
         .peers
         .iter()
@@ -88,6 +93,10 @@ fn peer_clients<C: RunContext>(context: &C, trust: &TrustV1) -> Result<Vec<Clien
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct TrustV1 {
+    /// Explicit network-operator pin; chain IDs are not encoded in signed genesis.
+    pub(crate) chain: iroha_model_base::chain::ChainId,
+    /// Explicit address-format pin selected with the network profile.
+    pub(crate) account_chain_discriminant: u16,
     pub(crate) genesis_public_key: PublicKey,
     pub(crate) genesis_signed_wire_hex: String,
     pub(crate) peers: Vec<PeerV1>,
@@ -104,6 +113,7 @@ pub(crate) struct PeerV1 {
 }
 
 struct Authority {
+    chain: iroha_model_base::chain::ChainId,
     network: NetworkId,
     genesis: HashOf<BlockHeader>,
     trusted_genesis: iroha_data_model::block::SignedBlock,
@@ -116,6 +126,10 @@ impl TrustV1 {
     }
 
     fn authority(&self, network: NetworkId) -> Result<Authority> {
+        require(
+            self.account_chain_discriminant != 0,
+            "public trust profile account_chain_discriminant must be nonzero",
+        )?;
         require(
             self.genesis_signed_wire_hex.len() <= MAX_BYTES,
             "public genesis exceeds the deployment profile bound",
@@ -132,13 +146,13 @@ impl TrustV1 {
             NetworkId::from_genesis_hash(genesis) == network
                 && metadata.mode
                     == iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
-            "public signed genesis differs from the independently selected Taira network",
+            "public signed genesis differs from the independently selected network",
         )?;
         let block = iroha_genesis::decode_signed_genesis(&wire)?;
         let validators = iroha_genesis::signed_genesis_validator_pops(&block)?;
         require(
             validators.len() == 4 && self.peers.len() == 4,
-            "Taira deployment verification requires exactly four genesis validators",
+            "dataspace deployment verification currently requires exactly four genesis validators",
         )?;
         let validators: BTreeMap<_, _> = validators
             .into_iter()
@@ -146,6 +160,7 @@ impl TrustV1 {
             .collect();
         validate_peer_selection(&self.peers, &validators)?;
         Ok(Authority {
+            chain: self.chain.clone(),
             network,
             genesis,
             trusted_genesis: block,
@@ -204,7 +219,7 @@ impl Authority {
     fn verifier(&self) -> Result<SumeragiFinalityVerifier> {
         Ok(SumeragiFinalityVerifier::new(
             &self.trusted_genesis,
-            "fc56984b-2be7-431d-840e-21514d1883f0",
+            self.chain.as_str(),
             self.validators.clone(),
         )?)
     }
@@ -247,42 +262,395 @@ fn validate_attestation(
     authority.roster(&body.finality_proof)
 }
 
-/// Prove the selected public verification routes and peer identities before any deployment write.
-pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Result<()> {
-    let deadline = operation_deadline(DEFAULT_OPERATION_TIMEOUT_MS)?;
-    let authority = manifest.finality.authority(manifest.network_id)?;
-    let challenge: [u8; 32] = rand::random();
-    require(challenge != [0; 32], "random finality challenge is zero")?;
-    let clients = peer_clients(context, &manifest.finality)?;
-    read_four_peers(
-        &clients,
-        context.config().account_chain_discriminant,
-        |index, client| {
-            let peer = &manifest.finality.peers[index];
+const PREFLIGHT_DIRECTORY: &str = "preflight-finality";
+
+/// Chain evidence binds the owner definition and selected trust, excluding only the fee cap.
+/// The cache never authorizes spending; the exact current definition and plan do that.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreflightBinding {
+    purpose: String,
+    definition_sha256: String,
+    network_id: NetworkId,
+    trust_sha256: String,
+}
+
+impl PreflightBinding {
+    fn expected(parent: &Journal) -> Result<Self> {
+        let (definition_sha256, network_id, trust_sha256) = definition::preflight_identity(parent)?;
+        Ok(Self {
+            purpose: "iroha.dataspace-preflight-finality.v1".into(),
+            definition_sha256,
+            network_id,
+            trust_sha256,
+        })
+    }
+}
+
+fn proof_file_height(name: &str) -> Option<u64> {
+    let digits = name.strip_prefix("proof-")?.strip_suffix(".json")?;
+    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|height| *height > 0)
+}
+
+fn preflight_staging_name(name: &str) -> bool {
+    let Some((name, suffix)) = name
+        .strip_prefix(".staging-")
+        .and_then(|name| name.rsplit_once('-'))
+    else {
+        return false;
+    };
+    (name == "binding.json" || proof_file_height(name).is_some())
+        && suffix.len() == 32
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// The child never admits signatures, dispatch claims, plans or completion evidence.
+#[cfg(unix)]
+fn validate_preflight_contents(child: &Journal, expected: &PreflightBinding) -> Result<bool> {
+    child.revalidate()?;
+    let binding = child.optional_json::<PreflightBinding>("binding.json")?;
+    if let Some(binding) = &binding {
+        require(
+            binding == expected,
+            "preflight proof cache belongs to another definition or trust",
+        )?;
+    }
+    let mut heights = BTreeSet::new();
+    for entry in fs::read_dir(&child.path)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| eyre!("invalid preflight proof filename"))?;
+        private_metadata(&fs::symlink_metadata(entry.path())?, false)?;
+        if let Some(height) = proof_file_height(name) {
+            require(
+                binding.is_some(),
+                "preflight proofs lost their retained definition/trust binding",
+            )?;
+            heights.insert(height);
+        } else {
+            require(
+                name == "lock" || name == "binding.json" || preflight_staging_name(name),
+                "preflight proof cache contains evidence outside its read-only purpose",
+            )?;
+        }
+    }
+    for (index, height) in heights.into_iter().enumerate() {
+        require(
+            height
+                == u64::try_from(index)?
+                    .checked_add(1)
+                    .ok_or_else(|| eyre!("proof height overflow"))?,
+            "preflight proof cache has a missing or reordered height",
+        )?;
+    }
+    child.revalidate()?;
+    Ok(binding.is_some())
+}
+
+#[cfg(not(unix))]
+fn validate_preflight_contents(_: &Journal, _: &PreflightBinding) -> Result<bool> {
+    eyre::bail!("durable preflight proofs require Unix filesystem custody")
+}
+
+#[cfg(unix)]
+fn open_preflight_child(parent: &Journal, create: bool) -> Result<Journal> {
+    parent.revalidate()?;
+    let path = parent.path.join(PREFLIGHT_DIRECTORY);
+    let child = match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            private_metadata(&metadata, true)?;
+            if fs::read_dir(&path)?.next().is_none() {
+                // A crash can leave mkdir durable before the first lock is created.
+                // Only a truly empty child has no lock or proof custody to lose.
+                // open_unpublished independently rejects evidence before a new lock.
+                Journal::open_unpublished(&path)?
+            } else {
+                Journal::open(&path, false)?
+            }
+        }
+        Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+            Journal::open(&path, true)?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    parent.revalidate()?;
+    Ok(child)
+}
+
+#[cfg(not(unix))]
+fn open_preflight_child(_: &Journal, _: bool) -> Result<Journal> {
+    eyre::bail!("durable preflight proofs require Unix filesystem custody")
+}
+
+/// Used only while validating an otherwise unsigned outer journal.
+pub(super) fn validate_preflight_cache(parent: &Journal) -> Result<()> {
+    parent.revalidate()?;
+    let expected = PreflightBinding::expected(parent)?;
+    let child = open_preflight_child(parent, false)?;
+    validate_preflight_contents(&child, &expected)?;
+    parent.revalidate()
+}
+
+/// Invocation-owned verified prefix; disk proofs are reauthenticated on a new invocation.
+/// The child journal is opened only while reading proofs, under the held operation lock.
+pub(super) struct Preflight<'a> {
+    parent: &'a Journal,
+    binding: PreflightBinding,
+    trust: TrustV1,
+    authority: Authority,
+    prefix: ProofPrefix,
+    deadline: Instant,
+}
+
+impl<'a> Preflight<'a> {
+    pub(super) fn new(
+        parent: &'a Journal,
+        trust: &TrustV1,
+        network: NetworkId,
+        deadline: Instant,
+    ) -> Result<Self> {
+        require_operation_budget(deadline, "opening preflight proof cache")?;
+        parent.revalidate()?;
+        let binding = PreflightBinding::expected(parent)?;
+        require(
+            binding.network_id == network && binding.trust_sha256 == digest(&json::to_vec(trust)?),
+            "preflight trust differs from the retained dataspace definition",
+        )?;
+        let child = open_preflight_child(parent, true)?;
+        if !validate_preflight_contents(&child, &binding)? {
+            child.install_json("binding.json", &binding)?;
+        }
+        let authority = trust.authority(network)?;
+        parent.revalidate()?;
+        require_operation_budget(deadline, "opened preflight proof cache")?;
+        Ok(Self {
+            parent,
+            binding,
+            trust: trust.clone(),
+            authority,
+            prefix: ProofPrefix::default(),
+            deadline,
+        })
+    }
+
+    fn revalidate(&self, child: &Journal) -> Result<()> {
+        self.parent.revalidate()?;
+        require(
+            PreflightBinding::expected(self.parent)? == self.binding,
+            "dataspace definition changed while synchronizing preflight proofs",
+        )?;
+        require(
+            validate_preflight_contents(child, &self.binding)?,
+            "preflight proof cache lost its definition/trust binding",
+        )
+    }
+
+    /// Complete bounded proof batches automatically while this invocation has time.
+    fn synchronize_until(
+        &mut self,
+        child: &Journal,
+        tip: &SumeragiFinalityProof,
+        genesis: &SumeragiFinalityProof,
+        batch_size: usize,
+        mut fetch: impl FnMut(
+            NonZeroU64,
+            &mut SumeragiFinalityVerifier,
+        ) -> Result<SumeragiFinalityProof>,
+    ) -> Result<()> {
+        let result: Result<()> = (|| {
+            loop {
+                self.revalidate(child)?;
+                let complete = self.prefix.synchronize(
+                    &self.authority,
+                    child,
+                    tip,
+                    genesis,
+                    self.deadline,
+                    batch_size,
+                    &mut fetch,
+                )?;
+                self.revalidate(child)?;
+                if complete {
+                    return Ok(());
+                }
+                eprintln!(
+                    "[dataspace] preflight finality: verified {}/{}; continuing",
+                    self.prefix.proofs.len(),
+                    tip.block_header.height().get(),
+                );
+            }
+        })();
+        result.wrap_err_with(|| format!(
+            "preflight finality synchronization stopped after retaining {} authenticated heights toward {}; rerun the same command with the same definition, trust and state to resume",
+            self.prefix.proofs.len(), tip.block_header.height().get(),
+        ))
+    }
+
+    /// Prove public verification routes, exact peer identities and live key eligibility.
+    pub(super) fn verify<C: RunContext>(&mut self, context: &C) -> Result<()> {
+        let child = Journal::open(&self.parent.path.join(PREFLIGHT_DIRECTORY), false)?;
+        self.revalidate(&child)?;
+        let challenge: [u8; 32] = rand::random();
+        require(challenge != [0; 32], "random finality challenge is zero")?;
+        let clients = peer_clients(context, &self.trust)?
+            .into_iter()
+            .map(|client| client.with_request_deadline(self.deadline))
+            .collect::<Vec<_>>();
+        let discriminant = context.config().account_chain_discriminant;
+        let tips = read_four_peers(&clients, discriminant, |index, client| {
+            require_operation_budget(self.deadline, "reading preflight finality tip")?;
+            let peer = &self.trust.peers[index];
             let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
                 .ok_or_else(|| eyre!("validator has no durable tip"))?;
             let attestation =
                 client.get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?;
-            validate_attestation(&authority, peer, challenge, &attestation)?;
-            let mut verifier = authority.anchor(&attestation.body.genesis_finality_proof)?;
-            for current in 2..=height.get() {
-                require_operation_budget(deadline, "authenticating preflight finality")?;
-                client.get_next_sumeragi_finality_proof(
-                    NonZeroU64::new(current).unwrap(),
-                    &mut verifier,
-                )?;
-            }
-            // Also authenticate this node's potentially different valid certificate.
-            // The transport's proof is never promoted to finality without the verifier.
-            verifier.verify_same_decision(
-                &attestation.body.finality_proof,
-                &attestation.body.finality_proof,
-            )?;
+            validate_attestation(&self.authority, peer, challenge, &attestation)?;
+            Ok(attestation)
+        })?;
+        let (source_index, source_tip) = tips
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, tip)| tip.body.finality_proof.block_header.height())
+            .ok_or_else(|| eyre!("missing preflight validator tips"))?;
+        self.synchronize_until(
+            &child,
+            &source_tip.body.finality_proof,
+            &source_tip.body.genesis_finality_proof,
+            MAX_NEW_PROOFS,
+            |height, trial| {
+                clients[source_index]
+                    .get_next_sumeragi_finality_proof(height, trial)
+                    .map_err(Into::into)
+            },
+        )?;
+        let verifier = self
+            .prefix
+            .verifier
+            .as_ref()
+            .ok_or_else(|| eyre!("missing preflight verifier"))?;
+        read_four_peers(&clients, discriminant, |index, client| {
+            require_operation_budget(self.deadline, "verifying preflight peer state")?;
+            let attestation = &tips[index];
+            let height = attestation.body.finality_proof.block_header.height().get();
+            let genesis = self
+                .prefix
+                .proofs
+                .get(&1)
+                .ok_or_else(|| eyre!("missing preflight genesis"))?;
+            let tip = self
+                .prefix
+                .proofs
+                .get(&height)
+                .ok_or_else(|| eyre!("peer tip absent from verified preflight prefix"))?;
+            verifier.verify_same_decision(genesis, &attestation.body.genesis_finality_proof)?;
+            verifier.verify_same_decision(tip, &attestation.body.finality_proof)?;
+            read_committee_snapshot(client, &self.authority, height)?;
             client.get_lane_lifecycle_status()?.validate()?;
-            require_operation_budget(deadline, "completed preflight finality")
-        },
+            require_operation_budget(self.deadline, "completed preflight finality")
+        })?;
+        self.revalidate(&child)
+    }
+}
+
+/// Check the exact Committee role at both heights the runtime transition will require.
+/// These operator observations can reject an ineligible parent before signing; the
+/// executor still authenticates eligibility at the actual committed transition height.
+fn validate_committee_snapshot(
+    authority: &Authority,
+    records: &[iroha_data_model::consensus::ConsensusKeyRecord],
+    tip_height: u64,
+) -> Result<()> {
+    use iroha_data_model::consensus::ConsensusKeyRole;
+    require(
+        tip_height > 0,
+        "committee preflight requires a durable parent tip",
     )?;
+    let manifest_activation = tip_height
+        .checked_add(2)
+        .ok_or_else(|| eyre!("committee manifest activation height overflow"))?;
+    let native_activation = tip_height
+        .checked_add(3)
+        .ok_or_else(|| eyre!("native committee activation height overflow"))?;
+    for validator in &authority.validators {
+        for height in [manifest_activation, native_activation] {
+            let eligible = records.iter().any(|record| {
+                record.id.role == ConsensusKeyRole::Committee
+                    && record.public_key == validator.public_key
+                    && record.is_live_at(height, 0, 0)
+                    && record.pop.as_deref() == Some(validator.proof_of_possession.as_slice())
+                    && iroha_crypto::bls_normal_pop_verify(
+                        &record.public_key,
+                        record.pop.as_deref().unwrap_or_default(),
+                    )
+                    .is_ok()
+            });
+            require(
+                eligible,
+                &format!(
+                    "selected parent validator {} has no matching live Committee key and genesis PoP in the bounded operator snapshot at height {height}; the parent operator must register or activate its Committee credential before deployment (a Validator key alone is insufficient; older records may be outside the snapshot)",
+                    validator.public_key
+                ),
+            )?;
+        }
+    }
     Ok(())
+}
+
+fn observe_committee_snapshot(
+    authority: &Authority,
+    authenticated_lower_bound: u64,
+    mut tip: impl FnMut() -> Result<u64>,
+    mut keys: impl FnMut() -> Result<Vec<iroha_data_model::consensus::ConsensusKeyRecord>>,
+) -> Result<()> {
+    let mut lower_bound = authenticated_lower_bound.max(1);
+    // Each request inherits the operation deadline. Only observed head movement
+    // permits another attempt; credential, transport and decoding errors stay final.
+    for _ in 0..3 {
+        let before = tip()?;
+        require(
+            before >= lower_bound,
+            "parent tip regressed behind authenticated Committee preflight evidence",
+        )?;
+        let records = keys()?;
+        let after = tip()?;
+        require(
+            after >= before,
+            "parent tip regressed during Committee credential preflight",
+        )?;
+        if after == before {
+            return validate_committee_snapshot(authority, &records, after);
+        }
+        lower_bound = after;
+    }
+    eyre::bail!(
+        "parent tip kept advancing during Committee credential preflight; retry before signing"
+    )
+}
+
+fn read_committee_snapshot(
+    client: &Client,
+    authority: &Authority,
+    minimum_height: u64,
+) -> Result<()> {
+    observe_committee_snapshot(
+        authority,
+        minimum_height,
+        || Ok(client.get_sumeragi_status()?.committed_height),
+        || client.get_sumeragi_consensus_keys(),
+    )
+}
+
+/// Recheck the primary endpoint immediately before preparing the unsigned catalog phase.
+pub(super) fn committee_preflight(client: &Client, manifest: &ManifestV1) -> Result<()> {
+    let authority = manifest.finality.authority(manifest.network_id)?;
+    read_committee_snapshot(client, &authority, 1)
 }
 
 #[derive(JsonSerialize, JsonDeserialize)]
@@ -294,6 +662,7 @@ struct PeerReceipt {
     attestation: SumeragiFinalityAttestation,
     transactions: Vec<PhaseObservationV1>,
     carriers: Vec<CarrierReceipt>,
+    native_lane: iroha_data_model::sumeragi_lanes::SumeragiLaneStatus,
 }
 
 #[derive(JsonSerialize, JsonDeserialize)]
@@ -313,6 +682,113 @@ struct CompletionV1 {
     network_id: NetworkId,
     challenge: [u8; 32],
     peers: Vec<PeerReceipt>,
+}
+
+fn verify_native_lane(
+    plan: &PlanV1,
+    client: &Client,
+    peer: &PeerId,
+    catalog_height: u64,
+    verified_height: u64,
+) -> Result<PeerRead<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>> {
+    use iroha_data_model::sumeragi_lanes::SumeragiLanePolicy;
+    let parameters = client.get_parameters()?;
+    let policy = parameters
+        .custom
+        .get(&SumeragiLanePolicy::parameter_id())
+        .and_then(SumeragiLanePolicy::from_custom_parameter)
+        .ok_or_else(|| eyre!("deployed dataspace has no native lane policy"))?
+        .map_err(|error| eyre!(error))?;
+    let lanes = client.get_sumeragi_lanes()?;
+    verify_native_lane_snapshot(
+        &plan.manifest,
+        &policy,
+        lanes,
+        peer,
+        catalog_height,
+        verified_height,
+    )
+}
+
+fn verify_native_lane_snapshot(
+    manifest: &ManifestV1,
+    policy: &iroha_data_model::sumeragi_lanes::SumeragiLanePolicy,
+    lanes: Vec<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>,
+    peer: &PeerId,
+    catalog_height: u64,
+    verified_height: u64,
+) -> Result<PeerRead<iroha_data_model::sumeragi_lanes::SumeragiLaneStatus>> {
+    use iroha_data_model::sumeragi_lanes::SumeragiLaneMember;
+    policy.validate()?;
+    let genesis = iroha_genesis::decode_signed_genesis(&hex::decode(
+        &manifest.finality.genesis_signed_wire_hex,
+    )?)?;
+    let committee: Vec<_> = iroha_genesis::signed_genesis_validator_pops(&genesis)?
+        .into_iter()
+        .map(|(key, pop)| SumeragiLaneMember {
+            peer: PeerId::new(key),
+            pop,
+        })
+        .collect();
+    let fixed = policy
+        .fixed_lane(manifest.lane.id)
+        .ok_or_else(|| eyre!("deployed dataspace is absent from native fixed lanes"))?;
+    require(
+        fixed.dataspace == manifest.lane.dataspace_id && fixed.committee == committee,
+        "native lane policy changed the dataspace or selected validator committee",
+    )?;
+    let mut matches = lanes
+        .into_iter()
+        .filter(|lane| lane.record.lane == manifest.lane.id);
+    let Some(lane) = matches.next() else {
+        return Ok(PeerRead::Pending);
+    };
+    require(
+        matches.next().is_none(),
+        "native lane status repeats the deployment lane",
+    )?;
+    let record = &lane.record;
+    require(
+        record.dataspace == manifest.lane.dataspace_id
+            && record.committee == committee
+            && record.created_at == catalog_height
+            && record.active_from
+                == catalog_height
+                    .checked_add(2)
+                    .ok_or_else(|| eyre!("activation height overflow"))?
+            && record.closing.is_none()
+            && record.incarnation != [0; 32]
+            && record.anchor_freshness != 0,
+        "native dataspace lane is closed or differs from its committed activation",
+    )?;
+    // Each incarnation pins its own parameters. Later governance changes the policy
+    // for future lanes, and must not invalidate a still-running existing incarnation.
+    iroha_core::sumeragi::lanes::lane_height_config(record)
+        .map_err(|error| eyre!("invalid committed dataspace lane parameters: {error}"))?;
+    if !record.admits_anchor(verified_height) || lane.instance.is_none() {
+        return Ok(PeerRead::Pending);
+    }
+    let expected_instance = iroha_core::sumeragi::lanes::lane_instance(
+        &iroha_core::sumeragi::crypto::BlsCrypto::new(),
+        &manifest.network_id,
+        &manifest.finality.chain.to_string(),
+        record,
+    );
+    require(
+        lane.instance
+            .as_ref()
+            .is_some_and(|status| status.instance == expected_instance.0),
+        "validator is running another dataspace lane instance",
+    )?;
+    require(
+        lane.instance.as_ref().is_some_and(|status| {
+            !status.is_halted()
+                && status.is_signing()
+                && status.signer.as_ref() == Some(peer.public_key())
+        }),
+        "dataspace lane instance is halted or not signing as its selected validator",
+    )?;
+    Ok(PeerRead::Verified(lane))
 }
 
 fn namespace_matches(plan: &PlanV1, client: &Client) -> Result<()> {
@@ -558,6 +1034,17 @@ fn verify_peer_state(
         transactions.push(observed);
     }
     physical_matches(plan, client)?;
+    let catalog_height = transactions
+        .iter()
+        .find(|observation| observation.phase == "catalog")
+        .and_then(|observation| observation.global_status.as_ref())
+        .and_then(|status| status.status.block_height)
+        .ok_or_else(|| eyre!("catalog transaction has no authenticated applied height"))?;
+    let native_lane =
+        match verify_native_lane(plan, client, &peer.peer_id, catalog_height, height.get())? {
+            PeerRead::Verified(lane) => lane,
+            PeerRead::Pending => return Ok(PeerRead::Pending),
+        };
     require(
         bootstrap_present(plan, client)?,
         "one validator omits the exact bootstrap grant",
@@ -590,6 +1077,7 @@ fn verify_peer_state(
             attestation: after,
             transactions,
             carriers,
+            native_lane,
         },
         wires,
     })))
@@ -918,6 +1406,8 @@ pub(super) fn test_trust() -> TrustV1 {
     let (block, key) = crate::taira_public_reset::deployment_genesis_fixture();
     let validators = iroha_genesis::signed_genesis_validator_pops(&block).unwrap();
     TrustV1 {
+        chain: "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+        account_chain_discriminant: 369,
         genesis_public_key: key.public_key().clone(),
         genesis_signed_wire_hex: hex::encode(block.encode_wire().unwrap()),
         peers: validators

@@ -1,0 +1,35 @@
+# Validator process: fill public bindings from the authenticated network bootstrap.
+# A private dataspace on existing validators uses dataspaces/dpn.toml instead.
+# Private keys belong in data_dir/secrets/, never in this file.
+# Validate with: iroha3d --config node.toml --check-config
+profile = "sora-nexus-v1"
+validators = 4
+data_dir = "./node"
+chain = "REPLACE_WITH_CHAIN_ID"
+public_key = "REPLACE_WITH_VALIDATOR_PUBLIC_KEY"
+trusted_peers = ["REPLACE_WITH_SEED_PEER"]
+trusted_peers_pop = [{ public_key = "REPLACE_WITH_SEED_PUBLIC_KEY", pop_hex = "REPLACE_WITH_SEED_POP" }]
+
+# role defaults to validator; use observer or lane_validator when appropriate.
+# The profile owns the network prefix, policy, limits, and storage layout.
+[network]
+address = "addr:0.0.0.0:1337#BF18"
+public_address = "REPLACE_WITH_PUBLIC_ADDRESS"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[genesis]
+public_key = "REPLACE_WITH_GENESIS_PUBLIC_KEY"
+expected_hash = "REPLACE_WITH_GENESIS_HASH"
+file = "./genesis.nrt"
+
+# Public binding for a global validator's runtime signer. Observers and lane
+# validators omit this table. Its private key stays in the runtime provider.
+[soracloud_runtime.submission.signer]
+handle = "REPLACE_WITH_SIGNER_HANDLE"
+authority = "REPLACE_WITH_SIGNER_AUTHORITY"
+algorithm = "ed25519"
+public_key_hex = "REPLACE_WITH_SIGNER_PUBLIC_KEY_HEX"
+revision = 1
+policy_digest_hex = "REPLACE_WITH_SIGNER_POLICY_DIGEST_HEX"

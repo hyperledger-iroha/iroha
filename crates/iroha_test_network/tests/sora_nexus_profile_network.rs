@@ -463,22 +463,13 @@ impl Seat {
     fn node_file(&self, data_dir: &DataDir, genesis: &toml::Table) -> Result<toml::Table> {
         let mut node = toml::Table::new();
         node.insert("profile".into(), PROFILE.as_str().into());
-        node.insert(
-            "role_overlay".into(),
-            ProfileRole::Validator.as_str().into(),
-        );
-        node.insert("profile_roster_size".into(), toml::Value::Integer(4));
+        node.insert("role".into(), ProfileRole::Validator.as_str().into());
+        node.insert("validators".into(), toml::Value::Integer(4));
         node.insert(
             "data_dir".into(),
             data_dir.root().to_string_lossy().into_owned().into(),
         );
-        for key in [
-            "chain",
-            "chain_discriminant",
-            "public_key",
-            "trusted_peers",
-            "trusted_peers_pop",
-        ] {
+        for key in ["chain", "public_key", "trusted_peers", "trusted_peers_pop"] {
             node.insert(key.into(), self.value(&[key])?);
         }
         let table = |entries: Vec<(&str, toml::Value)>| {

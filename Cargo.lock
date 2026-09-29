@@ -4771,6 +4771,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_deploy",
  "iroha_genesis",
  "iroha_i18n",
  "iroha_model_base",

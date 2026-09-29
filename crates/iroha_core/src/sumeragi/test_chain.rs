@@ -1656,13 +1656,24 @@ pub(super) fn prepare_configured_genesis(
                     drop((valid, overlay));
                     Ok(None)
                 }
-                Err((_, error)) => match *error {
+                Err((rejected, error)) => match *error {
                     crate::block::BlockValidationError::GenesisPolicyMismatch {
                         actual_execution,
                         actual_nexus,
                         ..
                     } if attempt == 0 => Ok(Some((actual_execution, actual_nexus))),
-                    error => Err(format!("original native genesis execution: {error}")),
+                    error => {
+                        let failures = rejected
+                            .execution_outputs()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, output)| output.result().is_err())
+                            .map(|(index, output)| (index, output.result()))
+                            .collect::<Vec<_>>();
+                        Err(format!(
+                            "original native genesis execution: {error}; failed outputs: {failures:?}"
+                        ))
+                    }
                 },
             }
         };
@@ -1776,6 +1787,14 @@ fn build_genesis(
     let builder = parameters
         .into_iter()
         .fold(builder, GenesisBuilder::append_parameter);
+    // Topology registrations are appended to the first transaction by GenesisBuilder.
+    // Dependent ordinary setup (including Committee keys for the same peers) must run
+    // afterwards, matching the native multi-transaction genesis signing path.
+    let builder = if instructions.is_empty() {
+        builder
+    } else {
+        builder.next_transaction()
+    };
     let builder = instructions
         .into_iter()
         .fold(builder, GenesisBuilder::append_instruction);

@@ -356,6 +356,12 @@ required-features = ["zk-tests", "zk-halo2", "halo2-dev-tests"]
 name = "sccp_public_boundary"
 path = "tests/sccp_public_boundary.rs"
 
+# Certified dynamic private-dataspace registration and native execution through public APIs.
+[[test]]
+name = "private_dataspace_runtime"
+path = "tests/private_dataspace_runtime.rs"
+required-features = ["iroha-core-tests"]
+
 [[test]]
 name = "iroha_core_group_01"
 path = "tests/grouped/group_01.rs"

@@ -95,10 +95,9 @@ impl ProfileNode {
             .expect("I105 authority");
         let contents = format!(
             "profile = \"{profile}\"\n\
-             role_overlay = \"validator\"\n\
-             profile_roster_size = 4\n\
+             role = \"validator\"\n\
+             validators = 4\n\
              chain = \"fc56984b-2be7-431d-840e-21514d1883f0\"\n\
-             chain_discriminant = {discriminant}\n\
              data_dir = \"{data_dir}\"\n\
              public_key = \"{VALIDATOR_PUBLIC}\"\n\
              trusted_peers_pop = [{{ public_key = \"{VALIDATOR_PUBLIC}\", pop_hex = \"{VALIDATOR_POP}\" }}]\n\
@@ -120,7 +119,6 @@ impl ProfileNode {
              revision = {revision}\n\
              policy_digest_hex = \"{policy}\"\n",
             profile = self.profile,
-            discriminant = self.chain_discriminant,
             data_dir = self.data_dir.root().display(),
             handle =
                 node_runtime_signer::handle_v1(self.signer.public_key()).expect("Ed25519 handle"),
