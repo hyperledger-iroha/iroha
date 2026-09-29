@@ -44,6 +44,9 @@ pub(super) fn result(
             ordinary_writes_root: ordinary_root,
             kagemusha_top_up_root: None,
             kagemusha_top_up_count: 0,
+            parent_world_state_root: Hash::new(b"fixture parent world"),
+            world_state_root: Hash::new(b"fixture world"),
+            event_commitment: None,
             executed_block_wire_len: len,
             executed_block_wire_hash: hash,
             transaction_input_commitment: block.network_input_merkle_commitment(),
@@ -877,4 +880,13 @@ impl Fixture {
         verifier.verify(&self.first).unwrap();
         verifier.verify(&proof).unwrap()
     }
+}
+
+#[test]
+fn signed_genesis_layout_reaches_the_native_epoch_exactly() {
+    let fixture = Fixture::new();
+    let signed = signed_genesis_consensus_metadata(&fixture.genesis).unwrap();
+    let epoch = genesis_epoch(&fixture.genesis).unwrap();
+    assert_eq!(epoch.da_layout, signed.sumeragi_context.da_layout);
+    assert_eq!(core_epoch(&epoch).unwrap().da_layout, epoch.da_layout);
 }

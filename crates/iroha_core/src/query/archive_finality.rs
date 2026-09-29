@@ -102,7 +102,8 @@ mod tests {
     #[test]
     fn certified_archive_does_not_accept_a_below_quorum_certificate() {
         let mut chain = chain();
-        chain.commit_with(Some(2_000), Vec::new(), Signers::BelowQuorum);
+        chain.commit_at(2_000, Vec::new());
+        chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
         let view = chain.state().view();
         let archive = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
         assert!(archive.block(2).is_err());

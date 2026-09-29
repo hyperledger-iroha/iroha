@@ -55,7 +55,7 @@ def terminal_success(output):
 
 
 def validate_run(path, request, validator_sha):
-    """Validate exactly 47 actual artifacts and unchanged live validator identities."""
+    """Validate exactly 79 actual artifacts and unchanged live validator identities."""
     return shared.validate_run(path, request, validator_sha, kind="happy_day")
 
 

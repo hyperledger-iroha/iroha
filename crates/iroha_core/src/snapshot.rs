@@ -2327,7 +2327,9 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "commit_topology" | "prev_commit_topology" | "native_execution_tip"
         ),
-        CanonicalWsvPath::World => false,
+        // A derived commitment over exactly the World values this identity binds; publication
+        // folds it after every deterministic tail write, and the next result certifies its root.
+        CanonicalWsvPath::World => key == "state_accumulator",
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -2708,10 +2710,12 @@ fn verify_snapshot_restore_preflight(
     verify_snapshot_root_identity(input, expected_chain, expected_network)?;
     let height = block_hash_count
         .ok_or_else(|| TryReadError::Serialization(json::Error::missing_field("block_hashes")))?;
-    // TODO(S9): accelerated snapshot recovery needs authenticated full-World
-    // provenance. Native R commits witnessed writes; it cannot authorize these
-    // decoded balances, custody, or pending credentials. Strict startup rebuilds
-    // them by replaying original signed genesis and every certified Kura block.
+    // TODO(S9): accelerated snapshot recovery must recompute the restored World's state
+    // accumulator by a cold capture and match it to the certified parent World state root of
+    // the successor block (with the native tip, CommitQC and retained headers, and separately
+    // authenticated State-level fields) before these decoded balances, custody or pending
+    // credentials are used. Until then Strict startup rebuilds them by replaying original
+    // signed genesis and every certified Kura block.
     if height > 0 {
         return Err(TryReadError::NativeExecutionReplayRequired);
     }
@@ -4605,10 +4609,12 @@ fn ensure_snapshot_commit_evidence(
             "durable native certificate differs from captured execution".into(),
         ));
     }
-    // The signed bytes are a local cache of one original State generation. R binds
-    // witnessed writes, not the full serialized World. Original replay therefore
-    // reproduces the complete World before consensus starts. TODO(S9): full-World
-    // provenance must authorize any accelerated restore; publication here does not.
+    // The signed bytes are a local cache of one original State generation; a local signature
+    // authenticates bytes, not execution. R binds the complete World state (the successor's
+    // parent World state root), but no accelerated restore checks a snapshot against it yet,
+    // so original replay reproduces the complete World before consensus starts. TODO(S9):
+    // accelerated restore verifies the World against that certified root; publication here
+    // authorizes nothing.
     Ok(())
 }
 
@@ -4996,6 +5002,10 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     // ledger checkpoints.
     state.remove("commit_topology");
     state.remove("prev_commit_topology");
+    // The World state accumulator is a derived commitment over the World values bound here.
+    if let Some(world) = state.get_mut("world").and_then(json::Value::as_object_mut) {
+        world.remove("state_accumulator");
+    }
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(test)]

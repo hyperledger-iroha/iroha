@@ -430,6 +430,7 @@ mod tests {
             .collect::<Vec<_>>();
         committee.sort();
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 4,
             max_merge_blocks: 8,
             stall_window: 1000,

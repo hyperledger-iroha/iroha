@@ -912,7 +912,7 @@ def require_parliament_beacon_requirement(beacon: str) -> None:
     # TODO(N1): the previous consensus runtime's `v2_beacon.rs`, `wire::HeightContext`
     # and the `State::apply_without_execution_inner` section are deleted, so this
     # check and its callers fail. Rebind the Parliament beacon-pulse requirement and
-    # the other runtime sections to the Sumeragi node driver's beacon owner.
+    # the other runtime sections to `crates/iroha_core/src/sumeragi/epoch_beacon.rs`.
     path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
     def compact(text: str) -> str:
         return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))
@@ -4582,7 +4582,7 @@ def main() -> int:
     formal_job = section(
         workflow,
         "  formal_models:\n",
-        "\n  nexus_cross_dataspace_localnet:\n",
+        "\n  sora_parliament_lifecycle:\n",
         workflow_path,
     )
     require_all(

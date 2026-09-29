@@ -108,6 +108,29 @@ pub(in crate::state) trait OriginalControlSource {
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError>;
 }
 
+/// Account for one store before reserving the complete World control inventory.
+/// Per-store iterators must leave the stack before acquisition starts; a macro
+/// expansion of every iterator otherwise retains all of them in the World frame.
+#[inline(never)]
+pub(in crate::state) fn add_original_control_demand<S: OriginalControlSource>(
+    source: &S,
+    demand: &mut usize,
+) -> Result<(), AdmittedStorageError> {
+    for layout in source
+        .generation_layouts()
+        .into_iter()
+        .chain([source.successor_layout()])
+        .flatten()
+    {
+        *demand = demand
+            .checked_add(layout.size())
+            .ok_or(AdmittedStorageError::Allocation(
+                mv::allocation::AllocationRefusal::DemandOverflow,
+            ))?;
+    }
+    Ok(())
+}
+
 /// Fill one original inert slot without returning its large acquisition value
 /// through the complete World census frame. No physical acquisition occurs here.
 #[inline(never)]

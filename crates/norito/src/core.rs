@@ -30,6 +30,9 @@ use std::{
     },
 };
 mod encoder;
+#[cfg(test)]
+#[path = "core/encoder_tests.rs"]
+mod encoder_tests;
 pub use encoder::Encoder;
 mod encode_frames;
 mod encode_writers;
@@ -3584,7 +3587,7 @@ fn write_counted_payload(
     if writer.count_measured_bytes(measured_len)? {
         Ok(())
     } else {
-        serialize_to_writer_exact(value, writer, measured_len)
+        writer.with_exact_length(measured_len, |writer| value.serialize(writer))
     }
 }
 /// Serialize a value by appending directly to a byte vector.

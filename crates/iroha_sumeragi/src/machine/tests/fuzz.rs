@@ -3,9 +3,7 @@
 //! §8.4 bounds after every event, and a `Tick` must consume every due deadline.
 
 use super::*;
-use crate::message::{
-    BlockRequest, BlockResponse, Echo, Status, SyncEntry, SyncRequest, SyncResponse,
-};
+use crate::message::{Echo, PayloadRequest, Status, SyncEntry, SyncRequest, SyncResponse};
 
 /// xorshift64* (no external crates).
 struct Rng(u64);
@@ -47,7 +45,7 @@ fn member(h: &H, rng: &mut Rng) -> ValidatorIndex {
 }
 
 /// A genuine (harness-signed) message for the current round, or a certificate that commits.
-fn genuine(h: &H, rng: &mut Rng) -> WireMessage {
+fn genuine(h: &mut H, rng: &mut Rng) -> WireMessage {
     let view = view_near(h, rng);
     let small_view = view.min(h.core.view + 1);
     let payload = [u8::try_from(rng.below(4)).unwrap()];
@@ -59,9 +57,9 @@ fn genuine(h: &H, rng: &mut Rng) -> WireMessage {
                 let entries: Vec<_> = signers.iter().map(|s| (*s, None)).collect();
                 h.tc(small_view - 1, &entries)
             });
-            let mut p = h.proposal(small_view, &block, justify);
+            let p = h.proposal(small_view, &block, justify);
             if rng.chance(20) {
-                p.payload = None;
+                h.withheld_rows.insert(h.bh(&block));
             }
             WireMessage::Proposal(Box::new(p))
         }
@@ -135,16 +133,16 @@ fn service(h: &H, rng: &mut Rng) -> WireMessage {
         1 => WireMessage::SyncResponse(SyncResponse {
             instance: I,
             blocks: vec![SyncEntry {
-                block: block.clone(),
+                manifest: manifest(&block),
                 commit_qc: h.qc_q(VoteKind::Commit, 0, &block),
             }],
         }),
-        2 => WireMessage::BlockRequest(BlockRequest {
+        2 => WireMessage::PayloadRequest(PayloadRequest {
             instance: I,
             height: rng.below(10),
             block_hash: h.bh(&block),
         }),
-        3 => WireMessage::BlockResponse(BlockResponse { instance: I, block }),
+        3 => WireMessage::PayloadManifest(manifest(&block)),
         _ => {
             // A certificate of a far height (sync hint) or a committed one (monitor).
             let mut qc = h.qc_q(VoteKind::Commit, 0, &block);
@@ -173,7 +171,7 @@ fn mutate(msg: &WireMessage, rng: &mut Rng) -> Option<WireMessage> {
 }
 
 #[allow(clippy::too_many_lines)] // one arm per event kind
-fn step(h: &mut H, rng: &mut Rng, stored: &mut Vec<Block>) {
+fn step(h: &mut H, rng: &mut Rng, stored: &mut Vec<AvailableBody>) {
     let event = match rng.below(100) {
         0..=29 => {
             let msg = genuine(h, rng);
@@ -242,7 +240,7 @@ fn step(h: &mut H, rng: &mut Rng, stored: &mut Vec<Block>) {
             } else {
                 Event::PayloadBuilt {
                     req,
-                    payload: vec![1; usize::try_from(rng.below(64)).unwrap()],
+                    payload: h.payload(&vec![1; usize::try_from(rng.below(64)).unwrap()]),
                     attest: false,
                 }
             }

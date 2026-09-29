@@ -24,6 +24,8 @@ sim = []
 mutation-testing = []
 
 [dependencies]
+iroha_primitives = { workspace = true, default-features = false, features = ["simd-accel"] }
+iroha_schema = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 # Shared original-pool custody of canonical application-result witnesses.

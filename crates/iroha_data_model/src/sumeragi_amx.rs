@@ -24,6 +24,7 @@
 //! Nothing in this module grants authority by decoding: a record is trusted only after a tracker
 //! verified its proof against an independently registered trust anchor.
 
+mod participant;
 mod proof;
 mod state;
 mod tracker;
@@ -33,6 +34,9 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub use participant::{
+    AmxEscrow, AmxHeldDecisionV1, AmxParticipantStateV1, AmxPreparedEntryV1, AmxSettleOutcome,
+};
 pub use proof::{
     AmxCertifiedBlockV1, AmxHandoffProofV1, AmxRecordProofV1, AmxWriteProofV1,
     MAX_AMX_HEADER_BYTES, MAX_AMX_QC_BYTES, write_set_root,
@@ -321,6 +325,7 @@ pub enum AmxVoteV1 {
 /// `Prepared{x, Di, Yes(effects_hash) | No}` (§11.3), recorded by participant `Di`.
 #[derive(
     Clone,
+    Copy,
     Debug,
     PartialEq,
     Eq,
@@ -365,6 +370,7 @@ pub struct AmxPreparedV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[norito(tag = "outcome", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_amx::AmxOutcomeV1")]
 pub enum AmxOutcomeV1 {

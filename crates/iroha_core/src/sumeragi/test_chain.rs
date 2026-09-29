@@ -12,6 +12,14 @@
 //! block time with a `Log` transaction of its own clock account when the block's transactions do
 //! not.
 
+#[path = "test_chain/lane_authority.rs"]
+mod lane_authority;
+/// Independent committed-State authority used by certified lane fixtures.
+pub use lane_authority::TestLaneStoreAuthorities;
+#[path = "test_chain/availability.rs"]
+mod availability;
+mod local_certificate;
+
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
@@ -34,14 +42,16 @@ use iroha_model_base::{chain::ChainId, peer::PeerId};
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi::{
     api::ExecOutcome,
+    availability::AvailableBody,
     crypto::{AttestOutcome, Attestor as _, Signer as _, form_qc},
-    message::{Block, BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
+    message::{BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
     preimage::payload_hash,
     types::{Committee, Hash32},
 };
 use mv::storage::StorageReadOnly;
 
 use super::{
+    availability_schedule::AvailabilitySchedule,
     block_store::{KuraBlockStore, Staging},
     certified_chain::{CommittedBlock, committed_block},
     crypto::{BlsCrypto, KeyPairSigner},
@@ -230,6 +240,7 @@ pub struct CertifiedTestChain {
     executor: StateExecutor,
     events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
     blocks: KuraBlockStore,
+    availability: Arc<dyn AvailabilitySchedule>,
     signers: Vec<KeyPairSigner>,
     committee: Committee,
     validators: Vec<(PeerId, Vec<u8>)>,
@@ -511,6 +522,15 @@ impl CertifiedTestChain {
             )
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
+        let instance = global_instance(&genesis, &chain_id.to_string());
+        let availability: Arc<dyn AvailabilitySchedule> = Arc::new(
+            super::runtime_availability::NativeGlobalAvailability::new(
+                Arc::clone(&state),
+                instance,
+                Arc::clone(&crypto),
+            )
+            .map_err(|error| invalid(format!("original availability authority: {error}")))?,
+        );
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             Arc::clone(&kura),
@@ -518,6 +538,11 @@ impl CertifiedTestChain {
             GENESIS_HEIGHT,
             staging.clone(),
             state.ivm_execution_budget(),
+            Arc::clone(&availability),
+            Arc::new(super::attestation::NativePastaVerifier::new(
+                instance,
+                *state.network_id_ref(),
+            )),
         );
         let (events, event_receiver) = tokio::sync::broadcast::channel(4096);
         let executor = StateExecutor::spawn(ExecutorContext {
@@ -555,7 +580,6 @@ impl CertifiedTestChain {
                 .collect(),
         )
         .expect("fixture committee");
-        let instance = global_instance(&genesis, &chain_id.to_string());
         let authority = Arc::new(
             crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
                 generation,
@@ -591,6 +615,7 @@ impl CertifiedTestChain {
             executor,
             events: event_receiver,
             blocks,
+            availability,
             signers,
             committee,
             validators,
@@ -634,11 +659,11 @@ impl CertifiedTestChain {
             self.kura
                 .store_block(Arc::clone(original.committed().block()))
                 .map_err(|error| error.to_string())?;
-            let entry = self
-                .blocks
-                .entry(height)
+            let (body, commit_qc) = self
+                .committed_body(height)
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("original replay frame unavailable at {height}"))?;
-            self.executor.replay(&entry.block, &entry.commit_qc)?;
+            self.executor.replay(&body, &commit_qc)?;
             self.tip = (
                 height,
                 original.committed().core_hash(),
@@ -954,7 +979,8 @@ impl CertifiedTestChain {
         let transaction_parameters = view.world().parameters().transaction();
         // The leader merges the lane blocks its lane stores have committed; they may raise the
         // block time (the merge time floor).
-        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height);
+        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height)
+            .expect("original lane store is available while building fixture proposal");
         drop(view);
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         let parent_time = parent.header().creation_time();
@@ -1133,16 +1159,14 @@ impl CertifiedTestChain {
             parent_hash: self.tip.1,
             parent_result: self.tip.2,
             payload_hash: payload_hash(&*self.crypto, &payload_bytes),
+            availability_digest: Hash32::ZERO,
             payload_len: u32::try_from(payload_bytes.len()).expect("payload fits"),
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: attestation_required(&proposal)
                 || height == scheduled.epoch.authorization.last_height,
         };
-        let block = Block {
-            header,
-            payload: payload_bytes,
-        };
+        let block = self.author_payload(header, payload_bytes);
         let block_hash = block.hash(&*self.crypto);
         let result = match self.executor.execute(&block, &block_hash) {
             Some(ExecOutcome::Valid(result)) => result,
@@ -1191,17 +1215,11 @@ impl CertifiedTestChain {
         };
         let witness = if attest {
             if height <= self.tip.0 {
-                Some(
-                    ResultWitness::from_untrusted(
-                        self.committed(height)
-                            .block()
-                            .commit_certificate()
-                            .unwrap()
-                            .result_preimage()
-                            .to_vec(),
-                    )
-                    .unwrap(),
-                )
+                self.committed_body(height)
+                    .expect("restore original certified witness into this State pool")
+                    .expect("original committed body exists")
+                    .1
+                    .attestation_witness
             } else {
                 let statement = iroha_sumeragi::preimage::att_preimage(
                     &self.instance,
@@ -1428,7 +1446,7 @@ impl CertifiedTestChain {
 /// use the production path. Dropping an unpublished owner discards only that speculative work.
 pub struct PendingTestExecution<'chain> {
     chain: &'chain mut CertifiedTestChain,
-    block: Block,
+    block: AvailableBody,
     block_hash: Hash32,
     result: Hash32,
     certificate: Option<(Signers, Qc)>,
@@ -1491,10 +1509,10 @@ impl PendingTestExecution<'_> {
             }
         } else {
             let mut qc = self.chain.commit_qc(
-                self.block.header.height,
+                self.block.header().height,
                 self.block_hash,
                 self.result,
-                self.block.header.attest,
+                self.block.header().attest,
                 signers,
             );
             qc.admit_attestation_witness(&self.chain.state.ivm_execution_budget())
@@ -1545,8 +1563,8 @@ impl PendingTestExecution<'_> {
             .executor
             .commit(&self.block, qc)
             .map_err(|error| error.to_string())?;
-        self.chain.tip = (self.block.header.height, self.block_hash, self.result);
-        let published = self.chain.committed(self.block.header.height);
+        self.chain.tip = (self.block.header().height, self.block_hash, self.result);
+        let published = self.chain.committed(self.block.header().height);
         self.published = Some(published.clone());
         Ok(published)
     }
@@ -1555,7 +1573,7 @@ impl PendingTestExecution<'_> {
 impl Drop for PendingTestExecution<'_> {
     fn drop(&mut self) {
         if self.published.is_none() {
-            self.chain.executor.discard(self.block.header.height, &[]);
+            self.chain.executor.discard(self.block.header().height, &[]);
         }
     }
 }
@@ -2089,6 +2107,11 @@ mod tests {
     mod native_publication_tests {
         use super::*;
         include!("test_chain/native_publication_tests.rs");
+    }
+
+    mod world_state_tests {
+        use super::*;
+        include!("test_chain/world_state_tests.rs");
     }
 
     #[test]

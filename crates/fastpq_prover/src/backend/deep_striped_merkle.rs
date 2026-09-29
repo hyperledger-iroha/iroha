@@ -668,7 +668,7 @@ fn replay_stripes() -> usize {
 
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "`map_err` adapter; the sibling test module passes it point-free"
+    reason = "`map_err` adapter; this module and its `tests` child pass it point-free"
 )]
 fn binding_error(error: super::deep_binding::BindingError) -> Error {
     Error::InvalidTraceShape {

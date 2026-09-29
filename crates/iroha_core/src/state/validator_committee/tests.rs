@@ -532,6 +532,7 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
     // This component fixture exercises the native boundary reducer with the exact original
     // credentials. It does not claim a certified chain or executed transition.
     let current = ValidatorEpochContextV1 {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
         network_id: fixture.authorization.network_id,
         mode: ConsensusMode::Npos,

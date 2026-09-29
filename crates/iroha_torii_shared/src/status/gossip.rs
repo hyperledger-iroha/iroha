@@ -5,7 +5,9 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 /// Configured caps and frame limits for transaction gossip.
 #[derive(
     Clone,
+    Copy,
     Debug,
+    Default,
     IntoSchema,
     NoritoSerialize,
     NoritoDeserialize,
@@ -24,7 +26,7 @@ pub struct TxGossipCaps {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub public_target_cap: Option<u64>,
-    /// Optional cap on restricted gossip targets (0 = commit topology).
+    /// Optional cap on restricted gossip targets (None = all authorized native lane validators).
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub restricted_target_cap: Option<u64>,
@@ -39,25 +41,6 @@ pub struct TxGossipCaps {
     /// Whether gossip for unknown dataspaces is dropped instead of routed via the restricted plane.
     #[norito(default)]
     pub drop_unknown_dataspace: bool,
-    /// Fallback policy when restricted targets are unavailable (`drop` or `public_overlay`).
-    #[norito(default)]
-    pub restricted_fallback: String,
-    /// Policy for restricted payloads when only the public overlay is available (`refuse` or `forward`).
-    pub restricted_public_policy: String,
-}
-impl Default for TxGossipCaps {
-    fn default() -> Self {
-        Self {
-            frame_cap_bytes: 0,
-            public_target_cap: None,
-            restricted_target_cap: None,
-            public_target_reshuffle_ms: None,
-            restricted_target_reshuffle_ms: None,
-            drop_unknown_dataspace: false,
-            restricted_fallback: "drop".to_string(),
-            restricted_public_policy: "refuse".to_string(),
-        }
-    }
 }
 /// Snapshot of the most recent gossip target selection for a dataspace.
 #[derive(
@@ -96,13 +79,6 @@ pub struct TxGossipStatus {
     /// Outcome of the latest attempt (`sent` or `dropped`).
     #[norito(default)]
     pub outcome: String,
-    /// Whether restricted fallback was considered/used for this attempt.
-    #[norito(default)]
-    pub fallback_used: bool,
-    /// Fallback surface used (e.g., `public_overlay`) when `fallback_used` is true.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub fallback_surface: Option<String>,
     /// Drop reason when the batch was refused.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]

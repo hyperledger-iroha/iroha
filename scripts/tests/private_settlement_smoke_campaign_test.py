@@ -150,29 +150,47 @@ def continuous(peer: int, bundle: bytes, *, baseline_height: int = 302,
 
 
 def finality(network: object, identities: list[str], *, height: int = 306) -> dict:
-    """Construct synthetic finality structure; signatures deliberately have no cryptographic validity."""
-    block_hash = hash_literal(777)
-    context = {name: None for name in ("next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap")}
-    context.update(network_id=network, protocol_version=4, height=height, epoch=1,
-        kagemusha_mint_finality_authorization={"synthetic": True}, kagemusha_mint_finality_authority={"synthetic": True},
-        epoch_end_height=1000, mode={"mode": "permissioned", "details": None},
-        roster=[{"validator": peer, "power": 1} for peer in identities[:4]],
-        quorum={"min_signers": 3, "total_power": 4}, nexus_amx_context_hash=hash_literal(778),
-        execution_policy_hash=hash_literal(779), leader_seed=[1] * 32,
-        da_layout={"encoding": {"encoding": "reed_solomon16", "details": None}, "chunk_size_bytes": 262144,
-                   "data_shards": 4, "parity_shards": 2, "max_payload_size_bytes": 16777216, "max_chunk_count": 1024})
-    subject = {"block_hash": block_hash}
-    round_value = {"context_id": [hash_literal(780)], "height": height, "view": 0}
-    qc = {"round": round_value, "proposal_round": copy.deepcopy(round_value),
-          "phase": {"phase": "commit", "details": None}, "subject": subject,
-          "execution_commitment": {"synthetic": True}, "signers": [0, 1, 2], "aggregate_signature": [1] * 96}
-    header = {name: None for name in ("prev_block_hash", "merkle_root", "result_merkle_root", "da_proof_policies_hash",
-        "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash", "confidential_features",
-        "execution_context_hash")}
-    header.update(height=height, creation_time_ms=123456, view_change_index=0)
-    return {"version": 2, "block_header": header, "finality_artifact": {"format_version": 4, "protocol_version": 4,
-        "height": height, "height_context": context, "subject": subject, "block_hash": block_hash,
-        "commit_qc": qc, "validator_set_pops": [[1] * 96 for _ in range(4)]}}
+    """Current native schema; the synthetic wire and PoPs have no cryptographic validity."""
+    header = {name: None for name in ("merkle_root", "da_proof_policies_hash", "da_commitments_hash",
+        "da_pin_intents_hash", "npos_effects_hash", "confidential_features", "execution_context_hash",
+        "global_beacon_pulse_hash")}
+    header.update(height=height, prev_block_hash=hash_literal(777), creation_time_ms=123456, view_change_index=0)
+    return {"block_header": header, "block_wire": [1, 2, 3], "committee": [
+        {"public_key": peer, "proof_of_possession": [1] * 96} for peer in identities[:4]]}
+
+
+def transport(peer: int, proof: dict, network: object, inventory: list[dict]) -> tuple[dict, bytes]:
+    """Build explicitly synthetic complete prefixes with actual offset/count/PID bindings."""
+    process = inventory[peer]
+    source = {"instance": "1" * 64, "height": proof["block_header"]["height"], "block": "2" * 64}
+    body = {"availability_digest": "3" * 64, "payload_hash": "4" * 64, "payload_bytes": 16,
+            "epoch": 1, "context": "5" * 64, "proposer": 0}
+    author = peer == 0
+    log = b'{"unrelated":"prefix with UTF-8: \xc3\xa9"}\n'
+    selected = []
+    def append(extra):
+        nonlocal log
+        line = M.canonical({"fields": {**source, "process_id": process["pid"], **extra}}) + b"\n"
+        selected.append({"offset": len(log), "line": line.decode()})
+        log += line
+    if not author:
+        for index in range(4):
+            append({"message": "sumeragi payload row admitted", "availability_digest": body["availability_digest"],
+                    "acquisition": 1, "index": index, "from": M.consensus_key(inventory[0]["peer_id"])})
+    append({"message": "sumeragi payload custody verified", **body,
+            "acquisition": 0 if author else 1, "accepted_rows": 0 if author else 4,
+            "origin": "author" if author else "network_rows"})
+    append({"message": "sumeragi block applied", "result": "6" * 64})
+    record = {"peer_index": peer, "peer": process["peer_id"], "pid": process["pid"], "run_id": 1,
+        "stdout_path": f"peer_{peer:02}/run-1-stdout.log", "log_artifact": f"finality-before-transport-{peer:02}.log",
+        "log_sha256": M.sha(log), "log_bytes": len(log), "network_id": network,
+        "proof_sha256": M.sha(M.canonical(proof)), "result": "6" * 64, **source, **body,
+        "local_key": M.consensus_key(process["peer_id"]),
+        "peer_keys": sorted(M.consensus_key(row["peer_id"]) for row in inventory),
+        "data_shards": 4, "parity_shards": 2, "stripes": 1,
+        "admitted_rows": 0 if author else 4, "local_author": author,
+        "provenance": M.TRANSPORT_PROVENANCE, "audit_lines": selected}
+    return record, log
 
 
 def request(index: int) -> dict:
@@ -186,9 +204,9 @@ def request(index: int) -> dict:
 def evidence_fixture(index: int, validator_sha: str, *, authority_height: int = 302,
                      expiry_height: int = 1000, readiness_height: int = 301,
                      finalized_height: int = 306) -> tuple[dict, dict]:
-    """Build the 80-file contract entirely from explicitly synthetic test values."""
+    """Build the 112-file contract entirely from explicitly synthetic test values."""
     req = request(index)
-    identities = [f"synthetic-validator-{index}-{peer:02}" for peer in range(16)]
+    identities = [f"ea0130{index * 16 + peer + 1:096X}" for peer in range(16)]
     network = [hash_literal(900 + 2 * index)]
     manifest = {"version": 1, "bundle_id": hash_literal(1000 + 2 * index), "network_id": network,
                 "authority_context_height": authority_height, "expiry_height": expiry_height, "legs": []}
@@ -237,6 +255,9 @@ def evidence_fixture(index: int, validator_sha: str, *, authority_height: int = 
                                                                baseline_height=authority_height, finalized_height=finalized_height)
         for phase in ("before", "after"):
             evidence[f"finality-{phase}-{peer:02}.json"] = finality(network, identities, height=finalized_height)
+        record, log = transport(peer, evidence[f"finality-before-{peer:02}.json"], network, inventory)
+        evidence[f"finality-before-transport-{peer:02}.json"] = record
+        evidence[f"finality-before-transport-{peer:02}.log"] = log
     result = {"version": 1, "protocol": M.PROTOCOL, "kind": "smoke", "request": req,
         "request_sha256": M.sha(M.canonical(req)+b"\n"), "network_id": network, "participants": 3,
         "processes": 16, "restarted": 16, "activation_height": readiness_height, "authority_context_height": authority_height,
@@ -256,7 +277,9 @@ def store_evidence(directory: Path, evidence: dict, result: dict) -> None:
     (directory / "evidence").mkdir(mode=0o700, exist_ok=True)
     result["artifacts"] = []
     for name, value in sorted(evidence.items()):
-        put(directory / "evidence" / name, value)
+        target = directory / "evidence" / name
+        target.write_bytes(value if isinstance(value, bytes) else M.canonical(value))
+        target.chmod(0o600)
         raw = (directory / "evidence" / name).read_bytes()
         result["artifacts"].append({"name": name, "bytes": len(raw), "sha256": M.sha(raw)})
     put(directory / "request.json", result["request"])
@@ -280,7 +303,7 @@ class SmokeEvidenceTests(unittest.TestCase):
 
     def test_complete_synthetic_contract_and_live_staged_observation(self) -> None:
         self.assertEqual(self.validate()["continuous_checks"], 64)
-        self.assertEqual(len(M.EVIDENCE_NAMES), 80)
+        self.assertEqual(len(M.EVIDENCE_NAMES), 112)
 
     def test_local_reconciliation_preserves_atomic_ledger_and_requires_terminal_cleanup(self) -> None:
         bundle = bytes(32)
@@ -309,14 +332,14 @@ class SmokeEvidenceTests(unittest.TestCase):
                 row["configuration_sha256"] = "9" * 64
         self.assertEqual(self.validate()["continuous_checks"], 64)
 
-    def test_genesis_readiness_height_one_keeps_all_eighty_artifacts_bound(self) -> None:
+    def test_genesis_readiness_height_one_keeps_all_112_artifacts_bound(self) -> None:
         self.evidence, self.result = evidence_fixture(
             0, self.sha, readiness_height=1, authority_height=4, finalized_height=8)
         summary = self.validate()
         self.assertEqual(M.validate_smoke_result_heights(self.result), (1, 4, 8))
         self.assertEqual(summary["finalized_height"], 8)
         self.assertEqual(summary["continuous_checks"], 64)
-        self.assertEqual(len(self.result["artifacts"]), 80)
+        self.assertEqual(len(self.result["artifacts"]), 112)
         self.assertEqual({row["name"] for row in self.result["artifacts"]}, M.EVIDENCE_NAMES)
 
     def test_low_height_readiness_type_and_strict_authority_order_fail_closed(self) -> None:
@@ -443,14 +466,15 @@ class SmokeEvidenceTests(unittest.TestCase):
             with self.assertRaises(M.release_runner.RunnerError):
                 self.validate()
 
-    def test_finality_signature_presence_height_roster_rs16_and_consistency(self) -> None:
+    def test_finality_wire_pop_height_roster_and_consistency(self) -> None:
         mutations = (
-            lambda p: p["finality_artifact"]["commit_qc"].update(aggregate_signature=[]),
-            lambda p: p["finality_artifact"]["height_context"]["roster"][0].update(validator="synthetic-substitution"),
-            lambda p: p["finality_artifact"]["height_context"]["da_layout"].update(data_shards=3),
+            lambda p: p["committee"][0].update(proof_of_possession=[]),
+            lambda p: p["committee"][0].update(public_key=f"ea0130{999:096X}"),
+            lambda p: p.update(block_wire=[]),
             lambda p: p["block_header"].update(height=307),
             lambda p: p["block_header"].update(creation_time_ms=123457),
-            lambda p: p["finality_artifact"]["commit_qc"].update(signers=[0, 0, 1]),
+            lambda p: p["committee"].__setitem__(1, copy.deepcopy(p["committee"][0])),
+            lambda p: p.update(block_wire=[True]),
         )
         for mutate in mutations:
             self.evidence, self.result = evidence_fixture(0, self.sha)
@@ -458,32 +482,128 @@ class SmokeEvidenceTests(unittest.TestCase):
             with self.assertRaises(M.CampaignError):
                 self.validate()
 
-    def test_finality_rejects_retired_authority_context_fields(self) -> None:
-        for canonical, retired in (
-            ("kagemusha_mint_finality_authorization", "kagemusha_mint_finality_epoch_id"),
-            ("kagemusha_mint_finality_authority", "kagemusha_mint_finality_epoch_roster"),
-        ):
-            with self.subTest(field=retired):
+    def test_finality_rejects_retired_layouts_and_context_fields(self) -> None:
+        for field, value in (("version", 2), ("finality_artifact", {}), ("height_context", {})):
+            with self.subTest(field=field):
                 self.evidence, self.result = evidence_fixture(0, self.sha)
-                context = self.evidence["finality-after-15.json"]["finality_artifact"]["height_context"]
-                context[retired] = context.pop(canonical)
-                with self.assertRaisesRegex(M.release_runner.RunnerError, "height context fields mismatch"):
-
+                self.evidence["finality-after-15.json"][field] = value
+                with self.assertRaisesRegex(M.release_runner.RunnerError, "finality proof fields mismatch"):
                     self.validate()
+        self.evidence, self.result = evidence_fixture(0, self.sha)
+        self.evidence["finality-after-15.json"]["block_header"]["result_merkle_root"] = None
+        with self.assertRaisesRegex(M.release_runner.RunnerError, "block header fields mismatch"):
+            self.validate()
 
-    def test_semantic_finality_allows_equivalent_parent_qc_signer_subsets(self) -> None:
-        parent = copy.deepcopy(self.evidence["finality-before-00.json"]["finality_artifact"]["commit_qc"])
-        for name, proof in self.evidence.items():
-            if name.startswith("finality-"):
-                proof["finality_artifact"]["height_context"]["parent_commit_qc"] = copy.deepcopy(parent)
-        alternate = self.evidence["finality-after-15.json"]["finality_artifact"]["height_context"]["parent_commit_qc"]
-        alternate["signers"] = [1, 2, 3]
-        alternate["aggregate_signature"] = [2] * 96
-        alternate["round"]["view"] = alternate["proposal_round"]["view"] = 1
+    def test_equivalent_verified_carriers_do_not_require_identical_qc_bytes(self) -> None:
+        # Python deliberately does not interpret or verify the opaque Norito QC.
+        # Rust CertifiedPrefix must authenticate this equivalence before retention.
+        alternate = self.evidence["finality-after-15.json"]
+        alternate["block_wire"] = [2, 3, 4]
         self.validate()
-        alternate["round"]["context_id"] = [hash_literal(999)]
+        alternate["block_header"]["prev_block_hash"] = hash_literal(999)
         with self.assertRaisesRegex(M.CampaignError, "disagree"):
             self.validate()
+
+    def test_transport_metadata_and_source_binding_fail_after_outer_rehash(self) -> None:
+        mutations = {
+            "peer": lambda r: r.update(peer=f"ea0130{999:096X}"),
+            "peer_index": lambda r: r.update(peer_index=14),
+            "pid": lambda r: r.update(pid=999),
+            "run": lambda r: r.update(run_id=2),
+            "path": lambda r: r.update(stdout_path="../peer/run-1-stdout.log"),
+            "log artifact": lambda r: r.update(log_artifact="finality-before-transport-14.log"),
+            "log hash": lambda r: r.update(log_sha256="9" * 64),
+            "log size": lambda r: r.update(log_bytes=r["log_bytes"] + 1),
+            "proof hash": lambda r: r.update(proof_sha256="9" * 64),
+            "network": lambda r: r.update(network_id=[hash_literal(99)]),
+            "local key": lambda r: r.update(local_key="9" * 96),
+            "peers": lambda r: r["peer_keys"].reverse(),
+            "author": lambda r: r.update(local_author=True),
+            "provenance": lambda r: r.update(provenance="cryptographic remote transport proof"),
+            "count": lambda r: r.update(admitted_rows=3),
+            "geometry": lambda r: r.update(data_shards=3),
+            "stripe": lambda r: r.update(stripes=2),
+            "epoch": lambda r: r.update(epoch=2),
+            "context": lambda r: r.update(context="9" * 64),
+            "result": lambda r: r.update(result="9" * 64),
+            "proposer": lambda r: r.update(proposer=1),
+            "payload": lambda r: r.update(payload_hash="9" * 64),
+            "payload bytes": lambda r: r.update(payload_bytes=17),
+            "offset": lambda r: r["audit_lines"][0].update(offset=0),
+            "omission": lambda r: r["audit_lines"].pop(0),
+            "reorder": lambda r: r["audit_lines"].reverse(),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(mutation=label):
+                self.evidence, self.result = evidence_fixture(0, self.sha)
+                mutate(self.evidence["finality-before-transport-15.json"])
+                with self.assertRaises((M.CampaignError, M.release_runner.RunnerError)):
+                    self.validate()
+
+    def test_transport_replays_every_raw_line_not_just_selected_claims(self) -> None:
+        def change_raw(transform, *, update_lines=True):
+            record = self.evidence["finality-before-transport-15.json"]
+            old = self.evidence["finality-before-transport-15.log"]
+            changed = transform(old)
+            self.assertNotEqual(changed, old)
+            self.evidence["finality-before-transport-15.log"] = changed
+            record.update(log_sha256=M.sha(changed), log_bytes=len(changed))
+            if update_lines:
+                offset = 0
+                selected = []
+                for line in changed.splitlines(keepends=True):
+                    if b"sumeragi" in line:
+                        selected.append({"offset": offset, "line": line.decode()})
+                    offset += len(line)
+                record["audit_lines"] = selected
+        mutations = (
+            lambda b: b.replace(b'"process_id":115', b'"process_id":999'),
+            lambda b: b.replace(b'"index":1', b'"index":0'),
+            lambda b: b.replace(b'"from":"' + b'0' * 95 + b'1"', b'"from":"' + b'0' * 94 + b'10"'),
+            lambda b: b.replace(b'"network_rows"', b'"stored"'),
+            lambda b: b.replace(b'"network_rows"', b'"author"'),
+            lambda b: b.replace(b'"accepted_rows":4', b'"accepted_rows":3'),
+            lambda b: b.replace(b'"acquisition":1', b'"acquisition":0'),
+            lambda b: b.replace(b'"index":3', b'"index":6'),
+            lambda b: b + b.splitlines(keepends=True)[-1],
+            lambda b: b''.join(reversed(b.splitlines(keepends=True))),
+            lambda b: b''.join(b.splitlines(keepends=True)[:-1]),
+            lambda b: b[:-1],
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                self.evidence, self.result = evidence_fixture(0, self.sha)
+                change_raw(mutate)
+                with self.assertRaises((M.CampaignError, M.release_runner.RunnerError)):
+                    self.validate()
+        # Appending a duplicate observation but omitting it from audit_lines also fails.
+        self.evidence, self.result = evidence_fixture(0, self.sha)
+        change_raw(lambda b: b + b.splitlines(keepends=True)[-1], update_lines=False)
+        with self.assertRaisesRegex(M.CampaignError, "omit or substitute"):
+            self.validate()
+
+    def test_transport_rejects_consistently_substituted_one_peer_source(self) -> None:
+        record = self.evidence["finality-before-transport-15.json"]
+        raw = self.evidence["finality-before-transport-15.log"]
+        changed = raw.replace(b'2' * 64, b'9' * 64)
+        self.evidence["finality-before-transport-15.log"] = changed
+        record.update(block="9" * 64, log_sha256=M.sha(changed))
+        for line in record["audit_lines"]:
+            line["line"] = line["line"].replace("2" * 64, "9" * 64)
+        with self.assertRaisesRegex(M.CampaignError, "original transport source"):
+            self.validate()
+
+    def test_transport_refuses_missing_raw_log_and_unbounded_read(self) -> None:
+        del self.evidence["finality-before-transport-15.log"]
+        with self.assertRaises(M.CampaignError):
+            self.validate()
+        self.evidence, self.result = evidence_fixture(0, self.sha)
+        store_evidence(self.root, self.evidence, self.result)
+        log = self.root / "evidence/finality-before-transport-15.log"
+        with log.open("r+b") as stream:
+            stream.truncate(M.MAX_TRANSPORT_LOG_BYTES + 1)
+        with self.assertRaisesRegex(M.CampaignError, "bounded regular"):
+            M.validate_run(self.root, request(0), self.sha)
 
     def test_readiness_authority_and_missing_artifact_failures(self) -> None:
         self.result["activation_height"] = 0
@@ -590,6 +710,11 @@ class SmokeEvidenceTests(unittest.TestCase):
                 self.evidence, self.result = evidence_fixture(0, self.sha)
                 self.evidence[f"processes-{phase}.json"][0]["pid"] = 1
                 self.evidence["restarts.json"][0][field] = 1
+                if phase == "before":
+                    record, log = transport(0, self.evidence["finality-before-00.json"],
+                                            self.result["network_id"], self.evidence["processes-before.json"])
+                    self.evidence["finality-before-transport-00.json"] = record
+                    self.evidence["finality-before-transport-00.log"] = log
                 self.validate()
                 self.evidence["restarts.json"][0][field] = True
                 with self.assertRaisesRegex(M.release_runner.RunnerError, "integer"):

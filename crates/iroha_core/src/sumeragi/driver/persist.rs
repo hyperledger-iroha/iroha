@@ -13,8 +13,8 @@ use std::{
 };
 
 use iroha_sumeragi::{
+    availability::AvailableBody,
     crypto::Crypto,
-    message::Block,
     safety::{RecordState, SafetyRecord},
     types::{Hash32, Millis, PublicKey},
 };
@@ -27,7 +27,7 @@ pub enum Write {
     /// A safety record (`PersistSafety`).
     Record(Box<SafetyRecord>),
     /// A block body (`StoreBody`).
-    Body(Box<Block>),
+    Body(Box<AvailableBody>),
     /// Drop the stored bodies at or below a height after its apply.
     Prune(u64),
 }
@@ -93,7 +93,7 @@ impl PersistQueue {
     pub fn push(&mut self, write: Write) -> u64 {
         if let Write::Prune(height) = &write {
             self.queue
-                .retain(|(_, w)| !matches!(w, Write::Body(b) if b.header.height <= *height));
+                .retain(|(_, w)| !matches!(w, Write::Body(b) if b.header().height <= *height));
         }
         self.last_seq += 1;
         self.queue.push_back((self.last_seq, write));
@@ -200,8 +200,8 @@ impl PersistQueue {
         let mut out: BTreeMap<u64, u64> = BTreeMap::new();
         for (_, write) in &self.queue {
             if let Write::Body(block) = write {
-                let bytes = u64::try_from(block.payload.len()).unwrap_or(u64::MAX);
-                let entry = out.entry(block.header.height).or_default();
+                let bytes = u64::try_from(block.payload().as_slice().len()).unwrap_or(u64::MAX);
+                let entry = out.entry(block.header().height).or_default();
                 *entry = entry.saturating_add(bytes);
             }
         }
@@ -229,7 +229,7 @@ where
             .encode(crypto)
             .map_err(|e| std::io::Error::other(e.to_string()))
             .and_then(|bytes| records.write(&record.instance, &record.key, &bytes)),
-        Write::Body(block) => bodies.put(&block.hash(crypto), block),
+        Write::Body(block) => bodies.put(&block.header().hash(crypto), block),
         Write::Prune(height) => bodies.prune_through(*height),
     }))
     .unwrap_or_else(|_| Err(std::io::Error::other("store panicked")));

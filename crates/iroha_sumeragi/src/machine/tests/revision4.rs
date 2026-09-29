@@ -3,11 +3,11 @@
 
 use super::*;
 use crate::{
-    message::{BlockRequest, Echo, Status, SyncEntry, SyncResponse},
+    message::{Echo, PayloadRequest, Status, SyncEntry, SyncResponse},
     preimage::KIND_COMMIT,
 };
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -79,7 +79,7 @@ fn det_r4_sync_responses_from_requested_sources() {
         let qc = h.cqc_for(&block, 0);
         parent = (h.bh(&block), result_of(&block));
         chain.push(SyncEntry {
-            block,
+            manifest: manifest(&block),
             commit_qc: qc,
         });
     }
@@ -156,7 +156,7 @@ fn det_r4_fetch_sources_cycle() {
     let fetches = |out: &[Action]| -> Vec<Vec<PublicKey>> {
         out.iter()
             .filter_map(|a| match a {
-                Action::FetchBody { peers, .. } => Some(peers.clone()),
+                Action::FetchPayload { peers, .. } => Some(peers.clone()),
                 _ => None,
             })
             .collect()
@@ -187,15 +187,15 @@ fn det_r4_block_applied_checks() {
         assert!(h.core.awaiting);
         (h, b1, b2)
     };
-    let applied = |h: &H, block: &Block, bh: Hash32| Event::BlockApplied {
-        height: block.header.height,
+    let applied = |h: &H, block: &AvailableBody, bh: Hash32| Event::BlockApplied {
+        height: block.header().height,
         block_hash: bh,
-        header: Box::new(block.header.clone()),
+        header: Box::new(block.header().clone()),
         config: crate::testing::applied_config(
-            block.header.height,
-            &h.config(block.header.height),
-            h.config(block.header.height + 1),
-            h.config(block.header.height + 2),
+            block.header().height,
+            &h.config(block.header().height),
+            h.config(block.header().height + 1),
+            h.config(block.header().height + 2),
         ),
     };
     let halted = |h: &mut H, event: Event| {
@@ -645,7 +645,7 @@ fn det_r4_repush_only_to_recipients_once() {
     let pushes = |out: &[Action]| -> Vec<Vec<PublicKey>> {
         sent(out)
             .into_iter()
-            .filter(|(_, m)| matches!(m, WireMessage::Proposal(p) if p.payload.is_some()))
+            .filter(|(_, m)| matches!(m, WireMessage::Proposal(_)))
             .map(|(to, _)| to)
             .collect()
     };
@@ -700,7 +700,7 @@ fn det_r4_demotion_window_from_init() {
     );
 }
 
-/// §6.9 serving (4.1 §3.5): a `BlockRequest` for an unknown body is handed to the driver, which
+/// §6.9 serving (4.1 §3.5): a `PayloadRequest` for an unknown body is handed to the driver, which
 /// may answer from its stores or not at all.
 #[test]
 fn det_r4_block_request_served_by_driver() {
@@ -708,11 +708,11 @@ fn det_r4_block_request_served_by_driver() {
     let o = h.others(1, &[])[0];
     let out = h.deliver(
         o,
-        WireMessage::BlockRequest(BlockRequest {
+        WireMessage::PayloadRequest(PayloadRequest {
             instance: I,
             height: 5,
             block_hash: Hash32([3; 32]),
         }),
     );
-    assert!(matches!(out[..], [Action::ServeBody { height: 5, .. }]));
+    assert!(matches!(out[..], [Action::ServePayload { height: 5, .. }]));
 }

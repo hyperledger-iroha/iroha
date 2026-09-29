@@ -211,10 +211,10 @@ whitelists malicious providers, or suppresses alerts.
   `crates/sorafs_orchestrator/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
   and failure scenarios animated in the threat model.
 - Capacity and repair soak results live under
-  `specs/sorafs/reports/sf2c_capacity_soak.md`, while the broader
-  Sumeragi soak matrix is tracked in `specs/sumeragi_soak_matrix.md`
-  These artefacts capture the long-running drills referenced in the residual
-  risk register.
+  `specs/sorafs/reports/sf2c_capacity_soak.md`, and the Sumeragi release-gate
+  soak (`scripts/sumeragi_soak.py`, runbook `specs/runbooks/sumeragi_taira_reset.md`)
+  covers consensus under loss, restarts and disk exhaustion. These artefacts
+  capture the long-running drills referenced in the residual risk register.
 - Reconciliation + privilege-audit automation lives in
   `docs/automation/da/README.md` and the new `cargo xtask da-commitment-reconcile`
   / `cargo xtask da-privilege-audit` commands; use the default outputs under

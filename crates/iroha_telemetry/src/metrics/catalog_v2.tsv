@@ -263,15 +263,12 @@ p2p_scion_outbound_total	p2p_scion_outbound_total	Successful outbound SCION P2P 
 tx_gossip_sent_total	tx_gossip_sent_total	Transaction gossip batches sent grouped by plane and dataspace	registered
 tx_gossip_dropped_total	tx_gossip_dropped_total	Transaction gossip batches dropped grouped by plane, dataspace, and reason	registered
 tx_gossip_targets	tx_gossip_targets	Latest transaction gossip target count grouped by plane and dataspace	registered
-tx_gossip_fallback_total	tx_gossip_fallback_total	Restricted transaction gossip fallback attempts grouped by plane, dataspace, and surface	registered
 tx_gossip_frame_cap_bytes	tx_gossip_frame_cap_bytes	Configured maximum frame size for transaction gossip payloads (bytes)	registered
 tx_gossip_public_target_cap	tx_gossip_public_target_cap	Configured cap on public transaction gossip targets (0 = broadcast)	registered
-tx_gossip_restricted_target_cap	tx_gossip_restricted_target_cap	Configured cap on restricted transaction gossip targets (0 = commit topology)	registered
+tx_gossip_restricted_target_cap	tx_gossip_restricted_target_cap	Configured cap on restricted transaction gossip targets (0 = all authorized native lane validators)	registered
 tx_gossip_public_target_reshuffle_ms	tx_gossip_public_target_reshuffle_ms	Public-plane target reshuffle interval in milliseconds	registered
 tx_gossip_restricted_target_reshuffle_ms	tx_gossip_restricted_target_reshuffle_ms	Restricted-plane target reshuffle interval in milliseconds	registered
 tx_gossip_drop_unknown_dataspace	tx_gossip_drop_unknown_dataspace	Whether transaction gossip drops unknown dataspaces (1 = drop, 0 = route via restricted plane)	registered
-tx_gossip_restricted_fallback	tx_gossip_restricted_fallback	Restricted gossip fallback policy (0 = drop, 1 = public overlay)	registered
-tx_gossip_restricted_public_policy	tx_gossip_restricted_public_policy	Policy for restricted gossip when only the public overlay is available (0 = refuse, 1 = forward)	registered
 sumeragi_new_view_receipts_by_hv	sumeragi_new_view_receipts_by_hv	NEW_VIEW receipt counts labeled by (height, view)	registered
 sumeragi_post_to_peer_total	sumeragi_post_to_peer_total	Sumeragi post attempts to peers (collector routing; cumulative)	registered
 sumeragi_bg_post_enqueued_total	sumeragi_bg_post_enqueued_total	Sumeragi background-post enqueued tasks (cumulative)	registered

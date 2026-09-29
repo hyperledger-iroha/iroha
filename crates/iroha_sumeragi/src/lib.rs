@@ -91,6 +91,7 @@
 #![allow(clippy::redundant_feature_names)]
 
 pub mod api;
+pub mod availability;
 mod bytes;
 pub mod crypto;
 pub mod evidence;

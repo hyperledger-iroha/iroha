@@ -63,16 +63,21 @@ fn smoke_leader_proposes_after_pace() {
     let out = h.built(b"abc");
     let ps = proposals(&out);
     assert_eq!(ps.len(), 1, "{out:#?}");
-    assert_eq!(ps[0].payload.as_deref(), Some(&b"abc"[..]));
+    assert_eq!(
+        h.bodies[&ps[0].block_hash(&h.v.crypto)]
+            .payload()
+            .as_slice(),
+        &b"abc"[..]
+    );
     assert_eq!(executes(&out).len(), 1);
 }
 
 use crate::{
     api::ConfigError,
-    message::{BlockRequest, BlockResponse, Status, SyncRequest, SyncResponse},
+    message::{PayloadRequest, Status, SyncRequest, SyncResponse},
 };
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -106,11 +111,11 @@ fn intake_drops_other_instances_and_oversized_structures() {
     let mut h = H::new(4, pick::set_a(0));
     let b = h.block(0, b"B");
     let mut p = h.proposal(0, &b, None);
-    p.instance = Hash32([0x22; 32]);
+    p.proposal.instance = Hash32([0x22; 32]);
     let out = h.deliver(h.leader(0), WireMessage::Proposal(Box::new(p)));
     assert!(out.is_empty());
     let mut p = h.proposal(0, &b, None);
-    p.header.skipped_leaders = vec![h.key_at(0); crate::types::MAX_COMMITTEE_SIZE + 1];
+    p.proposal.header.skipped_leaders = vec![h.key_at(0); crate::types::MAX_COMMITTEE_SIZE + 1];
     let out = h.deliver(h.leader(0), WireMessage::Proposal(Box::new(p)));
     assert!(out.is_empty());
 }
@@ -190,12 +195,17 @@ fn awaiting_configuration_freezes_the_round() {
         &I,
         3,
         0,
-        b3.header.clone(),
+        b3.header().clone(),
         None,
         h.core.tip.commit_qc.clone(),
-        Some(b3.payload),
     );
-    let out = h.deliver(0, WireMessage::Proposal(Box::new(p)));
+    let out = h.deliver(
+        0,
+        WireMessage::Proposal(Box::new(ProposalMessage {
+            proposal: p,
+            availability: b3.availability().clone(),
+        })),
+    );
     assert!(executes(&out).is_empty());
     // No round timers fire while awaiting.
     let out = h.run_until(h.now + 20_000);
@@ -245,8 +255,8 @@ fn status_from_a_member_behind_is_answered_and_sources_wants() {
     assert_eq!(status_to(&out), vec![vec![h.key_at(peer)]]);
     // A peer reporting a wanted proposal hash becomes a fetch source.
     let b = h.block(0, b"B");
-    let mut p = h.proposal(0, &b, None);
-    p.payload = None;
+    let p = h.proposal(0, &b, None);
+    h.withheld_rows.insert(h.bh(&b));
     h.deliver(h.leader(0), WireMessage::Proposal(Box::new(p)));
     let reporter = h.others(3, &[h.leader(0)])[0];
     h.now += h.local.rebroadcast_interval;
@@ -452,10 +462,7 @@ fn bodies_only_when_wanted() {
     assert!(out.is_empty());
     let out = h.deliver(
         h.others(1, &[])[0],
-        WireMessage::BlockResponse(BlockResponse {
-            instance: I,
-            block: b,
-        }),
+        WireMessage::PayloadManifest(manifest(&b)),
     );
     assert!(out.is_empty());
     assert!(h.core.blocks.is_empty());
@@ -485,12 +492,17 @@ fn idle_payload_wait_and_payload_ready() {
     // A stale answer to the first request is ignored.
     let out = h.fire(Event::PayloadBuilt {
         req: first,
-        payload: b"stale".to_vec(),
+        payload: h.payload(b"stale"),
         attest: false,
     });
     assert!(proposals(&out).is_empty());
     let out = h.built(b"tx");
-    assert_eq!(proposals(&out)[0].payload.as_deref(), Some(&b"tx"[..]));
+    assert_eq!(
+        h.bodies[&proposals(&out)[0].block_hash(&h.v.crypto)]
+            .payload()
+            .as_slice(),
+        &b"tx"[..]
+    );
 
     // Empty answers and build deadlines never manufacture a block.
     let mut h = H::new(4, pick::leader(0));
@@ -541,7 +553,7 @@ fn leader_repushes_to_members_lacking_the_proposal() {
     let out = h.run_until(h.now + h.local.rebroadcast_interval);
     let pushed: Vec<_> = sent(&out)
         .into_iter()
-        .filter(|(_, m)| matches!(m, WireMessage::Proposal(p) if p.payload.is_some()))
+        .filter(|(_, m)| matches!(m, WireMessage::Proposal(_)))
         .collect();
     assert_eq!(pushed.len(), 1);
     assert_eq!(pushed[0].0, vec![h.key_at(lagging)]);
@@ -593,7 +605,7 @@ fn sync_ignores_unsolicited_and_drops_empty_hints() {
     let mut h = H::new(4, pick::set_a(0));
     let b = h.block(0, b"B");
     let entry = crate::message::SyncEntry {
-        block: b.clone(),
+        manifest: manifest(&b),
         commit_qc: h.qc_q(VoteKind::Commit, 0, &b),
     };
     let o = h.others(2, &[]);
@@ -651,16 +663,46 @@ fn serving_requests() {
     prop(&mut h, 0, &b, None);
     let out = h.deliver(
         o,
-        WireMessage::BlockRequest(BlockRequest {
+        WireMessage::PayloadRequest(PayloadRequest {
             instance: I,
             height: 1,
             block_hash: h.bh(&b),
         }),
     );
-    assert!(matches!(
-        &sent(&out)[..],
-        [(_, WireMessage::BlockResponse(r))] if r.block == b
-    ));
+    assert!(out.iter().any(|action| matches!(action,
+        Action::ServePayload { to, height: 1, block_hash }
+            if *to == h.v.key(o) && *block_hash == h.bh(&b)
+    )));
+    assert!(
+        !out.iter()
+            .any(|action| matches!(action, Action::DisseminatePayload { .. })),
+        "a cached requested body must still use the per-requester serving path"
+    );
+    let expected: Vec<_> = out
+        .into_iter()
+        .filter(|action| matches!(action, Action::ServePayload { .. }))
+        .collect();
+    let hash = h.bh(&b);
+    assert!(
+        h.core.blocks.remove(&hash).is_some(),
+        "exercise cached-body case first"
+    );
+    let uncached = h.deliver(
+        o,
+        WireMessage::PayloadRequest(PayloadRequest {
+            instance: I,
+            height: 1,
+            block_hash: hash,
+        }),
+    );
+    let actual: Vec<_> = uncached
+        .into_iter()
+        .filter(|action| matches!(action, Action::ServePayload { .. }))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "cache residency does not change request ownership or quota"
+    );
 }
 
 // ---- §9.4, §12.1 configuration and startup -----------------------------------------------------------
@@ -679,20 +721,22 @@ fn config_too_tight_is_a_local_fault() {
 #[test]
 fn startup_rejects_bad_input() {
     let h = H::new(4, pick::set_a(0));
-    let signers = || -> Vec<Box<dyn Signer>> { vec![Box::new(h.signers[0].clone())] };
+    let signers =
+        || -> Vec<std::sync::Arc<dyn Signer>> { vec![std::sync::Arc::new(h.signers[0].clone())] };
     let key = h.signers[0].public_key().clone();
     let fresh = vec![(
         key.clone(),
         RecordState::Present(initial_record(&h.v, &key)),
         false,
     )];
-    let new = |init: Init, local: LocalParams, signers: Vec<Box<dyn Signer>>| {
+    let new = |init: Init, local: LocalParams, signers: Vec<std::sync::Arc<dyn Signer>>| {
         Core::new(
             local,
             init,
             signers,
             Box::new(h.v.crypto.clone()),
             crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            h.budget.clone(),
             0,
         )
         .map(|_| ())
@@ -708,7 +752,7 @@ fn startup_rejects_bad_input() {
     );
     let mut init = h.init(fresh.clone());
     init.tip.block_hash = Hash32([1; 32]);
-    init.tip.header = Some(h.block(0, b"x").header);
+    init.tip.header = Some(h.block(0, b"x").header().clone());
     assert!(matches!(
         new(init, h.local, signers()),
         Err(ConfigError::InvalidInit(_))
@@ -761,13 +805,15 @@ fn startup_rejects_foreign_tip_epoch_and_height_overflow() {
     let key = h.signers[0].public_key().clone();
     let state = RecordState::Present(h.records[&key].clone());
     let new = |init: Init| {
-        let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
+        let signers: Vec<std::sync::Arc<dyn Signer>> =
+            vec![std::sync::Arc::new(h.signers[0].clone())];
         Core::new(
             h.local,
             init,
             signers,
             Box::new(h.v.crypto.clone()),
             crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            h.budget.clone(),
             0,
         )
         .map(|_| ())
@@ -813,13 +859,13 @@ fn corrupt_record_halts_and_only_serves() {
     assert!(out.is_empty());
     let out = h.deliver(
         h.others(1, &[])[0],
-        WireMessage::BlockRequest(BlockRequest {
+        WireMessage::PayloadRequest(PayloadRequest {
             instance: I,
             height: 1,
             block_hash: h.bh(&b),
         }),
     );
-    assert!(matches!(out[..], [Action::ServeBody { .. }]));
+    assert!(matches!(out[..], [Action::ServePayload { .. }]));
 }
 
 #[test]
@@ -857,4 +903,91 @@ fn tick_consumes_every_deadline() {
         }
     }
     assert!(h.now > 100_000, "time advances");
+}
+
+/// Actual received row provenance survives Core dispatch independently of original authorship.
+#[test]
+fn wanted_row_preserves_authenticated_relay_and_intake_filters() {
+    let mut h = H::new(4, pick::set_a(0));
+    let body = h.block(0, b"original availability bytes");
+    let bh = body.hash(&h.v.crypto);
+    let shape = body
+        .source()
+        .config()
+        .epoch
+        .da_layout
+        .shape(body.header().payload_len.into())
+        .unwrap();
+    let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+        shape,
+        body.payload().as_slice(),
+        &h.budget,
+    )
+    .unwrap();
+    let bytes = encoded.codeword()[shape.chunk_range(0).unwrap()].to_vec();
+    let mut chunk = PayloadChunk {
+        instance: I,
+        height: 1,
+        block_hash: bh,
+        index: 0,
+        bytes: RowBytes::from_untrusted(bytes).unwrap(),
+    };
+    chunk.bytes.admit(&h.budget).unwrap();
+    h.core.want(bh, 1, Vec::new());
+    assert!(
+        matches!(h.core.out.as_slice(), [Action::FetchPayload { source, .. }] if source.block_hash() == bh)
+    );
+    h.core.out.clear(); // The fixture has dispatched the initial acquisition request.
+    let relays = [h.v.key(1), PublicKey::new(vec![0xfa; 32]).unwrap()];
+    for relay in relays {
+        let actions = h.core.handle(
+            h.now,
+            Event::Message {
+                from: relay.clone(),
+                msg: WireMessage::PayloadChunk(chunk.clone()),
+            },
+        );
+        assert_eq!(
+            actions,
+            vec![Action::ReceivePayloadChunk {
+                from: relay,
+                chunk: chunk.clone()
+            }]
+        );
+        assert!(
+            h.core.blocks.is_empty(),
+            "forwarding is not row authentication or body custody"
+        );
+    }
+    let from = h.v.key(2);
+    let mut rejects = Vec::new();
+    let mut wrong_height = chunk.clone();
+    wrong_height.height += 1;
+    rejects.push(wrong_height);
+    let mut wrong_hash = chunk.clone();
+    wrong_hash.block_hash = Hash32::ZERO;
+    rejects.push(wrong_hash);
+    let mut wrong_instance = chunk.clone();
+    wrong_instance.instance = Hash32::ZERO;
+    rejects.push(wrong_instance);
+    let mut foreign = chunk.clone();
+    foreign.bytes = RowBytes::from_untrusted(chunk.bytes.as_slice().to_vec()).unwrap();
+    foreign
+        .bytes
+        .admit(&mv::allocation::AllocationBudget::new(1 << 20))
+        .unwrap();
+    rejects.push(foreign);
+    for rejected in rejects {
+        assert!(
+            h.core
+                .handle(
+                    h.now,
+                    Event::Message {
+                        from: from.clone(),
+                        msg: WireMessage::PayloadChunk(rejected),
+                    }
+                )
+                .is_empty()
+        );
+    }
 }

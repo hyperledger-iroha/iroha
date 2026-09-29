@@ -26,8 +26,10 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
+    availability::{PayloadAuthoring, PayloadBytes},
     crypto::{Signer as _, form_qc},
     message::Vote,
+    preimage::payload_hash,
     types::{ChainParams, PublicKey},
 };
 use std::{num::NonZeroU64, sync::OnceLock, time::Duration};
@@ -223,7 +225,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     install_structural_outputs(&mut genesis);
     let result = ExecutionResultCommitment::new(
         1,
-        execution_commitment(&witness, &genesis).unwrap(),
+        execution_commitment(&witness, &genesis, &synthetic_world()).unwrap(),
         outcome(1, &current, None),
         None,
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
@@ -237,6 +239,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         Vec::new(),
         Vec::new(),
         result.preimage().unwrap(),
+        Vec::new(),
     )));
     let mut history = vec![Arc::new(genesis)];
     let mut active_keys = original_keys;
@@ -346,6 +349,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
                     if retain { [0; 32] } else { [height as u8; 32] },
                 );
             let next = ValidatorEpochContextV1 {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                 version: 1,
                 network_id: network,
                 mode: ConsensusMode::Npos,
@@ -386,15 +390,45 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
             parent_hash: parent.core_hash(),
             parent_result: parent.result(),
             payload_hash: payload_hash(&BlsCrypto::new(), &payload),
+            availability_digest: Hash32::ZERO,
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: boundary.is_some(),
         };
+        let budget = world.ivm_execution_budget();
+        let mut backing = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        backing.append(&payload).unwrap();
+        let payload = PayloadBytes::from_charged(backing, &budget)
+            .unwrap_or_else(|_| panic!("original historical fixture payload admission"));
+        let config = ScheduledConfig {
+            height,
+            epoch: current.clone(),
+            params: params(),
+        }
+        .height_config()
+        .unwrap();
+        let crypto = BlsCrypto::new();
+        crypto
+            .admit_committee(current.committee.iter().map(|member| {
+                (
+                    member.validator.public_key(),
+                    member.proof_of_possession.as_slice(),
+                )
+            }))
+            .unwrap();
+        let signer = crate::sumeragi::crypto::KeyPairSigner::new(&active_keys[0]).unwrap();
+        let authored = PayloadAuthoring::new(header, payload)
+            .complete(instance, &config, &budget, &crypto, &signer)
+            .unwrap_or_else(|(_, error)| {
+                panic!("actual historical signed RS16 authoring: {error:?}")
+            });
+        let header = authored.body.header().clone();
+        let availability = norito::encode_canonical(authored.body.availability()).unwrap();
         let witness = complete_lane_state_witness(network, height);
         let commitment = ExecutionResultCommitment::new(
             height,
-            execution_commitment(&witness, &block).unwrap(),
+            execution_commitment(&witness, &block, &synthetic_world()).unwrap(),
             outcome(height, &current, boundary),
             beacon,
             iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
@@ -406,8 +440,9 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         .unwrap();
         let preimage = commitment.preimage().unwrap();
         let qc = certificate(&active_keys, &header, result_of_preimage(&preimage), false);
-        block = block
-            .with_commit_certificate(Some(commit_certificate(&header, &qc, preimage).unwrap()));
+        block = block.with_commit_certificate(Some(
+            commit_certificate(&header, &qc, preimage, availability).unwrap(),
+        ));
         history.push(Arc::new(block));
         if let Some((next, keys, beacon)) = successor {
             current = next;
@@ -643,6 +678,7 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
         certificate.consensus_header().to_vec(),
         certificate.commit_qc().to_vec(),
         result.preimage().unwrap(),
+        certificate.availability().to_vec(),
     );
     history[0] = Arc::new(original.clone().with_commit_certificate(Some(certificate)));
     let state = state_with_history(&history);
@@ -818,5 +854,14 @@ fn complete_lane_state_witness(network: NetworkId, height: u64) -> ExecWitness {
             value: norito::encode_canonical(&commitment).unwrap(),
         }],
         ..ExecWitness::default()
+    }
+}
+
+/// Synthetic complete-World roots: these fixtures certify structural results, not a World.
+fn synthetic_world() -> crate::sumeragi::commitment::WorldStateTransition {
+    crate::sumeragi::commitment::WorldStateTransition {
+        parent_world_state_root: iroha_crypto::Hash::new(b"synthetic parent World"),
+        world_state_root: iroha_crypto::Hash::new(b"synthetic World"),
+        event_commitment: None,
     }
 }

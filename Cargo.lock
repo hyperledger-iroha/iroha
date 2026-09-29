@@ -5449,6 +5449,7 @@ dependencies = [
  "iroha_primitives_derive",
  "iroha_schema",
  "libc",
+ "mv",
  "norito",
  "num-bigint 0.4.6",
  "num-traits",
@@ -5639,6 +5640,8 @@ dependencies = [
 name = "iroha_sumeragi"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "iroha_primitives",
+ "iroha_schema",
  "mv",
  "norito",
 ]
@@ -5712,6 +5715,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",
+ "iroha_sumeragi",
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",

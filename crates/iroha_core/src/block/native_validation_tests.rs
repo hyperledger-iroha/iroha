@@ -117,12 +117,14 @@ impl NativeValidationFixture {
             parent_result: parent.result(),
             payload_hash: payload_hash(&BlsCrypto::new(), &bytes),
             payload_len: u32::try_from(bytes.len()).unwrap(),
+            availability_digest: iroha_sumeragi::types::Hash32::ZERO,
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: crate::sumeragi::executor::attestation_required(proposal)
                 || proposal.header().height().get() == scheduled.epoch.authorization.last_height,
         };
-        (header, bytes)
+        let body = self.chain.author_payload(header, bytes.clone());
+        (body.header().clone(), bytes)
     }
     fn validate(
         &self,

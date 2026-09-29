@@ -1691,7 +1691,7 @@ impl RawGenesisTransaction {
         }
         Ok(aggregated)
     }
-    /// Populate consensus metadata fields with defaults and a computed v2 fingerprint.
+    /// Populate consensus metadata fields with defaults and a computed consensus fingerprint.
     ///
     /// This helper is best-effort and does not alter existing transactions. It derives
     /// parameters from data-model defaults to produce a stable fingerprint for basic networks.

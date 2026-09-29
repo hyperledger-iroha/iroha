@@ -871,6 +871,7 @@ impl RetainedBenchmarkNetwork {
             .ok_or_else(|| eyre!("retained release network was skipped"))?;
         verify_controller_readiness(&network, &runtime)?;
         let coordinator = CoordinatorProcessV1::start(&network.client())?;
+        prepare_participant_assets(&network, shape)?;
         let activated_height = require_genesis_private_note_active(&network.client())?;
         let initial_inventory =
             collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
@@ -882,6 +883,14 @@ impl RetainedBenchmarkNetwork {
             activated_height,
             initial_inventory,
         })
+    }
+
+    /// Verify finality using this retained network's original runtime and peers.
+    pub(super) fn verify_signed_rs16_finality(
+        &self,
+        height: u64,
+    ) -> Result<SignedRs16FinalityObservationsV1> {
+        super::verify_signed_rs16_finality(&self.network, &self.runtime, height)
     }
 
     pub(super) fn inventory(&self, commit: &str) -> Result<Vec<RealProcessInventoryRowV1>> {

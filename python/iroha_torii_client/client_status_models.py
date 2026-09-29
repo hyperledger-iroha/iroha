@@ -320,34 +320,11 @@ class KaigiRelayHealthSnapshot:
 
 
 @dataclass(frozen=True)
-class SumeragiPrfContext:
-    """PRF state returned by Sumeragi inspection endpoints."""
-
-    height: int
-    view: int
-    epoch_seed: Optional[str]
-
-
-@dataclass(frozen=True)
-class SumeragiLeaderSnapshot:
-    """Leader metadata returned by ``GET /v1/sumeragi/leader``."""
-
-    leader_index: int
-    prf: SumeragiPrfContext
-
-
-@dataclass(frozen=True)
 class SumeragiParamsSnapshot:
     """Consensus parameter snapshot returned by ``GET /v1/sumeragi/params``."""
 
-    block_time_ms: int
-    commit_time_ms: int
+    block_cadence_ms: int
     max_clock_drift_ms: int
-    collectors_k: int
-    redundant_send_r: int
-    da_enabled: bool
-    next_mode: Optional[str]
-    mode_activation_height: Optional[int]
     chain_height: int
 
 

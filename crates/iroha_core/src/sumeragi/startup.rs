@@ -34,7 +34,13 @@ const _: () = assert!(
 pub enum StartupError {
     /// The genesis block is invalid.
     #[error("genesis is invalid: {0}")]
-    InvalidGenesis(String),
+    InvalidGenesis(#[source] Box<crate::block::BlockValidationError>),
+    /// The executed genesis lane transition did not complete correctly.
+    #[error("genesis lane transition is invalid: {0}")]
+    LaneStep(#[source] super::lanes::step::LaneStepError),
+    /// The original executed genesis and witness cannot form their commitment.
+    #[error("genesis execution commitment is invalid: {0}")]
+    ExecutionCommitment(#[source] iroha_data_model::sumeragi_finality::CommitmentError),
     /// The genesis committee or schedule is invalid.
     #[error("genesis schedule is invalid: {0}")]
     Schedule(String),
@@ -107,7 +113,7 @@ pub fn apply_genesis(
         consensus_mode,
     )
     .unpack(|_| {})
-    .map_err(|(_, error)| StartupError::InvalidGenesis(error.to_string()))?;
+    .map_err(|(_, error)| StartupError::InvalidGenesis(error))?;
     let inputs = overlay
         .take_sumeragi_execution_inputs()
         .map_err(|error| StartupError::Schedule(error.to_string()))?;
@@ -121,7 +127,7 @@ pub fn apply_genesis(
     }
     overlay
         .take_sumeragi_lanes()
-        .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
+        .map_err(StartupError::LaneStep)?;
     let witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;
@@ -129,8 +135,13 @@ pub fn apply_genesis(
     let native_lanes =
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(&witness, &budget)
             .map_err(|error| StartupError::Local(error.to_string()))?;
-    let retained_result = execution_result(&witness, valid.as_ref(), inputs, native_lanes)
-        .map_err(|error| StartupError::InvalidGenesis(error.to_string()))?;
+    // Genesis starts from the empty World and absorbs everything it holds (§4.1, E51).
+    let transition = overlay
+        .world_state_transition()
+        .map_err(StartupError::Local)?;
+    let retained_result =
+        execution_result(&witness, valid.as_ref(), &transition, inputs, native_lanes)
+            .map_err(StartupError::ExecutionCommitment)?;
     let preimage = encode_result_preimage(&retained_result, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let result = result_of_preimage(preimage.as_slice());
@@ -138,9 +149,16 @@ pub fn apply_genesis(
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let empty_qc = mv::allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let certificate =
-        CommitCertificate::from_charged_parts(empty_header, empty_qc, preimage, &budget)
-            .map_err(|(_original_parts, error)| StartupError::Local(error.to_string()))?;
+    let empty_availability = mv::allocation::ChargedBuffer::new(0, &budget)
+        .map_err(|error| StartupError::Local(error.to_string()))?;
+    let certificate = CommitCertificate::from_charged_parts(
+        empty_header,
+        empty_qc,
+        preimage,
+        empty_availability,
+        &budget,
+    )
+    .map_err(|(_original_parts, error)| StartupError::Local(error.to_string()))?;
     // Freeze H1 complete context values from the same original overlay and R used by
     // every successor. A separately reconstructed current-head projection is not a source.
     let archive = crate::query::native_context_archive::NativeContextArchive::open(

@@ -455,12 +455,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     #[test]
     fn network_enum_labels_reject_aliases_without_panicking() {
-        for (field, value) in [
-            ("lane_profile", "CORE"),
-            ("lane_profile", " core"),
-            ("transaction_gossip_restricted_fallback", "PUBLIC_OVERLAY"),
-            ("transaction_gossip_restricted_public_payload", "FORWARD"),
-        ] {
+        for (field, value) in [("lane_profile", "CORE"), ("lane_profile", " core")] {
             let mut table = base_table();
             table
                 .get_mut("network")

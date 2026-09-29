@@ -25,6 +25,7 @@ fn state() -> State {
         .collect::<Vec<_>>();
     committee.sort();
     let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         anchor_freshness: 16,
         max_merge_blocks: 32,
         stall_window: 256,
@@ -48,6 +49,7 @@ fn state() -> State {
     world.parameters = mv::cell::Cell::new(parameters);
     let mut lanes = SumeragiLaneState::default();
     lanes.upsert(SumeragiLaneRecord {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         lane: LaneId::new(1),
         dataspace: DataSpaceId::UNIVERSAL,
         incarnation: Hash::new(b"native ordering identity").into(),

@@ -28,7 +28,7 @@ pub const WIRE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"iroha.wire_schema.v1\0";
 pub fn covered_wire_schema() -> MetaMap {
     let mut schema = MetaMap::new();
     // TODO(sumeragi): cover the live consensus wire (`iroha_sumeragi::message::WireMessage`)
-    // again. The retired `ConsensusMessageV2` root was removed with the old runtime; the new
+    // again. The retired runtime's consensus-message root was removed with that runtime; the
     // core's message derives only `norito::NoritoSchema` (its frames carry
     // `norito::schema::identity::frame_hash::<WireMessage>()`), not `iroha_schema::IntoSchema`,
     // so it must gain a compiled schema description (or its Norito schema identity must be bound

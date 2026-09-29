@@ -247,8 +247,14 @@ layout:
 
 Every length-delimited field is sized by running its serializer against a
 counting sink. Norito then emits that measured length and constrains the output
-pass to the same byte count. `encoded_len_hint` and `encoded_len_exact` are
-optional diagnostics; canonical encoding never trusts them for framing,
+pass to the same byte count. Nested counted children share the original encoder
+and an active exact-length scope: successful writes advance one offset, and
+scopes enforce the smaller child/enclosing end before forwarding bytes. This
+avoids routing each emitted byte through a separate writer for every ancestor.
+Overruns remain sticky even when a serializer suppresses an I/O error; short
+successful writes fail the final exact-length check. The arbitrary-writer
+`serialize_to_writer_exact` seam still verifies actual output separately.
+`encoded_len_hint` and `encoded_len_exact` are optional diagnostics; canonical encoding never trusts them for framing,
 admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.

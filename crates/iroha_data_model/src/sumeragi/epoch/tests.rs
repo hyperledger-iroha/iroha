@@ -65,6 +65,7 @@ pub(crate) fn fixture(count: usize) -> ValidatorEpochContextV1 {
     };
     let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap();
     let context = ValidatorEpochContextV1 {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
         network_id,
         mode: ConsensusMode::Npos,
@@ -247,4 +248,23 @@ fn uniform_rank_binds_network_epochs_seed_and_peer_without_stake_weight() {
     );
     assert!(validator_seat_rank(context.network_id, 0, 1, [7; 32], peer).is_err());
     assert!(validator_seat_rank(context.network_id, 0, 2, [0; 32], peer).is_err());
+}
+
+#[test]
+fn signed_availability_layout_binds_epoch_and_cannot_change_at_retention() {
+    let original = fixture(4);
+    let mut changed = original.clone();
+    changed.da_layout.chunk_size_bytes /= 2;
+    changed.validate().unwrap();
+    assert_ne!(
+        original.context_id().unwrap(),
+        changed.context_id().unwrap()
+    );
+    let mut next = retained(&original);
+    next.validate_successor(&original).unwrap();
+    next.da_layout = changed.da_layout;
+    assert!(next.validate_successor(&original).is_err());
+    changed.da_layout.parity_shards = 0;
+    assert!(changed.validate().is_err());
+    assert!(crate::sumeragi_finality::core_epoch(&changed).is_err());
 }

@@ -8016,7 +8016,7 @@ pub struct Network {
     #[config(default = "defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE")]
     pub transaction_gossip_drop_unknown_dataspace: bool,
     /// Optional cap on the number of peers targeted for restricted transaction gossip (None = all
-    /// peers in the commit topology).
+    /// authorized native lane validators).
     pub transaction_gossip_restricted_target_cap: Option<NonZeroUsize>,
     /// Optional cap on the number of peers targeted for public transaction gossip (None = broadcast).
     pub transaction_gossip_public_target_cap: Option<NonZeroUsize>,
@@ -8026,12 +8026,6 @@ pub struct Network {
     /// Interval between restricted transaction gossip target reshuffles in milliseconds (clamped to >= 100ms).
     #[config(default = "defaults::network::TX_GOSSIP_RESTRICTED_TARGET_RESHUFFLE.into()")]
     pub transaction_gossip_restricted_target_reshuffle_ms: DurationMs,
-    /// Fallback behaviour when restricted gossip has no available targets (`drop` or `public_overlay`).
-    #[config(default = "defaults::network::TX_GOSSIP_RESTRICTED_FALLBACK.to_string()")]
-    pub transaction_gossip_restricted_fallback: String,
-    /// Policy for restricted payloads when only the public overlay is available (`refuse` or `forward`).
-    #[config(default = "defaults::network::TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD.to_string()")]
-    pub transaction_gossip_restricted_public_payload: String,
     /// Duration of time after which connection with peer is terminated if peer is idle
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
@@ -8343,8 +8337,6 @@ impl Network {
             transaction_gossip_public_target_cap,
             transaction_gossip_public_target_reshuffle_ms,
             transaction_gossip_restricted_target_reshuffle_ms,
-            transaction_gossip_restricted_fallback,
-            transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
             preauth_timeout_ms: preauth_timeout,
             preauth_max_connections_per_ip,
@@ -8504,31 +8496,6 @@ impl Network {
             low_priority_rate_per_sec.or(limits.low_priority_rate_per_sec);
         let low_priority_bytes_per_sec =
             low_priority_bytes_per_sec.or(limits.low_priority_bytes_per_sec);
-        let restricted_fallback = match transaction_gossip_restricted_fallback.as_str() {
-            "drop" => actual::DataspaceGossipFallback::Drop,
-            "public_overlay" => actual::DataspaceGossipFallback::UsePublicOverlay,
-            other => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
-                        "network.transaction_gossip_restricted_fallback must be exactly `drop` or `public_overlay`, got `{other}`"
-                    )),
-                );
-                actual::DataspaceGossipFallback::Drop
-            }
-        };
-        let restricted_public_payload = match transaction_gossip_restricted_public_payload.as_str()
-        {
-            "refuse" => actual::RestrictedPublicPayload::Refuse,
-            "forward" => actual::RestrictedPublicPayload::Forward,
-            other => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidNetworkConfig).attach(format!(
-                        "network.transaction_gossip_restricted_public_payload must be exactly `refuse` or `forward`, got `{other}`"
-                    )),
-                );
-                actual::RestrictedPublicPayload::Refuse
-            }
-        };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
         let preauth_timeout = preauth_timeout.get().max(min_interval);
@@ -8676,8 +8643,6 @@ impl Network {
                     public_target_cap: transaction_gossip_public_target_cap,
                     public_target_reshuffle: transaction_gossip_public_target_reshuffle,
                     restricted_target_reshuffle: transaction_gossip_restricted_target_reshuffle,
-                    restricted_fallback,
-                    restricted_public_payload,
                 },
             },
         )

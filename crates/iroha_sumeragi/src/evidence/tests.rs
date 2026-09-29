@@ -68,6 +68,7 @@ impl Fixture {
             parent_hash: self.parent.block_hash,
             parent_result: self.parent.result,
             payload_hash: h(3),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 1,
             proposer: topology.leader(view),
             skipped_leaders: topology.skipped_leader_keys(&self.config.committee, view),
@@ -82,7 +83,7 @@ impl Fixture {
             .unwrap()
             .leader(view);
         self.validators
-            .proposal(leader, &I, 2, view, header, None, None, None)
+            .proposal(leader, &I, 2, view, header, None, None)
     }
     fn resign(&self, proposal: &mut Proposal) {
         let leader = self
@@ -250,12 +251,16 @@ fn proposal_equivocation_requires_actual_leader_and_distinct_signed_content() {
             .collect::<Vec<_>>(),
         [expected]
     );
-    let mut unsigned = first.clone();
-    unsigned.payload = Some(vec![1, 2, 3]);
+    // A relay's corrupt availability carrier cannot manufacture signed equivocation.
+    let unsigned = crate::message::ProposalMessage {
+        proposal: first.clone(),
+        availability: crate::availability::AvailabilityFrame::from_untrusted(vec![0xff; 4])
+            .unwrap(),
+    };
     assert_eq!(
         fixture.verify(&Evidence::ProposalEquivocation(
             Box::new(first.clone()),
-            Box::new(unsigned)
+            Box::new(unsigned.proposal)
         )),
         Err(EvidenceError::NotConflicting)
     );
@@ -392,11 +397,15 @@ fn signed_header_defects_reproduce_but_poison_execution_does_not() {
             Err(EvidenceError::DefectMismatch)
         );
     }
-    let mut poison = ordinary.clone();
-    poison.payload = Some(vec![0xFF; 5]);
+    // The carrier fails availability verification; it does not prove a signed empty payload.
+    let poison = crate::message::ProposalMessage {
+        proposal: ordinary.clone(),
+        availability: crate::availability::AvailabilityFrame::from_untrusted(vec![0xff; 4])
+            .unwrap(),
+    };
     assert_eq!(
         fixture.verify(&Evidence::InvalidProposal {
-            proposal: Box::new(poison),
+            proposal: Box::new(poison.proposal),
             defect: Defect::EmptyPayload
         }),
         Err(EvidenceError::DefectMismatch)
@@ -507,7 +516,7 @@ fn parent_defects_use_the_authenticated_parent_configuration() {
     let leader = topology.leader(0);
     let missing = fixture
         .validators
-        .proposal(leader, &I, 3, 0, header.clone(), None, None, None);
+        .proposal(leader, &I, 3, 0, header.clone(), None, None);
     assert!(
         verify_evidence(
             &fixture.validators.crypto,
@@ -528,7 +537,6 @@ fn parent_defects_use_the_authenticated_parent_configuration() {
         header.clone(),
         None,
         Some(fixture.qc(VoteKind::Commit, 0, 98, &[0, 1, 2])),
-        None,
     );
     assert!(
         verify_evidence(
@@ -550,7 +558,6 @@ fn parent_defects_use_the_authenticated_parent_configuration() {
         header,
         None,
         Some(fixture.qc(VoteKind::Commit, 0, 3, &[0, 1, 2])),
-        None,
     );
     assert_eq!(
         verify_evidence(

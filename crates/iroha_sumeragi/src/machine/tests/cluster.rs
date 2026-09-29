@@ -8,9 +8,13 @@ use std::collections::BTreeMap;
 use super::{G_HASH, G_RESULT, I, W, initial_record, result_of};
 use crate::{
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalParams},
+    availability::{
+        AvailabilityFrame, AvailableBody, BodyRestoration, PayloadAcquisition, PayloadAuthoring,
+        PayloadBytes, RowBytes,
+    },
     crypto::Signer,
     machine::Core,
-    message::{Block, BlockResponse, Qc, SyncEntry, SyncResponse, VoteKind, WireMessage},
+    message::{PayloadChunk, PayloadManifest, Qc, SyncEntry, SyncResponse, VoteKind, WireMessage},
     safety::RecordState,
     testing::FakeValidators,
     types::{ChainParams, Hash32, HeightConfig, Millis, PublicKey},
@@ -22,10 +26,12 @@ pub(super) type Hook = Box<dyn Fn(Millis, usize, &Event) -> bool>;
 
 pub(super) struct Node {
     pub core: Option<Core>,
+    budget: mv::allocation::AllocationBudget,
+    acquisitions: BTreeMap<Hash32, PayloadAcquisition>,
     pub key: PublicKey,
     pub record: Option<Vec<u8>>,
-    pub bodies: BTreeMap<Hash32, Block>,
-    pub store: Vec<(Block, Qc)>,
+    pub bodies: BTreeMap<Hash32, AvailableBody>,
+    pub store: Vec<(AvailableBody, Qc)>,
     pub halted: Option<HaltReason>,
     pub evidence: usize,
 }
@@ -53,7 +59,7 @@ pub(super) struct Cluster {
     /// Sequence numbers of injected events (not passed to the hook).
     bypass: Vec<u64>,
     /// Committed blocks per height (the first to commit).
-    pub blocks: BTreeMap<u64, Block>,
+    pub blocks: BTreeMap<u64, AvailableBody>,
     /// View of the first `CommitQC` of every height.
     pub commit_views: BTreeMap<u64, u64>,
     nonce: u64,
@@ -71,6 +77,8 @@ impl Cluster {
             nodes: (0..n)
                 .map(|i| Node {
                     core: None,
+                    budget: mv::allocation::AllocationBudget::new(1 << 30),
+                    acquisitions: BTreeMap::new(),
                     key: v.key(u32::try_from(i).unwrap()),
                     record: None,
                     bodies: BTreeMap::new(),
@@ -127,10 +135,10 @@ impl Cluster {
                 commit_qc: None,
             },
             Some((block, qc)) => CommittedTip {
-                height: block.header.height,
+                height: block.header().height,
                 block_hash: qc.block_hash,
                 result: qc.result,
-                header: Some(block.header.clone()),
+                header: Some(block.header().clone()),
                 commit_qc: Some(qc.clone()),
             },
         };
@@ -155,15 +163,17 @@ impl Cluster {
             nonce: self.nonce,
             tip,
             configs,
-            recent_headers: node.store.iter().map(|(b, _)| b.header.clone()).collect(),
+            recent_headers: node.store.iter().map(|(b, _)| b.header().clone()).collect(),
         };
-        let signer: Box<dyn Signer> = Box::new(self.v.signer(u32::try_from(i).unwrap()).clone());
+        let signer: std::sync::Arc<dyn Signer> =
+            std::sync::Arc::new(self.v.signer(u32::try_from(i).unwrap()).clone());
         let (core, actions) = Core::new(
             self.local,
             init,
             vec![signer],
             Box::new(self.v.crypto.clone()),
             crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            node.budget.clone(),
             self.now,
         )
         .expect("valid configuration");
@@ -174,6 +184,7 @@ impl Cluster {
     /// Crash node `i`: its volatile state and queued events are lost.
     pub fn crash(&mut self, i: usize) {
         self.nodes[i].core = None;
+        self.nodes[i].acquisitions.clear();
         self.queue.retain(|_, (to, _)| *to != i);
     }
 
@@ -200,13 +211,16 @@ impl Cluster {
         if j == from || (self.filter)(from, j, msg) {
             return;
         }
+        let bytes = msg.encode().unwrap();
+        let mut msg = WireMessage::decode(&bytes, 32 << 20).unwrap();
+        msg.admit_owned_bytes(&self.nodes[j].budget).unwrap();
         let from_key = self.nodes[from].key.clone();
         self.schedule(
             self.now + self.latency,
             j,
             Event::Message {
                 from: from_key,
-                msg: msg.clone(),
+                msg,
             },
         );
     }
@@ -253,6 +267,13 @@ impl Cluster {
                             view.to_be_bytes()[7],
                         ]
                     };
+                    let payload = if payload.is_empty() {
+                        None
+                    } else {
+                        let mut bytes = PayloadBytes::from_untrusted(payload).unwrap();
+                        bytes.admit(&self.nodes[i].budget).unwrap();
+                        Some(bytes)
+                    };
                     self.schedule(
                         self.now + 1,
                         i,
@@ -276,7 +297,7 @@ impl Cluster {
                     );
                 }
                 Action::CommitBlock { block, commit_qc } => {
-                    let height = block.header.height;
+                    let height = block.header().height;
                     let value = commit_qc.value();
                     let known = *self.committed.entry(height).or_insert(value);
                     assert_eq!(known, value, "agreement violated at height {height}");
@@ -287,7 +308,7 @@ impl Cluster {
                     );
                     self.blocks.entry(height).or_insert_with(|| block.clone());
                     self.commit_views.entry(height).or_insert(commit_qc.view);
-                    let header = Box::new(block.header.clone());
+                    let header = Box::new(block.header().clone());
                     self.nodes[i].store.push((block, commit_qc));
                     self.schedule(
                         self.now + 1,
@@ -302,48 +323,100 @@ impl Cluster {
                         },
                     );
                 }
-                Action::FetchBody {
-                    height,
-                    block_hash,
-                    peers,
+                Action::AuthorPayload {
+                    req,
+                    config,
+                    header,
+                    payload,
                 } => {
-                    let node = &self.nodes[i];
-                    let local = node.bodies.get(&block_hash).cloned().or_else(|| {
-                        node.store
-                            .iter()
-                            .find(|(b, q)| q.block_hash == block_hash && b.header.height == height)
-                            .map(|(b, _)| b.clone())
-                    });
-                    if let Some(block) = local {
+                    let body = PayloadAuthoring::new(header, payload)
+                        .complete(
+                            I,
+                            &config,
+                            &self.nodes[i].budget,
+                            &self.v.crypto,
+                            self.v.signer(u32::try_from(i).unwrap()),
+                        )
+                        .unwrap_or_else(|(_, e)| panic!("author: {e:?}"))
+                        .body;
+                    self.schedule(self.now + 1, i, Event::PayloadAuthored { req, body });
+                }
+                Action::AcquirePayload { source, manifest } => {
+                    let bh = source.block_hash();
+                    let mut job = PayloadAcquisition::new(source, manifest);
+                    match job.prepare(&self.nodes[i].budget, &self.v.crypto) {
+                        Ok(()) => {
+                            self.nodes[i].acquisitions.entry(bh).or_insert(job);
+                        }
+                        Err(e) if e.rejects_manifest() => self.schedule(
+                            self.now + 1,
+                            i,
+                            Event::ManifestRejected {
+                                manifest: job.manifest().clone(),
+                            },
+                        ),
+                        Err(e) => panic!("acquisition: {e:?}"),
+                    }
+                }
+                Action::ReceivePayloadChunk { chunk, .. } => {
+                    let bh = chunk.block_hash;
+                    if let Some(mut job) = self.nodes[i].acquisitions.remove(&bh) {
+                        let _ = job.push(chunk, &self.nodes[i].budget, &self.v.crypto);
+                        match job.complete(&self.nodes[i].budget, &self.v.crypto) {
+                            Ok(block) => {
+                                self.schedule(self.now + 1, i, Event::BodyAvailable { block })
+                            }
+                            Err((job, crate::availability::AcquisitionError::Incomplete)) => {
+                                self.nodes[i].acquisitions.insert(bh, job);
+                            }
+                            Err((job, e)) if e.rejects_manifest() => self.schedule(
+                                self.now + 1,
+                                i,
+                                Event::ManifestRejected {
+                                    manifest: job.manifest().clone(),
+                                },
+                            ),
+                            Err((_, e)) => panic!("reconstruction: {e:?}"),
+                        }
+                    }
+                }
+                Action::FetchPayload { source, peers } => {
+                    if let Some(body) = self.local_body(i, source.height(), source.block_hash()) {
+                        let job = BodyRestoration::new(
+                            source,
+                            body.header().clone(),
+                            AvailabilityFrame::from_untrusted(
+                                body.availability().as_slice().to_vec(),
+                            )
+                            .unwrap(),
+                            PayloadBytes::from_untrusted(body.payload().as_slice().to_vec())
+                                .unwrap(),
+                        );
+                        let block = job
+                            .complete(&self.nodes[i].budget, &self.v.crypto)
+                            .unwrap_or_else(|(_, e)| panic!("restoration: {e:?}"));
                         self.schedule(self.now + 1, i, Event::BodyAvailable { block });
                     } else {
-                        let msg = WireMessage::BlockRequest(crate::message::BlockRequest {
+                        let msg = WireMessage::PayloadRequest(crate::message::PayloadRequest {
                             instance: I,
-                            height,
-                            block_hash,
+                            height: source.height(),
+                            block_hash: source.block_hash(),
                         });
                         for peer in &peers {
                             self.send(i, peer, &msg);
                         }
                     }
                 }
-                Action::ServeBody {
+                Action::ServePayload {
                     to,
                     height,
                     block_hash,
                 } => {
-                    let node = &self.nodes[i];
-                    let found = node.bodies.get(&block_hash).cloned().or_else(|| {
-                        node.store
-                            .iter()
-                            .find(|(b, q)| q.block_hash == block_hash && b.header.height == height)
-                            .map(|(b, _)| b.clone())
-                    });
-                    if let Some(block) = found {
-                        let msg = WireMessage::BlockResponse(BlockResponse { instance: I, block });
-                        self.send(i, &to, &msg);
+                    if let Some(body) = self.local_body(i, height, block_hash) {
+                        self.disseminate(i, &[to], &body);
                     }
                 }
+                Action::DisseminatePayload { peers, body } => self.disseminate(i, &peers, &body),
                 Action::ServeBlocks {
                     to,
                     from_height,
@@ -353,10 +426,13 @@ impl Cluster {
                     let blocks: Vec<SyncEntry> = self.nodes[i]
                         .store
                         .iter()
-                        .filter(|(b, _)| b.header.height >= from_height)
+                        .filter(|(b, _)| b.header().height >= from_height)
                         .take(usize::from(max_count))
                         .map(|(b, q)| SyncEntry {
-                            block: b.clone(),
+                            manifest: PayloadManifest {
+                                header: b.header().clone(),
+                                availability: b.availability().clone(),
+                            },
                             commit_qc: q.clone(),
                         })
                         .collect();
@@ -374,6 +450,60 @@ impl Cluster {
                 | Action::ReceiveApplicationControl { .. }
                 | Action::PayloadRejected { .. }
                 | Action::LocalFault(_) => {}
+            }
+        }
+    }
+
+    fn local_body(&self, i: usize, height: u64, bh: Hash32) -> Option<AvailableBody> {
+        self.nodes[i]
+            .bodies
+            .get(&bh)
+            .cloned()
+            .or_else(|| {
+                self.nodes[i]
+                    .store
+                    .iter()
+                    .find(|(b, q)| q.block_hash == bh && b.header().height == height)
+                    .map(|(b, _)| b.clone())
+            })
+            .filter(|b| b.header().height == height)
+    }
+
+    fn disseminate(&mut self, i: usize, peers: &[PublicKey], body: &AvailableBody) {
+        let shape = self
+            .config()
+            .epoch
+            .da_layout
+            .shape(body.payload().as_slice().len() as u64)
+            .unwrap();
+        let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+            shape,
+            body.payload().as_slice(),
+            &self.nodes[i].budget,
+        )
+        .unwrap();
+        let manifest = WireMessage::PayloadManifest(PayloadManifest {
+            header: body.header().clone(),
+            availability: body.availability().clone(),
+        });
+        for peer in peers {
+            self.send(i, peer, &manifest);
+        }
+        for index in 0..shape.chunk_count() {
+            let mut bytes = RowBytes::from_untrusted(
+                encoded.codeword()[shape.chunk_range(index).unwrap()].to_vec(),
+            )
+            .unwrap();
+            bytes.admit(&self.nodes[i].budget).unwrap();
+            let chunk = WireMessage::PayloadChunk(PayloadChunk {
+                instance: I,
+                height: body.header().height,
+                block_hash: body.hash(&self.v.crypto),
+                index: index as u32,
+                bytes,
+            });
+            for peer in peers {
+                self.send(i, peer, &chunk);
             }
         }
     }
@@ -435,7 +565,7 @@ impl Cluster {
         self.nodes[i]
             .store
             .last()
-            .map_or(0, |(b, _)| b.header.height)
+            .map_or(0, |(b, _)| b.header().height)
     }
 
     pub fn min_height(&self, nodes: &[usize]) -> u64 {
@@ -711,7 +841,7 @@ fn late_entrant_repush(local: LocalParams) {
             Event::Message {
                 msg: WireMessage::Proposal(p),
                 ..
-            } if p.height == target && p.view == 0 && p.payload.is_some() => {
+            } if p.proposal.height == target && p.proposal.view == 0 => {
                 s.borrow_mut().proposals.push(now);
                 false
             }
@@ -759,9 +889,8 @@ fn late_entrant_repush(local: LocalParams) {
                 ..
             } = event
                 && to == cn
-                && p.height == target
-                && p.view == 0
-                && p.payload.is_some()
+                && p.proposal.height == target
+                && p.proposal.view == 0
             {
                 s.borrow_mut().proposals.push(now);
             }
@@ -792,7 +921,7 @@ fn late_entrant_repush(local: LocalParams) {
     );
     let block = c.blocks.get(&target).expect("committed");
     assert!(
-        !block.header.skipped_leaders.contains(&c.nodes[a].key),
+        !block.header().skipped_leaders.contains(&c.nodes[a].key),
         "A is not skipped"
     );
 }
@@ -832,14 +961,19 @@ fn det_l21_idle_work_wakes_without_heartbeat() {
             c.min_height(&live) >= 3,
             "pending work progresses after idle view changes"
         );
-        assert!(c.blocks.values().all(|block| !block.payload.is_empty()));
+        assert!(
+            c.blocks
+                .values()
+                .all(|block| !block.payload().as_slice().is_empty())
+        );
     }
 }
 
 /// `det_l24_lost_proposal_copy` (ML24; F9): n = 4, `order_{h,0} = [A, C, B, D]` (A leads,
 /// B = P, C in set A), D crashed, hint off; A's proposal copy to C is dropped once; C sends no
-/// keepalive `Status` during view 0 → C receives A's and B's stage-2 Prepare broadcast, asks A
-/// once with `Status{want_proposal}`, gets the proposal at once and Prepares; view 0 commits.
+/// idle keepalive `Status` during view 0 → C receives A's and B's stage-2 Prepare broadcast,
+/// asks A with `Status{want_proposal}`, gets an immediate reply and Prepares; view 0 commits.
+/// The independent interval re-push may also run while availability rows are in flight.
 #[test]
 #[allow(clippy::many_single_char_names)] // replicas named as in the spec
 fn det_l24_lost_proposal_copy() {
@@ -850,6 +984,8 @@ fn det_l24_lost_proposal_copy() {
         dropped: bool,
         requests: usize,
         repushes: usize,
+        request_received: Option<Millis>,
+        proposal_received: Option<Millis>,
         c_prepared: bool,
     }
     let local = LocalParams {
@@ -879,7 +1015,7 @@ fn det_l24_lost_proposal_copy() {
         let mut seen = s.borrow_mut();
         match msg {
             WireMessage::Proposal(p)
-                if p.height == target && p.view == 0 && from == a && to == cn =>
+                if p.proposal.height == target && p.proposal.view == 0 && from == a && to == cn =>
             {
                 if !seen.dropped {
                     seen.dropped = true;
@@ -904,11 +1040,39 @@ fn det_l24_lost_proposal_copy() {
         }
         false
     });
+    let s = Rc::clone(&seen);
+    let requester = c.nodes[cn].key.clone();
+    c.hook = Box::new(move |now, to, event| {
+        if let Event::Message { from, msg } = event {
+            let mut seen = s.borrow_mut();
+            match msg {
+                WireMessage::Status(st)
+                    if to == a && *from == requester && st.want_proposal && st.height == target =>
+                {
+                    seen.request_received.get_or_insert(now);
+                }
+                WireMessage::Proposal(p)
+                    if to == cn && p.proposal.height == target && p.proposal.view == 0 =>
+                {
+                    seen.proposal_received.get_or_insert(now);
+                }
+                _ => {}
+            }
+        }
+        false
+    });
     c.run_until(c.now + 60_000);
     let seen = seen.borrow();
     assert!(seen.dropped, "A's copy to C was dropped");
     assert!(seen.requests >= 1, "C asked A for the proposal");
-    assert_eq!(seen.repushes, 1, "A re-pushed once");
+    assert!(
+        (1..=2).contains(&seen.repushes),
+        "at most one immediate and one independent interval re-push: {}",
+        seen.repushes
+    );
+    let requested = seen.request_received.expect("A received C's request");
+    let received = seen.proposal_received.expect("C received the proposal");
+    assert_eq!(received, requested + c.latency, "A replies immediately");
     assert!(seen.c_prepared, "C Prepared at ({target}, 0)");
     assert_eq!(c.commit_views.get(&target), Some(&0), "view 0 commits");
 }

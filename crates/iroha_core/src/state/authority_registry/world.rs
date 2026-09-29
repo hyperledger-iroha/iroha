@@ -11,6 +11,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Cell(schema::<Parameters>())));
     consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => ("world.consensus_schedule",
         Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::schedule::ConsensusSchedule>())));
+    state_accumulator: Cell<crate::state::world_projection::WorldStateAccumulator> => ("world.state_accumulator",
+        Role::Derived { sources: &["state.world"], check: DerivationCheck::Commitment("state::world_projection::WorldStateAccumulator::capture") });
     peers: Cell<Peers> => ("world.peers",
         Role::Canonical(Canonical::Cell(schema::<Peers>())));
     domains: Storage<DomainId, Domain> => ("world.domains",
@@ -572,6 +574,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Local("Process delivery buffer; authoritative invocation effects and completions belong to execution output carriers"));
     sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState> => ("world.sumeragi_lanes",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_lanes::SumeragiLaneState>())));
+    sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> => ("world.sumeragi_amx",
+        Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_amx::SumeragiAmxState>())));
     sccp_parameters: Cell<Option<iroha_data_model::sccp::params::SccpParametersV1>> => ("world.sccp_parameters",
         Role::Canonical(Canonical::Cell(schema::<Option<iroha_data_model::sccp::params::SccpParametersV1>>())));
     sccp_reset_nonce: Cell<Option<[u8; 32]>> => ("world.sccp_reset_nonce",

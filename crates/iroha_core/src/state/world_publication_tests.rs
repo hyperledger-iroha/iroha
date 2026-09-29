@@ -327,8 +327,8 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
             ]
         };
     }
-    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 310] =
-        with_world_overlay_fields!(holders);
+    let holders: &[(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>)] =
+        &with_world_overlay_fields!(holders);
     let world = fixture();
     let before = all_images(&world);
     let mut original = world.block();
@@ -336,7 +336,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
     let mut journal = capture(original);
     let expected = journal.fields().collect::<Vec<_>>();
     let custody = physical_custody(&journal);
-    for (name, hold) in holders {
+    for &(name, hold) in holders {
         let held = hold(&world);
         let (retained, error, _cleanup) = journal
             .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
@@ -410,7 +410,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
             ]
         };
     }
-    let invalidators: [(&str, fn(&World)); 310] = with_world_overlay_fields!(invalidators);
+    let invalidators: &[(&str, fn(&World))] = &with_world_overlay_fields!(invalidators);
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));

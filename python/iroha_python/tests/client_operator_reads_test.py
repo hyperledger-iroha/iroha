@@ -367,7 +367,7 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
     ("/v1/pipeline/recovery/42", lambda client: client.get_pipeline_recovery(42)),
     ("/v1/sumeragi/status", lambda client: client.get_sumeragi_status()),
     ("/v1/sumeragi/status", lambda client: client.get_sumeragi_status_typed()),
-    ("/v1/sumeragi/leader", lambda client: client.get_sumeragi_leader()),
+    ("/v1/sumeragi/lanes", lambda client: client.get_sumeragi_lanes()),
     (
         "/v1/sumeragi/evidence/count",
         lambda client: client.get_sumeragi_evidence_count(),

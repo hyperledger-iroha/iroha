@@ -285,7 +285,8 @@ mod tests {
 
         let mut invalid =
             CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
-        invalid.commit_with(Some(20_000), Vec::new(), Signers::BelowQuorum);
+        invalid.commit_at(20_000, Vec::new());
+        invalid.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
         assert!(matches!(
             build_proof(&invalid.state().view(), 2),
             Err(ProofError::Chain(ChainReadError::Certificate { .. }))

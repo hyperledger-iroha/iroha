@@ -3340,25 +3340,6 @@ test(
 );
 
 test(
-  "sumeragi leader snapshot exposes PRF context",
-  {
-    timeout: 60_000,
-  },
-  async (t) => {
-    const leader = await OPERATOR_CLIENT.getSumeragiLeader();
-    assert.ok(leader && typeof leader === "object", "leader snapshot must be present");
-    assertNonNegativeInteger(leader.leader_index, "sumeragi leader_index");
-    assert.ok(leader.prf && typeof leader.prf === "object", "leader prf snapshot must exist");
-    assertNonNegativeInteger(leader.prf.height, "sumeragi leader prf.height");
-    assertNonNegativeInteger(leader.prf.view, "sumeragi leader prf.view");
-    if (leader.prf.epoch_seed !== null) {
-      assert.equal(typeof leader.prf.epoch_seed, "string", "leader prf epoch_seed must be string");
-      assert.notEqual(leader.prf.epoch_seed.length, 0, "leader prf epoch_seed must be non-empty");
-    }
-  },
-);
-
-test(
   "sumeragi params snapshot exposes runtime configuration",
   {
     timeout: 60_000,
@@ -3366,21 +3347,14 @@ test(
   async (t) => {
     const params = await OPERATOR_CLIENT.getSumeragiParams();
     assert.ok(params && typeof params === "object", "params snapshot must be an object");
-    assertNonNegativeInteger(params.block_time_ms, "sumeragi params block_time_ms");
-    assertNonNegativeInteger(params.commit_time_ms, "sumeragi params commit_time_ms");
+    assert.deepEqual(
+      Object.keys(params).sort(),
+      ["block_cadence_ms", "chain_height", "max_clock_drift_ms"],
+      "params snapshot carries exactly the served fields",
+    );
+    assertNonNegativeInteger(params.block_cadence_ms, "sumeragi params block_cadence_ms");
+    assert.ok(params.block_cadence_ms > 0, "sumeragi params block_cadence_ms must be nonzero");
     assertNonNegativeInteger(params.max_clock_drift_ms, "sumeragi params max_clock_drift_ms");
-    assertNonNegativeInteger(params.collectors_k, "sumeragi params collectors_k");
-    assertNonNegativeInteger(params.redundant_send_r, "sumeragi params redundant_send_r");
-    assert.equal(typeof params.da_enabled, "boolean", "sumeragi params da_enabled must be boolean");
-    if (params.next_mode !== null) {
-      assert.equal(typeof params.next_mode, "string", "sumeragi params next_mode must be string");
-    }
-    if (params.mode_activation_height !== null) {
-      assertNonNegativeInteger(
-        params.mode_activation_height,
-        "sumeragi params mode_activation_height",
-      );
-    }
     assertNonNegativeInteger(params.chain_height, "sumeragi params chain_height");
   },
 );

@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-29.
 
+Core/network owners must qualify the [restricted native-lane gossip fix](docs/history/2026-09-30/restricted-lane-gossip.md) with a fresh same-source daemon and harness: all governed pools must finalize with disjoint global/participant committees, and unrelated identities must receive no restricted gossip. The passing scoped controls do not close network settlement qualification.
+
 The active [Kotodama/IVM completion goals](specs/kotodama_ivm_completion.md) require one final ABI V1 with direct removal of retired interfaces. Work runs only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`. Reconcile the prepared implementation with current State/Sumeragi/FASTPQ ownership, finish G1–G7, regenerate all consumers together, then qualify one unchanged candidate under G8. The complete native execution proof, finalized State anchor, private invocation, anchored AXT, production publication and hardware/release evidence remain open. Historical candidate passes do not qualify this combined source.
 
 Next IVM ownership gates are execution of the applied fallible lifecycle/final-owner erasure controls, original-pool custody for detached proof-task traces, and physically fallible shared-control allocation. Complete the missing Musubi semantic capture prerequisites before State-reader registration; bind Metal calibration, dispatch and quarantine to the same physical device owner. See the [memory cleanup engineering record](docs/history/2026-09-29/kotodama-ivm-memory-cleanup.md).
@@ -51,6 +53,8 @@ The [World acquisition correction](docs/history/2026-09-21/world-acquisition-cus
 Complete [validator staking](specs/staking_validator_completion.md): authenticate candidate consent and real-XOR eligibility before freezing selection, authenticate generation-bound mint keys during the preparation epoch, qualify signed encrypted per-seat beacon DKG and retain current/pending custody across restart, then atomically activate the matching certified session. Qualify exact custody effects, once-per-leg charges for signed real-XOR staking transfers under a distinct DS fee asset, and ordinary Nexus/PipelineGas signed payer bounds for staking, then prove admission and prepared 4→7→4 rotation with rewards, exit and restart on one unchanged network candidate. DA and liveness qualification (N2) remain open. Qualify the new candidate-pool admission and immutable E+2 transition together; explicit treasury distributions do not supply an automatic economic policy.
 
 ## Architecture and build ownership
+
+Carry the [qualified SDK capability slice](docs/history/2026-09-29/sdk-capability-qualification.md) through the remaining CLI/integration consumers and unchanged real-network scenarios. The World acquisition correction, actual async peer preparation, canonical constructor ordering and original-envelope authentication pass the 99/50/4 focused genesis/Core/daemon slice without oversized workers. Remaining synchronous operations, model boundaries, source/dependency budgets and pinned-memory/native/network acceptance remain open.
 
 The [approved design](specs/first_release_architecture_redesign.md),
 [repository map](docs/repository_map.md), [SDK route inventory](docs/sdk_inventory.md)

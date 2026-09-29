@@ -336,7 +336,7 @@ mod tests {
 
         for args in [
             vec!["beacon-history", "lane0", "--from", "1", "--length", "4"],
-            vec!["finality", "lane0", "--height", "4"],
+            vec!["finality", "lane0", "--chain-id", "chain", "--height", "4"],
         ] {
             assert!(
                 crate::Cli::try_parse_from(["kagami", "advanced", "kura"].into_iter().chain(args))
@@ -345,8 +345,18 @@ mod tests {
         }
         for args in [
             vec!["beacon-history", "lane0", "--length", "4"],
-            vec!["finality", "lane0", "--height", "4", "--from", "2"],
-            vec!["lane0", "finality", "--height", "4"],
+            vec!["finality", "lane0", "--height", "4"],
+            vec![
+                "finality",
+                "lane0",
+                "--chain-id",
+                "chain",
+                "--height",
+                "4",
+                "--from",
+                "2",
+            ],
+            vec!["lane0", "finality", "--chain-id", "chain", "--height", "4"],
         ] {
             assert!(
                 crate::Cli::try_parse_from(["kagami", "advanced", "kura"].into_iter().chain(args))

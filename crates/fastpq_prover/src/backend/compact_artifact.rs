@@ -268,7 +268,7 @@ fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
 #[cfg(test)]
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+    reason = "keeps the by-value `Copy` limits contract of its `tests` and `quantity_tests` callers"
 )]
 pub(in crate::backend) fn verify_ordinary_artifact(
     bytes: &[u8],
@@ -283,7 +283,7 @@ pub(in crate::backend) fn verify_ordinary_artifact(
 #[cfg(test)]
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+    reason = "keeps the by-value `Copy` limits contract of its `quantity_tests` callers"
 )]
 pub(in crate::backend) fn verify_quantity_ordinary_artifact(
     bytes: &[u8],
@@ -297,7 +297,7 @@ pub(in crate::backend) fn verify_quantity_ordinary_artifact(
 /// This mandatory normal-library input is checked before carrier or child verification.
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+    reason = "keeps the by-value `Copy` limits contract of the offline facade and test callers"
 )]
 pub(in crate::backend) fn verify_bound_quantity_ordinary_artifact(
     bytes: &[u8],
@@ -366,7 +366,7 @@ fn verify_ordinary_artifact_for<V: CompactTransferValue>(
 #[cfg(test)]
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+    reason = "keeps the by-value `Copy` context/limits contract of `tests` and `quantity_tests`"
 )]
 pub(in crate::backend) fn verify_axt_artifact(
     bytes: &[u8],
@@ -382,7 +382,7 @@ pub(in crate::backend) fn verify_axt_artifact(
 #[cfg(test)]
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+    reason = "keeps the by-value `Copy` context/limits contract of its `quantity_tests` callers"
 )]
 pub(in crate::backend) fn verify_quantity_axt_artifact(
     bytes: &[u8],
@@ -397,7 +397,7 @@ pub(in crate::backend) fn verify_quantity_axt_artifact(
 /// All AXT context and complete statement identity remain caller expectations.
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` context/limits contract of sibling-module callers"
+    reason = "keeps the by-value `Copy` context/limits contract of the offline facade and tests"
 )]
 pub(in crate::backend) fn verify_bound_quantity_axt_artifact(
     bytes: &[u8],
@@ -468,7 +468,7 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
 
 #[allow(
     clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` context contract of its sibling test module"
+    reason = "keeps the by-value `Copy` context contract of its `tests` child-module callers"
 )]
 fn validate_axt_advertisement(
     artifact: &FastpqAxtCompactArtifactV1,

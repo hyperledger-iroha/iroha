@@ -24092,8 +24092,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             where code == 408 || code == 409 || code == 425 || code == 429
                 || (500...599).contains(code):
             return error
-        case .invalidURL, .httpStatus, .stream, .dataModelMismatch,
-             .transactionSchemaMismatch:
+        case .ramLfeEncryptionUnavailable, .invalidURL, .httpStatus, .stream,
+             .dataModelMismatch, .transactionSchemaMismatch:
             return nil
         }
     }

@@ -33,3 +33,11 @@ enum NativeStatusFixtures {
         return row.1
     }
 }
+
+/// Re-open a JSON object body with `prefix` (for example `{"protocol_version":4,`) so the
+/// served object repeats one of its root fields; strict status decoders must reject it.
+func duplicateSumeragiRootField(_ prefix: String, in payload: Data) -> Data {
+    var duplicate = Data(prefix.utf8)
+    duplicate.append(contentsOf: payload.dropFirst())
+    return duplicate
+}

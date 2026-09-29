@@ -849,7 +849,7 @@ $ iroha dataspace apply dataspaces/acme.toml
    - The optional owner `[edge]` with per-node gateways.
 3. **Sync.**
    - Owner nodes dial Taira's public P2P and are admitted as authenticated NPoS observers (`iroha_p2p network.rs:15097-15102`).
-   - Being absent from the roster, they run the global protocol as observers (`v2_runner.rs:2726-2733`).
+   - Being absent from the roster, they run the global protocol as observers, which never vote (`specs/sumeragi.md` §1).
    - They replay the chain from genesis.
    - The tool waits until each owner node's signed `latest` attestation is within 2 blocks of the verified Taira tip.
 4. **One transaction:** `[EnsureAlias…, Register<Account>×4, RegisterDataspaceV1{committee: Explicit([4 members])}]`.
@@ -1250,7 +1250,7 @@ There is one implementation, `iroha_deploy::verify`, running in-process. Each ga
      Anything else is a parse error. Files without `profile` stay ordinary flat configs.
    - Node-bound templates: the profile's `torii.faucet`, `torii.account_onboarding` and `torii.kagemusha_v1_commands` sections apply only when the node file binds that section's authority (`authority`, or `redemption_authority` for KAGEMUSHA V1). A bound section's key comes from its fixed `<data_dir>/secrets/authority/*.key` file, and the parser rejects a key that does not sign for the bound authority. `sora-nexus-v1` carries Taira's KAGEMUSHA V1 commands (redemption minimum balance 1 XOR, operation registry 4096 entries and 593920 bytes), so the renderer enables them on every validator by emitting the redemption authority it created at genesis.
    - `NodeSecretFile::SorafsCouncilAuthority` names `authority/sorafs_council.key` in the fixed layout the deploy engine writes; no node configuration key reads it (the node verifies council signatures with public `trusted_council_keys`), so the node never opens it.
-   - Profiles replace the `iroha3d_taira` exact-match guards (`taira_runtime_signer.rs:126-298`). Genesis-bound hashes (`v2_context.rs:533-571`) and the handshake (`peer.rs:11929-11965`) still catch any divergence.
+   - Profiles replace the `iroha3d_taira` exact-match guards (`taira_runtime_signer.rs:126-298`). Genesis-bound hashes (checked by `irohad` against the authenticated genesis Sumeragi context) and the `iroha_p2p` peer handshake still catch any divergence.
    - `--config-blake3` stays, because the node file is flat.
 2. **`data_dir`** (user, actual, defaults). A relative `data_dir` resolves against the directory of the file that sets it and is then made absolute against the working directory, so every derived path is absolute; the loader writes the resolved value to its own source, and the parser rejects a `data_dir` read without the loader (`ParseError::InvalidDataDir`). Every state path defaults under `<data_dir>/state/`. Secret paths default to fixed `<data_dir>/secrets/*` names, including `torii.account_onboarding.private_key_file`, the faucet authority key and the KAGEMUSHA V1 redemption key. This replaces the 11 paths rewritten by `validator_config.rs:139-190`.
 3. **`irohad::node_secrets`** (about 500 lines). Builds `IrohaRuntimeDeps` for the Soracloud signer (when `production_mode` is set), the mint-finality authority, and the beacon partial signer (when `beacon.cred` exists). It verifies each against the rendered public binding.
@@ -1385,7 +1385,7 @@ It also has:
 
 ### 11.4 What "restricted" honestly means
 
-- Lanes are FullReplica. Every Taira validator, every owner node and every observer executes and stores restricted-lane data. Certified-body serving checks neither membership nor visibility (`v2_transport.rs:450-466`).
+- Lanes are FullReplica. Every Taira validator, every owner node and every observer executes and stores restricted-lane data. Certified-body serving checks neither membership nor visibility (`serve` in `crates/iroha_core/src/sumeragi/driver/serve.rs`).
 - "Restricted" means Torii read filtering, the restricted gossip plane and admin-managed committees. It does not mean confidentiality from Taira operators or observers.
 - The plan output and the docs say this plainly.
 - S2b adds narrower guarantees: the owner's 2f+1 certify every lane height, and the lane's authoritative Torii endpoints are the owner's own.

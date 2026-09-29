@@ -311,110 +311,6 @@ def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRe
     )
 
 
-_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
-    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-)
-
-
-
-
-
-
-
-
-
-
-def _autonomous_lane_execution_payload() -> Dict[str, Any]:
-    return {
-        "lane_id": 3,
-        "dataspace_id": 8,
-        "lane_incarnation": _canonical_hash(0x65),
-        "lane_block_height": 8,
-        "lane_block_view": 1,
-        "proposal_height": 10,
-        "proposal_view": 2,
-        "reservation_owner_hash": _canonical_hash(0x66),
-        "proposal_identity_hash": _canonical_hash(0x67),
-        "reservation_group_hash": _canonical_hash(0x68),
-        "proposal_hash": _canonical_hash(0x69),
-        "descriptor_hash": _canonical_hash(0x73),
-        "executable_payload_hash": _canonical_hash(0x74),
-        "source_bundle_hash": _canonical_hash(0x75),
-        "merge_entry_hash": _canonical_hash(0x76),
-        "application_block_height": 12,
-        "application_block_hash": _canonical_hash(0x77),
-        "reservation_count": 2,
-        "transaction_count": 2,
-        "highest_durable_stage": "kura_wsv_application_receipt_durable",
-        "stuck_reason": "queue_finalization_unverifiable",
-    }
-
-
-def _lane_settlement_payload() -> Dict[str, Any]:
-    return {
-        "block_height": 9,
-        "lane_id": 2,
-        "lane_incarnation": _canonical_hash(0x51),
-        "dataspace_id": 7,
-        "tx_count": 1,
-        "total_local_amount": "10",
-        "total_xor_due": "5",
-        "total_xor_after_haircut": "4",
-        "total_xor_variance": "1",
-        "swap_metadata": {
-            "epsilon_bps": 5,
-            "twap_window_seconds": 60,
-            "liquidity_profile": {"profile": "Tier1", "state": None},
-            "twap_local_per_xor": "2.5",
-            "volatility_class": {"bucket": "Stable", "state": None},
-        },
-        "receipts": [
-            {
-                "source_id": "52" * 32,
-                "local_amount": "10",
-                "xor_due": "5",
-                "xor_after_haircut": "4",
-                "xor_variance": "1",
-                "timestamp_ms": 1700,
-            }
-        ],
-        "nexus_fee_receipts": [],
-        "native_amx_receipts": [],
-    }
-
-
-def _nexus_fee_receipt_payload() -> Dict[str, Any]:
-    return {
-        "version": 1,
-        "source_id": "A1" * 32,
-        "dataspace_id": 7,
-        "lane_id": 2,
-        "block_height": 9,
-        "payer_account_id": CANONICAL_OWNER,
-        "fee_asset_id": "xor#universal",
-        "fee_amount": CANONICAL_LARGE_FRACTION,
-        "schedule": {
-            "tx_bytes_len": 128,
-            "instruction_count": 2,
-            "gas_used": 3,
-            "base_fee": "1",
-            "per_byte_fee": "0.5",
-            "per_instruction_fee": "2",
-            "per_gas_unit_fee": "0",
-        },
-    }
-
-
-
-
-
-
-
-
-
-
-
-
 def _canonical_signature_base64_fixture() -> str:
     return base64.b64encode(bytes([1]) * 64).decode("ascii")
 
@@ -5383,7 +5279,6 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
         base_url = server.base_url.rstrip("/")
         fixtures = {
             "status": {"protocol_version": 1, "height": 42},
-            "leader": {"leader_index": 2},
         }
         response = requests.post(
             f"{base_url}/__mock__/sumeragi/config",
@@ -5519,6 +5414,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
         ("GET", "/v1/sumeragi/rbc/sessions"),
         ("POST", "/v1/sumeragi/rbc/sample"),
         ("GET", "/v1/sumeragi/collectors"),
+        ("GET", "/v1/sumeragi/leader"),
     ),
 )
 def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: str) -> None:
@@ -6410,29 +6306,6 @@ def _status_payload(
     }
 
 
-def test_get_sumeragi_leader_parses_prf() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "leader_index": 3,
-                "prf": {"height": 100, "view": 4, "epoch_seed": "ff00"},
-            }
-        )
-    )
-    client = ToriiClient(
-        "http://node.test",
-        session=session,
-        operator_signing_context=_operator_context(),
-    )
-
-    leader = client.get_sumeragi_leader()
-
-    assert leader.leader_index == 3
-    assert leader.prf.epoch_seed == "ff00"
-    assert session.calls[0]["url"].endswith("/v1/sumeragi/leader")
-
-
 def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> None:
     retired_methods = (
         "get_sumeragi_rbc",
@@ -6440,6 +6313,7 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         "get_sumeragi_rbc_delivered",
         "sample_rbc_chunks",
         "get_sumeragi_collectors",
+        "get_sumeragi_leader",
     )
     for name in retired_methods:
         assert not hasattr(ToriiClient, name), name
@@ -6454,6 +6328,8 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         "RbcSample",
         "RbcChunkSample",
         "RbcMerkleProof",
+        "SumeragiLeaderSnapshot",
+        "SumeragiPrfContext",
     )
     for name in retired_models:
         assert not hasattr(client_module, name), name
@@ -6462,23 +6338,10 @@ def test_retired_global_sumeragi_rbc_and_collectors_surfaces_are_absent() -> Non
         assert name not in torii_module.__all__, name
 
 
-def test_get_sumeragi_params_parses_flags() -> None:
+def test_get_sumeragi_params_parses_the_served_snapshot() -> None:
+    served = {"block_cadence_ms": 2000, "max_clock_drift_ms": 20, "chain_height": 777}
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "block_time_ms": 2000,
-                "commit_time_ms": 500,
-                "max_clock_drift_ms": 20,
-                "collectors_k": 3,
-                "redundant_send_r": 1,
-                "da_enabled": True,
-                "next_mode": None,
-                "mode_activation_height": 1200,
-                "chain_height": 777,
-            }
-        )
-    )
+    session.queue(StubResponse(payload=served))
     client = ToriiClient(
         "http://node.test",
         session=session,
@@ -6487,9 +6350,19 @@ def test_get_sumeragi_params_parses_flags() -> None:
 
     params = client.get_sumeragi_params()
 
-    assert params.da_enabled is True
-    assert params.mode_activation_height == 1200
+    assert (params.block_cadence_ms, params.max_clock_drift_ms, params.chain_height) == (2000, 20, 777)
     assert session.calls[0]["url"].endswith("/v1/sumeragi/params")
+
+    for payload, message in [
+        ({**served, "collectors_k": 3}, "unsupported fields: collectors_k"),
+        ({"block_time_ms": 2000, "max_clock_drift_ms": 20, "chain_height": 777}, "block_time_ms"),
+        ({"block_cadence_ms": 2000, "max_clock_drift_ms": 20}, "chain_height"),
+        ({**served, "block_cadence_ms": 0}, "must be nonzero"),
+        ({**served, "chain_height": -1}, "chain_height"),
+    ]:
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError, match=message):
+            client.get_sumeragi_params()
 
 
 def test_get_sumeragi_bls_keys_parses_map() -> None:

@@ -28,8 +28,9 @@ IDENTITY = "crates/norito/src/schema/identity.rs"
 IDENTITY_DERIVE = "crates/norito_derive/src/schema_identity.rs"
 CODEGEN = "crates/norito_derive/src/tests/deserialize_codegen.rs"
 COUNT_TESTS = "crates/norito/src/core/counting_tests.rs"
+ENCODER_TESTS = "crates/norito/src/core/encoder_tests.rs"
 OWNERS = (CORE, ENCODER, FRAMES, COLUMNAR, DERIVE, ATTRS, JSON_WRITER, IDENTITY, IDENTITY_DERIVE)
-SOURCE_FILES = (*OWNERS, CODEGEN, COUNT_TESTS)
+SOURCE_FILES = (*OWNERS, CODEGEN, COUNT_TESTS, ENCODER_TESTS)
 RAW_STRING_START = re.compile(r'(?:b?r)(#*)"')
 
 class ContractError(AssertionError):
@@ -258,14 +259,27 @@ def validate_columnar(sources: dict[str, str]) -> None:
     require("bytes.len().saturating_sub(prefix.len())" in count.code and "Error::LengthMismatch" in count.code and "enforce_decode_sequence_length(u64::from(count))?" in count.code, "columnar.row_count_bounds")
 
 
+def encoding_roles(sources: dict[str, str]) -> dict[str, Function]:
+    """Find the current scoped encoder operations without pinning private names."""
+    predicates = {
+        "count_destination": lambda item: "->Result<bool,Error>" in item.signature and "EncoderSink::Counting" in item.code,
+        "count_kind": lambda item: "->bool" in item.signature and "EncoderSink::Counting" in item.code,
+        "count_constructor": lambda item: "LengthCountingWriter" in item.signature and "->Self" in item.signature,
+        "exact_scope": lambda item: "FnOnce(&mutSelf)->Result<(),Error>" in item.signature,
+    }
+    return {name: role(sources, ENCODER, predicate, f"encoding.{name}_owner") for name, predicate in predicates.items()}
+
+
 def validate_encoding(sources: dict[str, str]) -> None:
-    # Discover the destination-owned skip operation by its role, not its name.
-    skip = role(sources, ENCODER, lambda item: "EncoderSink::Counting" in item.code and ".add(" in item.code, "encoding.count_destination_owner")
-    require("Ok(true)" in skip.code and "Ok(false)" in skip.code, "encoding.count_destination_isolation")
-    constructor = role(sources, ENCODER, lambda item: "Self{sink:EncoderSink::Counting(" in item.code, "encoding.count_constructor_owner")
+    owners = encoding_roles(sources)
+    skip, kind, constructor = (owners[key] for key in ("count_destination", "count_kind", "count_constructor"))
+    require(kind.code == "matches!(self.sink,EncoderSink::Counting(_))" and skip.code.startswith(f"if!self.{kind.name}(){{returnOk(false);}}"), "encoding.count_destination_isolation")
+    factory_call = re.fullmatch(r"Self::(\w+)\(EncoderSink::Counting\(counter\)\)", constructor.code)
+    require(factory_call is not None, "encoding.count_constructor_destination")
     counter = operation(sources, CORE, "encoded_payload_len")
     require(f"Encoder::{constructor.name}(" in counter.code and "value.serialize(&mutencoder)?" in counter.code and ".finish()?" in counter.code and "validate_header_flags(flags)?" in counter.code, "encoding.actual_measurement")
-    owned = role(sources, CORE, lambda item: f".{skip.name}(" in item.code and "serialize_to_writer_exact(" in item.code, "encoding.measured_emission_owner")
+    owned = role(sources, CORE, lambda item: f".{skip.name}(" in item.code, "encoding.measured_emission_owner")
+    require(owned.code == f"ifwriter.{skip.name}(measured_len)?{{Ok(())}}else{{writer.{owners['exact_scope'].name}(measured_len,|writer|value.serialize(writer))}}", "encoding.measured_emission_uses_scope")
     preceding = owned.source[max(0, owned.start - 20):owned.start]
     require(not re.search(r"\bpub(?:\([^)]*\))?\s*$", preceding), "encoding.measured_emission_private")
     field = operation(sources, CORE, "write_len_prefixed")
@@ -275,7 +289,7 @@ def validate_encoding(sources: dict[str, str]) -> None:
     checked = False
     if binding:
         writer_name, expected_name = binding.groups()
-        checked = bool(re.search(rf"if{writer_name}\.\w+\(\)\{{returnErr\(Error::LengthMismatch\);\}}", exact.code)) and bool(re.search(rf"{writer_name}\.\w+\(\)=={expected_name}", exact.code))
+        checked = f"letresult=serialize_to_writer(value,&mut{writer_name});" in exact.code and bool(re.search(rf"if{writer_name}\.\w+\(\)\{{returnErr\(Error::LengthMismatch\);\}}", exact.code)) and bool(re.search(rf"{writer_name}\.\w+\(\)=={expected_name}", exact.code))
     require(checked and "result?;" in exact.code and f".{skip.name}(" not in exact.code, "encoding.public_exact_checks_output")
     frame = operation(sources, FRAMES, "write_frame_with_prefix")
     require("encoded_frame_len(value)?" in frame.code and "prefix(writer,frame_len)?" in frame.code and f".{skip.name}(frame_len)?" in frame.code and ".ok_or(Error::NonCanonicalEncoding)" in frame.code, "encoding.frame_owned_measurement")
@@ -328,6 +342,13 @@ def validate_identity(sources: dict[str, str]) -> None:
 
 
 RUNTIME_CONTRACTS = {
+    ENCODER_TESTS: (
+        "smallest_enclosing_bound_wins_and_overrun_stays_sticky",
+        "panic_restores_bound_and_keeps_successfully_written_prefix",
+        "partial_writes_and_interrupted_retry_count_only_actual_bytes",
+        "trusted_counting_measured_bytes_still_respect_an_active_bound",
+        "actual_nested_frame_still_rejects_same_length_checksum_drift",
+    ),
     COUNT_TESTS: (
         "nested_counting_visits_each_leaf_once_in_every_layout",
         "counting_never_trusts_public_exact_writer_lengths",

@@ -781,6 +781,10 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
     let certificate = original
         .commit_certificate()
         .expect("original native certificate");
+    assert!(
+        !certificate.availability().is_empty(),
+        "native signed availability"
+    );
     let mut substituted_qc = certificate.commit_qc().to_vec();
     assert!(!substituted_qc.is_empty());
     substituted_qc[0] ^= 1;
@@ -789,12 +793,18 @@ fn occupied_native_frame_rejects_certificate_substitution_without_journal_mutati
             certificate.consensus_header().to_vec(),
             substituted_qc,
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         ),
     ));
     assert_eq!(
         substituted.hash(),
         original.hash(),
         "the signed body is unchanged"
+    );
+    assert_eq!(
+        substituted.commit_certificate().unwrap().availability(),
+        certificate.availability(),
+        "QC corruption preserves the original signed availability"
     );
     assert_ne!(substituted.encode_wire().unwrap(), original_wire);
     assert!(matches!(

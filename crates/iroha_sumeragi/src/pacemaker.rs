@@ -168,6 +168,23 @@ pub fn validate_chain(chain: &ChainParams, transport_limit: u64) -> Result<(), C
     Ok(())
 }
 
+/// Validate chain parameters against their exact authenticated epoch layout.
+///
+/// # Errors
+/// Invalid chain/layout bounds or an unencodable admitted payload maximum.
+pub fn validate_height(config: &HeightConfig, transport_limit: u64) -> Result<(), ConfigError> {
+    validate_chain(&config.params, transport_limit)?;
+    config
+        .epoch
+        .da_layout
+        .validate()
+        .map_err(ConfigError::AvailabilityLayout)?;
+    if u64::from(config.params.max_block_bytes) > config.epoch.da_layout.max_payload_size_bytes {
+        return Err(ConfigError::PayloadAboveAvailabilityLimit);
+    }
+    Ok(())
+}
+
 /// `P(0) = payload_retry_interval + build_timeout`; `P(v > 0) = build_timeout`.
 pub fn propose_allowance(view: u64, chain: &ChainParams, build_timeout: Millis) -> Millis {
     if view == 0 {
@@ -442,6 +459,22 @@ impl Pacemaker {
 mod tests {
     use super::*;
     use crate::types::{Committee, PublicKey};
+
+    #[test]
+    fn height_configuration_requires_valid_encodable_signed_layout() {
+        let mut candidate = config(4, ChainParams::default());
+        validate_height(&candidate, u64::MAX).unwrap();
+        candidate.epoch.da_layout.max_payload_size_bytes = 1;
+        assert_eq!(
+            validate_height(&candidate, u64::MAX),
+            Err(ConfigError::PayloadAboveAvailabilityLimit)
+        );
+        candidate.epoch.da_layout.parity_shards = 0;
+        assert!(matches!(
+            validate_height(&candidate, u64::MAX),
+            Err(ConfigError::AvailabilityLayout(_))
+        ));
+    }
 
     fn config(n: usize, params: ChainParams) -> HeightConfig {
         let keys = (0..n)

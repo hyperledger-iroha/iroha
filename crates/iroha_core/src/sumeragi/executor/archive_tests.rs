@@ -204,6 +204,7 @@ fn context(
 
 fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> {
     Worker {
+        payload_build: None,
         context,
         state: &context.state,
         applied: context.applied,
@@ -221,7 +222,7 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
     }
 }
 
-fn prepare_and_append(worker: &mut Worker<'_>, block: &Block, qc: &Qc) -> usize {
+fn prepare_and_append(worker: &mut Worker<'_>, block: &AvailableBody, qc: &Qc) -> usize {
     assert_eq!(worker.prepare(block, qc).unwrap(), Some(qc.result));
     let original = worker
         .live
@@ -238,13 +239,25 @@ fn prepare_and_append(worker: &mut Worker<'_>, block: &Block, qc: &Qc) -> usize 
         1,
         worker.context.staging.clone(),
         worker.state.ivm_execution_budget(),
+        Arc::new(
+            crate::sumeragi::runtime_availability::NativeGlobalAvailability::new(
+                Arc::clone(&worker.context.state),
+                block.header().instance,
+                Arc::clone(worker.context.crypto.as_ref().unwrap()),
+            )
+            .unwrap(),
+        ),
+        Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
+            block.header().instance,
+            *worker.state.network_id_ref(),
+        )),
     )
     .append(block, qc)
     .unwrap();
     original
 }
 
-fn hold_archive_completion(worker: &mut Worker<'_>, block: &Block, qc: &Qc) {
+fn hold_archive_completion(worker: &mut Worker<'_>, block: &AvailableBody, qc: &Qc) {
     let original = prepare_and_append(worker, block, qc);
     let root = worker
         .archives
@@ -299,7 +312,7 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     let (context, mut events) = context(&chain);
     let mut worker = worker(&context, archives.clone());
     let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
-    let proposal = payload::decode(&block.payload).unwrap();
+    let proposal = payload::decode(block.payload().as_slice()).unwrap();
     let TransactionEntrypoint::External(transaction) = &proposal.external_entrypoints_slice()[0]
     else {
         panic!("real fixture carries its signed external transaction")
@@ -387,7 +400,7 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     );
     assert!(events.try_recv().is_err());
     assert!(worker.execute(&block, qc.block_hash).is_none());
-    assert_eq!(worker.build(3, 0, 1 << 20), (vec![], false));
+    assert_eq!(worker.build(3, 0, 1 << 20).unwrap(), (None, false));
     assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
     assert!(
         worker.live.as_ref().unwrap().overlay.is_none(),
@@ -440,8 +453,9 @@ fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate_c
     let mut worker = worker(&context, archives.clone());
     let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
     hold_archive_completion(&mut worker, &block, &qc);
-    let mut wrong_block = block.clone();
-    wrong_block.header.height += 1;
+    let mut wrong_header = block.header().clone();
+    wrong_header.height += 1;
+    let wrong_block = chain.author_payload(wrong_header, block.payload().as_slice().to_vec());
     assert!(worker.prepare(&wrong_block, &qc).is_err());
     assert!(worker.commit(&wrong_block, &qc).is_err());
     let mut wrong_qc = qc.clone();
@@ -453,37 +467,44 @@ fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate_c
     assert!(worker.commit(&block, &qc).is_err());
     worker.pending_commit.as_mut().unwrap().state_hash = chain.committed(2).block_hash();
     assert!(events.try_recv().is_err());
-    let retained = worker.pending_commit.take().unwrap();
-    drop(worker);
-    // A negative storage fixture retains the same exact journal and result-bearing frames,
-    // removing only the tip certificate. It cannot manufacture positive finality authority.
-    let missing_kura = crate::kura::Kura::blank_kura_for_testing();
-    let mut missing_state = State::new_with_chain_and_network_id_for_testing(
-        World::new(),
-        Arc::clone(&missing_kura),
-        crate::query::store::LiveQueryStore::start_test(),
-        "sumeragi-certified-test-chain".into(),
-        chain.network_id(),
+    let original_state = Arc::as_ptr(chain.state());
+    let original_contexts = worker
+        .pending_commit
+        .as_ref()
+        .unwrap()
+        .native_contexts
+        .canonical_bytes()
+        .as_ptr();
+    // Corrupt only the already-durable frame. The actual State, allocation pool and pending
+    // archive owner remain exactly the original ones, so rejection must reach the read boundary.
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(std::num::NonZeroUsize::new(2).unwrap(), None)
+        .unwrap();
+    let stored = chain
+        .kura()
+        .get_block(std::num::NonZeroUsize::new(2).unwrap())
+        .unwrap();
+    assert!(stored.commit_certificate().is_none());
+    assert_eq!(
+        chain.state().view().latest_block_hash(),
+        Some(stored.hash())
     );
-    for height in 1..=2 {
-        let frame = chain.committed(height).block().as_ref().clone();
-        let frame = if height == 2 {
-            frame.with_commit_certificate(None)
-        } else {
-            frame
-        };
-        missing_state.push_block_hash_for_testing(frame.hash());
-        missing_kura.store_block(frame).unwrap();
-    }
-    let missing_context = ExecutorContext {
-        state: Arc::new(missing_state),
-        ..context.clone()
-    };
-    let mut worker = self::worker(&missing_context, archives);
-    worker.pending_commit = Some(retained);
+    assert_eq!(Arc::as_ptr(&worker.context.state), original_state);
     assert!(worker.commit(&block, &qc).is_err());
     assert!(worker.pending_commit.is_some());
+    assert_eq!(
+        worker
+            .pending_commit
+            .as_ref()
+            .unwrap()
+            .native_contexts
+            .canonical_bytes()
+            .as_ptr(),
+        original_contexts
+    );
     assert_eq!(worker.applied.0, 1);
+    assert_eq!(worker.state.view().height(), 2);
     assert!(events.try_recv().is_err());
 }
 
@@ -583,7 +604,7 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         2,
         qc.block_hash,
         qc.result,
-        block.header.attest,
+        block.header().attest,
         Signers::BelowQuorum,
     );
     let committee = worker
@@ -596,7 +617,7 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         iroha_sumeragi::crypto::Verifier::new(
             &**worker.context.crypto.as_ref().unwrap(),
             &chain.instance(),
-            &block.header.epoch,
+            &block.header().epoch,
             &committee
         )
         .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &below)
@@ -610,41 +631,59 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         .unwrap()
         .health_generation()
         .unwrap();
-    let retained = worker.pending_commit.take().unwrap();
-    drop(worker);
-    // Preserve the actual already-published pending owner. Only the negative
-    // durable frame's quorum bytes change; they never authorize a new capture.
-    let invalid_kura = crate::kura::Kura::blank_kura_for_testing();
-    let mut invalid_state = State::new_with_chain_and_network_id_for_testing(
-        World::new(),
-        Arc::clone(&invalid_kura),
-        crate::query::store::LiveQueryStore::start_test(),
-        "sumeragi-certified-test-chain".into(),
-        chain.network_id(),
+    let original_state = Arc::as_ptr(chain.state());
+    let original_contexts = worker
+        .pending_commit
+        .as_ref()
+        .unwrap()
+        .native_contexts
+        .canonical_bytes()
+        .as_ptr();
+    let original_block = chain.committed(2);
+    // Only the published frame's QC is corrupt. Retain the exact already-published State,
+    // original pool, source bytes and pending archive owner throughout the negative read.
+    let bad_qc = norito::encode_canonical(&below).unwrap();
+    chain
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(bad_qc.clone()),
+        )
+        .unwrap();
+    let stored = chain
+        .kura()
+        .get_block(std::num::NonZeroUsize::new(2).unwrap())
+        .unwrap();
+    assert_eq!(stored.commit_certificate().unwrap().commit_qc(), bad_qc);
+    assert_eq!(
+        stored.executed_block_wire_identity().unwrap(),
+        original_block
+            .block()
+            .executed_block_wire_identity()
+            .unwrap()
     );
-    for height in 1..=2 {
-        let mut frame = chain.committed(height).block().as_ref().clone();
-        if height == 2 {
-            let certificate = frame.commit_certificate().unwrap();
-            let invalid_certificate =
-                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
-                    certificate.consensus_header().to_vec(),
-                    norito::to_bytes(&below).unwrap(),
-                    certificate.result_preimage().to_vec(),
-                );
-            frame = frame.with_commit_certificate(Some(invalid_certificate));
-        }
-        invalid_state.push_block_hash_for_testing(frame.hash());
-        invalid_kura.store_block(frame).unwrap();
-    }
-    let invalid_context = ExecutorContext {
-        state: Arc::new(invalid_state),
-        ..context.clone()
-    };
-    let mut worker = self::worker(&invalid_context, archives.clone());
-    worker.pending_commit = Some(retained);
+    assert_eq!(
+        stored.commit_certificate().unwrap().availability(),
+        original_block
+            .block()
+            .commit_certificate()
+            .unwrap()
+            .availability()
+    );
+    assert_eq!(Arc::as_ptr(&worker.context.state), original_state);
     assert!(worker.commit(&block, &qc).is_err());
     assert!(worker.pending_commit.is_some());
+    assert_eq!(
+        worker
+            .pending_commit
+            .as_ref()
+            .unwrap()
+            .native_contexts
+            .canonical_bytes()
+            .as_ptr(),
+        original_contexts
+    );
+    assert_eq!(worker.state.view().height(), 2);
     assert_eq!(worker.applied.0, 1);
     assert_eq!(
         archives

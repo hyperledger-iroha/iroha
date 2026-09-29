@@ -2104,11 +2104,13 @@ bespoke fetch plumbing:
 const blsKeys = await torii.getSumeragiBlsKeys();
 console.log(`BLS-capable peers=${Object.values(blsKeys).filter(Boolean).length}`);
 
-const leader = await torii.getSumeragiLeader();
-console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_seed ?? "unset"}`);
+const lanes = await torii.getSumeragiLanes();
+for (const { record, instance } of lanes) {
+  console.log(`lane ${record.lane} merged=${record.merged.height} running=${instance !== null}`);
+}
 
 const params = await torii.getSumeragiParams();
-console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
+console.log(`block cadence=${params.block_cadence_ms}ms drift=${params.max_clock_drift_ms}ms height=${params.chain_height}`);
 ```
 
 All advanced helpers validate the Torii payloads and coerce numeric string

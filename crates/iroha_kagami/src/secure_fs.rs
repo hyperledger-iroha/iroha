@@ -1174,8 +1174,8 @@ mod unix {
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 pub use unix::{
-    harden_private_tree_with_owner_executables, prepare_empty_private_directory,
-    read_private_file, write_private_file_atomic,
+    harden_private_tree_with_owner_executables, prepare_empty_private_directory, read_private_file,
+    write_private_file_atomic,
 };
 #[cfg(any(
     not(unix),

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Strict, bounded Mach-O header and load-command decoder.
 
 This is the repository's sole Mach-O decoder. It parses thin and fat (32- and

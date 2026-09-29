@@ -14,8 +14,9 @@ use super::{
 };
 use crate::{
     api::{Action, ExecOutcome, LocalFault},
+    availability::AvailableBody,
     crypto::{Crypto, Signer, verify_attestations, verify_vote_attestation},
-    message::{Block, BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
+    message::{BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
     pacemaker::{PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, view_timeout},
     preimage::{self, KIND_COMMIT, KIND_ECHO, KIND_PREPARE, KIND_PROPOSAL, KIND_TIMEOUT},
     safety::SafetyRecord,
@@ -27,7 +28,7 @@ use crate::{
 /// A committed block of the reference chain.
 #[derive(Clone, Debug)]
 pub struct RefBlock {
-    /// Block hash.
+    /// AvailableBody hash.
     pub bh: Hash32,
     /// Certified result.
     pub result: Hash32,
@@ -119,14 +120,14 @@ impl Oracle {
     }
 
     /// Adopt a pre-built chain as committed (F17).
-    pub fn adopt_chain(&mut self, inst: usize, chain: &[(Block, Qc)]) {
+    pub fn adopt_chain(&mut self, inst: usize, chain: &[(AvailableBody, Qc)]) {
         for (block, qc) in chain {
             self.refs[inst].insert(
-                block.header.height,
+                block.header().height,
                 RefBlock {
                     bh: qc.block_hash,
                     result: qc.result,
-                    header: block.header.clone(),
+                    header: block.header().clone(),
                     at: 0,
                     honest_proposer: true,
                     view: qc.view,
@@ -172,7 +173,7 @@ pub fn build_chain(
     signers: &[SimSigner],
     len: u64,
     crypto: &dyn Crypto,
-) -> Vec<(Block, Qc)> {
+) -> Vec<(AvailableBody, Qc)> {
     let mut chain = Vec::new();
     let (mut parent_hash, mut parent_result) = (inst.genesis_hash, inst.genesis_result);
     for h in 1..=len {
@@ -197,12 +198,26 @@ pub fn build_chain(
             parent_hash,
             parent_result,
             payload_hash: preimage::payload_hash(crypto, &payload),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
             attest: h == inst.config(h).epoch.last_height,
         };
-        let bh = preimage::block_hash(crypto, &header);
+        let author = signers
+            .iter()
+            .find(|signer| committee.get(header.proposer) == Some(signer.public_key()))
+            .expect("prebuilt author key");
+        let block = crate::testing::author_body(
+            header,
+            &payload,
+            &inst.config(h),
+            &mv::allocation::AllocationBudget::new(1 << 30),
+            crypto,
+            author,
+        );
+        let header = block.header();
+        let bh = block.hash(crypto);
         let ExecOutcome::Valid(result) = reference_exec(&parent_result, &payload) else {
             break;
         };
@@ -267,7 +282,7 @@ pub fn build_chain(
                 Vec::new()
             },
         };
-        chain.push((Block { header, payload }, qc));
+        chain.push((block, qc));
         parent_hash = bh;
         parent_result = result;
     }
@@ -400,12 +415,12 @@ impl World {
 
     /// Checks after every `handle` of an honest replica.
     pub fn after_handle(&mut self, r: usize, actions: &[Action]) {
-        let violations = self.log.borrow_mut().take_violations();
+        let violations = self.log.lock().expect("signing log").take_violations();
         if let Some(v) = violations.into_iter().next() {
             return self.fail(v);
         }
         self.check_view_change(actions);
-        let commits = std::mem::take(&mut self.log.borrow_mut().commits);
+        let commits = std::mem::take(&mut self.log.lock().expect("signing log").commits);
         for (m, msg) in commits {
             if let Err(e) = self.commit_backed(&msg) {
                 return self.fail(format!("O-SIGN: honest machine {m} {e}"));
@@ -445,7 +460,10 @@ impl World {
                 .min()
                 .unwrap_or(0);
             // A margin: a store restored from backup re-syncs (and re-verifies) old heights.
-            self.log.borrow_mut().prune_below(low.saturating_sub(256));
+            self.log
+                .lock()
+                .expect("signing log")
+                .prune_below(low.saturating_sub(256));
         }
     }
 
@@ -469,8 +487,8 @@ impl World {
         let applied = self.replicas[r].applied.0;
         let mut per_height: BTreeMap<u64, u64> = BTreeMap::new();
         for block in self.replicas[r].bodies.values() {
-            *per_height.entry(block.header.height).or_default() +=
-                u64::try_from(block.payload.len()).unwrap_or(u64::MAX);
+            *per_height.entry(block.header().height).or_default() +=
+                u64::try_from(block.payload().as_slice().len()).unwrap_or(u64::MAX);
         }
         if let Some((h, bytes)) = per_height
             .iter()
@@ -550,11 +568,13 @@ impl World {
         }
         for action in actions {
             if let Action::CommitBlock { block, commit_qc } = action
-                && (commit_qc.view > 0 || block.header.origin_view > 0)
+                && (commit_qc.view > 0 || block.header().origin_view > 0)
             {
                 return self.fail(format!(
                     "O-PERF F35: height {} committed in view {} (origin view {}); a timer moved",
-                    block.header.height, commit_qc.view, block.header.origin_view
+                    block.header().height,
+                    commit_qc.view,
+                    block.header().origin_view
                 ));
             }
         }
@@ -778,9 +798,9 @@ impl World {
     }
 
     /// O-AGR and O-VAL on a `CommitBlock` of an honest replica.
-    fn check_commit(&mut self, r: usize, block: &Block, qc: &Qc) {
+    fn check_commit(&mut self, r: usize, block: &AvailableBody, qc: &Qc) {
         let inst = self.replicas[r].inst;
-        let h = block.header.height;
+        let h = block.header().height;
         let emitted = self.oracle.reps[r].emitted;
         if h != emitted + 1 {
             return self.fail(format!(
@@ -813,12 +833,12 @@ impl World {
         }
         let proposer_key = self.instances[inst]
             .committee(h)
-            .get(block.header.proposer)
+            .get(block.header().proposer)
             .cloned();
         let honest_proposer = proposer_key
             .and_then(|k| self.key_owner.get(&k).copied())
             .is_some_and(|m| !self.machines[m].byz);
-        for (id, _) in decode_txs(&block.payload) {
+        for (id, _) in decode_txs(&block.payload().as_slice()) {
             if let Some(entry) = self.txs[inst].get_mut(&id)
                 && entry.2.is_none()
             {
@@ -830,7 +850,7 @@ impl World {
             RefBlock {
                 bh: qc.block_hash,
                 result: qc.result,
-                header: block.header.clone(),
+                header: block.header().clone(),
                 at: self.now,
                 honest_proposer,
                 view: qc.view,
@@ -838,15 +858,15 @@ impl World {
         );
     }
 
-    fn validity(&self, inst: usize, block: &Block, qc: &Qc) -> Result<(), String> {
+    fn validity(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {
         let instance = &self.instances[inst];
-        let h = block.header.height;
-        if block.header.epoch != instance.config(h).epoch.id || qc.epoch != block.header.epoch {
+        let h = block.header().height;
+        if block.header().epoch != instance.config(h).epoch.id || qc.epoch != block.header().epoch {
             return Err(
                 "block or certificate epoch context differs from authenticated schedule".into(),
             );
         }
-        if h == instance.config(h).epoch.last_height && !block.header.attest {
+        if h == instance.config(h).epoch.last_height && !block.header().attest {
             return Err("boundary execution lacks current-authority attestation".into());
         }
         if qc.kind != VoteKind::Commit || qc.height != h {
@@ -855,9 +875,24 @@ impl World {
         if block.hash(&self.hasher) != qc.block_hash {
             return Err("block hash differs from the CommitQC's".to_owned());
         }
-        if !block.body_ok(&self.hasher) {
-            return Err("payload fails body_ok".to_owned());
-        }
+        let proof = crate::availability::verify_availability(
+            instance.id,
+            &instance.config(h),
+            block.header(),
+            block.availability().as_slice(),
+            &self.hasher,
+        )
+        .map_err(|error| format!("original availability rejected: {error:?}"))?;
+        let mut codeword = vec![0; proof.shape().encoded_bytes()];
+        let mut scratch = vec![0; proof.shape().workspace_words()];
+        proof
+            .verify_payload(
+                block.payload().as_slice(),
+                &mut codeword,
+                &mut scratch,
+                &self.hasher,
+            )
+            .map_err(|error| format!("actual canonical codeword rejected: {error:?}"))?;
         let (parent_hash, parent_result) = if h == 1 {
             (instance.genesis_hash, instance.genesis_result)
         } else {
@@ -866,10 +901,12 @@ impl World {
                 .ok_or("parent not committed")?;
             (parent.bh, parent.result)
         };
-        if block.header.parent_hash != parent_hash || block.header.parent_result != parent_result {
+        if block.header().parent_hash != parent_hash
+            || block.header().parent_result != parent_result
+        {
             return Err("does not extend the committed parent".to_owned());
         }
-        if block.header.instance != instance.id {
+        if block.header().instance != instance.id {
             return Err("foreign instance".to_owned());
         }
         match block_exec(&parent_result, block, &instance.config(h).epoch) {
@@ -891,25 +928,25 @@ impl World {
             window,
             &headers,
         );
-        if block.header.proposer != topo.leader(block.header.origin_view) {
+        if block.header().proposer != topo.leader(block.header().origin_view) {
             return Err(format!(
                 "proposer {} is not L(h, {}) = {}",
-                block.header.proposer,
-                block.header.origin_view,
-                topo.leader(block.header.origin_view)
+                block.header().proposer,
+                block.header().origin_view,
+                topo.leader(block.header().origin_view)
             ));
         }
         let proposer = instance
             .committee(h)
-            .get(block.header.proposer)
+            .get(block.header().proposer)
             .and_then(|k| self.key_owner.get(k).copied());
         if let Some(m) = proposer
             && !self.machines[m].byz
-            && !block.payload.is_empty()
+            && !block.payload().as_slice().is_empty()
             && !self
                 .oracle
                 .built
-                .contains(&(inst, m, block.header.payload_hash))
+                .contains(&(inst, m, block.header().payload_hash))
         {
             return Err(format!("payload was not built by the honest proposer {m}"));
         }
@@ -930,7 +967,7 @@ impl World {
             *kind = KIND_PREPARE;
         }
         let committee = self.instances[inst].committee(slot.height);
-        let log = self.log.borrow();
+        let log = self.log.lock().expect("signing log");
         let backing = committee
             .members()
             .iter()
@@ -971,7 +1008,7 @@ impl World {
             ));
         }
         let msg = qc.preimage();
-        let log = self.log.borrow();
+        let log = self.log.lock().expect("signing log");
         if let Some(key) = keys.iter().find(|k| !log.was_signed(k, &msg)) {
             return Err(format!(
                 "a {:?}QC h {} v {} whose signer {key:?} never signed it",
@@ -987,11 +1024,12 @@ impl World {
     ///
     /// # Errors
     /// A description of the defect.
-    pub fn attested(&self, inst: usize, block: &Block, qc: &Qc) -> Result<(), String> {
-        if qc.attest != block.header.attest {
+    pub fn attested(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {
+        if qc.attest != block.header().attest {
             return Err(format!(
                 "a CommitQC with flag {} for a block with flag {}",
-                qc.attest, block.header.attest
+                qc.attest,
+                block.header().attest
             ));
         }
         let committee = self.instances[inst].committee(qc.height);
@@ -1032,7 +1070,7 @@ impl World {
             ));
         }
         {
-            let log = self.log.borrow();
+            let log = self.log.lock().expect("signing log");
             for entry in &tc.entries {
                 let key = committee
                     .get(entry.signer)
@@ -1164,7 +1202,7 @@ impl World {
 
     fn check_exposed(&mut self, r: usize, own: Vec<(PublicKey, Vec<u8>)>) {
         for (key, msg) in own {
-            if !self.log.borrow_mut().expose(&key, &msg) {
+            if !self.log.lock().expect("signing log").expose(&key, &msg) {
                 continue;
             }
             let Some(slot) = parse_preimage(&msg).filter(|slot| slot.kind != KIND_ECHO) else {
@@ -1236,7 +1274,7 @@ impl World {
 
     fn own_in_msg(&self, r: usize, msg: &WireMessage, out: &mut Vec<(PublicKey, Vec<u8>)>) {
         match msg {
-            WireMessage::Proposal(p) => self.own_in_proposal(r, p, out),
+            WireMessage::Proposal(p) => self.own_in_proposal(r, &p.proposal, out),
             WireMessage::Vote(v) => {
                 for (key, index) in self.own_index(r, v.height) {
                     if v.signer == index {
@@ -1270,8 +1308,9 @@ impl World {
                 }
             }
             WireMessage::SyncRequest(_)
-            | WireMessage::BlockRequest(_)
-            | WireMessage::BlockResponse(_)
+            | WireMessage::PayloadRequest(_)
+            | WireMessage::PayloadManifest(_)
+            | WireMessage::PayloadChunk(_)
             | WireMessage::ApplicationControl(_) => {}
         }
     }

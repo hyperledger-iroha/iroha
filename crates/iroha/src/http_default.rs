@@ -138,7 +138,7 @@ impl DefaultHttpTransport {
     }
 }
 
-pub(crate) fn request_deadline_elapsed() -> Error {
+pub fn request_deadline_elapsed() -> Error {
     std::io::Error::new(
         std::io::ErrorKind::TimedOut,
         "HTTP operation deadline elapsed",

@@ -54,11 +54,14 @@ impl ScheduledConfig {
                 .map(|member| consensus_key(&member.validator))
                 .collect::<Result<Vec<_>, _>>()?,
         )?;
-        Ok(HeightConfig {
+        let config = HeightConfig {
             epoch: Box::new(core_epoch(&self.epoch)?),
             committee,
             params: self.params.to_core(),
-        })
+        };
+        iroha_sumeragi::pacemaker::validate_height(&config, super::CHAIN_TRANSPORT_FRAME_LIMIT)
+            .map_err(ScheduleError::Params)?;
+        Ok(config)
     }
 }
 
@@ -66,6 +69,7 @@ impl ScheduledConfig {
 pub fn core_epoch(context: &ValidatorEpochContextV1) -> Result<EpochConfig, ScheduleError> {
     context.validate().map_err(ScheduleError::Epoch)?;
     Ok(EpochConfig {
+        da_layout: context.da_layout,
         id: EpochId {
             epoch: context.authorization.epoch,
             context: Hash32(context.context_id().map_err(ScheduleError::Epoch)?),

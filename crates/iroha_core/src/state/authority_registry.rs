@@ -10,10 +10,12 @@
 //! remain distinct. In particular config objects, opaque verifier handles and
 //! historical cursors cannot silently become node-local policy.
 //!
-//! TODO: consume this registry in the complete State root owner, supply every
-//! required semantic projection and derivation validator, and bind publication
-//! and recovery to one predecessor. No row disclosure or proof authority is
-//! provided here. The existing World baseline remains an internal projection.
+//! The World state accumulator (`world_projection::WorldStateAccumulator`)
+//! commits exactly the canonical World fields declared here, and the execution
+//! result `R` binds its root. TODO(S9): supply every required semantic
+//! projection and derivation validator for the State-level fields and bind
+//! recovery to one predecessor. No row disclosure or proof authority is
+//! provided here.
 
 use norito::{NoritoSchema, codec::Encode};
 
@@ -87,6 +89,9 @@ pub(crate) enum Canonical {
 pub(crate) enum DerivationCheck {
     /// Existing reconstruction implementation; root publication must run/check it.
     Rebuild(&'static str),
+    /// A commitment over every canonical descendant of the named owners, which supply its
+    /// authority; the procedure recomputes it from those values (a cold capture).
+    Commitment(&'static str),
 }
 
 /// Four explicit authority classes. Names alone never select a class.

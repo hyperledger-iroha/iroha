@@ -4,6 +4,8 @@
 //! the current version string. They help catch regression where the clap command tree fails to
 //! build or the binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "cli_smoke/consensus_status.rs"]
+mod consensus_status;
 #[path = "cli_smoke/incentives_dispute.rs"]
 mod incentives_dispute;
 #[path = "cli_smoke/zk_ivm_jobs.rs"]
@@ -14,9 +16,7 @@ mod zk_memo;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
 use iroha::{
-    account_address::{
-        encode_account_id_to_canonical_hex, encode_account_id_to_i105_for_discriminant,
-    },
+    account_address::{encode_account_id_to_canonical_hex, encode_account_id_to_i105},
     data_model::isi::{
         InstructionBox, TransferBox,
         repo::RepoInstructionBox,
@@ -3940,177 +3940,6 @@ fn incentives_daemon_processes_metrics_spool() {
             .is_empty()
     );
 }
-#[cfg(unix)]
-#[test]
-#[allow(
-    unsafe_code,
-    reason = "the child-only pre_exec hook passes one retained read-only operator descriptor through exec using fcntl"
-)]
-fn sumeragi_summary_commands_against_torii_mock() {
-    use std::{
-        io::{Seek as _, SeekFrom},
-        os::{
-            fd::{AsRawFd as _, BorrowedFd},
-            unix::process::CommandExt as _,
-        },
-    };
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_sumeragi, write_client_config,
-    };
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping sumeragi_summary_commands_against_torii_mock: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-    let temp_dir = TempDir::new("sumeragi_summary").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-    let operator_key_file = tempfile::NamedTempFile::new().expect("private operator key file");
-    let operator_key = fixture_key_pair(0xA7);
-    fs::write(
-        operator_key_file.path(),
-        iroha_crypto::ExposedPrivateKey(operator_key.private_key().clone()).to_string(),
-    )
-    .expect("write canonical runtime operator key");
-    let unsigned = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args(["ops", "sumeragi", "status"])
-        .output()
-        .expect("run operator read without its dedicated signer");
-    assert!(!unsigned.status.success());
-    assert!(unsigned.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&unsigned.stderr)
-            .contains("operator signing key is required before request dispatch")
-    );
-    // The shared mock's default also covers the wider Python SDK fixture shape.
-    // This command consumes Torii's exact, fail-closed authoritative Sumeragi status schema.
-    configure_sumeragi(
-        mock.base_url(),
-        &norito::json!({
-            "status": {
-                "protocol_version": 4,
-                "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
-                "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
-                "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",
-                "restart_required": false,
-                "height_context_id": [
-                    "hash:1414141414141414141414141414141414141414141414141414141414141415#9E28"
-                ],
-                "height": 10,
-                "view": 2,
-                "phase": {"phase": "prepare", "details": null},
-                "leader": 1,
-                "locked_prepare_qc": null,
-                "highest_prepare_qc": null,
-                "last_timeout_certificate": null,
-                "body_state": {"state": "validated", "details": null},
-                "pending_persistence_id": null,
-                "last_committed_height": 9,
-                "last_committed_subject": null,
-                "height_context": {
-                    "epoch": 1,
-                    "epoch_end_height": 20,
-                    "mode": {"mode": "permissioned", "details": null},
-                    "epoch_seed": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
-                    "validator_count": 4,
-                    "quorum": {"min_signers": 3, "total_power": 4}
-                },
-                "last_commit_qc": null,
-                "liveness": {
-                    "generation": 2,
-                    "prepare_quorums": [],
-                    "commit_quorums": [],
-                    "timeout_quorums": [],
-                    "outbound_intents": [],
-                    "work": {
-                        "candidate": {"stage": "idle", "details": null},
-                        "body_recovery": {"stage": "idle", "details": null},
-                        "body_store": {"stage": "idle", "details": null},
-                        "validation": {"stage": "complete", "details": null},
-                        "application": {"stage": "idle", "details": null},
-                        "successor_height": {"stage": "idle", "details": null}
-                    },
-                    "queues": [],
-                    "last_progress": null,
-                    "no_progress_age_ms": 0,
-                    "blocker": null,
-                    "ignore_counts": []
-                },
-                "beacon_horizon": null
-            }
-        }),
-    )
-    .expect("configure canonical Sumeragi status");
-    let mut inherited_operator_file =
-        fs::File::open(operator_key_file.path()).expect("read-only operator descriptor");
-    inherited_operator_file
-        .seek(SeekFrom::Start(5))
-        .expect("retain caller cursor");
-    let operator_fd = inherited_operator_file.as_raw_fd();
-    let assert_summary = |args: &[&str], expected: &str| {
-        for inherited in [false, true] {
-            let mut invocation = command();
-            invocation.arg("--config").arg(&config_path);
-            if inherited {
-                invocation
-                    .arg("--operator-private-key-fd")
-                    .arg(operator_fd.to_string());
-                // SAFETY: the read-only file remains open through child execution; this child-only
-                // hook uses only fcntl and lends the descriptor without taking ownership.
-                unsafe {
-                    invocation.inner.pre_exec(move || {
-                        let fd = BorrowedFd::borrow_raw(operator_fd);
-                        let flags = rustix::io::fcntl_getfd(fd).map_err(io::Error::from)?;
-                        rustix::io::fcntl_setfd(fd, flags & !rustix::io::FdFlags::CLOEXEC)
-                            .map_err(io::Error::from)
-                    });
-                }
-            } else {
-                invocation
-                    .arg("--operator-private-key-file")
-                    .arg(operator_key_file.path());
-            }
-            let output = invocation
-                .arg("--output-format")
-                .arg("text")
-                .args(args)
-                .output()
-                .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
-            assert!(
-                output.status.success(),
-                "expected iroha {args:?} to succeed, stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            assert_eq!(
-                stdout.trim_end(),
-                expected,
-                "unexpected summary for {args:?}, stdout: {stdout}"
-            );
-        }
-    };
-    assert_summary(
-        &["ops", "sumeragi", "status"],
-        "protocol=4 height=10 view=2 phase=prepare leader=1 body=validated pending_persistence=- last_committed=9 restart_required=false",
-    );
-    assert_summary(
-        &["ops", "sumeragi", "leader"],
-        "leader=3 prf_h=20 prf_v=2 seed=feedface",
-    );
-    assert_eq!(
-        inherited_operator_file
-            .stream_position()
-            .expect("caller descriptor remains open"),
-        5
-    );
-}
 #[test]
 fn tx_status_command_against_torii_mock() {
     use torii_mock_support::{
@@ -4400,8 +4229,7 @@ fn zk_attachments_flow_against_torii_mock() {
 fn address_convert_outputs_i105_by_default() {
     let key_pair = fixture_key_pair(0xA1);
     let account = AccountId::new(key_pair.public_key().clone());
-    let expected_i105 =
-        encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
+    let expected_i105 = encode_account_id_to_i105(&account, 753).expect("i105 string");
     let output = command()
         .args(["tools", "address", "convert", &expected_i105])
         .output()
@@ -4431,7 +4259,7 @@ fn address_convert_outputs_i105_by_default() {
 fn address_convert_json_summary_contains_i105_and_canonical_hex() {
     let key_pair = fixture_key_pair(0xB2);
     let account = AccountId::new(key_pair.public_key().clone());
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105 string");
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical");
     let output = command()
         .args([
@@ -4496,7 +4324,7 @@ fn address_convert_rejects_domain_suffix() {
         iroha_model_base::domain::DomainId::try_new("sora", "universal").expect("domain");
     let key_pair = fixture_key_pair(0xAB);
     let account = AccountId::new(key_pair.public_key().clone());
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105");
     let literal = format!("{i105}@{domain}");
     let output = command()
         .current_dir(workspace_root())
@@ -4528,7 +4356,7 @@ fn address_convert_rejects_domain_suffix() {
 fn address_convert_json_rejects_domain_suffix() {
     let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105");
     let literal = format!("{i105}@universal");
     let output = command()
         .current_dir(workspace_root())
@@ -4563,7 +4391,7 @@ fn address_convert_json_rejects_domain_suffix() {
 fn address_convert_json_summary_is_domainless() {
     let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105");
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -4598,9 +4426,8 @@ fn address_audit_reports_parsed_and_errors() {
     use torii_mock_support::TempDir;
     let first_account = AccountId::new(fixture_key_pair(0xC3).public_key().clone());
     let second_account = AccountId::new(fixture_key_pair(0x44).public_key().clone());
-    let first_i105 = encode_account_id_to_i105_for_discriminant(&first_account, 753).expect("i105");
-    let second_i105 =
-        encode_account_id_to_i105_for_discriminant(&second_account, 753).expect("i105");
+    let first_i105 = encode_account_id_to_i105(&first_account, 753).expect("i105");
+    let second_i105 = encode_account_id_to_i105(&second_account, 753).expect("i105");
     let temp_dir = TempDir::new("address_audit_report").expect("temp dir");
     let input_path = temp_dir.path().join("addresses.txt");
     let contents = format!("# sample addresses\n{first_i105}\n{second_i105}\ninvalid-address\n");
@@ -4645,7 +4472,7 @@ fn address_audit_reports_parsed_and_errors() {
 fn address_audit_rejects_domain_suffix() {
     use torii_mock_support::TempDir;
     let account = account_id_for_domain("wonderland", 0xE5);
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105");
     let literal = format!("{i105}@banka");
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{NetworkMessage, sumeragi::net::SumeragiFrame};
 use iroha_sumeragi::{
-    message::{BlockRequest, WireMessage},
+    message::{PayloadRequest, WireMessage},
     types::Hash32,
 };
 use norito::{
@@ -14,7 +14,7 @@ use norito::{
 
 fn consensus_frame() -> SumeragiFrame {
     let instance = Hash32([0x51; 32]);
-    let message = WireMessage::BlockRequest(BlockRequest {
+    let message = WireMessage::PayloadRequest(PayloadRequest {
         instance,
         height: 3,
         block_hash: Hash32([0x71; 32]),

@@ -64,19 +64,20 @@ pub(crate) fn commit(
     chain.commit_at(now, transactions)
 }
 
-/// [`commit`] with a local `CommitQC` of two of four signers: the block is committed and
-/// applied, but its certificate does not verify (signer finality is unavailable for it).
+/// Genuinely commit, then corrupt only the stored local QC to two of four signers.
+/// The original applied State is retained; signer finality is unavailable for the changed QC.
 #[cfg(test)]
 pub(crate) fn commit_uncertified(
     chain: &mut CertifiedTestChain,
     now: u64,
     transactions: Vec<SignedTransaction>,
 ) -> Vec<bool> {
-    chain.commit_with(
-        Some(now),
-        transactions,
+    let results = chain.commit_at(now, transactions);
+    chain.corrupt_local_quorum_for_test(
+        chain.height(),
         crate::sumeragi::test_chain::Signers::BelowQuorum,
-    )
+    );
+    results
 }
 
 /// Corrupt the State's entrypoint index: the committed `transactions` are indexed at genesis

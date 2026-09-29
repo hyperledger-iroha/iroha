@@ -43,7 +43,7 @@ class HappyDayEvidenceTests(unittest.TestCase):
         return H.validate_run(self.root, self.request, self.sha)
 
     def test_exact_happy_day_contract(self):
-        self.assertEqual(len(H.EVIDENCE_NAMES), 47)
+        self.assertEqual(len(H.EVIDENCE_NAMES), 79)
         self.assertEqual(self.validate()["continuous_checks"], 64)
         H.validate_request(self.request, F.COMMIT, 0)
 

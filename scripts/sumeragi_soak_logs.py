@@ -26,11 +26,16 @@ lines this module computes the §13.2 oracles on real nodes:
   already made durable at that height; no new timeout carrying a PrepareQC below a lock the key
   had already made durable at that height (the timeout carries ``high_pqc``, which never falls
   below the lock, Lemma 2); and no durable record that goes backwards (a rolled-back record,
-  §7.4 record provenance).
+  §7.4 record provenance). A Commit vote is durable only as the record's lock (``high_pqc``),
+  which a node also adopts from certificates it did not vote for, so the §13.2 rule "no Commit
+  at a view at or below an earlier timeout view" cannot be told apart from an adopted lock in
+  the logs; the logs judge Commit votes through ``conflicting-lock`` and ``timeout-below-lock``,
+  and the deterministic simulator's O-SIGN, which sees every vote, judges the rest.
 * O-LIVE: after every heal (end of a fault window) every node commits a new height of the
   observed instance within the bound ``B_live`` (§8.2) and again within every later window of
   ``B_live`` until the next fault; no node exits unless the soak killed it or a tolerated fault
-  (disk full) stopped it.
+  (disk full) stopped it. Only a fault-free interval at least as long as the bound can show a
+  stall, so a run without one fails as a harness problem (``no-interval-judged-by-o-live``).
 * O-PERF: commit-gap percentiles in fault-free intervals (after a warm-up of heights, Appendix
   E8), committed throughput and client-observed commit latency against thresholds.
 
@@ -44,6 +49,9 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
+from array import array
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -123,18 +131,69 @@ class Record:
     signed: Signed
 
 
-@dataclass
-class NodeLog:
-    """Everything the soak read from one node's logs (all boots, in order)."""
+MAX_KEPT_PARSE_ERRORS = 20
+MAX_REPORTED_VIOLATIONS = 200
 
-    node: str
-    applied: list[Applied] = field(default_factory=list)
-    records: list[Record] = field(default_factory=list)
-    observations: dict[str, int] = field(default_factory=dict)
-    examples: dict[str, str] = field(default_factory=dict)
-    parse_errors: list[str] = field(default_factory=list)
-    boots: int = 0
-    lines: int = 0
+
+class NodeLog:
+    """What the soak read from one node's logs (all boots, in order).
+
+    With ``keep`` every decoded event is kept in ``applied`` and ``records`` (tests and small
+    runs); with an ``analysis`` every event is fed to its incremental oracles instead, which is
+    how a long run is judged in bounded memory.
+    """
+
+    def __init__(self, node: str, keep: bool = True, analysis: Optional["Analysis"] = None) -> None:
+        self.node = node
+        self.keep = keep
+        self.analysis = analysis
+        self.applied: list[Applied] = []
+        self.records: list[Record] = []
+        self.applied_count = 0
+        self.record_count = 0
+        self.observations: dict[str, int] = {}
+        self.examples: dict[str, str] = {}
+        self.parse_errors: list[str] = []
+        self.parse_error_count = 0
+        self.boots = 0
+        self.lines = 0
+
+    def add_applied(self, event: Applied) -> None:
+        """One ``sumeragi block applied`` line."""
+        self.applied_count += 1
+        if self.keep:
+            self.applied.append(event)
+        if self.analysis is not None:
+            self.analysis.add_applied(event)
+
+    def add_record(self, record: Record) -> None:
+        """One ``sumeragi record durable`` line."""
+        self.record_count += 1
+        if self.keep:
+            self.records.append(record)
+        if self.analysis is not None:
+            self.analysis.add_record(record)
+
+    def add_parse_error(self, message: str) -> None:
+        """An audit line that could not be decoded (the first few are kept)."""
+        self.parse_error_count += 1
+        if len(self.parse_errors) < MAX_KEPT_PARSE_ERRORS:
+            self.parse_errors.append(message)
+
+
+class ViolationList:
+    """Violations of one oracle: every one is counted, the first few are kept for the verdict."""
+
+    def __init__(self, limit: int = MAX_REPORTED_VIOLATIONS) -> None:
+        self.items: list[Violation] = []
+        self.count = 0
+        self.limit = limit
+
+    def add(self, violation: "Violation") -> None:
+        """Count ``violation`` and keep it while under the limit."""
+        self.count += 1
+        if len(self.items) < self.limit:
+            self.items.append(violation)
 
 
 @dataclass(frozen=True)
@@ -482,13 +541,13 @@ def parse_log_lines(node: str, boot: int, lines: Iterable[str], log: NodeLog) ->
             message, timestamp, fields = event
             if message == APPLIED_MESSAGE:
                 ts_ms = _audit_timestamp_ms(timestamp)
-                log.applied.append(
+                log.add_applied(
                     Applied(
                         node=node,
                         boot=boot,
                         line=number,
                         ts_ms=ts_ms,
-                        instance=_hex(_text(fields, "instance")),
+                        instance=sys.intern(_hex(_text(fields, "instance"))),
                         height=_int(fields, "height"),
                         view=_int(fields, "view"),
                         origin_view=_int(fields, "origin_view"),
@@ -501,14 +560,14 @@ def parse_log_lines(node: str, boot: int, lines: Iterable[str], log: NodeLog) ->
                 )
             elif message == DURABLE_MESSAGE:
                 ts_ms = _audit_timestamp_ms(timestamp)
-                log.records.append(
+                log.add_record(
                     Record(
                         node=node,
                         boot=boot,
                         line=number,
                         ts_ms=ts_ms,
-                        instance=_hex(_text(fields, "instance")),
-                        key=_hex(_text(fields, "key")),
+                        instance=sys.intern(_hex(_text(fields, "instance"))),
+                        key=sys.intern(_hex(_text(fields, "key"))),
                         height=_int(fields, "height"),
                         epoch=_int(fields, "epoch"),
                         signed=parse_signed(_text(fields, "signed")),
@@ -521,7 +580,7 @@ def parse_log_lines(node: str, boot: int, lines: Iterable[str], log: NodeLog) ->
                         log.examples.setdefault(name, _ANSI_RE.sub("", raw).strip()[:400])
                         break
         except AuditParseError as error:
-            log.parse_errors.append(f"{node} boot {boot} line {number}: {error}")
+            log.add_parse_error(f"{node} boot {boot} line {number}: {error}")
 
 
 def boot_logs(node_dir: Path) -> list[tuple[int, Path]]:
@@ -534,11 +593,15 @@ def boot_logs(node_dir: Path) -> list[tuple[int, Path]]:
     return sorted(boots)
 
 
+def _node_dirs(log_root: Path) -> list[Path]:
+    return sorted(path for path in log_root.iterdir() if path.is_dir())
+
+
 def load_node_logs(log_root: Path) -> dict[str, NodeLog]:
-    """Parse every node's boot logs under ``log_root/<node>/boot<k>.log``."""
+    """Parse every node's boot logs under ``log_root/<node>/boot<k>.log``, keeping every event."""
     logs: dict[str, NodeLog] = {}
-    for node_dir in sorted(path for path in log_root.iterdir() if path.is_dir()):
-        log = NodeLog(node=node_dir.name)
+    for node_dir in _node_dirs(log_root):
+        log = NodeLog(node_dir.name)
         for boot, path in boot_logs(node_dir):
             log.boots += 1
             with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -547,117 +610,118 @@ def load_node_logs(log_root: Path) -> dict[str, NodeLog]:
     return logs
 
 
+def analyze_logs(log_root: Path) -> "Analysis":
+    """Stream every node's boot logs through the incremental oracles (bounded memory)."""
+    analysis = Analysis()
+    for node_dir in _node_dirs(log_root):
+        log = NodeLog(node_dir.name, keep=False, analysis=analysis)
+        analysis.nodes[node_dir.name] = log
+        for boot, path in boot_logs(node_dir):
+            log.boots += 1
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                parse_log_lines(node_dir.name, boot, handle, log)
+    return analysis
+
+
 # ---------------------------------------------------------------------------------------------
 # Oracles
 # ---------------------------------------------------------------------------------------------
 
 
-def check_agreement(applied: Sequence[Applied]) -> tuple[list[Violation], dict[str, Any]]:
-    """O-AGR over every applied line of every node."""
-    violations: list[Violation] = []
-    commits: dict[tuple[str, int], dict[tuple[str, str], list[str]]] = {}
-    for event in applied:
-        seen = commits.setdefault((event.instance, event.height), {})
-        seen.setdefault((event.block, event.result), [])
+class AgreementChecker:
+    """O-AGR, incrementally (each node's events in its log order): one ``(block, result)`` per
+    ``(instance, height)`` on every node and across restarts, and contiguous chains."""
+
+    def __init__(self) -> None:
+        self.first: dict[tuple[str, int], tuple[str, str, str]] = {}
+        self.conflicts: dict[tuple[str, int], dict[tuple[str, str], list[str]]] = {}
+        self.last: dict[tuple[str, str], tuple[int, int]] = {}
+        self.violations = ViolationList()
+        self.lines = 0
+
+    def add(self, event: Applied) -> None:
+        """Feed one applied block."""
+        self.lines += 1
+        key = (event.instance, event.height)
+        outcome = (event.block, event.result)
         where = f"{event.node}#{event.boot}"
-        if where not in seen[(event.block, event.result)]:
-            seen[(event.block, event.result)].append(where)
-    for (instance, height), outcomes in sorted(commits.items()):
-        if len(outcomes) > 1:
-            violations.append(
-                Violation(
-                    "O-AGR",
-                    "conflicting-commit",
-                    {
-                        "instance": instance,
-                        "height": height,
-                        "commits": [
-                            {"block": block, "result": result, "nodes": nodes}
-                            for (block, result), nodes in sorted(outcomes.items())
-                        ],
-                    },
-                )
+        first = self.first.get(key)
+        if first is None:
+            self.first[key] = (event.block, event.result, where)
+        elif (first[0], first[1]) != outcome or key in self.conflicts:
+            conflict = self.conflicts.setdefault(key, {(first[0], first[1]): [first[2]]})
+            nodes = conflict.setdefault(outcome, [])
+            if where not in nodes:
+                nodes.append(where)
+        chain = (event.node, event.instance)
+        previous = self.last.get(chain)
+        if previous is not None:
+            boot, height = previous
+            detail = {
+                "node": event.node,
+                "instance": event.instance,
+                "boot": event.boot,
+                "after": height,
+                "height": event.height,
+            }
+            if event.boot == boot:
+                if event.height != height + 1:
+                    kind = "chain-gap" if event.height > height else "height-regression"
+                    self.violations.add(Violation("O-AGR", kind, detail))
+            elif event.height > height + 2:
+                # At most one height can be applied but not yet logged when the process died.
+                self.violations.add(Violation("O-AGR", "chain-gap-across-restart", detail))
+        if previous is None or event.height >= previous[1]:
+            self.last[chain] = (event.boot, event.height)
+
+    def finish(self) -> tuple[list[Violation], int, dict[str, Any]]:
+        """``(kept violations, violation count, what was checked)``."""
+        conflicts = [
+            Violation(
+                "O-AGR",
+                "conflicting-commit",
+                {
+                    "instance": instance,
+                    "height": height,
+                    "commits": [
+                        {"block": block, "result": result, "nodes": nodes}
+                        for (block, result), nodes in sorted(outcomes.items())
+                    ],
+                },
             )
-    chains: dict[tuple[str, str], list[Applied]] = {}
-    for event in applied:
-        chains.setdefault((event.node, event.instance), []).append(event)
-    for (node, instance), events in sorted(chains.items()):
-        events.sort(key=lambda event: (event.boot, event.line))
-        previous: Optional[Applied] = None
-        for event in events:
-            if previous is not None:
-                if event.boot == previous.boot:
-                    if event.height != previous.height + 1:
-                        violations.append(
-                            Violation(
-                                "O-AGR",
-                                "chain-gap" if event.height > previous.height else "height-regression",
-                                {
-                                    "node": node,
-                                    "instance": instance,
-                                    "boot": event.boot,
-                                    "after": previous.height,
-                                    "height": event.height,
-                                },
-                            )
-                        )
-                elif event.height > previous.height + 2:
-                    # At most one height can be applied but not yet logged when the process died.
-                    violations.append(
-                        Violation(
-                            "O-AGR",
-                            "chain-gap-across-restart",
-                            {
-                                "node": node,
-                                "instance": instance,
-                                "boot": event.boot,
-                                "after": previous.height,
-                                "height": event.height,
-                            },
-                        )
-                    )
-            previous = event if previous is None or event.height >= previous.height else previous
-    checked = {
-        "applied_lines": len(applied),
-        "instances": len({event.instance for event in applied}),
-        "committed_heights": len(commits),
-    }
-    return violations, checked
+            for (instance, height), outcomes in sorted(self.conflicts.items())
+            if len(outcomes) > 1
+        ]
+        kept = (conflicts + self.violations.items)[:MAX_REPORTED_VIOLATIONS]
+        checked = {
+            "applied_lines": self.lines,
+            "instances": len({instance for instance, _ in self.first}),
+            "committed_heights": len(self.first),
+        }
+        return kept, len(conflicts) + self.violations.count, checked
 
 
-def check_sign_once(records: Sequence[Record]) -> tuple[list[Violation], dict[str, Any]]:
-    """O-SIGN over every durable record of every key (all nodes, all boots)."""
-    violations: list[Violation] = []
-    by_key: dict[str, list[Record]] = {}
-    for record in records:
-        by_key.setdefault(record.key, []).append(record)
-    for key, key_records in sorted(by_key.items()):
-        nodes = sorted({record.node for record in key_records})
-        if len(nodes) > 1:
-            violations.append(
-                Violation("O-SIGN", "shared-key", {"key": key, "nodes": nodes})
-            )
-            key_records.sort(key=lambda record: (record.ts_ms, record.node, record.boot, record.line))
-        else:
-            key_records.sort(key=lambda record: (record.boot, record.line))
-        violations.extend(_sign_once_of_key(key, key_records))
-    checked = {"records": len(records), "keys": len(by_key)}
-    return violations, checked
+class SignOnceChecker:
+    """O-SIGN, incrementally (each node's records in its log order), per consensus key across
+    restarts, keeping only the last few heights of every ``(key, instance)``."""
 
+    KEEP_HEIGHTS = 4
 
-def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
-    violations: list[Violation] = []
-    # Per instance: the last height and, per height, what the key made durable so far.
-    heights: dict[str, int] = {}
-    state: dict[tuple[str, int], dict[str, Any]] = {}
+    def __init__(self) -> None:
+        self.node_of_key: dict[str, str] = {}
+        self.shared: dict[str, set[str]] = {}
+        self.heights: dict[tuple[str, str], int] = {}
+        self.slots: dict[tuple[str, str], dict[int, dict[str, Any]]] = {}
+        self.violations = ViolationList()
+        self.records = 0
 
-    def violation(kind: str, record: Record, **detail: Any) -> None:
-        violations.append(
+    def _violation(self, kind: str, record: Record, **detail: Any) -> None:
+        self.violations.add(
             Violation(
                 "O-SIGN",
                 kind,
                 {
-                    "key": key,
+                    "key": record.key,
                     "instance": record.instance,
                     "height": record.height,
                     "node": record.node,
@@ -668,14 +732,22 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
             )
         )
 
-    for record in records:
-        last_height = heights.get(record.instance)
+    def add(self, record: Record) -> None:
+        """Feed one durable record."""
+        self.records += 1
+        first = self.node_of_key.setdefault(record.key, record.node)
+        if first != record.node:
+            self.shared.setdefault(record.key, {first}).add(record.node)
+        chain = (record.key, record.instance)
+        last_height = self.heights.get(chain)
         if last_height is not None and record.height < last_height:
-            violation("record-regression", record, previous_height=last_height)
-        heights[record.instance] = max(record.height, last_height or record.height)
-        slot = state.setdefault(
-            (record.instance, record.height),
-            {
+            self._violation("record-regression", record, previous_height=last_height)
+        if last_height is None or record.height > last_height:
+            self.heights[chain] = record.height
+        slots = self.slots.setdefault(chain, {})
+        slot = slots.get(record.height)
+        if slot is None:
+            slot = {
                 "proposals": {},
                 "prepares": {},
                 "locks": {},
@@ -683,8 +755,11 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
                 "max_timeout_view": None,
                 "max_lock_view": None,
                 "last": Signed(),
-            },
-        )
+            }
+            slots[record.height] = slot
+            top = self.heights[chain]
+            for height in [height for height in slots if height < top - self.KEEP_HEIGHTS]:
+                del slots[height]
         signed = record.signed
         last: Signed = slot["last"]
         # A newer record never loses an entry nor lowers its view (§7.4 record provenance).
@@ -692,7 +767,7 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
             before = getattr(last, kind)
             now = getattr(signed, kind)
             if before is not None and (now is None or now[0] < before[0]):
-                violation(
+                self._violation(
                     "record-regression",
                     record,
                     entry=kind,
@@ -703,19 +778,19 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
             view, block = signed.proposal
             seen = slot["proposals"].setdefault(view, block)
             if seen != block:
-                violation("double-proposal", record, view=view, blocks=[seen, block])
+                self._violation("double-proposal", record, view=view, blocks=[seen, block])
         if signed.prepare is not None:
             view = signed.prepare[0]
             preimage = signed.prepare[1:]
             if view not in slot["prepares"]:
                 max_timeout = slot["max_timeout_view"]
                 if max_timeout is not None and view <= max_timeout:
-                    violation(
+                    self._violation(
                         "prepare-after-timeout", record, view=view, timeout_view=max_timeout
                     )
             seen = slot["prepares"].setdefault(view, preimage)
             if seen != preimage:
-                violation(
+                self._violation(
                     "double-prepare", record, view=view, preimages=[list(seen), list(preimage)]
                 )
         if signed.lock is not None:
@@ -723,7 +798,7 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
             preimage = signed.lock[1:]
             seen = slot["locks"].setdefault(view, preimage)
             if seen != preimage:
-                violation(
+                self._violation(
                     "conflicting-lock", record, view=view, preimages=[list(seen), list(preimage)]
                 )
         if signed.timeout is not None:
@@ -731,43 +806,143 @@ def _sign_once_of_key(key: str, records: Sequence[Record]) -> list[Violation]:
             if view not in slot["timeouts"]:
                 max_lock = slot["max_lock_view"]
                 if max_lock is not None and (carried is None or carried < max_lock):
-                    violation(
+                    self._violation(
                         "timeout-below-lock", record, view=view, carried=carried, lock_view=max_lock
                     )
             seen = slot["timeouts"].setdefault(view, carried)
             if seen != carried:
-                violation("double-timeout", record, view=view, carried=[seen, carried])
+                self._violation("double-timeout", record, view=view, carried=[seen, carried])
         # What this record made durable bounds the next records (strictly later signatures).
         if signed.timeout is not None:
-            slot["max_timeout_view"] = max(
-                signed.timeout[0],
-                slot["max_timeout_view"] if slot["max_timeout_view"] is not None else -1,
-            )
+            previous = slot["max_timeout_view"]
+            slot["max_timeout_view"] = max(signed.timeout[0], -1 if previous is None else previous)
         if signed.lock is not None:
-            slot["max_lock_view"] = max(
-                signed.lock[0],
-                slot["max_lock_view"] if slot["max_lock_view"] is not None else -1,
-            )
+            previous = slot["max_lock_view"]
+            slot["max_lock_view"] = max(signed.lock[0], -1 if previous is None else previous)
         slot["last"] = signed
-    return violations
+
+    def finish(self) -> tuple[list[Violation], int, dict[str, Any]]:
+        """``(kept violations, violation count, what was checked)``."""
+        shared = [
+            Violation("O-SIGN", "shared-key", {"key": key, "nodes": sorted(nodes)})
+            for key, nodes in sorted(self.shared.items())
+        ]
+        kept = (shared + self.violations.items)[:MAX_REPORTED_VIOLATIONS]
+        checked = {"records": self.records, "keys": len(self.node_of_key)}
+        return kept, len(shared) + self.violations.count, checked
 
 
-def observed_instance(applied: Sequence[Applied]) -> Optional[str]:
-    """The instance O-LIVE and O-PERF observe: the one with the most applied lines.
+class CommitTimes:
+    """Commit timestamps and payload sizes per node and instance, in compact arrays."""
 
-    The load drives the global chain; lanes idle without routed work (idle chains create no
-    blocks), so they are reported but not held to the liveness bound.
-    """
-    counts: dict[str, int] = {}
+    def __init__(self) -> None:
+        self.times: dict[tuple[str, str], array] = {}
+        self.payloads: dict[tuple[str, str], array] = {}
+        self.counts: dict[str, int] = {}
+        self.max_height: dict[tuple[str, str], int] = {}
+
+    def add(self, event: Applied) -> None:
+        """Feed one applied block."""
+        key = (event.node, event.instance)
+        times = self.times.get(key)
+        if times is None:
+            times = self.times[key] = array("d")
+            self.payloads[key] = array("q")
+        times.append(event.ts_ms)
+        self.payloads[key].append(event.payload_bytes)
+        self.counts[event.instance] = self.counts.get(event.instance, 0) + 1
+        self.max_height[key] = max(self.max_height.get(key, 0), event.height)
+
+    def observed_instance(self) -> Optional[str]:
+        """The instance O-LIVE and O-PERF observe: the one with the most applied lines.
+
+        The load drives the global chain; lanes idle without routed work (idle chains create no
+        blocks), so they are reported but not held to the liveness bound.
+        """
+        if not self.counts:
+            return None
+        return sorted(self.counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+    def of(self, node: str, instance: Optional[str]) -> list[tuple[float, int]]:
+        """``(timestamp ms, payload bytes)`` of every commit of ``instance`` on ``node``, in time
+        order."""
+        key = (node, instance)
+        if instance is None or key not in self.times:
+            return []
+        return sorted(zip(self.times[key], self.payloads[key]))
+
+    def nodes(self) -> list[str]:
+        """Every node with at least one commit."""
+        return sorted({node for node, _ in self.times})
+
+    def instances(self) -> dict[str, dict[str, int]]:
+        """Applied lines and the highest height of every instance."""
+        out: dict[str, dict[str, int]] = {}
+        for (node, instance), height in self.max_height.items():
+            entry = out.setdefault(instance, {"applied_lines": self.counts[instance], "max_height": 0})
+            entry["max_height"] = max(entry["max_height"], height)
+        return dict(sorted(out.items()))
+
+
+def commit_times(applied: Iterable[Applied]) -> CommitTimes:
+    """The commit times of a list of applied events."""
+    commits = CommitTimes()
     for event in applied:
-        counts[event.instance] = counts.get(event.instance, 0) + 1
-    if not counts:
-        return None
-    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        commits.add(event)
+    return commits
+
+
+class Analysis:
+    """Every oracle's incremental state over all nodes, and the per-node summaries."""
+
+    def __init__(self) -> None:
+        self.agreement = AgreementChecker()
+        self.sign = SignOnceChecker()
+        self.commits = CommitTimes()
+        self.nodes: dict[str, NodeLog] = {}
+
+    def add_applied(self, event: Applied) -> None:
+        """Feed one applied block."""
+        self.agreement.add(event)
+        self.commits.add(event)
+
+    def add_record(self, record: Record) -> None:
+        """Feed one durable record."""
+        self.sign.add(record)
+
+    @staticmethod
+    def from_logs(logs: Mapping[str, NodeLog]) -> "Analysis":
+        """The analysis of logs whose events were kept (each node in its log order)."""
+        analysis = Analysis()
+        for name, log in sorted(logs.items()):
+            analysis.nodes[name] = log
+            for event in sorted(log.applied, key=lambda event: (event.boot, event.line)):
+                analysis.add_applied(event)
+            for record in sorted(log.records, key=lambda record: (record.boot, record.line)):
+                analysis.add_record(record)
+        return analysis
+
+
+def check_agreement(applied: Sequence[Applied]) -> tuple[list[Violation], dict[str, Any]]:
+    """O-AGR over a list of applied events (each node's in its log order)."""
+    checker = AgreementChecker()
+    for event in sorted(applied, key=lambda event: (event.node, event.boot, event.line)):
+        checker.add(event)
+    violations, _, checked = checker.finish()
+    return violations, checked
+
+
+def check_sign_once(records: Sequence[Record]) -> tuple[list[Violation], dict[str, Any]]:
+    """O-SIGN over a list of durable records (each node's in its log order)."""
+    checker = SignOnceChecker()
+    for record in sorted(records, key=lambda record: (record.node, record.boot, record.line)):
+        checker.add(record)
+    violations, _, checked = checker.finish()
+    return violations, checked
 
 
 def check_liveness(
-    applied: Sequence[Applied],
+    commits: CommitTimes,
     timeline: Timeline,
     instance: Optional[str],
     bound_ms: float,
@@ -775,18 +950,14 @@ def check_liveness(
     """O-LIVE: commits resume within ``bound_ms`` after every heal and never stall after it."""
     violations: list[Violation] = []
     intervals = timeline.steady_intervals()
-    commits: dict[str, list[float]] = {node: [] for node in timeline.nodes}
-    for event in applied:
-        if event.instance == instance and event.node in commits:
-            commits[event.node].append(event.ts_ms)
-    for times in commits.values():
-        times.sort()
+    times = {node: [ts for ts, _ in commits.of(node, instance)] for node in timeline.nodes}
     windows_checked = 0
     for start, end in intervals:
         for node in timeline.nodes:
             windows_checked += 1
             cursor = start
-            for ts in (ts for ts in commits[node] if start <= ts < end):
+            node_times = times[node]
+            for ts in node_times[bisect_left(node_times, start) : bisect_left(node_times, end)]:
                 if ts - cursor > bound_ms:
                     violations.append(
                         Violation(
@@ -847,6 +1018,9 @@ def check_liveness(
         "instance": instance,
         "bound_ms": bound_ms,
         "steady_intervals": len(intervals),
+        # Only an interval at least as long as the bound can show a stall.
+        "judged_intervals": sum(1 for start, end in intervals if end - start >= bound_ms),
+        "longest_interval_ms": max((end - start for start, end in intervals), default=0.0),
         "node_windows": windows_checked,
     }
     return violations, checked
@@ -875,7 +1049,7 @@ def committed_transactions(samples: Sequence[LoadSample]) -> Optional[int]:
 
 
 def check_performance(
-    applied: Sequence[Applied],
+    commits: CommitTimes,
     timeline: Timeline,
     instance: Optional[str],
     thresholds: Thresholds,
@@ -887,22 +1061,17 @@ def check_performance(
     gaps: list[float] = []
     blocks_best = 0
     payload_best = 0
-    by_node: dict[str, list[Applied]] = {}
-    for event in applied:
-        if event.instance == instance:
-            by_node.setdefault(event.node, []).append(event)
-    for events in by_node.values():
-        events.sort(key=lambda event: event.ts_ms)
+    for node in commits.nodes():
+        events = commits.of(node, instance)
+        times = [ts for ts, _ in events]
         node_blocks = 0
         node_payload = 0
         for start, end in intervals:
-            inside = [event for event in events if start <= event.ts_ms < end]
+            inside = events[bisect_left(times, start) : bisect_left(times, end)]
             node_blocks += len(inside)
-            node_payload += sum(event.payload_bytes for event in inside)
-            steady = inside[thresholds.warmup_heights :]
-            gaps.extend(
-                later.ts_ms - earlier.ts_ms for earlier, later in zip(steady, steady[1:])
-            )
+            node_payload += sum(payload for _, payload in inside)
+            steady = [ts for ts, _ in inside[thresholds.warmup_heights :]]
+            gaps.extend(later - earlier for earlier, later in zip(steady, steady[1:]))
         blocks_best = max(blocks_best, node_blocks)
         payload_best = max(payload_best, node_payload)
     steady_ms = sum(end - start for start, end in intervals)
@@ -1083,54 +1252,65 @@ def live_bound_ms(params: LiveBoundParams) -> float:
 
 
 def build_verdict(
-    logs: Mapping[str, NodeLog],
+    analysis: Analysis,
     timeline: Timeline,
     thresholds: Thresholds,
     load: Optional[LoadRecord],
     run: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Compute every oracle and the overall verdict (``ok`` is false on any violation)."""
-    applied = [event for log in logs.values() for event in log.applied]
-    records = [record for log in logs.values() for record in log.records]
-    instance = observed_instance(applied)
-    agr, agr_checked = check_agreement(applied)
-    sign, sign_checked = check_sign_once(records)
-    live, live_checked = check_liveness(applied, timeline, instance, thresholds.live_bound_ms)
-    perf, perf_metrics = check_performance(applied, timeline, instance, thresholds, load)
+    instance = analysis.commits.observed_instance()
+    agr, agr_count, agr_checked = analysis.agreement.finish()
+    sign, sign_count, sign_checked = analysis.sign.finish()
+    live, live_checked = check_liveness(analysis.commits, timeline, instance, thresholds.live_bound_ms)
+    perf, perf_metrics = check_performance(analysis.commits, timeline, instance, thresholds, load)
+    logs = analysis.nodes
     harness: list[Violation] = []
-    parse_errors = [error for log in logs.values() for error in log.parse_errors]
-    if parse_errors:
+    parse_error_count = sum(log.parse_error_count for log in logs.values())
+    if parse_error_count:
         harness.append(
             Violation(
-                "HARNESS", "unparsed-audit-lines", {"count": len(parse_errors), "first": parse_errors[:5]}
+                "HARNESS",
+                "unparsed-audit-lines",
+                {
+                    "count": parse_error_count,
+                    "first": [error for log in logs.values() for error in log.parse_errors][:5],
+                },
             )
         )
-    missing = [node for node in timeline.nodes if node not in logs or not logs[node].applied]
+    missing = [node for node in timeline.nodes if node not in logs or not logs[node].applied_count]
     if missing:
         harness.append(Violation("HARNESS", "node-without-applied-lines", {"nodes": missing}))
-    silent = [node for node in timeline.nodes if node not in logs or not logs[node].records]
+    if not live_checked["judged_intervals"]:
+        # Every fault-free interval is shorter than the bound: a stall could not fail O-LIVE.
+        harness.append(
+            Violation(
+                "HARNESS",
+                "no-interval-judged-by-o-live",
+                {
+                    "bound_ms": thresholds.live_bound_ms,
+                    "longest_interval_ms": live_checked["longest_interval_ms"],
+                },
+            )
+        )
+    silent = [node for node in timeline.nodes if node not in logs or not logs[node].record_count]
     if silent:
         # Without durable-record lines O-SIGN is blind (the audit DEBUG filter is missing).
         harness.append(Violation("HARNESS", "node-without-record-lines", {"nodes": silent}))
 
-    def oracle(violations: list[Violation], checked: Mapping[str, Any]) -> dict[str, Any]:
+    def oracle(violations: list[Violation], count: int, checked: Mapping[str, Any]) -> dict[str, Any]:
         return {
-            "ok": not violations,
-            "violations": [violation.to_json() for violation in violations[:200]],
-            "violation_count": len(violations),
+            "ok": count == 0,
+            "violations": [violation.to_json() for violation in violations[:MAX_REPORTED_VIOLATIONS]],
+            "violation_count": count,
             "checked": dict(checked),
         }
 
-    instances: dict[str, dict[str, Any]] = {}
-    for event in applied:
-        entry = instances.setdefault(event.instance, {"applied_lines": 0, "max_height": 0})
-        entry["applied_lines"] += 1
-        entry["max_height"] = max(entry["max_height"], event.height)
     oracles = {
-        "O-AGR": oracle(agr, agr_checked),
-        "O-SIGN": oracle(sign, sign_checked),
-        "O-LIVE": oracle(live, live_checked),
-        "O-PERF": oracle(perf, perf_metrics),
+        "O-AGR": oracle(agr, agr_count, agr_checked),
+        "O-SIGN": oracle(sign, sign_count, sign_checked),
+        "O-LIVE": oracle(live, len(live), live_checked),
+        "O-PERF": oracle(perf, len(perf), perf_metrics),
     }
     verdict = {
         "schema": VERDICT_SCHEMA,
@@ -1138,17 +1318,14 @@ def build_verdict(
         "ok": all(entry["ok"] for entry in oracles.values()) and not harness,
         "oracles": oracles,
         "harness": [violation.to_json() for violation in harness],
-        "instances": instances,
+        "instances": analysis.commits.instances(),
         "nodes": {
             name: {
                 "boots": log.boots,
                 "lines": log.lines,
-                "applied_lines": len(log.applied),
-                "record_lines": len(log.records),
-                "max_height": max(
-                    (event.height for event in log.applied if event.instance == instance),
-                    default=None,
-                ),
+                "applied_lines": log.applied_count,
+                "record_lines": log.record_count,
+                "max_height": analysis.commits.max_height.get((name, instance)),
                 "observations": dict(sorted(log.observations.items())),
                 "examples": dict(sorted(log.examples.items())),
             }

@@ -9893,35 +9893,6 @@ class SumeragiEvidenceListPage:
         return cls(items=items, total=total)
 
 
-@dataclass(frozen=True)
-class SumeragiPrfStatus:
-    """Pending PRF (pseudo-random function) window state."""
-
-    height: int
-    view: int
-    epoch_seed: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiPrfStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("PRF status must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("PRF status `height` and `view` must be numeric") from exc
-        seed_value = payload.get("epoch_seed")
-        if seed_value is None:
-            epoch_seed: Optional[str] = None
-        elif isinstance(seed_value, str):
-            epoch_seed = seed_value
-        else:
-            raise TypeError("PRF status `epoch_seed` must be a string when present")
-        return cls(height=height, view=view, epoch_seed=epoch_seed)
-
-
-
-
 _MAX_NATIVE_AMX_GROUP_SOURCES = 4096
 
 
@@ -9951,81 +9922,11 @@ def _strict_uint(payload: Mapping[str, Any], field_name: str, bits: int, context
     return value
 
 
-def _strict_tagged_unit_enum(
-    payload: Mapping[str, Any],
-    field_name: str,
-    *,
-    tag: str,
-    content: str,
-    variants: Sequence[str],
-    context: str,
-) -> str:
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} `{field_name}` must be a tagged enum object")
-    if set(value) != {tag, content}:
-        raise ValueError(f"{context} `{field_name}` must contain exactly `{tag}` and `{content}`")
-    variant = value[tag]
-    if not isinstance(variant, str) or variant not in variants:
-        raise ValueError(f"{context} `{field_name}` contains an unsupported variant")
-    if value[content] is not None:
-        raise ValueError(f"{context} `{field_name}.{content}` must be null")
-    return variant
-
-
-def _strict_quantity_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
-    """Decode one canonical bounded non-negative Kotodama quantity."""
-
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str):
-        raise TypeError(f"{context} `{field_name}` must be a quantity string")
-    if len(value) > 155:
-        raise ValueError(f"{context} `{field_name}` exceeds the quantity text length bound")
-    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
-    if matched is None:
-        raise TypeError(f"{context} `{field_name}` must be a canonical non-negative quantity")
-    fraction = matched.group(2) or ""
-    mantissa = int(matched.group(1) + fraction)
-    if mantissa > (1 << 511) - 1:
-        raise ValueError(f"{context} `{field_name}` exceeds the signed 512-bit domain")
-    return value
-
-
 def _strict_nonempty_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
     value = _required_field(payload, field_name, context)
     if not isinstance(value, str) or value.strip() == "":
         raise TypeError(f"{context} `{field_name}` must be a non-empty string")
     return value
-
-
-def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
-    """Decode one canonical signed Numeric without unbounded decimal input."""
-
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str):
-        raise TypeError(f"{context} `{field_name}` must be a numeric string")
-    if len(value) > 156:
-        raise ValueError(f"{context} `{field_name}` exceeds the numeric text length bound")
-    return str(NumericV1Codec.decode_decimal_json(value))
-
-
-def _strict_hex_string(
-    payload: Mapping[str, Any],
-    field_name: str,
-    byte_length: int,
-    context: str,
-) -> str:
-    value = _required_field(payload, field_name, context)
-    if (
-        not isinstance(value, str)
-        or len(value) != byte_length * 2
-        or re.fullmatch(r"[0-9A-F]+", value) is None
-    ):
-        raise TypeError(
-            f"{context} `{field_name}` must be exactly {byte_length} bytes of uppercase hex"
-        )
-    return value
-
 
 
 def _crc16_ccitt_false(value: bytes) -> int:
@@ -10058,82 +9959,6 @@ def _strict_nexus_lane_config(value: Any, context: str) -> Dict[str, Any]:
     return _strict_nexus_lane_config_impl(value, context, _strict_exact_fields, _strict_uint, _strict_nonempty_string)
 
 
-def _strict_byte_vector(value: Any, length: int, context: str) -> Tuple[int, ...]:
-    if not isinstance(value, list) or len(value) != length:
-        raise TypeError(f"{context} must contain exactly {length} byte values")
-    result: List[int] = []
-    for index, byte in enumerate(value):
-        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255:
-            raise TypeError(f"{context}[{index}] must be an integer byte")
-        result.append(byte)
-    return tuple(result)
-
-
-
-
-
-
-
-
-def _parse_sumeragi_lane_settlement_receipts(
-    receipts_payload: Any, context: str
-) -> List[SumeragiLaneSettlementReceipt]:
-    if not isinstance(receipts_payload, list):
-        raise TypeError(f"{context} receipts must be a list")
-    receipts: List[SumeragiLaneSettlementReceipt] = []
-    for index, receipt in enumerate(receipts_payload):
-        if not isinstance(receipt, Mapping):
-            raise TypeError(f"{context} receipts must be objects")
-        receipt_context = f"{context} receipt at index {index}"
-        _strict_exact_fields(
-            receipt,
-            {
-                "source_id",
-                "local_amount",
-                "xor_due",
-                "xor_after_haircut",
-                "xor_variance",
-                "timestamp_ms",
-            },
-            receipt_context,
-        )
-        source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-        receipt_local = _strict_quantity_string(receipt, "local_amount", receipt_context)
-        receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
-        receipt_after = _strict_quantity_string(receipt, "xor_after_haircut", receipt_context)
-        receipt_variance = _strict_quantity_string(receipt, "xor_variance", receipt_context)
-        receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
-        receipts.append(
-            SumeragiLaneSettlementReceipt(
-                source_id=source_id,
-                local_amount=receipt_local,
-                xor_due=receipt_due,
-                xor_after_haircut=receipt_after,
-                xor_variance=receipt_variance,
-                timestamp_ms=receipt_timestamp,
-            )
-        )
-    return receipts
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 _SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
 _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 
@@ -10142,73 +9967,28 @@ _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
 class SumeragiParamsSnapshot:
     """On-chain Sumeragi parameter snapshot from `/v1/sumeragi/params`."""
 
-    block_time_ms: int
-    commit_time_ms: int
+    block_cadence_ms: int
     max_clock_drift_ms: int
-    collectors_k: int
-    redundant_send_r: int
-    da_enabled: bool
-    next_mode: Optional[str]
-    mode_activation_height: Optional[int]
     chain_height: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiParamsSnapshot":
+        """Validate exactly the served fields; any other field fails closed."""
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi params payload must be an object")
-        next_mode_value = payload.get("next_mode")
-        if next_mode_value is not None and not isinstance(next_mode_value, str):
-            raise TypeError("sumeragi params `next_mode` must be a string when present")
-        mode_activation_value = payload.get("mode_activation_height")
-        try:
-            block_time_ms = int(payload.get("block_time_ms", 0))
-            commit_time_ms = int(payload.get("commit_time_ms", 0))
-            max_clock_drift_ms = int(payload.get("max_clock_drift_ms", 0))
-            collectors_k = int(payload.get("collectors_k", 0))
-            redundant_send_r = int(payload.get("redundant_send_r", 0))
-            chain_height = int(payload.get("chain_height", 0))
-            mode_activation_height = (
-                None if mode_activation_value is None else int(mode_activation_value)
-            )
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi params numeric fields must be integers") from exc
-        da_enabled = payload.get("da_enabled")
-        if not isinstance(da_enabled, bool):
-            raise TypeError("sumeragi params `da_enabled` must be a boolean")
-        return cls(
-            block_time_ms=block_time_ms,
-            commit_time_ms=commit_time_ms,
-            max_clock_drift_ms=max_clock_drift_ms,
-            collectors_k=collectors_k,
-            redundant_send_r=redundant_send_r,
-            da_enabled=da_enabled,
-            next_mode=next_mode_value,
-            mode_activation_height=mode_activation_height,
-            chain_height=chain_height,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiLeaderSnapshot:
-    """Leader index snapshot from `/v1/sumeragi/leader`."""
-
-    leader_index: int
-    prf: SumeragiPrfStatus
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLeaderSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("leader payload must be an object")
-        prf_payload = payload.get("prf")
-        if not isinstance(prf_payload, Mapping):
-            raise TypeError("leader payload missing object `prf` field")
-        try:
-            leader_index = int(payload.get("leader_index", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("leader index must be numeric") from exc
-        return cls(leader_index=leader_index, prf=SumeragiPrfStatus.from_payload(prf_payload))
-
-
+        fields = ("block_cadence_ms", "max_clock_drift_ms", "chain_height")
+        unknown = sorted(set(payload) - set(fields))
+        if unknown:
+            raise TypeError(f"sumeragi params contain unsupported fields: {', '.join(unknown)}")
+        values = {}
+        for name in fields:
+            value = payload.get(name)
+            if type(value) is not int or not 0 <= value < (1 << 64):
+                raise TypeError(f"sumeragi params `{name}` must be an unsigned 64-bit integer")
+            values[name] = value
+        if values["block_cadence_ms"] == 0:
+            raise TypeError("sumeragi params `block_cadence_ms` must be nonzero")
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -11960,7 +11740,6 @@ __all__ = [
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
-    "SumeragiPrfStatus",
     "SumeragiStatus",
     "SumeragiFootprint",
     "SumeragiBeaconHorizon",
@@ -11971,7 +11750,6 @@ __all__ = [
     "SumeragiLaneFrontier",
     "SumeragiParameters",
     "SumeragiParamsSnapshot",
-    "SumeragiLeaderSnapshot",
     "SumeragiEvidenceCount",
     "TriggerRecord",
     "TriggerListPage",
@@ -21080,22 +20858,6 @@ class ToriiClient(
     def get_sumeragi_status_typed(self) -> SumeragiStatus:
         """Read the canonical native observation through the original authenticated client."""
         return super().get_sumeragi_status()
-
-    def get_sumeragi_leader(self) -> Optional[Any]:
-        """Fetch the operator-authenticated leader index snapshot."""
-
-        return self._sumeragi_operator_json(
-            "/v1/sumeragi/leader",
-            context="sumeragi leader",
-        )
-
-    def get_sumeragi_leader_typed(self) -> SumeragiLeaderSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_leader`."""
-
-        payload = self.get_sumeragi_leader()
-        if not isinstance(payload, Mapping):
-            raise TypeError("leader response must be a JSON object")
-        return SumeragiLeaderSnapshot.from_payload(payload)
 
     def get_sumeragi_evidence_count(self) -> SumeragiEvidenceCount:
         """Return the exact committed evidence count."""

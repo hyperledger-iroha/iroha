@@ -57,11 +57,14 @@ pub(super) fn validate(
         parent_result: parent.result(),
         payload_hash: payload_hash(&BlsCrypto::new(), &bytes),
         payload_len: u32::try_from(bytes.len()).unwrap(),
+        availability_digest: iroha_sumeragi::types::Hash32::ZERO,
         proposer: 0,
         skipped_leaders: Vec::new(),
         attest: iroha_core::sumeragi::executor::attestation_required(&proposal)
             || proposal.header().height().get() == scheduled.epoch.authorization.last_height,
     };
+    let body = chain.author_payload(header, bytes.clone());
+    let header = body.header();
     let expansion = expand(chain.state(), &proposal, &NoLanes, Duration::ZERO).unwrap();
     let topology = Topology::new(chain.validators().iter().map(|(peer, _)| peer.clone()));
     ValidBlock::validate_sumeragi_block(
@@ -71,7 +74,7 @@ pub(super) fn validate(
         Duration::from_millis(scheduled.params.block_time_ms),
         iroha_data_model::parameter::system::ConsensusMode::Permissioned,
         expansion,
-        &header,
+        header,
         &bytes,
         chain.state(),
     )

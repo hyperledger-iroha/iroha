@@ -3,25 +3,30 @@
 //! Late DA writes and lifecycle cleanup finish before the overlay is captured by
 //! tiered persistence or consumed by publication. A rebuildable DA cache never
 //! decides which authoritative World records exist. The prepared owner exposes
-//! no mutable World access, so its baseline projection and its commit see the
-//! same values. Existing State authorization and transaction gates still own
+//! no mutable World access, so its World state accumulator and its commit see
+//! the same values. Existing State authorization and transaction gates still own
 //! permission to publish; this object cannot authorize a carrier by itself.
 //!
-//! TODO: compose non-World membership/runtime/finality values, authenticated
-//! predecessor restoration and aggregate resource admission into this owner
-//! before it can publish a complete State commitment.
+//! The State publisher advances the World state accumulator from this
+//! completed overlay (`WorldBlock::advance_state_accumulator`) after these
+//! writes, so the accumulator covers every deterministic tail write.
 
-use super::world_projection::{WorldBaselineError, WorldStateBaseline};
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
 
 /// One finalized World overlay and its derived DA cache publication records.
+///
+/// Production uses only the associated deterministic-tail functions on the State's own
+/// overlay; a prepared instance is a component fixture.
 pub(in crate::state) struct PreparedWorldCommit<'state> {
     #[cfg(test)]
     state: &'state State,
+    #[cfg(test)]
     world: WorldBlock<'state>,
     #[cfg(test)]
     effects: PreparedWorldEffects,
+    /// The World lifetime of the associated functions.
+    _world: core::marker::PhantomData<&'state ()>,
 }
 
 /// Deferred cache records from the exact prepared World; no publication authority.
@@ -70,6 +75,7 @@ impl<'state> PreparedWorldCommit<'state> {
             state,
             world,
             effects,
+            _world: core::marker::PhantomData,
         })
     }
 
@@ -184,22 +190,6 @@ impl<'state> PreparedWorldCommit<'state> {
     #[cfg(test)]
     pub(in crate::state) fn world(&self) -> &WorldBlock<'state> {
         &self.world
-    }
-
-    /// Derive the new private World baseline from this exact predecessor version.
-    /// The complete State lifecycle must still establish predecessor identity.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: connect retained journals to the consuming State publisher"
-        )
-    )]
-    pub(in crate::state) fn baseline_after(
-        &self,
-        parent: &WorldStateBaseline,
-    ) -> Result<WorldStateBaseline, WorldBaselineError> {
-        parent.apply_block(&self.world)
     }
 
     /// Consume the same prepared World after State's publication gates succeed.

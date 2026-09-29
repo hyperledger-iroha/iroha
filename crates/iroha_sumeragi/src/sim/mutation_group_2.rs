@@ -39,8 +39,9 @@ use super::{
 use crate::{
     Core,
     api::{Action, CommittedTip, Event, ExecOutcome, Init, LocalParams},
+    availability::AvailableBody,
     crypto::Signer,
-    message::{Block, BlockHeader, Qc, VoteKind, WireMessage},
+    message::{BlockHeader, Qc, VoteKind, WireMessage},
     preimage,
     safety::{RecordState, SafetyRecord},
     testing::{FakeValidators, SignLog, sha256},
@@ -59,9 +60,9 @@ const G_RESULT: Hash32 = Hash32([0xbb; 32]);
 const N: usize = 4;
 
 /// The deterministic execution result of the test: `R = H(parent_R ‖ payload)`.
-fn result_of(block: &Block) -> Hash32 {
-    let mut input = block.header.parent_result.0.to_vec();
-    input.extend_from_slice(&block.payload);
+fn result_of(block: &AvailableBody) -> Hash32 {
+    let mut input = block.header().parent_result.0.to_vec();
+    input.extend_from_slice(&block.payload().as_slice());
     Hash32(sha256(&input))
 }
 
@@ -73,9 +74,10 @@ struct Rig {
     topo: Topology,
     me: ValidatorIndex,
     core: Core,
+    budget: mv::allocation::AllocationBudget,
     now: Millis,
     local: LocalParams,
-    pending: Vec<(u64, Block)>,
+    pending: Vec<(u64, AvailableBody)>,
     /// Every message the core sent: `(time, recipients, message)`.
     sent: Vec<(Millis, Vec<PublicKey>, WireMessage)>,
     /// The core's routing stage after every handled event, recorded when it changes.
@@ -125,12 +127,14 @@ impl Rig {
             ],
             recent_headers: Vec::new(),
         };
+        let budget = mv::allocation::AllocationBudget::new(1 << 28);
         let (core, actions) = Core::new(
             local,
             init,
-            vec![Box::new(signer)],
+            vec![std::sync::Arc::new(signer)],
             Box::new(v.crypto.clone()),
             crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            budget.clone(),
             0,
         )
         .expect("valid test configuration");
@@ -140,6 +144,7 @@ impl Rig {
             topo,
             me,
             core,
+            budget,
             now: 0,
             local,
             pending: Vec::new(),
@@ -175,6 +180,8 @@ impl Rig {
     }
 
     fn deliver(&mut self, from: ValidatorIndex, msg: WireMessage) {
+        let mut msg = WireMessage::decode(&msg.encode().unwrap(), 32 << 20).unwrap();
+        msg.admit_owned_bytes(&self.budget).unwrap();
         let from = self.key(from);
         self.fire(Event::Message { from, msg });
     }
@@ -205,7 +212,7 @@ impl Rig {
     }
 
     /// A fresh block of height 1 first proposed in `view` by its leader.
-    fn block(&self, view: u64, payload: &[u8]) -> Block {
+    fn block(&self, view: u64, payload: &[u8]) -> AvailableBody {
         let header = BlockHeader {
             control_witness: crate::types::ControlWitness::empty(),
             epoch: crate::testing::TEST_EPOCH.id,
@@ -215,42 +222,59 @@ impl Rig {
             parent_hash: G_HASH,
             parent_result: G_RESULT,
             payload_hash: preimage::payload_hash(&self.v.crypto, payload),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: u32::try_from(payload.len()).expect("a small payload"),
             proposer: self.topo.leader(view),
             skipped_leaders: self.topo.skipped_leader_keys(&self.v.committee, view),
             attest: false,
         };
-        Block {
+        crate::testing::author_body(
             header,
-            payload: payload.to_vec(),
-        }
+            payload,
+            &HeightConfig {
+                epoch: Box::new(crate::testing::TEST_EPOCH),
+                committee: self.v.committee.clone(),
+                params: ChainParams::default(),
+            },
+            &self.budget,
+            &self.v.crypto,
+            self.v.signer(self.topo.leader(view)),
+        )
     }
 
     /// The leader of `(1, view)` sends its proposal of `block` (with payload).
-    fn propose(&mut self, view: u64, block: &Block) {
+    fn propose(&mut self, view: u64, block: &AvailableBody) {
         let leader = self.topo.leader(view);
-        let proposal = self.v.proposal(
+        let proposal = self
+            .v
+            .proposal(leader, &I, 1, view, block.header().clone(), None, None);
+        self.deliver(
             leader,
-            &I,
-            1,
-            view,
-            block.header.clone(),
-            None,
-            None,
-            Some(block.payload.clone()),
+            WireMessage::Proposal(Box::new(crate::message::ProposalMessage {
+                proposal,
+                availability: block.availability().clone(),
+            })),
         );
-        self.deliver(leader, WireMessage::Proposal(Box::new(proposal)));
+        self.fire(Event::BodyAvailable {
+            block: block.clone(),
+        });
     }
 
     /// A certificate of `(1, view)` for `block` by exactly `signers`.
-    fn qc(&self, kind: VoteKind, view: u64, block: &Block, signers: &[ValidatorIndex]) -> Qc {
+    fn qc(
+        &self,
+        kind: VoteKind,
+        view: u64,
+        block: &AvailableBody,
+        signers: &[ValidatorIndex],
+    ) -> Qc {
         let bh = block.hash(&self.v.crypto);
         self.v
             .qc(kind, &I, 1, view, &bh, &result_of(block), signers)
     }
 
     /// A certificate by the `q = 3` members other than the core.
-    fn qc_q(&self, kind: VoteKind, view: u64, block: &Block) -> Qc {
+    fn qc_q(&self, kind: VoteKind, view: u64, block: &AvailableBody) -> Qc {
         let others = self.others();
         self.qc(kind, view, block, &others)
     }
@@ -455,7 +479,7 @@ fn wide_params() -> LocalParams {
 
 /// A set-B member of `(1, 0)` that accepted and executed the proposal at time 0: it votes only
 /// on entering stage 1 at `t_ready + t_retx` (§5.2). Returns the rig and that time.
-fn set_b_voter() -> (Rig, Block, Millis) {
+fn set_b_voter() -> (Rig, AvailableBody, Millis) {
     let mut r = Rig::new(wide_params(), |t| t.round(0).set_b()[0]);
     let b = r.block(0, b"B");
     r.propose(0, &b);

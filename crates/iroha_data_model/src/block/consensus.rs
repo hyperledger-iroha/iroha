@@ -1,11 +1,12 @@
 //! Norito-encoded consensus types shared across Sumeragi components.
 //!
 //! These types cover committee geometry, signed consensus genesis parameters and height
-//! context identities, the RS16 data-availability layout, operator diagnostics, Nexus fee
-//! and settlement receipts, and execution witnesses. The consensus state machine and its
-//! messages live in `iroha_sumeragi`; native certified block proofs and execution
-//! commitments are owned by [`crate::sumeragi_finality`].
+//! context identities, the signed RS16 layout, operator diagnostics, SORA Nexus fee and
+//! settlement receipts, and execution witnesses. The consensus state machine, messages and
+//! original-row availability verification live in `iroha_sumeragi`; certified block proofs
+//! and execution commitments are owned by [`crate::sumeragi_finality`].
 use super::Header as BlockHeader;
+use iroha_sumeragi::availability::{DataAvailabilityLayout, recommended_data_availability_layout};
 
 #[cfg(test)]
 use crate::NetworkId;
@@ -53,20 +54,6 @@ pub const fn is_valid_committee_size(validator_count: usize) -> bool {
         && validator_count <= MAX_VALIDATORS_PER_HEIGHT
         && (validator_count - 1).is_multiple_of(3)
 }
-/// Protocol-wide upper bound for one authenticated RS16 chunk.
-pub const MAX_DA_CHUNK_SIZE_BYTES: u32 = 256 * 1024;
-/// Protocol-wide upper bound for data shards in one RS16 stripe.
-pub const MAX_DA_DATA_SHARDS: u16 = 16;
-/// Protocol-wide upper bound for parity shards in one RS16 stripe.
-pub const MAX_DA_PARITY_SHARDS: u16 = 16;
-/// Protocol-wide upper bound for total shards in one RS16 stripe.
-pub const MAX_DA_STRIPE_WIDTH: u16 = MAX_DA_DATA_SHARDS + MAX_DA_PARITY_SHARDS;
-/// Protocol-wide upper bound for one canonical consensus payload.
-pub const MAX_DA_PAYLOAD_SIZE_BYTES: u64 = 16 * 1024 * 1024;
-/// Protocol-wide upper bound for all encoded shards of one maximum payload.
-pub const MAX_DA_ENCODED_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
-/// Protocol-wide upper bound for encoded chunks committed by one manifest.
-pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
 /// Permissioned Sumeragi handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha3-consensus::permissioned-sumeragi@v1";
 /// `NPoS` Sumeragi handshake and domain-separation tag.
@@ -89,8 +76,8 @@ pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    220, 232, 211, 211, 61, 114, 186, 115, 100, 1, 0, 110, 240, 35, 151, 111, 88, 0, 178, 133, 41,
-    51, 110, 13, 124, 189, 155, 111, 238, 246, 21, 21,
+    184, 201, 137, 127, 132, 160, 253, 49, 98, 200, 33, 224, 106, 253, 214, 89, 70, 108, 60, 163,
+    25, 61, 120, 83, 183, 110, 129, 158, 132, 13, 42, 75,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -100,18 +87,6 @@ pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
     63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
     224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
 ];
-/// Recommended deterministic data-availability layout.
-#[must_use]
-pub const fn recommended_data_availability_layout() -> DataAvailabilityLayout {
-    DataAvailabilityLayout {
-        encoding: PayloadEncoding::ReedSolomon16,
-        chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
-        data_shards: 4,
-        parity_shards: 2,
-        max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
-        max_chunk_count: MAX_DA_CHUNK_COUNT,
-    }
-}
 pub use crate::parameter::system::ConsensusMode;
 impl ConsensusMode {
     /// Return the canonical handshake and signing-domain tag for this mode.
@@ -153,65 +128,6 @@ pub struct ValidatorPower {
     pub validator: PeerId,
     /// Consensus vote count. The native protocol requires this to be exactly one.
     pub power: u64,
-}
-/// Payload chunking parameters frozen for one block height.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::DataAvailabilityLayout")]
-pub struct DataAvailabilityLayout {
-    /// Payload encoding used before chunk dissemination.
-    pub encoding: PayloadEncoding,
-    /// Maximum encoded chunk size in bytes.
-    pub chunk_size_bytes: u32,
-    /// Data shards per RS16 stripe.
-    pub data_shards: u16,
-    /// Parity shards per RS16 stripe.
-    pub parity_shards: u16,
-    /// Maximum canonical body size accepted at this height.
-    pub max_payload_size_bytes: u64,
-    /// Maximum number of encoded chunks accepted for one body.
-    pub max_chunk_count: u32,
-}
-/// Payload encoding used by RS16 data dissemination.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(
-    tag = "encoding",
-    content = "details",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::PayloadEncoding")]
-pub enum PayloadEncoding {
-    /// Encode payload stripes with the deterministic RS16 layout.
-    ReedSolomon16,
 }
 /// Genesis-selected transport inputs needed to construct every Sumeragi
 /// height context.
@@ -284,7 +200,9 @@ impl SumeragiGenesisContextParameters {
         {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
-        validate_data_availability_layout(self.da_layout)
+        self.da_layout
+            .validate()
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)
     }
 }
 /// Canonical staged active-lane record committed by genesis metadata.
@@ -320,8 +238,6 @@ pub enum ValidationError {
     InvalidNexusAmxContextHash,
     /// The staged execution-policy commitment is not a canonical nonzero hash.
     InvalidExecutionPolicyHash,
-    /// The RS16 encoded chunk count exceeds its wire representation.
-    ChunkCountTooLarge,
 }
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -329,62 +245,10 @@ impl fmt::Display for ValidationError {
             Self::InvalidDataAvailabilityLayout => "invalid data-availability layout",
             Self::InvalidNexusAmxContextHash => "invalid Nexus context hash",
             Self::InvalidExecutionPolicyHash => "invalid execution-policy hash",
-            Self::ChunkCountTooLarge => "payload chunk count exceeds the wire range",
         })
     }
 }
 impl std::error::Error for ValidationError {}
-fn encoded_chunk_count_for_validated_layout(
-    payload_size_bytes: u64,
-    layout: DataAvailabilityLayout,
-) -> Result<u32, ValidationError> {
-    let payload = u128::from(payload_size_bytes);
-    let chunk_size = u128::from(layout.chunk_size_bytes);
-    let count = match layout.encoding {
-        PayloadEncoding::ReedSolomon16 => {
-            let data_shards = u128::from(layout.data_shards);
-            let stripe_payload = chunk_size
-                .checked_mul(data_shards)
-                .ok_or(ValidationError::ChunkCountTooLarge)?;
-            let stripes = payload.div_ceil(stripe_payload);
-            stripes
-                .checked_mul(u128::from(layout.data_shards) + u128::from(layout.parity_shards))
-                .ok_or(ValidationError::ChunkCountTooLarge)?
-        }
-    };
-    u32::try_from(count).map_err(|_| ValidationError::ChunkCountTooLarge)
-}
-fn validate_data_availability_layout(
-    layout: DataAvailabilityLayout,
-) -> Result<(), ValidationError> {
-    if layout.chunk_size_bytes == 0
-        || layout.chunk_size_bytes > MAX_DA_CHUNK_SIZE_BYTES
-        || !layout.chunk_size_bytes.is_multiple_of(2)
-        || layout.data_shards == 0
-        || layout.data_shards > MAX_DA_DATA_SHARDS
-        || layout.parity_shards == 0
-        || layout.parity_shards > MAX_DA_PARITY_SHARDS
-        || layout.data_shards.saturating_add(layout.parity_shards) > MAX_DA_STRIPE_WIDTH
-        || layout.max_payload_size_bytes == 0
-        || layout.max_payload_size_bytes > MAX_DA_PAYLOAD_SIZE_BYTES
-        || layout.max_chunk_count == 0
-        || layout.max_chunk_count > MAX_DA_CHUNK_COUNT
-    {
-        return Err(ValidationError::InvalidDataAvailabilityLayout);
-    }
-    let required_chunk_capacity =
-        encoded_chunk_count_for_validated_layout(layout.max_payload_size_bytes, layout)
-            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
-    let required_encoded_bytes = u64::from(required_chunk_capacity)
-        .checked_mul(u64::from(layout.chunk_size_bytes))
-        .ok_or(ValidationError::InvalidDataAvailabilityLayout)?;
-    if required_chunk_capacity > layout.max_chunk_count
-        || required_encoded_bytes > MAX_DA_ENCODED_PAYLOAD_BYTES
-    {
-        return Err(ValidationError::InvalidDataAvailabilityLayout);
-    }
-    Ok(())
-}
 /// Build deterministic paired-Pasta authority aligned to a unit-test consensus roster.
 #[cfg(test)]
 pub(crate) fn test_kagemusha_mint_finality_authority(

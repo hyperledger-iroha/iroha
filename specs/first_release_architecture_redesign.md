@@ -1,5 +1,7 @@
 # First-release architecture redesign
 
+The [September 29 capability checkpoint](../docs/history/2026-09-29/sdk-capability-qualification.md) records canonical asynchronous Nexus observations, operator-owned diagnostics, explicit SDK address formatting and current scoped qualification. Its remaining consumer, stack, architecture and release gates are explicit.
+
 The [September 10 SDK and Musubi checkpoint](../docs/history/2026-09-10/musubi-sdk-and-resolver.md)
 records the iterative resolver repair, canonical compiler adapters, authenticated
 Musubi capability and merged-source development qualification. Release acceptance

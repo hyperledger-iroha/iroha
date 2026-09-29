@@ -13,7 +13,7 @@ use std::{
 use iroha_sumeragi::{
     api::{ExecOutcome, HaltReason, LocalParams},
     crypto::{NoAttestation, Signer},
-    message::{BlockRequest, BlockResponse, Status, SyncRequest, VoteKind, WireMessage},
+    message::{PayloadRequest, Status, SyncRequest, VoteKind, WireMessage},
     safety::RecordState,
     sim::driver::block_exec,
     testing::{FakeCrypto, FakeSigner, FakeValidators},
@@ -153,10 +153,10 @@ fn spawn_instance<C: Clock + 'static>(
             DriverConfig::default(),
             DriverStart {
                 node_gate: Arc::new(NodeGate::new()),
-                allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
+                allocation_budget: super::test_budget(),
                 local: LocalParams::default(),
                 init,
-                signers: vec![Box::new(signer)],
+                signers: vec![Arc::new(signer)],
                 crypto,
                 attestor: Box::new(NoAttestation),
                 verifier: Box::new(NoAttestation),
@@ -211,14 +211,14 @@ fn single_validator_commits_through_failures() {
     );
     assert!(node.fakes.records.writes() > 0);
     let payloads = (1..=node.fakes.blocks.height())
-        .filter_map(|h| node.fakes.blocks.entry(h))
-        .filter(|e| !e.block.payload.is_empty())
+        .filter_map(|h| node.fakes.blocks.entry(h).unwrap())
+        .filter(|e| e.manifest.header.payload_len > 0)
         .count();
     assert!(payloads > 0, "transactions were included");
     assert!(
         (1..=node.fakes.blocks.height())
-            .filter_map(|h| node.fakes.blocks.entry(h))
-            .all(|e| !e.block.payload.is_empty()),
+            .filter_map(|h| node.fakes.blocks.entry(h).unwrap())
+            .all(|e| e.manifest.header.payload_len > 0),
         "blocks are never empty"
     );
     assert!(node.fakes.bodies.len() <= 4, "applied bodies are pruned");
@@ -242,7 +242,7 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
             for i in 0..20_000u64 {
                 let peer = PublicKey::new(vec![u8::try_from(i % 50).unwrap(); 32]).unwrap();
                 let msg = if i % 2 == 0 {
-                    WireMessage::BlockRequest(BlockRequest {
+                    WireMessage::PayloadRequest(PayloadRequest {
                         instance,
                         height: i,
                         block_hash: Hash32::ZERO,
@@ -326,7 +326,7 @@ fn raw_frames_are_decoded_and_filtered() {
     });
     let handle = node.handle();
     let request = |instance| {
-        WireMessage::BlockRequest(BlockRequest {
+        WireMessage::PayloadRequest(PayloadRequest {
             instance,
             height: 1,
             block_hash: Hash32::ZERO,
@@ -386,16 +386,88 @@ fn frame_limit_below_parameters_is_refused() {
         config,
         DriverStart {
             node_gate: Arc::new(NodeGate::new()),
-            allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
+            allocation_budget: super::test_budget(),
             local: LocalParams::default(),
             init,
-            signers: vec![Box::new(signer)],
+            signers: vec![Arc::new(signer)],
             crypto: Arc::new(FakeCrypto::new()),
             attestor: Box::new(NoAttestation),
             verifier: Box::new(NoAttestation),
         },
     );
     assert!(matches!(refused, Err(DriverError::FrameLimit { .. })));
+}
+
+/// Startup checks the mandatory signed epoch layout, with no detached driver layout.
+#[test]
+fn a_signed_epoch_layout_below_the_block_bound_is_refused() {
+    use iroha_sumeragi::{
+        api::ConfigError,
+        availability::{LayoutError, recommended_data_availability_layout},
+    };
+    let signer = FakeSigner::from_seed(&[7], None);
+    let key = signer.public_key().clone();
+    let recommended = recommended_data_availability_layout();
+    let mut small = recommended;
+    small.max_payload_size_bytes = u64::from(params().max_block_bytes) - 1;
+    let mut invalid = recommended;
+    invalid.parity_shards = 0;
+    for (layout, expected) in [
+        (small, ConfigError::PayloadAboveAvailabilityLimit),
+        (
+            invalid,
+            ConfigError::AvailabilityLayout(LayoutError::InvalidLayout),
+        ),
+    ] {
+        let mut epoch = iroha_sumeragi::testing::TEST_EPOCH;
+        epoch.da_layout = layout;
+        let config = HeightConfig {
+            epoch: Box::new(epoch),
+            committee: Committee::new(vec![key.clone()]).unwrap(),
+            params: params(),
+        };
+        let blocks = Arc::new(FakeBlocks::default());
+        let init = assemble_init(
+            &*blocks,
+            Hash32([7; 32]),
+            0,
+            (Hash32([1; 32]), Hash32([2; 32])),
+            128,
+            vec![(key.clone(), RecordState::Absent, false)],
+            vec![
+                (1, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+                (2, iroha_sumeragi::types::ConfigSlot::Ready(config.clone())),
+            ],
+            1,
+        )
+        .unwrap();
+        let driver = Driver::new(
+            Arc::new(FakeNet::default()),
+            Arc::new(FakeRecords::default()),
+            Arc::new(FakeBodies::default()),
+            blocks,
+            Arc::new(SystemClock::new()),
+            FakeExecutor::new(Hash32([1; 32]), Hash32([2; 32]), config),
+            Arc::new(NoObserver),
+        );
+        let refused = driver.spawn(
+            DriverConfig::default(),
+            DriverStart {
+                node_gate: Arc::new(NodeGate::new()),
+                allocation_budget: super::test_budget(),
+                local: LocalParams::default(),
+                init,
+                signers: vec![Arc::new(signer.clone())],
+                crypto: Arc::new(FakeCrypto::new()),
+                attestor: Box::new(NoAttestation),
+                verifier: Box::new(NoAttestation),
+            },
+        );
+        assert!(
+            matches!(refused, Err(DriverError::Config(error)) if error == expected),
+            "{layout:?}"
+        );
+    }
 }
 
 /// `Init` from the block store: the tip with its header and `CommitQC`, the last `W + 2`
@@ -406,10 +478,15 @@ fn init_from_the_block_store() {
     let (mut parent, mut parent_result) = (Hash32([1; 32]), Hash32([2; 32]));
     let mut headers = Vec::new();
     for h in 1..=5 {
-        let b = block(h, parent, parent_result, Vec::new());
+        let b = block(
+            h,
+            parent,
+            parent_result,
+            iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+        );
         let r = Hash32([u8::try_from(h).unwrap(); 32]);
         blocks.append(&b, &commit_qc(&b, r)).unwrap();
-        headers.push(b.header.clone());
+        headers.push(b.header().clone());
         (parent, parent_result) = (hash(&b), r);
     }
     let init = assemble_init(
@@ -535,17 +612,18 @@ fn worker_exits_and_unreachable_workers_are_detected() {
         workers.dispatch(vec![Op::Exec(discard())]),
         Err(Worker::Exec)
     );
-    let fetch = super::super::serve::ServeRequest::Fetch {
-        height: 1,
-        block_hash: Hash32::ZERO,
-        peers: Vec::new(),
-    };
+    let fetch = super::super::serve::ServeRequest::Payload(Box::new(
+        super::super::payload_worker::PayloadWork::Fetch {
+            source: super::source(1, Hash32::ZERO),
+            peers: Vec::new(),
+        },
+    ));
     assert_eq!(workers.dispatch(vec![Op::Serve(fetch)]), Err(Worker::Serve));
 }
 
 /// §12.2 serving limits on the real threads: member 0 of a four-member committee, on a slow
 /// disk (every block-store read takes 20 ms), is flooded with 10 000 `SyncRequest`s from 50
-/// peers. Its own `FetchBody` for a body it lacks under a `CommitQC` still asks the peer at
+/// peers. Its own `FetchPayload` for a body it lacks under a `CommitQC` still asks the peer at
 /// once, it applies the block once the peer answers, and its serving queue stays bounded (a
 /// FIFO would have queued 200 s of reads ahead of the fetch).
 #[test]
@@ -595,7 +673,7 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
     .unwrap();
     blocks.set_read_delay(20);
     let net = Arc::new(FakeNet::default());
-    let exec = FakeExecutor::new(genesis.0, genesis.1, config);
+    let exec = FakeExecutor::new(genesis.0, genesis.1, config.clone());
     let driver = Driver::new(
         Arc::clone(&net),
         records,
@@ -610,10 +688,10 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
             DriverConfig::default(),
             DriverStart {
                 node_gate: Arc::new(NodeGate::new()),
-                allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
+                allocation_budget: super::test_budget(),
                 local: LocalParams::default(),
                 init,
-                signers: vec![Box::new(vals.signer(0).clone())],
+                signers: vec![Arc::new(vals.signer(0).clone())],
                 crypto,
                 attestor: Box::new(NoAttestation),
                 verifier: Box::new(NoAttestation),
@@ -634,7 +712,30 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         }
     }
     std::thread::sleep(Duration::from_millis(100));
-    let b1 = block(1, genesis.0, genesis.1, vec![4; 64]);
+    let application_bytes = vec![4; 64];
+    let header = iroha_sumeragi::message::BlockHeader {
+        instance,
+        epoch: config.epoch.id,
+        height: 1,
+        origin_view: 0,
+        parent_hash: genesis.0,
+        parent_result: genesis.1,
+        payload_hash: iroha_sumeragi::preimage::payload_hash(&vals.crypto, &application_bytes),
+        availability_digest: Hash32::ZERO,
+        payload_len: application_bytes.len() as u32,
+        proposer: 0,
+        skipped_leaders: Vec::new(),
+        attest: false,
+        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
+    };
+    let b1 = iroha_sumeragi::testing::author_body(
+        header,
+        &application_bytes,
+        &config,
+        &super::test_budget(),
+        &vals.crypto,
+        vals.signer(0),
+    );
     let ExecOutcome::Valid(r1) = block_exec(&genesis.1, &b1, &iroha_sumeragi::testing::TEST_EPOCH)
     else {
         panic!("the block executes")
@@ -665,19 +766,15 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
     wait_until("the body request", Duration::from_secs(3), || {
         net.sent().iter().any(|(to, msg)| {
             *to == vals.key(1)
-                && matches!(msg, WireMessage::BlockRequest(r) if r.block_hash == hash(&b1))
+                && matches!(msg, WireMessage::PayloadRequest(r) if r.block_hash == hash(&b1))
         })
     });
     assert!(asked.elapsed() < Duration::from_secs(3));
     let backlog = handle.backlog();
     assert!(backlog.serve <= 2 * 50, "{backlog:?}");
-    handle.deliver_message(
-        vals.key(1),
-        WireMessage::BlockResponse(BlockResponse {
-            instance,
-            block: b1,
-        }),
-    );
+    for message in super::row_messages(&b1) {
+        handle.deliver_message(vals.key(1), message);
+    }
     wait_until("height 1 applied", Duration::from_secs(5), || {
         handle.status().is_some_and(|s| s.applied_height >= 1)
     });
@@ -709,19 +806,22 @@ fn frame_limit_follows_committed_configurations() {
     });
     let peer = PublicKey::new(vec![9; 32]).unwrap();
     let response = |bytes: usize| {
-        WireMessage::BlockResponse(BlockResponse {
+        WireMessage::PayloadChunk(iroha_sumeragi::message::PayloadChunk {
             instance: node.instance,
-            block: block(1, Hash32::ZERO, Hash32::ZERO, vec![0; bytes]),
+            height: 1,
+            block_hash: Hash32::ZERO,
+            index: 0,
+            bytes: iroha_sumeragi::availability::RowBytes::from_untrusted(vec![0; bytes]).unwrap(),
         })
         .encode()
         .unwrap()
     };
     assert!(
-        handle.deliver(&peer, &response(6 << 20)),
-        "a 6 MiB body decodes under the committed 8 MiB limit"
+        handle.deliver(&peer, &response(256 << 10)),
+        "a maximum legal RS16 row decodes under the committed block limit"
     );
     assert!(
-        !handle.deliver(&peer, &response(17 << 20)),
+        !handle.deliver(&peer, &vec![0; 17 << 20]),
         "above the transport limit"
     );
     assert!(node.fakes.observer.frame_limits.lock().is_empty());
@@ -808,7 +908,12 @@ fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
         exec,
         serve,
     };
-    let block = block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    let block = block(
+        2,
+        Hash32([1; 32]),
+        Hash32([2; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     let message = WireMessage::Qc(commit_qc(&block, Hash32([3; 32])));
     let frame = super::super::serve::frame(&message).unwrap();
     let peer = FakeSigner::from_seed(&[3], None).public_key().clone();
@@ -816,14 +921,20 @@ fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
         net: Arc::clone(&net),
         gate: Arc::clone(&gate),
     };
-    super::super::traits::Net::send(&physical, &peer, &frame);
+    assert!(matches!(
+        super::super::traits::Net::send(&physical, &peer, &frame),
+        super::super::traits::SendOutcome::Admitted
+    ));
     assert_eq!(
         net.sent().len(),
         1,
         "open native sends reach the original transport"
     );
     gate.close();
-    super::super::traits::Net::send(&physical, &peer, &frame);
+    assert!(matches!(
+        super::super::traits::Net::send(&physical, &peer, &frame),
+        super::super::traits::SendOutcome::Closed
+    ));
     assert_eq!(
         net.sent().len(),
         1,

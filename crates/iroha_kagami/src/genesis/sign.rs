@@ -1145,7 +1145,11 @@ fn staged_sumeragi_context_hashes_on_bounded_stack(
         provisional,
     ) {
         Ok(staged) => Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash)),
-        Err(error) => match error.downcast_ref::<iroha_core::block::BlockValidationError>() {
+        // Staging wraps the boxed validation error exactly as core returns it.
+        Err(error) => match error
+            .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+            .map(Box::as_ref)
+        {
             Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                 actual_execution,
                 actual_nexus,
@@ -2040,6 +2044,7 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         committee.sort_by(|a, b| a.peer.cmp(&b.peer));
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import pytest
-from iroha_python import SumeragiStatus, ToriiClient
+from iroha_python import SumeragiParamsSnapshot, SumeragiStatus, ToriiClient
 
 
 def _native_status():
@@ -44,3 +44,22 @@ def test_retired_consensus_queries_are_absent():
     assert not hasattr(client, "get_sumeragi_qc")
     assert not hasattr(client, "get_sumeragi_commit_qc_typed")
     assert not hasattr(client, "get_sumeragi_phases_typed")
+
+
+def test_sumeragi_params_snapshot_accepts_exactly_the_served_fields():
+    served = {"block_cadence_ms": 1_000, "max_clock_drift_ms": 50, "chain_height": (1 << 64) - 1}
+    params = SumeragiParamsSnapshot.from_payload(served)
+    assert (params.block_cadence_ms, params.max_clock_drift_ms, params.chain_height) == (
+        1_000, 50, (1 << 64) - 1,
+    )
+    for payload in [
+        {**served, "collectors_k": 3},
+        {"block_time_ms": 1_000, "max_clock_drift_ms": 50, "chain_height": 1},
+        {"block_cadence_ms": 1_000, "max_clock_drift_ms": 50},
+        {**served, "block_cadence_ms": 0},
+        {**served, "chain_height": 1 << 64},
+        {**served, "max_clock_drift_ms": True},
+        {**served, "max_clock_drift_ms": "50"},
+    ]:
+        with pytest.raises(TypeError):
+            SumeragiParamsSnapshot.from_payload(payload)

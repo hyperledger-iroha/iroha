@@ -254,3 +254,17 @@ fn retired_block_queue_limit_and_storage_tables_are_rejected() {
         );
     }
 }
+
+#[test]
+fn retired_body_ingress_environment_name_is_not_an_input() {
+    // `SUMERAGI_QUEUES_BODY_BYTES` bound the retired `[sumeragi.queues].body_bytes`; generators
+    // no longer emit it and the reader must leave it unvisited.
+    let env = iroha_config_base::env::MockEnv::new().set("SUMERAGI_QUEUES_BODY_BYTES", "213909504");
+    let _actual: ActualConfig = base_reader()
+        .with_env(env.clone())
+        .read_and_complete::<UserConfig>()
+        .expect("a retired environment name is not a schema input")
+        .parse()
+        .expect("a retired environment name cannot alter the configuration");
+    assert!(env.unvisited().contains("SUMERAGI_QUEUES_BODY_BYTES"));
+}

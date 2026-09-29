@@ -18,46 +18,83 @@ mod sim_host;
 mod threaded;
 
 use iroha_sumeragi::{
-    message::{Block, BlockHeader, Qc, VoteKind},
+    availability::AvailableBody,
+    message::{BlockHeader, Qc, VoteKind},
     preimage::payload_hash,
     testing::FakeCrypto,
     types::{AggregateSignature, Bitmap, Hash32, SIGNATURE_LEN},
 };
 
-/// A block of `height` on `parent` (with result `parent_result`) carrying `payload`.
-pub(super) fn block(height: u64, parent: Hash32, parent_result: Hash32, payload: Vec<u8>) -> Block {
-    let crypto = FakeCrypto::new();
-    Block {
-        header: BlockHeader {
-            control_witness: iroha_sumeragi::types::ControlWitness::empty(),
-            epoch: iroha_sumeragi::testing::TEST_EPOCH.id,
-            instance: Hash32([5; 32]),
-            height,
-            origin_view: 0,
-            parent_hash: parent,
-            parent_result,
-            payload_hash: payload_hash(&crypto, &payload),
-            payload_len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
-            proposer: 0,
-            skipped_leaders: Vec::new(),
-            attest: false,
-        },
-        payload,
+std::thread_local! {
+    static TEST_BUDGET: mv::allocation::AllocationBudget = mv::allocation::AllocationBudget::new(1 << 28);
+}
+/// One original pool retained by all fixture workers of this test instance.
+pub(super) fn test_budget() -> mv::allocation::AllocationBudget {
+    TEST_BUDGET.with(Clone::clone)
+}
+/// Admit an actual nonempty builder result under the fixture's original pool.
+pub(super) fn payload(bytes: Vec<u8>) -> Option<iroha_sumeragi::availability::PayloadBytes> {
+    if bytes.is_empty() {
+        return None;
     }
+    let mut payload = iroha_sumeragi::availability::PayloadBytes::from_untrusted(bytes).unwrap();
+    payload.admit(&test_budget()).unwrap();
+    Some(payload)
+}
+/// Author exact application bytes through the actual signed RS16 worker.
+pub(super) fn block(
+    height: u64,
+    parent: Hash32,
+    parent_result: Hash32,
+    payload: Vec<u8>,
+) -> AvailableBody {
+    assert!(
+        !payload.is_empty(),
+        "available-body fixture needs actual nonempty work"
+    );
+    let validators = iroha_sumeragi::testing::FakeValidators::new(4, 7, None);
+    let config = iroha_sumeragi::types::HeightConfig {
+        epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
+        committee: validators.committee.clone(),
+        params: iroha_sumeragi::types::ChainParams::default(),
+    };
+    let header = BlockHeader {
+        control_witness: iroha_sumeragi::types::ControlWitness::empty(),
+        epoch: config.epoch.id,
+        instance: Hash32([5; 32]),
+        height,
+        origin_view: 0,
+        parent_hash: parent,
+        parent_result,
+        payload_hash: payload_hash(&validators.crypto, &payload),
+        availability_digest: Hash32::ZERO,
+        payload_len: u32::try_from(payload.len()).unwrap(),
+        proposer: 0,
+        skipped_leaders: Vec::new(),
+        attest: false,
+    };
+    iroha_sumeragi::testing::author_body(
+        header,
+        &payload,
+        &config,
+        &test_budget(),
+        &validators.crypto,
+        validators.signer(0),
+    )
 }
 
 /// The block hash under the fake crypto.
-pub(super) fn hash(block: &Block) -> Hash32 {
+pub(super) fn hash(block: &AvailableBody) -> Hash32 {
     block.hash(&FakeCrypto::new())
 }
 
 /// A `CommitQC` of `block` certifying `result` (no signers: only the driver reads it here).
-pub(super) fn commit_qc(block: &Block, result: Hash32) -> Qc {
+pub(super) fn commit_qc(block: &AvailableBody, result: Hash32) -> Qc {
     Qc {
-        epoch: block.header.epoch,
+        epoch: block.header().epoch,
         kind: VoteKind::Commit,
-        instance: block.header.instance,
-        height: block.header.height,
+        instance: block.header().instance,
+        height: block.header().height,
         view: 0,
         block_hash: hash(block),
         result,
@@ -67,4 +104,58 @@ pub(super) fn commit_qc(block: &Block, result: Hash32) -> Qc {
         attestations: Vec::new(),
         attestation_witness: None,
     }
+}
+
+/// Send original manifest followed by exact actual codec rows through the normal ingress.
+pub(super) fn row_messages(body: &AvailableBody) -> Vec<iroha_sumeragi::message::WireMessage> {
+    use iroha_sumeragi::message::{PayloadChunk, PayloadManifest, WireMessage};
+    let shape = body
+        .source()
+        .config()
+        .epoch
+        .da_layout
+        .shape(u64::from(body.header().payload_len))
+        .unwrap();
+    let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+        shape,
+        body.payload().as_slice(),
+        &test_budget(),
+    )
+    .unwrap();
+    let mut messages = vec![WireMessage::PayloadManifest(PayloadManifest {
+        header: body.header().clone(),
+        availability: body.availability().clone(),
+    })];
+    for index in 0..shape.chunk_count() {
+        messages.push(WireMessage::PayloadChunk(PayloadChunk {
+            instance: body.header().instance,
+            height: body.header().height,
+            block_hash: hash(body),
+            index: index as u32,
+            bytes: iroha_sumeragi::availability::RowBytes::from_untrusted(
+                encoded.codeword()[shape.chunk_range(index).unwrap()].to_vec(),
+            )
+            .unwrap(),
+        }));
+    }
+    messages
+}
+
+/// Independent authenticated fixture authority for one expected body identity.
+pub(super) fn source(
+    height: u64,
+    block_hash: Hash32,
+) -> iroha_sumeragi::availability::AvailabilitySource {
+    let validators = iroha_sumeragi::testing::FakeValidators::new(4, 7, None);
+    iroha_sumeragi::availability::AvailabilitySource::new(
+        Hash32([5; 32]),
+        height,
+        block_hash,
+        iroha_sumeragi::types::HeightConfig {
+            epoch: Box::new(iroha_sumeragi::testing::TEST_EPOCH),
+            committee: validators.committee,
+            params: iroha_sumeragi::types::ChainParams::default(),
+        },
+    )
+    .unwrap()
 }

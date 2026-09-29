@@ -24,7 +24,17 @@ const MODULES: [(&str, usize, &[&str]); 8] = [
     (
         "types",
         600,
-        &["types.rs", "types/control_witness.rs", "bytes.rs"],
+        &[
+            "types.rs",
+            "types/control_witness.rs",
+            "bytes.rs",
+            "bytes/shared.rs",
+            "availability.rs",
+            "availability/artifact.rs",
+            "availability/artifact/custody.rs",
+            "availability/artifact/author.rs",
+            "availability/artifact/acquisition.rs",
+        ],
     ),
     ("topology", 300, &["topology.rs"]),
     (

@@ -26,7 +26,8 @@ use std::{collections::VecDeque, sync::Arc};
 
 use iroha_sumeragi::{
     api::{ApplicationControlContext, ControlWitnessContext, Event, ExecOutcome, HaltReason},
-    message::{ApplicationControl, Block, Qc},
+    availability::{AvailableBody, PayloadBytes},
+    message::{ApplicationControl, Qc},
     types::{AppliedConfig, ControlWitness, Hash32, MAX_COMMITTEE_SIZE, Millis, PublicKey},
 };
 
@@ -39,7 +40,7 @@ const MAX_REJECTS: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commit {
     /// The block.
-    pub block: Block,
+    pub block: AvailableBody,
     /// Its `CommitQC` (carries the block hash and the certified result).
     pub qc: Qc,
 }
@@ -50,7 +51,7 @@ pub enum ExecOp {
     /// Execute a block on its parent's post-state.
     Execute {
         /// The block.
-        block: Arc<Block>,
+        block: Arc<AvailableBody>,
         /// Its hash.
         block_hash: Hash32,
     },
@@ -102,7 +103,7 @@ pub enum ExecOp {
         height: u64,
         /// View.
         view: u64,
-        /// Block hash.
+        /// AvailableBody hash.
         block_hash: Hash32,
     },
 }
@@ -126,13 +127,8 @@ pub enum ExecDone {
     ApplicationControlDriven(Result<Option<ApplicationControl>, PublicationError>),
     /// The application accepted/rejected one peer partial.
     ApplicationControlReceived(Result<(), PublicationError>),
-    /// `Build`: the payload and its attestation flag.
-    Built {
-        /// Payload.
-        payload: Vec<u8>,
-        /// Commit-attestation flag (§3.7 A1).
-        attest: bool,
-    },
+    /// Exact admitted payload, genuine absence, or a retained local failure.
+    Built(Result<(Option<PayloadBytes>, bool), PublicationError>),
     /// `Reject` done.
     Rejected,
 }
@@ -141,13 +137,13 @@ pub enum ExecDone {
 struct Job {
     req: u64,
     block_hash: Hash32,
-    block: Arc<Block>,
+    block: Arc<AvailableBody>,
     cancelled: bool,
 }
 
 impl Job {
     fn height(&self) -> u64 {
-        self.block.header.height
+        self.block.header().height
     }
 }
 
@@ -158,7 +154,7 @@ enum Running {
     Prepare,
     Append,
     Commit,
-    Build(u64),
+    Build(BuildRequest),
     BuildControl(ControlBuild),
     DriveControl(ApplicationControlContext),
     ReceiveControl(u64),
@@ -180,6 +176,8 @@ struct BuildRequest {
     view: u64,
     max_bytes: u32,
     exec_budget_ms: u32,
+    retry_at: Millis,
+    failures: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -272,7 +270,7 @@ impl ExecSched {
 
     /// `Execute{block, req}`: queued (most recent first); answered `Cancelled` at once if its
     /// height is already applied.
-    pub fn execute(&mut self, req: u64, block_hash: Hash32, block: Block) {
+    pub fn execute(&mut self, req: u64, block_hash: Hash32, block: AvailableBody) {
         if self.halted.is_some() {
             self.events.push(Event::Executed {
                 req,
@@ -328,7 +326,7 @@ impl ExecSched {
     }
 
     /// `CommitBlock` (after the O2 barrier; the core emits them in height order).
-    pub fn commit(&mut self, block: Block, qc: Qc) {
+    pub fn commit(&mut self, block: AvailableBody, qc: Qc) {
         if self.halted.is_some() {
             return;
         }
@@ -346,6 +344,8 @@ impl ExecSched {
             view,
             max_bytes,
             exec_budget_ms,
+            retry_at: 0,
+            failures: 0,
         });
     }
 
@@ -522,10 +522,11 @@ impl ExecSched {
         }
         if let Some(build) = self.build
             && build.height <= self.applied.saturating_add(1)
+            && now >= build.retry_at
         {
             self.build = None;
             self.prefer_control = true;
-            self.running = Some(Running::Build(build.req));
+            self.running = Some(Running::Build(build));
             self.arrived_during_build = false;
             return Some(ExecOp::Build {
                 req: build.req,
@@ -583,7 +584,7 @@ impl ExecSched {
         let (ready, rest): (Vec<Job>, Vec<Job>) = self
             .parked
             .drain(..)
-            .partition(|job| job.block.header.parent_hash == *parent);
+            .partition(|job| job.block.header().parent_hash == *parent);
         self.parked = rest;
         let newer = std::mem::replace(&mut self.jobs, ready);
         self.jobs.extend(newer);
@@ -669,21 +670,21 @@ impl ExecSched {
                     Ok(local) => {
                         // O3: the local state or executor disagrees with a certified result.
                         self.halted = Some(HaltReason::ApplyDiverged {
-                            height: commit.block.header.height,
+                            height: commit.block.header().height,
                         });
                         let outcome = local.map_or(ExecOutcome::Invalid, ExecOutcome::Valid);
                         for job in std::mem::take(&mut self.merged) {
                             self.answer(&job, outcome.clone());
                         }
                         self.events.push(Event::ApplyDiverged {
-                            height: commit.block.header.height,
+                            height: commit.block.header().height,
                             block_hash: commit.qc.block_hash,
                             local_result: local.unwrap_or(Hash32::ZERO),
                         });
                     }
                     Err(PublicationError::Retryable(reason)) => self.retry(now, "prepare", &reason),
                     Err(PublicationError::RecoveryRequired(reason)) => {
-                        self.require_recovery(commit.block.header.height, &reason)
+                        self.require_recovery(commit.block.header().height, &reason)
                     }
                 }
             }
@@ -704,12 +705,12 @@ impl ExecSched {
                     self.retry_at = None;
                     self.stage = Stage::Fresh;
                     self.appended = false;
-                    let height = commit.block.header.height;
+                    let height = commit.block.header().height;
                     self.applied = height;
                     self.events.push(Event::BlockApplied {
                         height,
                         block_hash: commit.qc.block_hash,
-                        header: Box::new(commit.block.header.clone()),
+                        header: Box::new(commit.block.header().clone()),
                         config: *config,
                     });
                     // Requests of applied heights are moot: answered, never left waiting.
@@ -741,7 +742,7 @@ impl ExecSched {
                 }
                 Err(PublicationError::RecoveryRequired(reason)) => {
                     if let Some(commit) = self.commits.front() {
-                        self.require_recovery(commit.block.header.height, &reason);
+                        self.require_recovery(commit.block.header().height, &reason);
                     }
                 }
             },
@@ -800,20 +801,34 @@ impl ExecSched {
                     }
                 }
             }
-            (Running::Build(req), ExecDone::Built { payload, attest }) => {
-                let empty = payload.is_empty();
-                let arrived = std::mem::take(&mut self.arrived_during_build);
-                self.pending_ready = (empty && !arrived).then_some(req);
-                self.events.push(Event::PayloadBuilt {
-                    req,
-                    payload,
-                    attest,
-                });
-                // A non-empty answer may come after the core timed `req` out to `EMPTY` and
-                // began the heartbeat wait: the transactions it carries are includable (E55).
-                // The core ignores `PayloadReady` unless it is waiting on `req`.
-                if !empty || arrived {
-                    self.events.push(Event::PayloadReady { req });
+            (Running::Build(mut build), ExecDone::Built(result)) => {
+                // A newer request supersedes this result. Local refusal keeps the exact
+                // source in the executor; it never produces an EMPTY answer to Core.
+                if self.build.is_none_or(|pending| pending.req == build.req) {
+                    match result {
+                        Ok((payload, attest)) => {
+                            let empty = payload.is_none();
+                            let arrived = std::mem::take(&mut self.arrived_during_build);
+                            self.pending_ready = (empty && !arrived).then_some(build.req);
+                            self.events.push(Event::PayloadBuilt {
+                                req: build.req,
+                                payload,
+                                attest,
+                            });
+                            if !empty || arrived {
+                                self.events.push(Event::PayloadReady { req: build.req });
+                            }
+                        }
+                        Err(PublicationError::Retryable(reason)) => {
+                            build.failures = build.failures.saturating_add(1);
+                            build.retry_at = now.saturating_add(self.backoff.delay(build.failures));
+                            self.build = Some(build);
+                            iroha_logger::warn!(%reason, "sumeragi payload build retained for retry");
+                        }
+                        Err(PublicationError::RecoveryRequired(reason)) => {
+                            self.require_recovery(build.height, &reason)
+                        }
+                    }
                 }
             }
             (Running::Discard, ExecDone::Discarded) | (Running::Reject, ExecDone::Rejected) => {}
@@ -834,9 +849,15 @@ impl ExecSched {
         if !self.commits.is_empty() {
             return self.retry_at.unwrap_or(Millis::MAX);
         }
-        self.control_build
+        let control = self
+            .control_build
             .filter(|build| build.context.height == self.applied.saturating_add(1))
-            .map_or(Millis::MAX, |build| build.retry_at)
+            .map_or(Millis::MAX, |build| build.retry_at);
+        let payload = self
+            .build
+            .filter(|build| build.height <= self.applied.saturating_add(1))
+            .map_or(Millis::MAX, |build| build.retry_at);
+        control.min(payload)
     }
 
     /// The local events produced so far (answers for the core), in order.

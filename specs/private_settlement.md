@@ -40,9 +40,15 @@ authority. Observers cannot pad a quorum.
 
 The authority is not a caller-selected set of four keys. At the manifest's
 `authority_context_height`, every validator resolves the exact canonical
-ordered roster and active lane incarnation from consensus state, requires the
-resolved authority height to equal that context height, requires the V1
-`f = 1` four-validator geometry, and verifies every BLS proof of possession.
+ordered roster and proofs of possession pinned by the committed
+`SumeragiLaneRecord`. The record must bind the exact dataspace and incarnation,
+admit that global anchor (`active_from <= height < closing`, when closing),
+and contain exactly the V1 `f = 1` four-validator committee. Each supplied BLS
+proof of possession is verified and must equal its pinned native record.
+Physical lane catalogs and manifest registries grant no participant authority.
+Pool bootstrap, governance rotation, Prepare registration, and receipt application
+also require the same native incarnation to admit the committed global anchor
+preceding their execution block, matching native transaction routing.
 Private-settlement and all participant-lane authorities require a live
 `Committee` key for every member. A Committee-only peer is registered in WSV
 and trusted P2P state but is never

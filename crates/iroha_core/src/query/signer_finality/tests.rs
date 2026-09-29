@@ -153,12 +153,13 @@ fn identical_blocks_and_certificates_cannot_authorize_a_foreign_state_network() 
     }
 }
 
-/// A block whose local `CommitQC` does not verify (two of four signers) is committed, but not
-/// signer-final; the consensus-visible read of the same block is unaffected by the certificate.
+/// A genuinely committed block whose local QC is subsequently corrupted is not signer-final;
+/// its original native execution remains authoritative for deterministic State reads.
 #[test]
 fn an_invalid_local_certificate_is_not_signer_finality() {
     let mut chain = chain();
-    chain.commit_with(Some(4_000), Vec::new(), Signers::BelowQuorum);
+    chain.commit_at(4_000, Vec::new());
+    chain.corrupt_local_quorum_for_test(4, Signers::BelowQuorum);
     let view = chain.state().view();
     assert_eq!(
         verify_signer_finality_v1(&view, 4, hash(&chain, 4)),
@@ -172,7 +173,7 @@ fn an_invalid_local_certificate_is_not_signer_finality() {
 #[test]
 fn genesis_execution_finality_requires_a_verified_successor() {
     use crate::sumeragi::{
-        block_store::{commit_certificate, decode_certificate},
+        block_store::commit_certificate,
         certified_chain::{CertifiedChain, QcVerification},
         commitment::ExecutionResultCommitment,
         crypto::BlsCrypto,
@@ -189,6 +190,7 @@ fn genesis_execution_finality_requires_a_verified_successor() {
         original_result.consensus_header().to_vec(),
         original_result.commit_qc().to_vec(),
         preimage.preimage().unwrap(),
+        original_result.availability().to_vec(),
     );
     let changed_genesis = Arc::new(
         genesis
@@ -202,7 +204,8 @@ fn genesis_execution_finality_requires_a_verified_successor() {
         genesis.signatures().collect::<Vec<_>>()
     );
     let second_certificate = second.commit_certificate().unwrap();
-    let (header, qc) = decode_certificate(second_certificate).unwrap();
+    let (body, qc) = chain.committed_body(2).unwrap().unwrap();
+    let header = body.header();
     let below_quorum = chain.commit_qc(
         2,
         header.hash(&BlsCrypto::new()),
@@ -213,9 +216,10 @@ fn genesis_execution_finality_requires_a_verified_successor() {
     let bad_second = Arc::new(
         second.as_ref().clone().with_commit_certificate(Some(
             commit_certificate(
-                &header,
+                header,
                 &below_quorum,
                 second_certificate.result_preimage().to_vec(),
+                second_certificate.availability().to_vec(),
             )
             .unwrap(),
         )),

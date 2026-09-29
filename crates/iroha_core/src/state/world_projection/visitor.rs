@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Exhaustive semantic World visitor shared by delta and persistent baseline owners.
+/// Exhaustive semantic World visitor shared by delta owners and the World state accumulator.
 /// Each owner supplies the hash of its actual borrowed value, excluding caches.
 pub(crate) trait WorldProjection {
     /// Owner-specific errors retain local resource custody through this visitor.
@@ -21,7 +21,14 @@ pub(crate) trait WorldProjection {
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
-    /// The complete World baseline uses the semantic anchor; the physical
+    /// Whether the trigger owner re-checks its contract rows against its action stores (a
+    /// scan of every trigger) before this pass. A change-set pass over a block whose execution
+    /// seal already ran the same check skips it, keeping its cost proportional to the changes.
+    fn validates_trigger_contract_rows(&self) -> bool {
+        true
+    }
+
+    /// The complete World state accumulator uses the semantic anchor; the physical
     /// publication journal retains the full original row through this default.
     fn append_musubi_archive_availability(
         &mut self,
@@ -30,7 +37,7 @@ pub(crate) trait WorldProjection {
         self.append_storage_with("musubi_archive_availability", storage, hash_value)
     }
 
-    /// The baseline retains each independently assigned resolver revision.
+    /// The accumulator retains each independently assigned resolver revision.
     /// The physical publication journal keeps complete rows through this default.
     fn append_musubi_resolver_index(
         &mut self,
@@ -39,7 +46,7 @@ pub(crate) trait WorldProjection {
         self.append_storage_with("musubi_resolver_index", storage, hash_value)
     }
 
-    /// The baseline retains each independently assigned directory revision.
+    /// The accumulator retains each independently assigned directory revision.
     /// The physical publication journal keeps complete rows through this default.
     fn append_musubi_public_directory(
         &mut self,
@@ -51,6 +58,9 @@ pub(crate) trait WorldProjection {
 
 impl<T: WorldProjection> WorldProjection for &mut T {
     type Error = T::Error;
+    fn validates_trigger_contract_rows(&self) -> bool {
+        (**self).validates_trigger_contract_rows()
+    }
     fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,

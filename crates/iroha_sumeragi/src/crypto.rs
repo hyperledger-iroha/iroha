@@ -20,7 +20,7 @@ use crate::{
 /// deterministic (the same key and preimage always give the same bytes, as BLS does): after a
 /// restart the core re-creates recorded messages by signing their recorded preimages again
 /// (§6.10 rule 0, §7.4).
-pub trait Signer {
+pub trait Signer: Send + Sync {
     /// The consensus public key.
     fn public_key(&self) -> &PublicKey;
     /// Sign `preimage`.
@@ -29,8 +29,12 @@ pub trait Signer {
 
 /// Pure cryptographic primitives (§12.1): BLS in production, a fake scheme in the simulator.
 pub trait Crypto {
-    /// The chain hash `H`.
-    fn hash(&self, bytes: &[u8]) -> Hash32;
+    /// The chain hash `H` over one contiguous input.
+    fn hash(&self, bytes: &[u8]) -> Hash32 {
+        self.hash_chunks(&[bytes])
+    }
+    /// Hash concatenated chunks with constant auxiliary memory, without copying them.
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32;
     /// Verify an individual signature.
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool;
     /// Aggregate signatures (possibly over different messages).
@@ -1392,13 +1396,14 @@ mod tests {
             parent_hash: h(1),
             parent_result: h(2),
             payload_hash: preimage::payload_hash(&v.crypto, &[]),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 0,
             proposer: 2,
             skipped_leaders: vec![],
             attest: false,
         };
         let parent = v.qc(VoteKind::Commit, &I, 8, 0, &h(1), &h(2), &[0, 1, 2]);
-        let p = v.proposal(2, &I, 9, 0, header, None, Some(parent), Some(vec![]));
+        let p = v.proposal(2, &I, 9, 0, header, None, Some(parent));
         let verify = |instance: &Hash32, leader: ValidatorIndex, p: &Proposal| {
             let epoch = &crate::testing::TEST_EPOCH.id;
             crate::crypto::Verifier::new(&v.crypto, instance, epoch, &v.committee)
@@ -1411,12 +1416,13 @@ mod tests {
         assert_eq!(verify(&I, 1, &p), Err(CertError::BadSignature));
         assert_eq!(verify(&I, 7, &p), Err(CertError::SignerOutOfRange));
         assert_eq!(verify(&J, 2, &p), Err(CertError::WrongInstance));
-        // The payload is unsigned: stripping it keeps the signature valid.
-        let stripped = Proposal {
-            payload: None,
-            ..p.clone()
-        };
-        assert!(verify(&I, 2, &stripped).is_ok());
+        // The canonical availability content commitment is signed through the header hash.
+        let mut changed_availability = p.clone();
+        changed_availability.header.availability_digest.0[0] ^= 1;
+        assert_eq!(
+            verify(&I, 2, &changed_availability),
+            Err(CertError::BadSignature)
+        );
         // The attachments are signed: stripping the parent QC breaks it.
         let tampered = Proposal {
             parent_qc: None,
@@ -2092,6 +2098,7 @@ mod tests {
             parent_hash: h(1),
             parent_result: h(2),
             payload_hash: preimage::payload_hash(&v.crypto, &[1]),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 1,
             proposer: 0,
             skipped_leaders: vec![],

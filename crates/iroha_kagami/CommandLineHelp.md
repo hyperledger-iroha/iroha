@@ -510,7 +510,7 @@ Sign the genesis block
 * `--replace-expected-hash <NETWORK_ID>` — Replace the expected-hash file only if it still contains this exact prior NetworkId. Requires all three output paths. The identity is published last as the bundle's commit marker; interrupted publication must be retried with the same prior identity
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
-   The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
+   The final unique topology must be an exact Sumeragi `3f + 1` committee in the range 4..=31.
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
 * `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
 * `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive.

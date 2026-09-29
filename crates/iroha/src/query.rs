@@ -85,7 +85,7 @@ fn decode_transaction_details_failure(response: &http::Response<Vec<u8>>) -> Que
     };
     let content_type_values = response.headers().get_all(CONTENT_TYPE);
     let mut content_types = content_type_values.iter();
-    if content_types.next().map(|value| value.as_bytes()) != Some(APPLICATION_NORITO.as_bytes())
+    if content_types.next().map(http::HeaderValue::as_bytes) != Some(APPLICATION_NORITO.as_bytes())
         || content_types.next().is_some()
     {
         return protocol_error("requires one Content-Type: application/x-norito header");
@@ -260,7 +260,7 @@ fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
     };
     let content_type_values = response.headers().get_all(CONTENT_TYPE);
     let mut content_types = content_type_values.iter();
-    let content_type = content_types.next().map(|value| value.as_bytes());
+    let content_type = content_types.next().map(http::HeaderValue::as_bytes);
     if content_types.next().is_some() {
         return protocol_error("requires exactly one Content-Type header");
     }

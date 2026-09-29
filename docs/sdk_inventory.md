@@ -207,3 +207,40 @@ unknown lengths as absent. HTTP `Retry-After` delta hints and abnormal close
 codes remain machine-readable. Only an HTTP 429 upgrade permits readiness's
 existing HTTP status fallback. Local mock/fixture, source-built Kagami and real
 four-validator qualification are distinct checks.
+
+## Nexus observation coverage
+
+`nexus.staking.prepare` uses `Client::nexus().prepare_public_lane_plan(...).await` for
+one public read-only POST with canonical Norito request and response bodies.
+It uses the client-owned asynchronous transport, the request deadline and the
+shared model's 64-KiB request / 256-KiB response limits. HTTP, transport, deadline,
+decoding and exact request-binding failures use `iroha::Error`. The response is
+an observation for inspection before signing; it does not prove finality.
+
+The synchronous entry point exists only on `iroha::blocking::Client::nexus()` and runs
+the same implementation on the facade's reusable runtime. It rejects calls
+inside an asynchronous runtime. Neither entry point retries or submits a
+transaction. The network bootstrap consumer awaits the asynchronous operation.
+
+`nexus.validator_committee.read` uses `Client::nexus().validator_committee(epoch).await`
+for the canonical public GET. The response is bounded to 16 MiB; decoding the
+native block attachment has separate byte, allocation and block-count limits.
+Network, requested epoch and source-block bindings remain mandatory. A zero
+requested epoch fails before dispatch; omitting it permits a server-selected
+observation. Both finality attachments still require independent native-chain
+and signed-genesis authentication before they can authorize provisioning or signing.
+The explicit blocking capability runs this same operation. All nine rotation
+scenario callers await it directly, without per-read blocking workers.
+
+## Operator consensus diagnostics
+
+`sumeragi.diagnostics.read` has one typed asynchronous operation:
+`OperatorClient::consensus().diagnostics().await`. It signs with the explicit
+operator key for the context's network and uses centralized dispatch, request
+and absolute deadlines, a 64-MiB response bound and structured errors. It accepts
+one declared JSON or Norito response and validates the current NPoS schedule.
+
+`blocking::OperatorClient::consensus().diagnostics()` uses the same operation
+on the facade's owned runtime. Public/account contexts and flat wrappers expose
+no diagnostics operation. CLI consumers require their configured operator key.
+The observation does not authenticate finality or enable unavailable telemetry.

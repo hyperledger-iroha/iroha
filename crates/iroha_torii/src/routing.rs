@@ -39067,7 +39067,8 @@ mod explorer_lookup_tests {
                 fixed.push(SumeragiFixedLane { lane, dataspace, committee: committee.clone() });
                 routes.push(SumeragiLaneRoute { lane, account: Some(dm::AccountId::new(key.public_key().clone()).to_string()), instruction: None });
             }
-            let policy = SumeragiLanePolicy { anchor_freshness: 16, max_merge_blocks: 32, stall_window: 256, lane_params: Default::default(), fixed, routes, autoscale: None };
+            let policy = SumeragiLanePolicy {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(), anchor_freshness: 16, max_merge_blocks: 32, stall_window: 256, lane_params: Default::default(), fixed, routes, autoscale: None };
             config.genesis_parameters.push(dm::Parameter::Custom(policy.into_custom_parameter()));
             let mut nexus = iroha_config::parameters::actual::Nexus::default();
             nexus.dataspace_catalog = DataSpaceCatalog::new(dataspaces.into_iter().map(|id| {

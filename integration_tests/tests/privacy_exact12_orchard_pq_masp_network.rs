@@ -439,7 +439,7 @@ fn independently_resign_corrupted_proof(
     );
     Ok(corrupted)
 }
-async fn wait_for_common_v2_subject(
+async fn wait_for_common_commit_subject(
     clients: &[Client],
     minimum_height: u64,
     context: &str,
@@ -1007,7 +1007,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                  height {finalized_height}"
             );
         }
-        wait_for_common_v2_subject(
+        wait_for_common_commit_subject(
             &healthy_clients,
             finalized_height,
             "healthy-peer retained-native DA/RBC subject",
@@ -1089,7 +1089,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "post-restart authoritative Orchard state",
         )
         .await?;
-        wait_for_common_v2_subject(
+        wait_for_common_commit_subject(
             &recovered_clients,
             post_restart_replay_height,
             "post-restart retained-native DA/RBC subject",

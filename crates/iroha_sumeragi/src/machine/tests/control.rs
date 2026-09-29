@@ -24,26 +24,28 @@ fn answer(h: &mut H, req: u64, context: ControlWitnessContext) {
 #[test]
 fn det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature() {
     let h = H::new(4, pick::leader(0));
-    let mut original = h.block(0, b"transactions");
-    original.header.control_witness = ControlWitness::try_from_slice(b"pulse-A").unwrap();
+    let original = h.block(0, b"transactions");
+    let mut header = original.header().clone();
+    header.control_witness = ControlWitness::try_from_slice(b"pulse-A").unwrap();
+    let original = h.author(header, original.payload().as_slice());
     let signed = h.proposal(0, &original, None);
     let leader = h.v.signer(h.leader(0));
     assert!(h.v.crypto.verify(
         leader.public_key(),
-        &signed.signing_preimage(&h.v.crypto),
-        &signed.sig
+        &signed.proposal.signing_preimage(&h.v.crypto),
+        &signed.proposal.sig
     ));
     for bytes in [b"pulse-B".as_slice(), b"", b"pulse-A\0"] {
         let mut changed = signed.clone();
-        changed.header.control_witness = ControlWitness::try_from_slice(bytes).unwrap();
+        changed.proposal.header.control_witness = ControlWitness::try_from_slice(bytes).unwrap();
         assert_ne!(
-            changed.block_hash(&h.v.crypto),
-            signed.block_hash(&h.v.crypto)
+            changed.proposal.block_hash(&h.v.crypto),
+            signed.proposal.block_hash(&h.v.crypto)
         );
         assert!(!h.v.crypto.verify(
             leader.public_key(),
-            &changed.signing_preimage(&h.v.crypto),
-            &signed.sig
+            &changed.proposal.signing_preimage(&h.v.crypto),
+            &signed.proposal.sig
         ));
     }
 }
@@ -73,10 +75,11 @@ fn det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation
         .as_ref()
         .unwrap()
         .0
+        .as_slice()
         .as_ptr();
     h.fire(Event::PayloadBuilt {
         req,
-        payload: b"replacement".to_vec(),
+        payload: h.payload(b"replacement"),
         attest: false,
     });
     assert_eq!(
@@ -88,6 +91,7 @@ fn det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation
             .as_ref()
             .unwrap()
             .0
+            .as_slice()
             .as_ptr(),
         original
     );
@@ -103,7 +107,7 @@ fn det_s47_nonempty_work_waits_for_independent_control_and_preserves_attestation
     );
     assert!(proposed.header.attest);
     let hash = proposed.block_hash(&h.v.crypto);
-    assert_eq!(h.bodies[&hash].payload, b"last transaction");
+    assert_eq!(h.bodies[&hash].payload().as_slice(), b"last transaction");
 }
 #[test]
 fn transaction_timeout_cannot_start_control_or_accept_late_work() {
@@ -126,7 +130,7 @@ fn transaction_timeout_cannot_start_control_or_accept_late_work() {
     );
     h.fire(Event::PayloadBuilt {
         req,
-        payload: b"too late".to_vec(),
+        payload: h.payload(b"too late"),
         attest: false,
     });
     answer(&mut h, req, context);
@@ -246,9 +250,10 @@ fn every_member_drives_exact_applied_parent_and_partial_ingress_is_bounded() {
 fn locked_reproposal_and_restart_preserve_exact_control_header() {
     let mut h = H::new(4, pick::leader(2));
     h.auto_control = false;
-    let mut original = H::flagged(h.block(0, b"locked transactions"));
-    original.header.control_witness =
-        ControlWitness::try_from_slice(b"original finalized pulse").unwrap();
+    let original = h.flagged(h.block(0, b"locked transactions"));
+    let mut header = original.header().clone();
+    header.control_witness = ControlWitness::try_from_slice(b"original finalized pulse").unwrap();
+    let original = h.author(header, original.payload().as_slice());
     let hash = h.bh(&original);
     h.bodies.insert(hash, original.clone());
     h.fire(Event::BodyAvailable {
@@ -268,7 +273,7 @@ fn locked_reproposal_and_restart_preserve_exact_control_header() {
         .proposal
         .as_ref()
         .expect("locked block reproposed");
-    assert_eq!(proposal.header, original.header);
+    assert_eq!(proposal.header, original.header().clone());
     assert_eq!(proposal.block_hash(&h.v.crypto), hash);
     assert!(
         !h.out
@@ -282,6 +287,6 @@ fn locked_reproposal_and_restart_preserve_exact_control_header() {
         .proposal
         .as_ref()
         .expect("recorded proposal replayed");
-    assert_eq!(replayed.header, original.header);
+    assert_eq!(replayed.header, original.header().clone());
     assert_eq!(replayed.block_hash(&h.v.crypto), hash);
 }

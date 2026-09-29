@@ -1086,6 +1086,7 @@ mod consensus_manifest_tests {
         };
         let key = iroha_crypto::KeyPair::from_seed(vec![7; 32], Algorithm::BlsNormal);
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,

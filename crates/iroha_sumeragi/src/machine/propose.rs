@@ -3,7 +3,8 @@
 use super::{Build, Core, FreshBuild, Me};
 use crate::{
     api::{Action, ControlWitnessContext},
-    message::{Block, BlockHeader, Proposal, TimeoutCert, WireMessage},
+    availability::{AvailableBody, PayloadBytes},
+    message::{BlockHeader, Proposal, ProposalMessage, TimeoutCert, WireMessage},
     preimage,
     safety::RecordedProposal,
     types::ControlWitness,
@@ -85,6 +86,7 @@ impl Core {
                 parent_result: self.tip.result,
             },
             payload: None,
+            authoring: None,
         });
         self.out.push(Action::BuildPayload {
             req,
@@ -128,7 +130,12 @@ impl Core {
     }
 
     /// Keep the first nonempty bounded payload until its exact control response arrives.
-    pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>, attest: bool) {
+    pub(super) fn on_payload_built(
+        &mut self,
+        req: u64,
+        payload: Option<PayloadBytes>,
+        attest: bool,
+    ) {
         if self.awaiting {
             return;
         }
@@ -143,12 +150,19 @@ impl Core {
         let Some(fresh) = self.fresh_build.as_ref() else {
             return;
         };
-        if req != outstanding || fresh.payload.is_some() {
+        if req != outstanding || fresh.payload.is_some() || fresh.authoring.is_some() {
             return;
         }
-        let too_large =
-            u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
-        if payload.is_empty() || too_large {
+        let Some(payload) = payload else {
+            self.wait_for_work(req, ready, false);
+            return;
+        };
+        let too_large = u32::try_from(payload.as_slice().len())
+            .map_or(true, |len| len > self.cfg.params.max_block_bytes);
+        if !payload.admitted_to(&self.body_budget) {
+            return;
+        }
+        if too_large {
             self.wait_for_work(req, ready, too_large);
             return;
         }
@@ -213,10 +227,12 @@ impl Core {
         }
         // Control is requested only after the first bounded payload. Taking the request
         // consumes its sole response and makes every duplicate stale.
-        let fresh = self.fresh_build.take().expect("original request retained");
-        let (payload, payload_attest) = fresh.payload.expect("original nonempty payload");
-        self.build = Build::Idle;
-        self.propose_fresh(payload, payload_attest || attest, witness);
+        let fresh = self
+            .fresh_build
+            .as_mut()
+            .expect("original request retained");
+        let (payload, payload_attest) = fresh.payload.take().expect("original nonempty payload");
+        self.request_authoring(req, payload, payload_attest || attest, witness);
     }
 
     /// On `PayloadReady{req}` (§6.10): wake the eligible leader's empty-build wait at any
@@ -251,14 +267,17 @@ impl Core {
 
     /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
     /// (§3.7 A1).
-    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool, control_witness: &ControlWitness) {
+    fn request_authoring(
+        &mut self,
+        req: u64,
+        payload: PayloadBytes,
+        attest: bool,
+        control_witness: &ControlWitness,
+    ) {
         let Some(me) = self.leader_eligible() else {
             self.build = Build::Idle;
             return;
         };
-        if payload.is_empty() {
-            return;
-        }
         // MA7: the builder's flag is dropped.
         let boundary = self.height == self.cfg.epoch.last_height;
         let attest = (attest && !cfg!(sumeragi_mutation = "MA7"))
@@ -278,8 +297,9 @@ impl Core {
             origin_view: self.view,
             parent_hash: self.tip.block_hash,
             parent_result: self.tip.result,
-            payload_hash: preimage::payload_hash(&*self.crypto, &payload),
-            payload_len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+            payload_hash: preimage::payload_hash(&*self.crypto, payload.as_slice()),
+            availability_digest: crate::types::Hash32::ZERO,
+            payload_len: u32::try_from(payload.as_slice().len()).unwrap_or(u32::MAX),
             proposer: me.index,
             skipped_leaders: self
                 .topo
@@ -287,11 +307,63 @@ impl Core {
             control_witness: *control_witness,
             attest,
         };
-        self.propose_block(Block { header, payload }, justify);
+        self.fresh_build
+            .as_mut()
+            .expect("original source retained")
+            .authoring = Some((header.clone(), justify));
+        self.out.push(Action::AuthorPayload {
+            req,
+            config: self.cfg.clone(),
+            header,
+            payload,
+        });
+    }
+
+    /// Only an exact current original request can become a fresh proposal after worker custody.
+    pub(super) fn on_payload_authored(&mut self, req: u64, body: AvailableBody) {
+        if self.awaiting
+            || self.leader_eligible().is_none()
+            || !body.admitted_to(&self.body_budget)
+            || body.source().instance() != self.instance
+            || body.source().config() != &self.cfg
+        {
+            return;
+        }
+        let Build::Requested { req: expected, .. } = self.build else {
+            return;
+        };
+        if req != expected {
+            return;
+        }
+        let Some(fresh) = self.fresh_build.as_ref() else {
+            return;
+        };
+        let Some((template, _)) = &fresh.authoring else {
+            return;
+        };
+        let mut template = template.clone();
+        template.availability_digest = body.header().availability_digest;
+        if &template != body.header()
+            || template.height != self.height
+            || template.origin_view != self.view
+            || template.epoch != self.cfg.epoch.id
+            || template.parent_hash != self.tip.block_hash
+            || template.parent_result != self.tip.result
+        {
+            return;
+        }
+        let (_, justify) = self
+            .fresh_build
+            .as_mut()
+            .expect("exact source retained")
+            .authoring
+            .take()
+            .expect("exact template retained");
+        self.propose_block(body, justify);
     }
 
     /// Record, sign and broadcast a proposal of `block`, then accept it (§6.10 rule 3, SR1).
-    fn propose_block(&mut self, block: Block, justify: Option<TimeoutCert>) {
+    fn propose_block(&mut self, block: AvailableBody, justify: Option<TimeoutCert>) {
         let Some(me) = self.leader_eligible() else {
             return;
         };
@@ -299,7 +371,7 @@ impl Core {
         self.fresh_build = None;
         self.repropose = false;
         let bh = block.hash(&*self.crypto);
-        self.put_body(bh, block.clone(), false);
+        self.put_body(bh, block.clone());
         #[cfg(not(sumeragi_mutation = "MS29"))]
         if let Some(record) = self.safety.as_mut() {
             record.proposal = Some(RecordedProposal {
@@ -314,7 +386,7 @@ impl Core {
 
     /// Sign and broadcast the proposal of `block` in `(h, view)` (after its record), then
     /// handle it as an accepted proposal.
-    fn send_proposal(&mut self, me: Me, block: Block, justify: Option<TimeoutCert>) {
+    fn send_proposal(&mut self, me: Me, block: AvailableBody, justify: Option<TimeoutCert>) {
         let parent_qc = self
             .safety
             .as_ref()
@@ -336,20 +408,27 @@ impl Core {
             instance: self.instance,
             height: self.height,
             view: self.view,
-            header: block.header,
+            header: block.header().clone(),
             justify,
             parent_qc,
-            payload: Some(block.payload),
             sig,
         };
         let to = self.recipients(true);
-        self.broadcast(to, WireMessage::Proposal(Box::new(proposal.clone())));
-        let mut stripped = proposal;
-        stripped.payload = None;
-        self.mine.proposal = Some(stripped.clone());
+        self.broadcast(
+            to.clone(),
+            WireMessage::Proposal(Box::new(ProposalMessage {
+                proposal: proposal.clone(),
+                availability: block.availability().clone(),
+            })),
+        );
+        self.out.push(Action::DisseminatePayload {
+            peers: to,
+            body: block,
+        });
+        self.mine.proposal = Some(proposal.clone());
         self.proposal_sent_at = Some(self.now);
         if self.proposal.is_none() {
-            self.accept_own(stripped, bh, ad);
+            self.accept_proposal(None, proposal, bh, ad);
         }
     }
 

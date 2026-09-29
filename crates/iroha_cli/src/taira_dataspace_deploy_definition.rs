@@ -1195,7 +1195,10 @@ mod tests {
         let baseline = fixture_plan().baseline;
         assert_eq!(baseline.lane_count, 8);
         assert_eq!(select_lane(&baseline, &Parameters::default()).unwrap(), 8);
-        let mut policy = SumeragiLanePolicy::for_chain(SumeragiParameters::default());
+        let mut policy = SumeragiLanePolicy::for_chain(
+            SumeragiParameters::default(),
+            iroha_sumeragi::availability::recommended_data_availability_layout(),
+        );
         policy.autoscale = Some(SumeragiLaneAutoscale {
             min_lane: LaneId::new(8),
             max_lane_exclusive: LaneId::new(16),

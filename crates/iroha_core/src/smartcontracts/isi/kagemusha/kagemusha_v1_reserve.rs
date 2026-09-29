@@ -2910,6 +2910,7 @@ mod tests {
         let mut block = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
+        let availability = certificate.availability().to_vec();
         let mut commitment =
             ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
         let mint_finality_authorization_id = commitment
@@ -2952,6 +2953,7 @@ mod tests {
             header,
             norito::encode_canonical(&qc).unwrap(),
             commitment.preimage().unwrap(),
+            availability,
         )));
         let mut finality_proof = fixture.latest().clone();
         finality_proof.block_wire = block.encode_wire().unwrap();

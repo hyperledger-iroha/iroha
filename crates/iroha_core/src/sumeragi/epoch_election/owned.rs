@@ -401,6 +401,7 @@ impl<'a> Construction<'a> {
         source: &ValidatorEpochContextV1,
     ) -> Result<ValidatorEpochContextV1, BoundaryCaptureError> {
         Ok(ValidatorEpochContextV1 {
+            da_layout: source.da_layout,
             version: source.version,
             network_id: source.network_id,
             mode: source.mode,
@@ -478,6 +479,7 @@ pub(super) fn materialize(
     let mut owner = Construction::new(demand, budget)?;
     let current = owner.context(inputs.current)?;
     let next = ValidatorEpochContextV1 {
+        da_layout: current.da_layout,
         version: 1,
         network_id: current.network_id,
         mode: current.mode,

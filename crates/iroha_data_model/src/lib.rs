@@ -182,6 +182,9 @@ pub mod state;
 pub mod subscription;
 /// Sumeragi status served by the node (projection of the consensus core's diagnostics).
 pub mod sumeragi;
+/// Atomic cross-dataspace transactions (AMX): records, proofs, the foreign-committee tracker
+/// and the global chain's two-phase-commit state.
+pub mod sumeragi_amx;
 /// Portable finality proofs for the current embedded consensus certificate.
 pub mod sumeragi_finality;
 /// Lanes of the global chain: lifecycle records and merge references.

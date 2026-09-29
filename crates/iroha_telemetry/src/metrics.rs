@@ -1488,11 +1488,10 @@ impl Metrics {
             dataspace_catalog: collect_dataspace_catalog(value),
             nexus: None,
             tx_gossip: TxGossipSnapshot {
-                caps: value
+                caps: *value
                     .tx_gossip_caps
                     .read()
-                    .expect("tx gossip caps cache poisoned")
-                    .clone(),
+                    .expect("tx gossip caps cache poisoned"),
                 targets: value
                     .tx_gossip_status
                     .read()
@@ -2462,13 +2461,11 @@ fields {
     pub tx_gossip_dropped_total: int_counter_vec(&["plane", "dataspace", "reason"]);
     /// Latest transaction gossip target count (labels: plane, dataspace).
     pub tx_gossip_targets: gauge_vec(&["plane", "dataspace"]);
-    /// Fallback attempts for restricted gossip (labels: plane, dataspace, surface).
-    pub tx_gossip_fallback_total: int_counter_vec(&["plane", "dataspace", "surface"],);
     /// Configured frame cap for transaction gossip (bytes).
     pub tx_gossip_frame_cap_bytes: gauge();
     /// Configured cap for public gossip targets (0 = broadcast).
     pub tx_gossip_public_target_cap: gauge();
-    /// Configured cap for restricted gossip targets (0 = commit topology).
+    /// Configured cap for restricted gossip targets (0 = all authorized native lane validators).
     pub tx_gossip_restricted_target_cap: gauge();
     /// Public-plane target reshuffle interval in milliseconds.
     pub tx_gossip_public_target_reshuffle_ms: gauge();
@@ -2476,10 +2473,6 @@ fields {
     pub tx_gossip_restricted_target_reshuffle_ms: gauge();
     /// Whether unknown dataspaces are dropped (1) or routed via the restricted plane (0).
     pub tx_gossip_drop_unknown_dataspace: gauge();
-    /// Restricted gossip fallback policy (0 = drop, 1 = public overlay).
-    pub tx_gossip_restricted_fallback: gauge();
-    /// Configured policy for restricted payloads when only the public overlay is available (0 = refuse, 1 = forward).
-    pub tx_gossip_restricted_public_policy: gauge();
     /// Cached status snapshot for the latest gossip target selections.
     pub tx_gossip_status: raw(Arc<RwLock<Vec<TxGossipStatus>>>);
     /// Cached configured caps for status exports.
@@ -3926,11 +3919,9 @@ construct {
         }
     }
     [p2p_scion_inbound_total p2p_scion_outbound_total
-        tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
-        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
+        tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
         tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
-        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
-        tx_gossip_restricted_public_policy]
+        tx_gossip_drop_unknown_dataspace ]
     {
         let tx_gossip_status = Arc::new(RwLock::new(Vec::new()));
         let tx_gossip_caps = Arc::new(RwLock::new(TxGossipCaps::default()));
@@ -4404,11 +4395,9 @@ initialize (metrics) {
         p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total p2p_trust_score
         p2p_trust_penalties_total
         p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total tx_gossip_sent_total
-        tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
-        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
+        tx_gossip_dropped_total tx_gossip_targets tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
         tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
-        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
-        tx_gossip_restricted_public_policy tx_gossip_status tx_gossip_caps p2p_scion_inbound_total
+        tx_gossip_drop_unknown_dataspace tx_gossip_status tx_gossip_caps p2p_scion_inbound_total
         p2p_scion_outbound_total p2p_queue_depth
         p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum p2p_handshake_ms_count
         p2p_handshake_error_total p2p_frame_cap_violations_total runtime_upgrade_events_total
@@ -4649,12 +4638,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 751;
-const METRIC_CATALOG_V2_REGISTERED: usize = 708;
-const METRIC_CATALOG_V2_BYTES: usize = 102_265;
+const METRIC_CATALOG_V2_ROWS: usize = 748;
+const METRIC_CATALOG_V2_REGISTERED: usize = 705;
+const METRIC_CATALOG_V2_BYTES: usize = 101_823;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "4fd5a8015dafbcec8fb8172f9703a22cbc3632cf4190f688bf4a01726c8362a2";
+    "739d0e42371862efbf3e79586884b7ce06213204a121cbd1d55fa810bfbec7e2";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

@@ -186,7 +186,18 @@ fn check_genesis_block_requires_canonical_execution_results() {
     install_genesis_outputs(&mut rejected, outputs, 1);
     assert_eq!(
         check_genesis_block(&rejected, &genesis_account),
-        Err(InvalidGenesisError::ContainsErrors)
+        Err(InvalidGenesisError::RejectedOutput(
+            GenesisOutputRejection {
+                output_index: 0,
+                reason: Box::new(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "genesis rejection fixture".to_owned()
+                        ),
+                    )
+                ),
+            }
+        ))
     );
 
     // There is no parallel input cache. Validate the real proposal-input commitment.
@@ -283,11 +294,21 @@ fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts(
             }
             ExecutionOutputV1::Network(_) => unreachable!(),
         };
+        let reason = rejected_outputs[index]
+            .result()
+            .as_ref()
+            .unwrap_err()
+            .clone();
         let mut rejected = block.clone();
         install_genesis_outputs(&mut rejected, rejected_outputs, 3);
         assert_eq!(
             check_genesis_block(&rejected, &SAMPLE_GENESIS_ACCOUNT_ID),
-            Err(InvalidGenesisError::ContainsErrors),
+            Err(InvalidGenesisError::RejectedOutput(
+                GenesisOutputRejection {
+                    output_index: index,
+                    reason: Box::new(reason),
+                }
+            )),
             "an internal failure cannot hide behind successful Network outputs"
         );
     }
@@ -550,4 +571,84 @@ fn authenticated_genesis_uses_the_actual_whole_output_owner() {
     );
     assert_eq!(prepared.state.view().height(), 0);
     assert_eq!(prepared.kura.blocks_count(), 0);
+}
+
+#[test]
+fn genesis_rejection_selects_first_complete_output_and_retains_typed_source() {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+    use std::error::Error as _;
+
+    let mut block = canonical_executed_genesis_fixture();
+    let mut outputs = block.execution_outputs().to_vec();
+    outputs.extend(genesis_internal_outputs());
+    let ExecutionOutputV1::Pipeline(pipeline) = &outputs[1] else {
+        unreachable!()
+    };
+    outputs[1] = ExecutionOutputV1::pipeline_output_limit_rejection(pipeline.invocation.clone());
+    let first_reason = outputs[1].result().as_ref().unwrap_err().clone();
+    let ExecutionOutputV1::Time(time) = &outputs[2] else {
+        unreachable!()
+    };
+    outputs[2] = ExecutionOutputV1::time_output_limit_rejection(time.invocation.clone());
+    install_genesis_outputs(&mut block, outputs, 3);
+    let InvalidGenesisError::RejectedOutput(rejection) =
+        check_genesis_block(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap_err()
+    else {
+        panic!("two internal rejections must retain their first canonical output");
+    };
+    assert_eq!(rejection.output_index, 1);
+    assert_eq!(*rejection.reason, first_reason);
+    assert_eq!(
+        rejection
+            .source()
+            .unwrap()
+            .downcast_ref::<TransactionRejectionReason>(),
+        Some(&first_reason),
+        "the original typed reason remains available through Error::source"
+    );
+}
+
+#[test]
+fn check_genesis_block_intents_accepts_resultless_source_and_checks_all_payload_commitments() {
+    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+    let original = canonical_executed_genesis_fixture().canonical_resultless_proposal();
+    let wire = original.encode_wire().unwrap();
+    assert_eq!(
+        check_genesis_block_intents(&original, &SAMPLE_GENESIS_ACCOUNT_ID),
+        Ok(())
+    );
+    assert_eq!(
+        check_genesis_block(&original, &SAMPLE_GENESIS_ACCOUNT_ID),
+        Err(InvalidGenesisError::MissingResults)
+    );
+    let absent = iroha_crypto::Hash::new(b"absent original committed payload");
+    for component in 0..3 {
+        let mut payload = original.payload().clone();
+        match component {
+            0 => {
+                payload.header.execution_context_hash = Some(HashOf::from_untyped_unchecked(absent))
+            }
+            1 => payload.header.npos_effects_hash = Some(HashOf::from_untyped_unchecked(absent)),
+            _ => {
+                payload.header.global_beacon_pulse_hash =
+                    Some(HashOf::from_untyped_unchecked(absent))
+            }
+        }
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                payload.header.hash(),
+            )
+            .unwrap(),
+        );
+        let mismatch = SignedBlock::presigned_with_payload(signature, payload);
+        assert_eq!(
+            check_genesis_block_intents(&mismatch, &SAMPLE_GENESIS_ACCOUNT_ID),
+            Err(InvalidGenesisError::ProposalCommitmentMismatch)
+        );
+    }
+    assert_eq!(original.encode_wire().unwrap(), wire);
 }

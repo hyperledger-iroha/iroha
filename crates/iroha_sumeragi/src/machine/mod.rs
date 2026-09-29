@@ -41,8 +41,7 @@ use crate::{
     api::{Action, CoreStatus, Event, Footprint, HaltReason, LocalFault, LocalParams},
     crypto::{Attestation, Crypto, Signer, Verifier},
     message::{
-        Block, BlockHeader, Evidence, Proposal, Qc, TimeoutCert, TimeoutVote, Vote, VoteKind,
-        WireMessage,
+        BlockHeader, Evidence, Proposal, Qc, TimeoutCert, TimeoutVote, Vote, VoteKind, WireMessage,
     },
     pacemaker::{self, Pacemaker},
     safety::SafetyRecord,
@@ -55,6 +54,7 @@ use crate::{
 /// honours the guarantees of §12.3.
 #[allow(clippy::struct_excessive_bools)] // independent per-view and per-height flags of §6.0
 pub struct Core {
+    body_budget: mv::allocation::AllocationBudget,
     crypto: Box<dyn Crypto>,
     /// The node's attestor and the attestation verifier (§3.7).
     attestation: Attestation,
@@ -134,7 +134,7 @@ pub struct Core {
     /// Evidence already emitted (§6.0 `reported`).
     reported: BTreeSet<EvKey>,
     // Bodies and execution.
-    blocks: BTreeMap<Hash32, Block>,
+    blocks: BTreeMap<Hash32, crate::availability::AvailableBody>,
     exec: BTreeMap<Hash32, ExecState>,
     next_req: u64,
     wants: BTreeMap<Hash32, Want>,
@@ -151,7 +151,7 @@ pub struct Core {
 struct LocalKey {
     pk: PublicKey,
     /// `None` for a retired key: restored like the others, but it never signs.
-    signer: Option<Box<dyn Signer>>,
+    signer: Option<std::sync::Arc<dyn Signer>>,
     /// First height at which the key may sign (R2 after anchoring, R6).
     abstain_below: u64,
     /// R2: the record was `Absent`; the key signs nothing until the probe anchors it.
@@ -250,7 +250,8 @@ struct Retx {
 /// Original exact source and its payload awaiting the source-bound control response.
 struct FreshBuild {
     context: crate::api::ControlWitnessContext,
-    payload: Option<(Vec<u8>, bool)>,
+    payload: Option<(crate::availability::PayloadBytes, bool)>,
+    authoring: Option<(BlockHeader, Option<TimeoutCert>)>,
 }
 
 /// The leader's payload build state (§6.10). `req` is the outstanding request id (§6.0 `build`).
@@ -459,7 +460,9 @@ impl Core {
                 req,
                 outcome,
             } => self.on_executed(block_hash, req, &outcome),
-            Event::BodyAvailable { block } => self.on_body(block, true),
+            Event::BodyAvailable { block } => self.on_body(block),
+            Event::PayloadAuthored { req, body } => self.on_payload_authored(req, body),
+            Event::ManifestRejected { manifest } => self.on_manifest_rejected(manifest),
             Event::BlockApplied {
                 height,
                 block_hash,

@@ -2,7 +2,7 @@
 fn address_audit_supports_csv_output() {
     use torii_mock_support::TempDir;
     let account = account_id_for_domain("atlas", 0xF7);
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let i105 = encode_account_id_to_i105(&account, 753).expect("i105");
     let temp_dir = TempDir::new("address_audit_csv").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
     fs::write(&path, format!("{i105}\ninvalid-address\n")).expect("write addresses");

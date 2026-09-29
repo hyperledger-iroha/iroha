@@ -4,6 +4,12 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Added `ToriiClient.getSumeragiLanes()` (async and completion-handler forms)
+  for the operator-signed `GET /v1/sumeragi/lanes` list. Responses decode
+  fail-closed into `ToriiSumeragiLaneStatus` (exact fields, canonical
+  BLS-normal committee keys, 96-byte proofs of possession, uppercase 32-byte
+  hex lane hashes) and are tested against the shared Rust-generated
+  `fixtures/sumeragi/native_lanes_v1.tsv` corpus.
 - Pinned Norito v1 headers to the fixed-width (`0x00`) and compact
   (`COMPACT_LEN`, `0x02`) layouts. `NoritoHeader.packedSeq`, `packedStruct`,
   `fieldBitset`, `varintOffsets`, and `compactSeqLen` were removed, and headers

@@ -505,9 +505,9 @@ fn every_inventory_field_binds_untouched_current_and_undo_publications() {
             ]
         };
     }
-    let owners: [(&str, fn(&World)); 310] = with_world_overlay_fields!(invalidators);
+    let owners: &[(&str, fn(&World))] = &with_world_overlay_fields!(invalidators);
     let world = fixture();
-    for (name, publish_same_values) in owners {
+    for &(name, publish_same_values) in owners {
         let detached = capture(world.block());
         assert!(detached.matches_current(&world));
         assert_eq!(detached.field(name).unwrap().touched_values, 0);

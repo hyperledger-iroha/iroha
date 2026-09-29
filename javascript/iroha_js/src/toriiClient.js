@@ -8018,29 +8018,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch leader/PRF context snapshot (`GET /v1/sumeragi/leader`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiLeaderSnapshot>}
-   */
-  async getSumeragiLeader(options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getSumeragiLeader");
-    const response = await this._request("GET", "/v1/sumeragi/leader", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiLeader",
-      ),
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("sumeragi leader endpoint returned no payload");
-    }
-    return normalizeSumeragiLeaderSnapshot(payload);
-  }
-
-  /**
    * Fetch the on-chain Sumeragi parameter snapshot (`GET /v1/sumeragi/params`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiSumeragiParamsSnapshot>}
@@ -14485,50 +14462,38 @@ function normalizeSumeragiBlsKeysMap(payload) {
   return normalized;
 }
 
-function normalizeSumeragiLeaderSnapshot(payload) {
-  const record = ensureRecord(payload, "sumeragi leader response");
-  return {
-    leader_index: coerceInteger(record.leader_index, "sumeragi leader.leader_index"),
-    prf: normalizeSumeragiPrfContext(record.prf, "sumeragi leader.prf"),
-  };
-}
-
-function normalizeSumeragiPrfContext(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    epoch_seed:
-      record.epoch_seed == null
-        ? null
-        : requireNonEmptyString(record.epoch_seed, `${context}.epoch_seed`),
-  };
-}
+const SUMERAGI_PARAMS_FIELDS = Object.freeze([
+  "block_cadence_ms",
+  "max_clock_drift_ms",
+  "chain_height",
+]);
 
 function normalizeSumeragiParamsSnapshot(payload) {
-  const record = ensureRecord(payload, "sumeragi params response");
+  const context = "sumeragi params response";
+  const record = ensureRecord(payload, context);
+  const unknown = Object.keys(record).filter(
+    (field) => !SUMERAGI_PARAMS_FIELDS.includes(field),
+  );
+  if (unknown.length !== 0) {
+    rejectType(`${context} contains unsupported fields: ${unknown.sort().join(", ")}`);
+  }
+  const blockCadenceMs = requireNonNegativeIntegerLike(
+    record.block_cadence_ms,
+    "sumeragi params.block_cadence_ms",
+  );
+  if (blockCadenceMs === 0) {
+    rejectRange("sumeragi params.block_cadence_ms must be nonzero");
+  }
   return {
-    block_time_ms: coerceInteger(record.block_time_ms, "sumeragi params.block_time_ms"),
-    commit_time_ms: coerceInteger(record.commit_time_ms, "sumeragi params.commit_time_ms"),
-    max_clock_drift_ms: coerceInteger(
+    block_cadence_ms: blockCadenceMs,
+    max_clock_drift_ms: requireNonNegativeIntegerLike(
       record.max_clock_drift_ms,
       "sumeragi params.max_clock_drift_ms",
     ),
-    collectors_k: coerceInteger(record.collectors_k, "sumeragi params.collectors_k"),
-    redundant_send_r: coerceInteger(record.redundant_send_r, "sumeragi params.redundant_send_r"),
-    da_enabled: coerceBoolean(record.da_enabled, "sumeragi params.da_enabled"),
-    next_mode:
-      record.next_mode == null
-        ? null
-        : requireNonEmptyString(record.next_mode, "sumeragi params.next_mode"),
-    mode_activation_height:
-      record.mode_activation_height == null
-        ? null
-        : coerceInteger(
-            record.mode_activation_height,
-            "sumeragi params.mode_activation_height",
-          ),
-    chain_height: coerceInteger(record.chain_height, "sumeragi params.chain_height"),
+    chain_height: requireNonNegativeIntegerLike(
+      record.chain_height,
+      "sumeragi params.chain_height",
+    ),
   };
 }
 

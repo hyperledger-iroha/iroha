@@ -1,8 +1,8 @@
 //! The persist-before-effect barrier (`specs/sumeragi.md` §12.3 O2, §7.4).
 //!
 //! After a `PersistSafety`, every later externally visible action — `Send`, `Broadcast`,
-//! `CommitBlock` (and anything later served from the block store), `ServeBlocks`, `ServeBody`,
-//! `FetchBody`, `ReportEvidence`, and `Halt` — takes effect only once that record is durable,
+//! `CommitBlock` (and anything later served from the block store), `ServeBlocks`, `ServePayload`,
+//! `FetchPayload`, `ReportEvidence`, and `Halt` — takes effect only once that record is durable,
 //! in the order the core emitted them (O1). The exempt actions (`Execute`, `DiscardExecution`,
 //! `BuildPayload`, `PayloadRejected`, `LocalFault`, `StoreBody`) never wait. Records are
 //! identified by the sequence numbers of the ordered persistence queue, so "durable up to `s`"
@@ -11,7 +11,7 @@
 //! While a write keeps failing the core keeps rebroadcasting, so the held effects are bounded
 //! ([`HeldLimits`]): beyond the bounds the oldest held network messages and serving requests
 //! are dropped (O6: the core rebroadcasts its state and requesters retry), and a newer
-//! `FetchBody` of a body replaces a held one. `CommitBlock`, evidence and `Halt` are never
+//! `FetchPayload` of a body replaces a held one. `CommitBlock`, evidence and `Halt` are never
 //! dropped (the core emits a bounded number of them).
 
 use std::collections::VecDeque;
@@ -28,6 +28,9 @@ pub fn gated(action: &Action) -> bool {
             | Action::Execute { .. }
             | Action::DiscardExecution { .. }
             | Action::BuildPayload { .. }
+            | Action::AuthorPayload { .. }
+            | Action::AcquirePayload { .. }
+            | Action::ReceivePayloadChunk { .. }
             | Action::BuildControlWitness { .. }
             | Action::DriveApplicationControl { .. }
             | Action::ReceiveApplicationControl { .. }
@@ -43,42 +46,43 @@ pub fn droppable(action: &Action) -> bool {
         action,
         Action::Send { .. }
             | Action::Broadcast { .. }
+            | Action::DisseminatePayload { .. }
             | Action::ServeBlocks { .. }
-            | Action::ServeBody { .. }
+            | Action::ServePayload { .. }
     )
 }
 
 /// Block payload bytes a message carries (what dominates its size).
 pub fn message_payload_bytes(msg: &WireMessage) -> u64 {
     let len = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    let manifest = |m: &iroha_sumeragi::message::PayloadManifest| {
+        len(m.availability.as_slice().len())
+            .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES))
+    };
     match msg {
-        WireMessage::Proposal(p) => p
-            .payload
-            .as_ref()
-            .map_or(0, |payload| len(payload.len()))
+        WireMessage::Proposal(p) => len(p.availability.as_slice().len())
             .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES)),
-        WireMessage::BlockResponse(r) => len(r.block.payload.len())
-            .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES)),
+        WireMessage::PayloadManifest(m) => manifest(m),
+        WireMessage::PayloadChunk(chunk) => len(chunk.bytes.as_slice().len()),
         WireMessage::ApplicationControl(_) => len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES),
         WireMessage::SyncResponse(r) => r
             .blocks
             .iter()
-            .map(|entry| {
-                len(entry.block.payload.len())
-                    .saturating_add(len(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES))
-            })
+            .map(|entry| manifest(&entry.manifest))
             .fold(0, u64::saturating_add),
         _ => 0,
     }
 }
 
-/// Block payload bytes a held action keeps in memory.
+/// Exact retained bulk bytes plus the bounded header witness of a held action.
 fn payload_bytes(action: &Action) -> u64 {
     match action {
         Action::Send { msg, .. } | Action::Broadcast { msg, .. } => message_payload_bytes(msg),
-        Action::CommitBlock { block, .. } => u64::try_from(block.payload.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64),
+        Action::CommitBlock { block, .. } | Action::DisseminatePayload { body: block, .. } => {
+            (block.payload().as_slice().len() as u64)
+                .saturating_add(block.availability().as_slice().len() as u64)
+                .saturating_add(iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64)
+        }
         _ => 0,
     }
 }
@@ -151,11 +155,11 @@ impl Barrier {
     }
 
     fn hold(&mut self, seq: u64, action: Action) {
-        if let Action::FetchBody { block_hash, .. } = &action {
+        if let Action::FetchPayload { source, .. } = &action {
             // The newer fetch waits for a record at least as late as the one it replaces.
-            let hash = *block_hash;
+            let wanted = source;
             self.held.retain(
-                |(_, held)| !matches!(held, Action::FetchBody { block_hash, .. } if *block_hash == hash),
+                |(_, held)| !matches!(held, Action::FetchPayload { source, .. } if source == wanted),
             );
         }
         self.bytes = self.bytes.saturating_add(payload_bytes(&action));
@@ -207,7 +211,7 @@ impl Barrier {
 mod tests {
     use iroha_sumeragi::{
         api::{HaltReason, LocalFault},
-        message::{BlockRequest, BlockResponse, WireMessage},
+        message::{PayloadRequest, WireMessage},
         types::{Hash32, PublicKey},
     };
 
@@ -219,7 +223,7 @@ mod tests {
     fn send(height: u64) -> Action {
         Action::Send {
             to: PublicKey::new(vec![1; 32]).unwrap(),
-            msg: WireMessage::BlockRequest(BlockRequest {
+            msg: WireMessage::PayloadRequest(PayloadRequest {
                 instance: Hash32::ZERO,
                 height,
                 block_hash: Hash32::ZERO,
@@ -257,18 +261,17 @@ mod tests {
             send(1),
             Action::Broadcast {
                 to: vec![key.clone()],
-                msg: WireMessage::BlockRequest(BlockRequest {
+                msg: WireMessage::PayloadRequest(PayloadRequest {
                     instance: Hash32::ZERO,
                     height: 1,
                     block_hash: Hash32::ZERO,
                 }),
             },
-            Action::FetchBody {
-                height: 1,
-                block_hash: Hash32::ZERO,
+            Action::FetchPayload {
+                source: super::super::tests::source(1, Hash32::ZERO),
                 peers: Vec::new(),
             },
-            Action::ServeBody {
+            Action::ServePayload {
                 to: key.clone(),
                 height: 1,
                 block_hash: Hash32::ZERO,
@@ -309,9 +312,8 @@ mod tests {
     }
 
     fn fetch(tag: u8, peer: u8) -> Action {
-        Action::FetchBody {
-            height: 1,
-            block_hash: Hash32([tag; 32]),
+        Action::FetchPayload {
+            source: super::super::tests::source(1, Hash32([tag; 32])),
             peers: vec![PublicKey::new(vec![peer; 32]).unwrap()],
         }
     }
@@ -321,13 +323,18 @@ mod tests {
     /// and a newer fetch of a body replaces the held one.
     #[test]
     fn held_effects_are_bounded() {
+        let b1 = block(1, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]);
+        // Retained original payload and signed table both count, together with the
+        // bounded control witness allowance. Two bodies fit; three must not.
+        let retained_bytes = b1.payload().as_slice().len() as u64
+            + b1.availability().as_slice().len() as u64
+            + iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64;
         let limits = HeldLimits {
             effects: 4,
-            payload_bytes: 2_500 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64,
+            payload_bytes: 2 * retained_bytes + 500,
         };
         let mut barrier = Barrier::new(limits);
         barrier.persisting(1);
-        let b1 = block(1, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]);
         let commit = Action::CommitBlock {
             block: b1.clone(),
             commit_qc: commit_qc(&b1, Hash32::ZERO),
@@ -340,13 +347,7 @@ mod tests {
         assert_eq!(barrier.admit(fetch(7, 1)), None);
         assert_eq!(barrier.admit(fetch(7, 2)), None);
         assert_eq!(barrier.admit(halt.clone()), None);
-        assert_eq!(
-            barrier.size(),
-            (
-                4,
-                1_000 + iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64
-            )
-        );
+        assert_eq!(barrier.size(), (4, retained_bytes));
         assert_eq!(
             barrier.held().cloned().collect::<Vec<_>>(),
             vec![commit.clone(), send(99), fetch(7, 2), halt.clone()]
@@ -357,26 +358,17 @@ mod tests {
         // Payload bytes: a response of a large block makes the older one go.
         let mut barrier = Barrier::new(HeldLimits {
             effects: 100,
-            payload_bytes: 2_500 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64,
+            payload_bytes: 2 * retained_bytes + 500,
         });
         barrier.persisting(1);
-        let response = |h: u64| Action::Send {
-            to: PublicKey::new(vec![1; 32]).unwrap(),
-            msg: WireMessage::BlockResponse(BlockResponse {
-                instance: Hash32::ZERO,
-                block: block(h, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]),
-            }),
+        let response = |h: u64| Action::DisseminatePayload {
+            peers: vec![PublicKey::new(vec![1; 32]).unwrap()],
+            body: block(h, Hash32::ZERO, Hash32::ZERO, vec![0; 1_000]),
         };
         barrier.admit(commit.clone());
         barrier.admit(response(2));
         barrier.admit(response(3));
-        assert_eq!(
-            barrier.size(),
-            (
-                2,
-                2_000 + 2 * iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES as u64
-            )
-        );
+        assert_eq!(barrier.size(), (2, 2 * retained_bytes));
         assert_eq!(
             barrier.held().cloned().collect::<Vec<_>>(),
             vec![commit, response(3)]

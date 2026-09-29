@@ -6,7 +6,7 @@
 
 use crate::{
     crypto::Crypto,
-    message::{AttestationSignature, Block, BlockHeader, Qc, TimeoutCert, VoteKind},
+    message::{AttestationSignature, BlockHeader, Qc, TimeoutCert, VoteKind},
     types::{Committee, EpochConfig, EpochId, Hash32, PublicKey},
 };
 
@@ -126,7 +126,7 @@ fn signing_prefix(kind: u8, instance: &Hash32, epoch: &EpochId) -> Vec<u8> {
 
 /// Preimage of `block_hash` (§3.2):
 /// `TAG_BLOCK ‖ I ‖ E ‖ be64(h) ‖ be64(origin_view) ‖ parent_hash ‖ parent_result ‖ payload_hash ‖
-/// be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ be32(control_len) ‖ control ‖ bit(attest)`.
+/// availability_digest ‖ be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ be32(control_len) ‖ control ‖ bit(attest)`.
 pub fn block_hash_preimage(header: &BlockHeader) -> Vec<u8> {
     let mut out = Vec::with_capacity(200);
     out.extend_from_slice(TAG_BLOCK);
@@ -140,6 +140,7 @@ pub fn block_hash_preimage(header: &BlockHeader) -> Vec<u8> {
     out.extend_from_slice(header.parent_hash.as_bytes());
     out.extend_from_slice(header.parent_result.as_bytes());
     out.extend_from_slice(header.payload_hash.as_bytes());
+    out.extend_from_slice(header.availability_digest.as_bytes());
     out.extend_from_slice(&header.payload_len.to_be_bytes());
     out.extend_from_slice(&header.proposer.to_be_bytes());
     put_keys(&mut out, &header.skipped_leaders);
@@ -159,19 +160,7 @@ pub fn block_hash(crypto: &dyn Crypto, header: &BlockHeader) -> Hash32 {
 
 /// `payload_hash = H(TAG_PAY ‖ payload)` (§3.2).
 pub fn payload_hash(crypto: &dyn Crypto, payload: &[u8]) -> Hash32 {
-    let mut out = Vec::with_capacity(TAG_PAY.len() + payload.len());
-    out.extend_from_slice(TAG_PAY);
-    out.extend_from_slice(payload);
-    crypto.hash(&out)
-}
-
-/// `body_ok(b) := 0 < len(b.payload) == b.header.payload_len ∧ H(TAG_PAY ‖ b.payload) ==
-/// b.header.payload_hash` (§3.2).
-pub fn body_ok(crypto: &dyn Crypto, block: &Block) -> bool {
-    cfg!(sumeragi_mutation = "MS20")
-        || (!block.payload.is_empty()
-            && u32::try_from(block.payload.len()).is_ok_and(|len| len == block.header.payload_len)
-            && payload_hash(crypto, &block.payload) == block.header.payload_hash)
+    crypto.hash_chunks(&[TAG_PAY, payload])
 }
 
 /// `prop_preimage(h, v, bh, ad) = TAG_SIG ‖ 0x01 ‖ I ‖ E ‖ be64(h) ‖ be64(v) ‖ bh ‖ ad` (§3.3).
@@ -540,6 +529,7 @@ mod tests {
             parent_hash: h(0x44),
             parent_result: h(0x45),
             payload_hash: h(0x46),
+            availability_digest: h(0x47),
             payload_len: 3,
             proposer: 2,
             skipped_leaders: vec![key(0xa1, 32), key(0xa2, 48)],
@@ -797,7 +787,7 @@ mod tests {
         let header = golden_header();
         let preimage = block_hash_preimage(&header);
         let expected = format!(
-            "{}{}{:016x}{:016x}{}{}{}{:08x}{:08x}00000002{}{}{}{}0000000000",
+            "{}{}{:016x}{:016x}{}{}{}{}{:08x}{:08x}00000002{}{}{}{}0000000000",
             hex(TAG_BLOCK),
             instance_epoch_hex(),
             7,
@@ -805,6 +795,7 @@ mod tests {
             "44".repeat(32),
             "45".repeat(32),
             "46".repeat(32),
+            "47".repeat(32),
             3,
             2,
             "0020",
@@ -815,7 +806,7 @@ mod tests {
         assert_eq!(hex(&preimage), expected);
         assert_eq!(
             block_hash(&crypto, &header).to_string(),
-            "ca85008c0cd159d57365ea1ca3b2e942e7b78e41423523d47111b57c3ff3820a"
+            "220e89cc46946d2ea16efb204fb9ad8037e0b31a067b94179d6be12f7de2fcd8"
         );
         assert_eq!(
             block_hash(
@@ -826,39 +817,22 @@ mod tests {
                 }
             )
             .to_string(),
-            "0c96df0264b9faa573517be2193b53d5fcaf77daca648a6aaac9dbe0b6eeddbd"
+            "f4073a2e8fcb0553d61500e198fdb5f22e4a221693ec6e663ec66974660464e3"
         );
         assert_eq!(
             payload_hash(&crypto, &[1, 2, 3]).to_string(),
             "a0a0dfa08688a53aaa799ab662a06c9efe6a0c41050e6b023b1a6b6cb9ff320c"
         );
-        let good = BlockHeader {
-            payload_hash: payload_hash(&crypto, &[1, 2, 3]),
-            ..header
-        };
-        let block = Block {
-            header: good.clone(),
-            payload: vec![1, 2, 3],
-        };
-        assert!(body_ok(&crypto, &block));
-        let tampered = Block {
-            payload: vec![1, 2, 4],
-            ..block.clone()
-        };
-        assert!(!body_ok(&crypto, &tampered));
-        let truncated = Block {
-            payload: vec![1, 2],
-            ..block.clone()
-        };
-        assert!(!body_ok(&crypto, &truncated));
-        let wrong_len = Block {
-            header: BlockHeader {
-                payload_len: 4,
-                ..good
-            },
-            payload: vec![1, 2, 3],
-        };
-        assert!(!body_ok(&crypto, &wrong_len));
+        // Actual body admission is exercised by availability worker controls. This owner
+        // only defines exact payload/header preimages; changed or truncated bytes differ.
+        assert_ne!(
+            payload_hash(&crypto, &[1, 2, 3]),
+            payload_hash(&crypto, &[1, 2, 4])
+        );
+        assert_ne!(
+            payload_hash(&crypto, &[1, 2, 3]),
+            payload_hash(&crypto, &[1, 2])
+        );
         // Every header field is bound by the hash.
         let base = block_hash(&crypto, &golden_header());
         let variants = vec![
@@ -884,6 +858,10 @@ mod tests {
             },
             BlockHeader {
                 payload_hash: h(0),
+                ..golden_header()
+            },
+            BlockHeader {
+                availability_digest: h(0),
                 ..golden_header()
             },
             BlockHeader {

@@ -183,6 +183,7 @@ mod tests {
         SumeragiLaneState {
             lanes: (1..=count)
                 .map(|lane| SumeragiLaneRecord {
+                    da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                     lane: LaneId::new(lane),
                     dataspace: DataSpaceId::new(1),
                     incarnation: [lane as u8; 32],

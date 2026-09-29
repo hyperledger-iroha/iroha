@@ -176,7 +176,7 @@ impl Ingress {
 #[cfg(test)]
 mod tests {
     use iroha_sumeragi::{
-        message::{BlockRequest, Status, SyncResponse},
+        message::{PayloadRequest, Status, SyncResponse},
         types::Hash32,
     };
 
@@ -187,7 +187,7 @@ mod tests {
     }
 
     fn request(height: u64) -> WireMessage {
-        WireMessage::BlockRequest(BlockRequest {
+        WireMessage::PayloadRequest(PayloadRequest {
             instance: Hash32::ZERO,
             height,
             block_hash: Hash32::ZERO,
@@ -218,7 +218,7 @@ mod tests {
 
     fn height_of(msg: &WireMessage) -> u64 {
         match msg {
-            WireMessage::BlockRequest(r) => r.height,
+            WireMessage::PayloadRequest(r) => r.height,
             WireMessage::Status(s) => s.height,
             _ => u64::MAX,
         }

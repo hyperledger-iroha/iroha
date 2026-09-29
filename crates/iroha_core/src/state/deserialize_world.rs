@@ -7502,6 +7502,9 @@ fn decode_world_fields(
     let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let consensus_schedule = take_native_consensus_schedule(&mut map, execution_budget)?;
+    // Derived from the restored World: accelerated restoration recomputes it by a cold capture
+    // and compares it with the certified parent World state root before use (S9).
+    let state_accumulator = take_required(&mut map, "state_accumulator")?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
     let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
@@ -7818,6 +7821,16 @@ fn decode_world_fields(
     let consensus_keys = take_required(&mut map, "consensus_keys")?;
     let consensus_keys_by_pk = take_required(&mut map, "consensus_keys_by_pk")?;
     let sumeragi_lanes = take_required(&mut map, "sumeragi_lanes")?;
+    let sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> =
+        take_required(&mut map, "sumeragi_amx")?;
+    sumeragi_amx
+        .view()
+        .get()
+        .validate()
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.sumeragi_amx".to_owned(),
+            message: error.to_string(),
+        })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
@@ -8215,6 +8228,7 @@ fn decode_world_fields(
         parameters,
         peers,
         consensus_schedule,
+        state_accumulator,
         domains,
         domains_by_owner: Storage::default(),
         kaigi_relay_registry: Storage::default(),
@@ -8317,6 +8331,7 @@ fn decode_world_fields(
         consensus_keys,
         consensus_keys_by_pk,
         sumeragi_lanes,
+        sumeragi_amx,
         pedersen_params,
         poseidon_params,
         runtime_upgrades,

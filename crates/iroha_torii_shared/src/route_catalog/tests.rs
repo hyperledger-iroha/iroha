@@ -426,13 +426,26 @@ mod tests {
     }
     #[test]
     fn canonical_catalog_retires_direct_sumeragi_mutation_and_vrf_snapshot_routes() {
-        // Consensus evidence is log and telemetry only: no route reads or submits it.
-        assert!(
-            CATALOGED_ROUTES
-                .iter()
-                .all(|route| route.path() != "/v1/sumeragi/evidence"
-                    && route.path() != "/v1/sumeragi/evidence/count")
-        );
+        // Committed consensus evidence is readable by operators (`specs/sumeragi_evidence_api.md`);
+        // no route submits it.
+        for (route, path) in [
+            (sumeragi::EVIDENCE_LIST, "/v1/sumeragi/evidence"),
+            (sumeragi::EVIDENCE_COUNT, "/v1/sumeragi/evidence/count"),
+        ] {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.path(), path);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OperatorSignature
+            );
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| candidate.path() == path)
+                    .all(|candidate| candidate.method() == HttpMethod::Get),
+                "{path} is read-only"
+            );
+        }
         for (stable_route_id, path) in [
             ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
             ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
@@ -1682,6 +1695,7 @@ mod tests {
             "/v1/sumeragi/bls-keys",
             "/v1/sumeragi/consensus-keys",
             "/v1/sumeragi/diagnostics",
+            "/v1/sumeragi/lanes",
         ] {
             assert!(
                 routes.iter().any(|route| route.path() == canonical_path),
@@ -1697,6 +1711,7 @@ mod tests {
         for route in [
             sumeragi::STATUS,
             sumeragi::DIAGNOSTICS,
+            sumeragi::LANES,
             sumeragi::BLS_KEYS,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::PARAMETERS,

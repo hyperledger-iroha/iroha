@@ -2085,7 +2085,10 @@ pub(crate) mod tests {
         validator_keys: &[KeyPair],
     ) -> PrivateSettlementReceiptV1 {
         let mut ordered_keys = validator_keys.to_vec();
-        ordered_keys.sort_by_key(|key| PeerId::from(key.public_key().clone()));
+        ordered_keys.sort_by_cached_key(|key| {
+            crate::sumeragi::schedule::consensus_key(&PeerId::from(key.public_key().clone()))
+                .expect("native committee key")
+        });
         let validators = ordered_keys
             .iter()
             .map(|key| PeerId::from(key.public_key().clone()))
@@ -2228,19 +2231,12 @@ pub(crate) mod tests {
         state: &crate::state::State,
         receipt: &PrivateSettlementReceiptV1,
         validator_keys: &[KeyPair],
-    ) -> std::sync::Arc<crate::governance::manifest::LaneManifestRegistry> {
-        use crate::{
-            governance::manifest::{
-                GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-            },
-            state::derive_committee_key_id,
-        };
+    ) {
+        use crate::state::derive_committee_key_id;
         use iroha_data_model::{
-            account::AccountId,
             consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
-            nexus::{LaneStorageProfile, LaneVisibility},
+            sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLaneRecord},
         };
-        use std::{collections::BTreeMap, sync::Arc};
 
         let mut world = state.world.block();
         {
@@ -2272,51 +2268,35 @@ pub(crate) mod tests {
                 .consensus_keys_by_pk
                 .insert(record.public_key.to_string(), vec![record.id]);
         }
-        world.commit();
-
-        let validators = validator_keys
-            .iter()
-            .map(|key| AccountId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        let mut statuses = BTreeMap::new();
-        for leg in &receipt.manifest.legs {
-            let validator_bindings = validators
-                .iter()
-                .map(|validator| ManifestValidatorBinding {
-                    validator: validator.clone(),
-                    peer_id: PeerId::from(
-                        validator
-                            .try_signatory()
-                            .expect("fixture validators are single-signatory")
-                            .clone(),
-                    ),
-                    torii_url: None,
-                })
-                .collect();
-            statuses.insert(
-                leg.route.lane_id,
-                LaneManifestStatus {
-                    lane: leg.route.lane_id,
-                    alias: format!("private-settlement-{}", leg.route.lane_id.as_u32()),
-                    dataspace: leg.route.dataspace_id,
-                    visibility: LaneVisibility::Public,
-                    storage: LaneStorageProfile::FullReplica,
-                    governance: Some("parliament".to_owned()),
-                    manifest_path: Some(std::path::PathBuf::from(
-                        "/tmp/private-settlement-authority.json",
-                    )),
-                    governance_rules: Some(GovernanceRules {
-                        validators: validators.clone(),
-                        validator_bindings,
-                        ..GovernanceRules::default()
-                    }),
-                    privacy_commitments: Vec::new(),
-                },
-            );
+        // Component setup installs the committed native owner. Physical catalog
+        // metadata cannot substitute for native authority or its pinned PoPs.
+        for (index, leg) in receipt.manifest.legs.iter().enumerate() {
+            let authority = receipt
+                .authority_catalog
+                .authority_for_leg(&receipt.manifest, index)
+                .expect("fixture route authority");
+            world.sumeragi_lanes.get_mut().upsert(SumeragiLaneRecord {
+                da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+                lane: leg.route.lane_id,
+                dataspace: leg.route.dataspace_id,
+                incarnation: leg.route.lane_incarnation.into(),
+                params: Default::default(),
+                committee: authority
+                    .validators
+                    .into_iter()
+                    .zip(authority.validator_pops)
+                    .map(|(peer, pop)| SumeragiLaneMember { peer, pop })
+                    .collect(),
+                created_at: 1,
+                active_from: 3,
+                closing: None,
+                anchor_freshness: 16,
+                merged: SumeragiLaneFrontier::default(),
+                merged_at: 3,
+                rescued: 0,
+            });
         }
-        let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests_for_testing(&registry);
-        registry
+        world.commit();
     }
 
     pub(crate) fn fixture() -> (
@@ -3378,7 +3358,7 @@ pub(crate) mod tests {
             ChainId::from("private-settlement-wsv-test"),
             receipt.manifest.network_id.clone(),
         );
-        let lane_manifests = install_private_settlement_authority_fixture(
+        install_private_settlement_authority_fixture(
             &state,
             &receipt,
             &sidecar_fixture.validator_keys,
@@ -3391,9 +3371,6 @@ pub(crate) mod tests {
             0,
         );
         let mut block = state.block(header);
-        // This component fixture supplies its receipt-bound route authority on
-        // the same block scope as the catalogs below.
-        block.lane_manifests = lane_manifests;
         block.nexus.atomic_private_settlement.enabled = true;
         block.nexus.atomic_private_settlement.activation_height = Some(2);
         block
@@ -3444,18 +3421,6 @@ pub(crate) mod tests {
                 .collect(),
         )
         .expect("fixture settlement dataspace catalog");
-        block.lane_incarnations = receipt
-            .manifest
-            .legs
-            .iter()
-            .map(|leg| (leg.route.lane_id, leg.route.lane_incarnation))
-            .collect();
-        block.lane_incarnation_activation_heights = receipt
-            .manifest
-            .legs
-            .iter()
-            .map(|leg| (leg.route.lane_id, 0))
-            .collect();
 
         let old_heads = receipt
             .legs

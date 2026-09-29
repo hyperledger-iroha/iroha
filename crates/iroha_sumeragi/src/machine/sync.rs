@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use super::{Core, MAX_WANTS, Via, Want};
 use crate::{
     api::Action,
-    message::{Block, Qc, SyncEntry, SyncRequest, SyncResponse, VoteKind, WireMessage},
+    availability::{AvailabilitySource, AvailableBody},
+    message::{PayloadManifest, Qc, SyncEntry, SyncRequest, SyncResponse, VoteKind, WireMessage},
     types::{Hash32, PublicKey},
 };
 
@@ -95,11 +96,19 @@ impl SyncState {
 // (Appendix E, E26)
 fn entry_bytes(entry: &SyncEntry) -> usize {
     entry
-        .block
-        .payload
+        .manifest
+        .availability
+        .as_slice()
         .len()
         .saturating_add(256 + crate::types::MAX_CONTROL_WITNESS_BYTES)
-        .saturating_add(entry.block.header.skipped_leaders.len().saturating_mul(64))
+        .saturating_add(
+            entry
+                .manifest
+                .header
+                .skipped_leaders
+                .len()
+                .saturating_mul(64),
+        )
 }
 
 impl Core {
@@ -276,12 +285,12 @@ impl Core {
         for entry in response.blocks {
             let qc = &entry.commit_qc;
             let well_formed = qc.kind == VoteKind::Commit
-                && qc.height == entry.block.header.height
+                && qc.height == entry.manifest.header.height
                 && previous.is_none_or(|p| Some(qc.height) == p.checked_add(1))
-                && (entry.block.hash(&*self.crypto) == qc.block_hash
+                && (entry.manifest.hash(&*self.crypto) == qc.block_hash
                     || cfg!(sumeragi_mutation = "MS22"))
-                && qc.attest == entry.block.header.attest
-                && entry.block.body_ok(&*self.crypto);
+                && qc.attest == entry.manifest.header.attest
+                && entry.manifest.availability.has_valid_structure();
             if !well_formed {
                 break;
             }
@@ -300,6 +309,7 @@ impl Core {
             self.sync.buffer.insert(qc.height, entry);
         }
         if useful {
+            self.sync.add_source(from);
             self.sync.empty_from.clear();
         } else {
             self.note_empty(from);
@@ -322,7 +332,7 @@ impl Core {
                 return;
             };
             self.sync.buffer_bytes = self.sync.buffer_bytes.saturating_sub(entry_bytes(&entry));
-            let header = &entry.block.header;
+            let header = &entry.manifest.header;
             let linked = cfg!(sumeragi_mutation = "MS22")
                 || (header.parent_hash == self.tip.block_hash
                     && header.parent_result == self.tip.result
@@ -349,7 +359,16 @@ impl Core {
                 return;
             }
             let bh = entry.commit_qc.block_hash;
-            self.put_body(bh, entry.block, true);
+            if !self.blocks.contains_key(&bh) {
+                let manifest = entry.manifest.clone();
+                self.sync.buffer_bytes = self.sync.buffer_bytes.saturating_add(entry_bytes(&entry));
+                self.sync.buffer.insert(next, entry);
+                if !self.wants.contains_key(&bh) {
+                    self.want(bh, next, self.sync.sources.clone());
+                }
+                self.on_manifest(manifest);
+                return;
+            }
             self.commit_height(entry.commit_qc, Via::Sync);
         }
     }
@@ -417,11 +436,13 @@ impl Core {
         want.attempt = want.attempt.saturating_add(1);
         want.next_retry = now.saturating_add(retry);
         let height = want.height;
-        self.out.push(Action::FetchBody {
-            height,
-            block_hash: bh,
-            peers,
-        });
+        let Some(config) = self.config(height).cloned() else {
+            return;
+        };
+        let Ok(source) = AvailabilitySource::new(self.instance, height, bh, config) else {
+            return;
+        };
+        self.out.push(Action::FetchPayload { source, peers });
     }
 
     /// Fetch retries that are due (§6.11).
@@ -446,18 +467,24 @@ impl Core {
             .collect()
     }
 
-    /// `on_body` (§6.9 rule 6) on `BlockResponse` / `BodyAvailable`: only wanted bodies of the
-    /// wanted height that pass `body_ok` (SR20); a held body is never replaced. Then the
+    /// `on_body` (§6.9 rule 6): only wanted custody of the exact independently selected
+    /// full authority and original pool (SR20); a held body is never replaced. Then the
     /// `pending_apply` flush (with its parent-link check) and whatever waited for the body.
-    pub(super) fn on_body(&mut self, block: Block, from_store: bool) {
+    pub(super) fn on_body(&mut self, block: AvailableBody) {
         let bh = block.hash(&*self.crypto);
         let Some(want) = self.wants.get(&bh) else {
             return;
         };
-        if block.header.height != want.height || !block.body_ok(&*self.crypto) {
+        if block.header().height != want.height
+            || !block.admitted_to(&self.body_budget)
+            || block.source().instance() != self.instance
+            || self
+                .config(want.height)
+                .is_none_or(|config| block.source().config() != config)
+        {
             return;
         }
-        self.put_body(bh, block, from_store);
+        self.put_body(bh, block);
         self.after_body(bh);
     }
 
@@ -498,5 +525,23 @@ impl Core {
             max_count: request.max_count.min(self.local.sync_batch),
             max_bytes: request.max_bytes.min(self.local.sync_max_bytes),
         });
+    }
+    pub(super) fn on_manifest_rejected(&mut self, manifest: PayloadManifest) {
+        let height = manifest.header.height;
+        if self
+            .sync
+            .buffer
+            .get(&height)
+            .is_some_and(|entry| entry.manifest == manifest)
+        {
+            let removed = self
+                .sync
+                .buffer
+                .remove(&height)
+                .expect("exact rejected entry");
+            self.sync.buffer_bytes = self.sync.buffer_bytes.saturating_sub(entry_bytes(&removed));
+            self.keep_buffer_contiguous(self.next_height());
+            self.maybe_request_sync();
+        }
     }
 }

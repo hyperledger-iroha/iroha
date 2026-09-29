@@ -186,6 +186,7 @@ mod tests {
             .collect::<Vec<_>>();
         committee.sort();
         let mut record = SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(1),
             dataspace: DataSpaceId::new(0),
             incarnation: [1; 32],

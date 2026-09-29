@@ -223,7 +223,7 @@ fn zero_expired_cull_interval_runs_on_every_call() {
     queue.assert_pressure_counters_consistent_for_tests();
 }
 #[test]
-fn v2_pending_snapshot_runs_bounded_expiry_sweep() {
+fn pending_snapshot_runs_bounded_expiry_sweep() {
     let state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),

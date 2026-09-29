@@ -10,7 +10,7 @@
     "crates/iroha_cli/src/commands/sorafs.rs": 22654,
     "crates/iroha_cli/src/main_shared.rs": 10589,
     "crates/iroha_cli/src/soracloud.rs": 23091,
-    "crates/iroha_cli/tests/cli_smoke.rs": 5128,
+    "crates/iroha_cli/tests/cli_smoke.rs": 4970,
     "crates/iroha_config/src/parameters/actual.rs": 12054,
     "crates/iroha_config/src/parameters/user.rs": 34819,
     "crates/iroha_core/src/block.rs": 29061,

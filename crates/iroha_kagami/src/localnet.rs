@@ -1441,7 +1441,8 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path = write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
+    let alias_setup_intent_path =
+        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);

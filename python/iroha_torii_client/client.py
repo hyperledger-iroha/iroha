@@ -123,9 +123,7 @@ from .client_status_models import (
     SumeragiEvidencePenaltyStatus,
     SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceRecord,
-    SumeragiLeaderSnapshot,
     SumeragiParamsSnapshot,
-    SumeragiPrfContext,
     SumeragiEvidenceOffender,
     parse_sumeragi_json_object,
 )
@@ -809,8 +807,6 @@ __all__ = [
     "SubscriptionListPage",
     "SubscriptionActionResult",
     "SubscriptionUsageDraft",
-    "SumeragiPrfContext",
-    "SumeragiLeaderSnapshot",
     "SumeragiParamsSnapshot",
     "ToriiCanonicalRequestAuth",
     "ToriiOperatorSigningContext",
@@ -5685,17 +5681,6 @@ class ToriiClient(
             maximum_body_bytes=16 * 1024 * 1024,
         )
         return parse_native_lanes_json(body, "native sumeragi lanes")
-
-    def get_sumeragi_leader(self) -> SumeragiLeaderSnapshot:
-        """Fetch leader/PRF state (`GET /v1/sumeragi/leader`)."""
-
-        payload = self._ensure_mapping(
-            self._operator_get("/v1/sumeragi/leader").json(),
-            "sumeragi leader",
-        )
-        leader_index = self._coerce_unsigned(payload.get("leader_index"), "sumeragi leader.leader_index")
-        prf = self._parse_sumeragi_prf(payload.get("prf"), context="sumeragi leader.prf")
-        return SumeragiLeaderSnapshot(leader_index=leader_index, prf=prf)
 
     def get_sumeragi_params(self) -> SumeragiParamsSnapshot:
         """Fetch on-chain Sumeragi parameters (`GET /v1/sumeragi/params`)."""
@@ -11561,46 +11546,24 @@ class ToriiClient(
         return snapshot
 
     @staticmethod
-    def _parse_sumeragi_prf(payload: Any, *, context: str) -> SumeragiPrfContext:
-        record = ToriiClient._ensure_mapping(payload, context)
-        height = ToriiClient._coerce_unsigned(record.get("height"), f"{context}.height")
-        view = ToriiClient._coerce_unsigned(record.get("view"), f"{context}.view")
-        epoch_seed = record.get("epoch_seed")
-        if epoch_seed is not None and not isinstance(epoch_seed, str):
-            raise RuntimeError(f"{context}.epoch_seed must be a string or null")
-        return SumeragiPrfContext(height=height, view=view, epoch_seed=epoch_seed)
-
-    @staticmethod
     def _parse_sumeragi_params(payload: Mapping[str, Any], *, context: str) -> SumeragiParamsSnapshot:
         record = ToriiClient._ensure_mapping(payload, context)
+        fields = ("block_cadence_ms", "max_clock_drift_ms", "chain_height")
+        unknown = sorted(set(record) - set(fields))
+        if unknown:
+            raise RuntimeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
 
         def require_unsigned(key: str) -> int:
             if key not in record:
                 raise RuntimeError(f"{context} missing `{key}`")
             return ToriiClient._coerce_unsigned(record.get(key), f"{context}.{key}")
 
-        def require_bool(key: str) -> bool:
-            value = record.get(key)
-            if not isinstance(value, bool):
-                raise RuntimeError(f"{context}.{key} must be a boolean")
-            return value
-
-        next_mode_value = record.get("next_mode")
-        if next_mode_value is not None and not isinstance(next_mode_value, str):
-            raise RuntimeError(f"{context}.next_mode must be a string or null")
-
+        block_cadence_ms = require_unsigned("block_cadence_ms")
+        if block_cadence_ms == 0:
+            raise RuntimeError(f"{context}.block_cadence_ms must be nonzero")
         return SumeragiParamsSnapshot(
-            block_time_ms=require_unsigned("block_time_ms"),
-            commit_time_ms=require_unsigned("commit_time_ms"),
+            block_cadence_ms=block_cadence_ms,
             max_clock_drift_ms=require_unsigned("max_clock_drift_ms"),
-            collectors_k=require_unsigned("collectors_k"),
-            redundant_send_r=require_unsigned("redundant_send_r"),
-            da_enabled=require_bool("da_enabled"),
-            next_mode=next_mode_value,
-            mode_activation_height=ToriiClient._coerce_optional_unsigned(
-                record.get("mode_activation_height"),
-                context=f"{context}.mode_activation_height",
-            ),
             chain_height=require_unsigned("chain_height"),
         )
 
